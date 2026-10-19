@@ -45,7 +45,7 @@ pub(crate) fn clear_simple_window_event_handler_values<'s>(
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(fragment, prototype = "Window", receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(fragment, prototype = "Window", receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowGlobalEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,

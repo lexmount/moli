@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::{context_host_ptr_from_window_object, get_private_value};
+use crate::util::get_private_value;
 use crate::webidl;
 
 fn window_receiver<'s>(
@@ -8,7 +8,7 @@ fn window_receiver<'s>(
     member: &'static str,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if context_host_ptr_from_window_object(scope, receiver).is_some() {
+    if super::super::is_window_receiver(scope, receiver) {
         return Some(receiver);
     }
     webidl::throw_type_error(
@@ -26,6 +26,9 @@ pub(in crate::context_bootstrap) fn window_history_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args, "history") else {
         return;
     };
+    if !super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false) {
+        return;
+    }
     match object_window_slot_value(scope, receiver, WINDOW_HISTORY_SLOT)
         .or_else(|| global_window_slot_value(scope, WINDOW_HISTORY_SLOT))
     {
@@ -42,6 +45,9 @@ pub(in crate::context_bootstrap) fn window_navigation_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args, "navigation") else {
         return;
     };
+    if !super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false) {
+        return;
+    }
     match object_window_slot_value(scope, receiver, WINDOW_NAVIGATION_SLOT)
         .or_else(|| global_window_slot_value(scope, WINDOW_NAVIGATION_SLOT))
     {
@@ -58,8 +64,7 @@ pub(in crate::context_bootstrap) fn window_location_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args, "location") else {
         return;
     };
-    let Some(value) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT)
-        .filter(|v| !v.is_undefined())
+    let Some(value) = object_window_slot_value(scope, receiver, WINDOW_LOCATION_SLOT)
         .or_else(|| global_location_slot_value(scope))
     else {
         webidl::throw_type_error(
@@ -102,6 +107,8 @@ fn object_window_slot_value<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let context = object.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     get_private_value(scope, object, slot).filter(|value| !value.is_undefined())
 }
 

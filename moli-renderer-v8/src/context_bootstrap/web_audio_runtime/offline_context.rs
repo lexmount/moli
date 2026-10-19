@@ -180,7 +180,6 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
         sample_rate,
         f64::from(options.number_of_channels),
         compressors,
-        OFFLINE_AUDIO_LISTENERS_SLOT,
         "suspended",
         destination,
     )

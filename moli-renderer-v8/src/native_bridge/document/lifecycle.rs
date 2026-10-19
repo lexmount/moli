@@ -8,14 +8,14 @@ use crate::native_bridge::element::{
     TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
     document_copy_command_supported, form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
-    replace_text_control_selection, replace_text_control_selection_for_insert_html, restore_focused_text_control_selection,
-    run_document_copy_command, text_control_value_dom_string,
+    replace_text_control_selection, replace_text_control_selection_for_insert_html,
+    restore_focused_text_control_selection, run_document_copy_command,
+    text_control_value_dom_string,
 };
 use crate::{
     custom_elements,
     document_runtime::{DomHandle, EventTargetHandle},
-    dom::native::{DocumentReadyState, NativeDom, Node, NodeData},
-    parser::HtmlParser,
+    dom::native::{DocumentReadyState, Node},
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
         utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, v8_string, v8str,

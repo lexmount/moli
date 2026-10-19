@@ -46,7 +46,11 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.refresh_child_browsing_context(scope, handle);
+        // Child navigables belong to insertion/parser lifecycle. A read must
+        // not create an unprocessed sibling during another frame's load event.
+        if !self.child_browsing_contexts.contains_key(&handle) {
+            return None;
+        }
         if !self.frame_owner_can_access_content_document(handle) {
             return None;
         }
@@ -112,7 +116,9 @@ impl JsContextHost {
         Option<v8::Local<'s, v8::Object>>,
         Vec<FrameDocumentClassicScriptSchedulerWork>,
     ) {
-        if !self.child_browsing_contexts.contains_key(&handle) { return (None, Vec::new()); }
+        if !self.child_browsing_contexts.contains_key(&handle) {
+            return (None, Vec::new());
+        }
         let mut ready_work = Vec::new();
         let current_context = scope.get_current_context();
         // Refresh can commit a new Document while native synchronization still
@@ -226,15 +232,6 @@ impl JsContextHost {
     ) {
         self.child_window_proxy_records
             .set_detached_content_document(scope, handle, document);
-    }
-
-    pub(crate) fn cached_detached_iframe_content_window<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.child_window_proxy_records
-            .detached_content_window(scope, handle)
     }
 
     pub(crate) fn set_cached_detached_iframe_content_window(

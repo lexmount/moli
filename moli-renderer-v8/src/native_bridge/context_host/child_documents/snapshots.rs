@@ -2,7 +2,9 @@ use super::super::fixture_support::child_upstream_fixture_text;
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
 use super::LocalChildDocumentPreparation;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
-use crate::navigation_document::{decode_navigation_document_response, navigation_response_content_type};
+use crate::navigation_document::{
+    decode_navigation_document_response, navigation_response_content_type,
+};
 use moli_web_mime::{resource_mime_essence_for_url, response_document_content_type};
 use url::Url;
 

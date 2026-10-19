@@ -1,4 +1,7 @@
 (() => {
+  // https://html.spec.whatwg.org/multipage/document-sequences.html#concept-navigable-container-content-document
+  // The container's node Document supplies origin-domain, including when its
+  // native getter is borrowed from another Realm.
   const outer = document.getElementById('outer');
   const container = outer.contentDocument;
   const nested = container.getElementById('nested');
@@ -8,9 +11,9 @@
   document.domain = document.domain;
   checks.push(outer.contentDocument === null,
               nested.contentDocument === doc,
-              get.call(nested) === null);
+              get.call(nested) === doc);
   doc.domain = doc.domain;
-  checks.push(nested.contentDocument === null, get.call(nested) === doc);
+  checks.push(nested.contentDocument === null, get.call(nested) === null);
   container.domain = container.domain;
   checks.push(outer.contentDocument === container,
               nested.contentDocument === doc, get.call(nested) === doc);

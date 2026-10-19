@@ -6,56 +6,66 @@ async fn canvas_exif_orientation_survives_sources_realms_and_bitmap_copies() {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         loader.set_image_fetch_enabled(true);
-        let (mut page, _resource_source, _owner_wake) =
-            page_vm_with_bound_task_sources_and_owner_wake(
-                &loader,
-                Url::parse("https://canvas-exif.test/")?,
-            );
-        page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
-        page.vm_mut().eval(&format!(
-            "document.body.innerHTML='<iframe></iframe>';globalThis.__exifSources={};",
-            include_str!("../../../../tests/fixtures/canvas-exif-sources.json"),
-        ))?;
-        page.vm_mut().eval(include_str!(
-            "../../../../tests/fixtures/canvas-exif-orientation.js"
-        ))?;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
-            let _ = page
-                .run_next_child_frame_task_source_for_semantic_test()
-                .await;
-            for selector in [
-                PageSelectedTaskTestSelector::ResourceCompletion,
-                PageSelectedTaskTestSelector::BitmapTask,
-                PageSelectedTaskTestSelector::DomManipulation(
-                    PageDomManipulationTestFamily::ImageLoadEvent,
-                ),
-            ] {
-                let _ = page
-                    .run_exact_selected_page_task_for_test(selector, &loader)
-                    .await?;
+        let mut names = std::collections::BTreeSet::new();
+        // Each scenario retains all eight orientations and all source/copy
+        // assertions. The shared browser fixture remains unfiltered by default.
+        for owner in ["main", "iframe"] {
+            for callee in ["main", "iframe"] {
+                for format in ["png", "jpg", "webp"] {
+                    let scenario = format!("{owner}/{callee}/{format}");
+                    let (mut page, _resource_source, _owner_wake) =
+                        page_vm_with_bound_task_sources_and_owner_wake(
+                            &loader,
+                            Url::parse("https://canvas-exif.test/")?,
+                        );
+                    page.vm_mut()
+                        .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+                    page.vm_mut().eval(&format!(
+                        "document.body.innerHTML='<iframe></iframe>';globalThis.__exifScenario={scenario:?};globalThis.__exifSources={};",
+                        include_str!("../../../../tests/fixtures/canvas-exif-sources.json"),
+                    ))?;
+                    page.vm_mut().eval(include_str!(
+                        "../../../../tests/fixtures/canvas-exif-orientation.js"
+                    ))?;
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+                        let _ = page
+                            .run_next_child_frame_task_source_for_semantic_test()
+                            .await;
+                        for selector in [
+                            PageSelectedTaskTestSelector::ResourceCompletion,
+                            PageSelectedTaskTestSelector::BitmapTask,
+                            PageSelectedTaskTestSelector::DomManipulation(
+                                PageDomManipulationTestFamily::ImageLoadEvent,
+                            ),
+                        ] {
+                            let _ = page
+                                .run_exact_selected_page_task_for_test(selector, &loader)
+                                .await?;
+                        }
+                        anyhow::ensure!(
+                            Instant::now() < deadline,
+                            "EXIF scenario {scenario} did not finish: {}",
+                            page.vm_mut().eval("__exifProgress.stage")?
+                        );
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    let result: serde_json::Value = serde_json::from_str(
+                        &page.vm_mut().eval("JSON.stringify(__uiEventResults)")?,
+                    )?;
+                    let checks = result["checks"].as_array().unwrap();
+                    let failures: Vec<_> = checks.iter().filter(|row| row["passed"] != true).collect();
+                    assert!(failures.is_empty(), "{scenario}: {failures:#?}");
+                    assert_eq!(result["total"], 200, "all orientations and sources: {scenario}");
+                    for check in checks {
+                        let name = check["name"].as_str().unwrap();
+                        assert!(name.starts_with(&format!("{scenario}/")), "{name}");
+                        assert!(names.insert(name.to_owned()), "duplicate check {name}");
+                    }
+                }
             }
-            anyhow::ensure!(
-                Instant::now() < deadline,
-                "EXIF fixture did not finish: {}",
-                page.vm_mut().eval("__exifProgress.stage")?
-            );
-            tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        let result: serde_json::Value =
-            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
-        let failures: Vec<_> = result["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|row| row["passed"] != true)
-            .collect();
-        assert!(failures.is_empty(), "{failures:#?}");
-        assert_eq!(
-            result["total"], 2400,
-            "all codecs, orientations, sources and realm pairs must run"
-        );
+        assert_eq!(names.len(), 2400, "all codecs, orientations, sources and realm pairs must run");
         Ok::<_, anyhow::Error>(())
     })
     .await

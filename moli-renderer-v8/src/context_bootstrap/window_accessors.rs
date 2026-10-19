@@ -29,8 +29,7 @@ pub(crate) use document::{
 pub(crate) use helpers::{current_window_style_viewport, window_host_ptr};
 pub(super) use helpers::{
     window_child_context_handle, window_current_dispatch_scope, window_document_handle,
-    window_has_discarded_child_browsing_context,
-    window_owner_dispatch_scope,
+    window_has_discarded_child_browsing_context, window_owner_dispatch_scope,
 };
 pub(super) use interceptors::{
     window_indexed_property_definer, window_indexed_property_deleter,
@@ -52,6 +51,7 @@ pub(super) use surface::{
     window_screen_getter, window_scroll_x_getter, window_scroll_y_getter, window_self_getter,
     window_speech_synthesis_getter, window_visual_viewport_getter, window_window_getter,
 };
+pub(super) use values::window_alias_value;
 pub(crate) use values::{
     window_closed_value, window_frames_value, window_length_value, window_opener_value,
     window_parent_value, window_self_value, window_top_value,

@@ -179,7 +179,8 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
                 .is_some_and(|old_url| urls_equal_ignoring_fragment(&old_url, &applied.parsed_url));
         if let Some(child_handle) =
             super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-                scope, applied.owner,
+                scope,
+                applied.owner,
             )
             && !is_same_document_traversal
         {

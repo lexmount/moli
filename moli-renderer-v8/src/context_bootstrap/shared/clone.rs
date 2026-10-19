@@ -4,8 +4,8 @@ use crate::{
         message_port_id_from_object,
     },
     structured_clone::{
-        RuntimeMessageAgentCluster, V8StructuredClonePayload, WireTransfer, WireTransfers,
-        deserialize_from_wire, deserialize_message_event_from_wire, serialize_for_wire_for_runtime,
+        RuntimeMessageAgentCluster, V8StructuredClonePayload, WireTransfer, deserialize_from_wire,
+        deserialize_message_event_from_wire, serialize_for_wire_for_runtime,
         serialize_for_wire_for_runtime_message, serialize_for_wire_for_runtime_with_transfers,
         serialize_for_wire_for_storage,
     },
@@ -19,8 +19,8 @@ pub(in crate::context_bootstrap) struct PostMessageTransferList<'s> {
 }
 
 impl<'s> PostMessageTransferList<'s> {
-    fn wire_transfers(&self) -> WireTransfers<'_, 's> {
-        WireTransfers {
+    fn wire_transfers(&self) -> crate::structured_clone::WireTransfers<'_, 's> {
+        crate::structured_clone::WireTransfers {
             entries: &self.entries,
         }
     }

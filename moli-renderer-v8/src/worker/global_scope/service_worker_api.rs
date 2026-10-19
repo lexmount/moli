@@ -1,7 +1,4 @@
 use super::*;
-use crate::context_bootstrap::{
-    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
-};
 
 pub(super) fn install_service_worker_global_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -68,12 +65,7 @@ fn build_service_worker_global_registration<'s>(
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build service worker registration: {error:?}"))?;
-    crate::context_bootstrap::mark_simple_event_target_slot(
-        scope,
-        registration,
-        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
-    );
-    install_simple_event_target_ordered_handlers(scope, registration);
+    crate::context_bootstrap::initialize_simple_event_target(scope, registration);
     let scope_value = v8_string(scope, scope_url.as_str())
         .ok_or_else(|| anyhow!("failed to allocate service worker registration scope"))?;
     set_private_value(
@@ -121,7 +113,6 @@ pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
     crate::context_bootstrap::dispatch_simple_event_target_event(
         scope,
         registration,
-        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
         "updatefound",
         event,
     );
@@ -2225,5 +2216,3 @@ struct BackgroundSyncOptions {
 }
 
 const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str = "__moliServiceWorkerGlobalRegistration";
-
-const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";

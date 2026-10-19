@@ -5,7 +5,7 @@
 use crate::{
     context_bootstrap::{exposed_interfaces, media_queries},
     native_bridge::throw_dom_exception,
-    util::{get_private_value, set_private_value},
+    util::get_private_value,
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};

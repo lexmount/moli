@@ -1663,26 +1663,18 @@ fn detached_iframe_windows_do_not_create_document_browsing_contexts() {
       outer.documentElement.appendChild(frame);
       const label = `${name}/${first}`;
       check(outer.defaultView === null, `${label}: windowless owner`);
-      let child;
       if (first === "document") {
-        child = frame.contentDocument;
-        check(child.hidden && child.visibilityState === "hidden", `${label}: before contentWindow`);
+        check(frame.contentDocument === null, `${label}: no child Document before contentWindow`);
       }
-      const view = frame.contentWindow;
-      child ||= frame.contentDocument;
-      check(view !== null && view.document === child, `${label}: synthetic window`);
-      check(child.defaultView === null, `${label}: synthetic window has no browsing context`);
-      check(child.hidden && child.visibilityState === "hidden", `${label}: after contentWindow`);
+      check(frame.contentWindow === null, `${label}: no child Window`);
+      check(frame.contentDocument === null, `${label}: no child Document after contentWindow`);
+      check(outer.defaultView === null, `${label}: getter cannot create a browsing context`);
       check(outer.hidden && outer.visibilityState === "hidden", `${label}: owner stays hidden`);
-      const nested = child.createElement("iframe");
-      nested.srcdoc = "<p>nested</p>";
-      child.body.appendChild(nested);
-      const nestedChild = nested.contentDocument;
-      check(nestedChild.hidden && nestedChild.visibilityState === "hidden", `${label}: nested before contentWindow`);
-      check(nested.contentWindow.document === nestedChild, `${label}: nested window`);
-      check(nested.contentWindow.parent === view, `${label}: nested compatibility parent`);
-      check(nestedChild.defaultView === null, `${label}: nested synthetic window has no browsing context`);
-      check(nestedChild.hidden && nestedChild.visibilityState === "hidden", `${label}: nested after contentWindow`);
+      const nested = outer.createElementNS("http://www.w3.org/1999/xhtml", "iframe");
+      frame.appendChild(nested);
+      check(nested.contentDocument === null, `${label}: nested has no child Document`);
+      check(nested.contentWindow === null, `${label}: nested has no child Window`);
+      check(outer.hidden && outer.visibilityState === "hidden", `${label}: nested getters keep owner hidden`);
     }
   }
   return JSON.stringify(errors);

@@ -5,33 +5,26 @@
 use super::{media_queries, shared};
 use crate::{
     document_runtime::DomHandle,
-    host::report_event_callback_exception,
     native_bridge::{
         JsContextHost, document::document_is_fully_active,
         node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
     },
     util::{get_private_object, get_private_value, set_private_value, v8str},
     web_api_interfaces, webidl,
-    window_webidl_callback::{
-        WindowWebIdlCallbackFunction, WindowWebIdlCallbackFunctionOutcome,
-        invoke_window_webidl_callback_function,
-    },
+    window_webidl_callback::WindowWebIdlCallbackFunction,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const ASSOCIATED: &str = "__moliMediaRemotePlayback";
 const MEDIA: &str = "__moliRemotePlaybackMedia";
-const LISTENERS: &str = "__moliRemotePlaybackListeners";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::RemotePlayback, require_prototype)]
 struct RemotePlaybackObject<'s> {
     #[webapi(slot = MEDIA)]
     media: v8::Local<'s, v8::Object>,
-    #[webapi(slot = shared::SIMPLE_EVENT_TARGET_SLOT, value = LISTENERS)]
+    #[webapi(slot = shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_target: (),
-    #[webapi(slot = shared::SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -264,15 +257,12 @@ fn handler_setter<'s>(
     let remote = target(scope, args.this());
     let event = args.data().to_rust_string_lossy(scope);
     let slot = handler_slot(&event);
-    let active = args.get(0).is_object();
-    let handler = if active {
-        args.get(0)
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, remote, slot, handler);
-    media_queries::simple_object_event_set_ordered_handler(
-        scope, remote, LISTENERS, &event, slot, active,
+    media_queries::simple_object_event_set_handler(
+        scope,
+        remote,
+        event.as_str(),
+        slot,
+        args.get(0),
     );
 }
 
@@ -298,33 +288,17 @@ impl RemotePlaybackAvailabilityTask {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
     ) -> bool {
-        let callback = self.callback.prepare(scope);
-        let relevant_identity = callback.relevant_identity();
+        let Some(execution) = self.callback.prepare_execution(scope, host_ptr, None) else {
+            return false;
+        };
         let receiver = v8::undefined(scope).into();
         let available = v8::Boolean::new(scope, false).into();
-        match invoke_window_webidl_callback_function(
+        execution.invoke_and_report(
             scope,
-            host_ptr,
-            "RemotePlaybackAvailabilityCallback",
-            "RemotePlayback availability callback threw",
+            "remoteplayback",
             "RemotePlayback availability callback",
-            &callback,
             receiver,
             &[available],
-        ) {
-            WindowWebIdlCallbackFunctionOutcome::Returned => true,
-            WindowWebIdlCallbackFunctionOutcome::Threw(report) => {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    "remoteplayback",
-                    relevant_identity,
-                    None,
-                    &report,
-                );
-                true
-            }
-            WindowWebIdlCallbackFunctionOutcome::Retired => false,
-        }
+        )
     }
 }

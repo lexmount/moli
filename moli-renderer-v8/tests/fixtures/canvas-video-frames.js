@@ -27,13 +27,18 @@
   }
   function bytes(ctx,source) {
     ctx.canvas.width=source.width;ctx.canvas.height=source.height;ctx.drawImage(source,0,0);
-    return Array.from(ctx.getImageData(0,0,source.width,source.height).data).join(',');
+    return ctx.getImageData(0,0,source.width,source.height).data;
+  }
+  function sameBytes(actual,expected) {
+    if(actual.length!==expected.length)return false;
+    for(let i=0;i<actual.length;i++)if(actual[i]!==expected[i])return false;
+    return true;
   }
   function seek(callee,video,time) {
     return new Promise((resolve,reject)=>{
-      video.onseeked=()=>{video.onseeked=null;try{assert(video.currentTime===time && !video.seeking,'seek position '+video.currentTime+' expected '+time+' seeking '+video.seeking);resolve();}catch(error){reject(error);}};
+      video.onseeked=()=>{progress.operation='seeked/'+time;video.onseeked=null;try{assert(video.currentTime===time && !video.seeking,'seek position '+video.currentTime+' expected '+time+' seeking '+video.seeking);resolve();}catch(error){reject(error);}};
       set(callee,video,'currentTime',time);
-    }).then(()=>new Promise(resolve=>callee.setTimeout(resolve,0)));
+    }).then(()=>new Promise(resolve=>{progress.operation='seek-timer/'+time;callee.setTimeout(resolve,0);}));
   }
   const cases=[
     ['decoded dimensions and Canvas pixels',async(owner,callee,video,url,ctx)=>{
@@ -76,15 +81,21 @@
       ctx.drawImage(bitmap,0,0);corners(ctx);bitmap.close();
     }],
     ['seek selects new frames and rewinds reference state',async(owner,callee,video,url,ctx,transport)=>{
+      progress.operation='counting-ready';
       await ready(owner,callee,video,__videoFrameSources[transport].counting);
+      progress.operation='first-bitmap';
       const first=await callee.createImageBitmap(video),initial=bytes(ctx,first);
+      progress.operation='forward-seek';
       await seek(callee,video,2.5);
+      progress.operation='later-bitmap';
       const later=await callee.createImageBitmap(video);
-      assert(bytes(ctx,later)!==initial,'seek must produce a genuinely different decoded frame');
-      assert(bytes(ctx,first)===initial,'an earlier bitmap remains immutable');
+      assert(!sameBytes(bytes(ctx,later),initial),'seek must produce a genuinely different decoded frame');
+      assert(sameBytes(bytes(ctx,first),initial),'an earlier bitmap remains immutable');
+      progress.operation='rewind-seek';
       await seek(callee,video,0);
+      progress.operation='rewound-bitmap';
       const rewound=await callee.createImageBitmap(video);
-      assert(bytes(ctx,rewound)===initial,'rewinding replays codec references');
+      assert(sameBytes(bytes(ctx,rewound),initial),'rewinding replays codec references');
       first.close();later.close();rewound.close();
     }],
     ['VP9 frames share native allocation limits and timestamps',async(owner,callee,video,url,ctx,transport)=>{
@@ -105,13 +116,15 @@
     const realms=[['main',globalThis],['iframe',document.querySelector('iframe').contentWindow]];
     for(const [ownerName,owner] of realms)for(const [calleeName,callee] of realms)
       for(const transport of ['data','http'])for(const windowless of [false,true])for(const offscreen of [false,true]) {
+        const scenario=`${ownerName}/${calleeName}/${transport}/${windowless?'windowless':'live'}/${offscreen?'offscreen':'html'}`;
+        if(globalThis.__videoFrameScenario && globalThis.__videoFrameScenario !== scenario)continue;
         const doc=windowless?owner.document.implementation.createHTMLDocument(''):owner.document;
         for(const [name,body] of cases) {
           const video=doc.createElement('video');doc.body.appendChild(video);
           const label=`${ownerName}/${calleeName}/${transport}/${windowless?'windowless':'live'}/${offscreen?'offscreen':'html'}/${name}`;
           progress.stage=label;let timeout;
           try {
-            await Promise.race([body(owner,callee,video,__videoFrameSources[transport].pattern,context(callee,offscreen),transport,offscreen),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('video case timeout')),2500);})]);
+            await Promise.race([body(owner,callee,video,__videoFrameSources[transport].pattern,context(callee,offscreen),transport,offscreen),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('video case timeout '+JSON.stringify({operation:progress.operation,currentTime:video.currentTime,seeking:video.seeking,readyState:video.readyState,error:video.error?.code,ownerClosed:owner.closed,calleeClosed:callee.closed,native:globalThis.__videoFrameNativeState?.(video)}))),2500);})]);
             if(windowless)assert(doc.defaultView===null && doc.hidden,'video resources do not create a synthetic Window');
             checks.push({name:label,category:windowless?'windowless':'live',passed:true});
           }catch(error){checks.push({name:label,category:windowless?'windowless':'live',passed:false,detail:String(error)});}

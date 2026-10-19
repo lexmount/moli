@@ -5449,13 +5449,7 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
                 hasDocumentCollision: Object.prototype.hasOwnProperty.call(win, 'document'),\
                 hasFocusCollision: Object.prototype.hasOwnProperty.call(win, 'focus'),\
                 sameAsIndexed: named === indexed,\
-                documentDescriptor: {\
-                  enumerable: documentDescriptor?.enumerable,\
-                  configurable: documentDescriptor?.configurable,\
-                  getterType: typeof documentDescriptor?.get,\
-                  setterType: typeof documentDescriptor?.set,\
-                  valueType: typeof documentDescriptor?.value\
-                },\
+                documentDescriptor,\
                 focusDescriptor: {\
                   enumerable: focusDescriptor?.enumerable,\
                   configurable: focusDescriptor?.configurable,\

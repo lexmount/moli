@@ -268,7 +268,10 @@ pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
     let Some(parsed_args) = webidl::parse_args::<TouchConstructorArgs>(scope, &args) else {
         return;
     };
-    parsed_args.init.initialize_snapshot(scope, touch).expect("Touch state");
+    parsed_args
+        .init
+        .initialize_snapshot(scope, touch)
+        .expect("Touch state");
     web_api_interfaces::initialize(scope, touch, "Touch").expect("Touch brand");
 
     rv.set(touch.into());

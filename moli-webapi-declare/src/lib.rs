@@ -256,8 +256,8 @@ extern crate self as moli_webapi_declare;
 
 mod brand;
 mod callback;
-mod cross_origin;
 mod constructor;
+mod cross_origin;
 mod declaration;
 mod error;
 mod interface;
