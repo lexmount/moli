@@ -51,9 +51,10 @@ pub(crate) use self::bindings::{
 };
 pub(crate) use self::delivery::{
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
-    apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
-    apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
-    reset_xhr_response_for_request_error, throw_synchronous_xhr_failure,
+    apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_failure,
+    apply_xhr_streaming_response_body_source, apply_xhr_streaming_response_chunk,
+    apply_xhr_streaming_response_head, apply_xhr_timeout, reset_xhr_response_for_request_error,
+    throw_synchronous_xhr_failure,
 };
 pub(crate) use self::events::xhr_dispatch_progress_event;
 pub(crate) use self::instance_state::xhr_has_upload_listeners;
