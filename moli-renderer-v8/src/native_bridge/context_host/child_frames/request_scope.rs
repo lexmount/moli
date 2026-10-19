@@ -165,6 +165,7 @@ impl PageScriptHost {
         if entry.pending_attribute_bootstrap_commit()
             && let Some(snapshot) = self
                 .materialize_local_child_snapshot_for_bootstrap(handle, entry.attribute_bootstrap())
+                .into_snapshot()
         {
             if moli_url::is_about_blank(&snapshot.url)
                 && entry.attribute_bootstrap().security_origin_inherited()

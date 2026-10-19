@@ -1,11 +1,12 @@
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost};
+use super::LocalChildDocumentPreparation;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
-use crate::navigation_document::{decode_navigation_document_response, is_image_document_mime};
+use crate::navigation_document::{
+    decode_navigation_document_response, navigation_response_content_type,
+};
 #[cfg(test)]
 use moli_web_mime::resource_mime_essence_for_url;
-use moli_web_mime::{
-    is_html_document_mime, resource_mime_essence_for_url, response_document_content_type,
-};
+use moli_web_mime::response_document_content_type;
 use url::Url;
 
 impl PageScriptHost {
@@ -25,17 +26,22 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
         url: &Url,
-    ) -> Option<ChildBrowsingContextSnapshot> {
-        let mut snapshot = self.materialize_local_child_snapshot_for_url(url, Some(handle))?;
+    ) -> LocalChildDocumentPreparation {
+        let mut snapshot = match self.materialize_local_child_snapshot_for_url(url, Some(handle)) {
+            LocalChildDocumentPreparation::Ready(snapshot) => *snapshot,
+            other => return other,
+        };
         if ChildBrowsingContextBootstrap::Url(url.clone()).content_security_policy_inherited() {
             snapshot.policy_container =
                 self.initial_child_about_blank_policy_container_from_parent(handle);
         }
         let snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
         if moli_url::is_about_blank(&snapshot.url) {
-            Some(snapshot.with_fallback_base_url(self.document_base_url_for_child_context(handle)))
+            LocalChildDocumentPreparation::Ready(Box::new(
+                snapshot.with_fallback_base_url(self.document_base_url_for_child_context(handle)),
+            ))
         } else {
-            Some(snapshot)
+            LocalChildDocumentPreparation::Ready(Box::new(snapshot))
         }
     }
 
@@ -43,23 +49,29 @@ impl PageScriptHost {
         &self,
         url: &Url,
         owner: Option<DomHandle>,
-    ) -> Option<ChildBrowsingContextSnapshot> {
+    ) -> LocalChildDocumentPreparation {
         match url.scheme() {
-            "about" if url.path() == "blank" => Some(ChildBrowsingContextSnapshot::html(
-                url.clone(),
-                "<!DOCTYPE html><html><head></head><body></body></html>".into(),
-            )),
-            "http" | "https" => None,
-            "blob" | "data" => crate::network_host::local_url_response(url).and_then(|response| {
+            "about" if url.path() == "blank" => {
+                LocalChildDocumentPreparation::Ready(Box::new(ChildBrowsingContextSnapshot::html(
+                    url.clone(),
+                    "<!DOCTYPE html><html><head></head><body></body></html>".into(),
+                )))
+            }
+            "http" | "https" => LocalChildDocumentPreparation::Unavailable,
+            "blob" | "data" => {
+                let Some(response) = crate::network_host::local_url_response(url) else {
+                    return LocalChildDocumentPreparation::Unavailable;
+                };
                 let head = response.head();
-                let content_type = child_document_content_type_from_headers(&head.headers);
-                if url.scheme() == "blob"
-                    && content_type.as_deref().is_some_and(|mime| {
-                        !(is_html_document_mime(mime) || is_image_document_mime(mime))
-                    })
-                {
-                    return None;
+                let mime = navigation_response_content_type(
+                    &head.final_url,
+                    &head.headers,
+                    response.body_bytes(),
+                );
+                if !moli_web_mime::is_supported_document_mime_type(&mime) {
+                    return LocalChildDocumentPreparation::IgnoredNavigation;
                 }
+                let content_type = Some(mime);
                 let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
                     &head.headers,
                     &head.final_url,
@@ -79,7 +91,7 @@ impl PageScriptHost {
                     &head.final_url,
                     fallback,
                 );
-                Some(
+                LocalChildDocumentPreparation::Ready(Box::new(
                     ChildBrowsingContextSnapshot::with_content(
                         head.final_url,
                         body,
@@ -87,9 +99,9 @@ impl PageScriptHost {
                         character_set,
                     )
                     .with_policy_container(policy_container),
-                )
-            }),
-            _ => None,
+                ))
+            }
+            _ => LocalChildDocumentPreparation::Unavailable,
         }
     }
 
@@ -97,37 +109,37 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
         bootstrap: &ChildBrowsingContextBootstrap,
-    ) -> Option<ChildBrowsingContextSnapshot> {
-        match bootstrap {
-            ChildBrowsingContextBootstrap::AboutBlank => {
-                let policy_container =
-                    self.initial_child_about_blank_policy_container_from_parent(handle);
-                Some(
-                    self.apply_page_csp_bypass_to_child_snapshot(
-                        ChildBrowsingContextSnapshot::about_blank(
-                            self.document_base_url_for_child_context(handle),
-                        )
-                        .with_policy_container(policy_container),
-                    ),
-                )
-            }
+    ) -> LocalChildDocumentPreparation {
+        let mut snapshot = match bootstrap {
+            ChildBrowsingContextBootstrap::AboutBlank => ChildBrowsingContextSnapshot::about_blank(
+                self.document_base_url_for_child_context(handle),
+            ),
             ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
                 if let Some(snapshot) = self
                     .child_browsing_contexts
                     .get(&handle)
                     .and_then(|entry| entry.pending_srcdoc_history_snapshot())
                 {
-                    return Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot));
+                    return LocalChildDocumentPreparation::Ready(Box::new(
+                        self.apply_page_csp_bypass_to_child_snapshot(snapshot),
+                    ));
                 }
-                Some(self.apply_page_csp_bypass_to_child_snapshot(
-                    ChildBrowsingContextSnapshot::srcdoc(base_url.clone(), markup.clone()),
-                ))
+                ChildBrowsingContextSnapshot::srcdoc(base_url.clone(), markup.clone())
             }
             ChildBrowsingContextBootstrap::Url(url) => {
-                self.materialize_local_child_snapshot_for_navigation_url(handle, url)
+                return self.materialize_local_child_snapshot_for_navigation_url(handle, url);
             }
-            ChildBrowsingContextBootstrap::Request(_) => None,
+            ChildBrowsingContextBootstrap::Request(_) => {
+                return LocalChildDocumentPreparation::Unavailable;
+            }
+        };
+        if bootstrap.content_security_policy_inherited() {
+            snapshot.policy_container =
+                self.initial_child_about_blank_policy_container_from_parent(handle);
         }
+        LocalChildDocumentPreparation::Ready(Box::new(
+            self.apply_page_csp_bypass_to_child_snapshot(snapshot),
+        ))
     }
 }
 
