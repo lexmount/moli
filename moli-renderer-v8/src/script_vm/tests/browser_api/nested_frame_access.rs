@@ -50,7 +50,7 @@ async fn nested_frame_windows_use_accessing_realm_without_granting_top_access() 
 }
 
 #[tokio::test]
-async fn frame_content_document_uses_getter_realm_after_document_domain_changes() {
+async fn frame_content_document_uses_node_document_origin_after_document_domain_changes() {
     let server = StaticHttpServer::spawn_with_bodies(vec![
         "<!doctype html><body><iframe id=nested src='/nested'></iframe>".to_owned(),
         "<!doctype html><body>nested loaded".to_owned(),

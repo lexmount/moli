@@ -4,10 +4,13 @@
 
 use super::super::video_color_space::VideoColorSpaceInit;
 use crate::{blob::array_buffer_from_bytes, webidl};
-use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
+use webidl::SnapshotPrototype;
 
 fn codec_is_empty(codec: &webidl::DomString16) -> bool {
-    codec.0.iter().all(|unit| matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20))
+    codec
+        .0
+        .iter()
+        .all(|unit| matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20))
 }
 
 pub(super) struct Description<'s>(webidl::AllowSharedBufferSource<'s>);
@@ -28,21 +31,27 @@ impl Description<'_> {
             webidl::AllowSharedBufferSource::Buffer(buffer) => buffer.was_detached(),
             webidl::AllowSharedBufferSource::Shared(_) => false,
             webidl::AllowSharedBufferSource::View(view) => {
-                if view.get_backing_store().is_some_and(|store| store.is_shared()) {
+                if view
+                    .get_backing_store()
+                    .is_some_and(|store| store.is_shared())
+                {
                     false
                 } else {
-                    view.buffer(scope).is_none_or(|buffer| buffer.was_detached())
+                    view.buffer(scope)
+                        .is_none_or(|buffer| buffer.was_detached())
                 }
-            },
+            }
         }
     }
 }
 fn description_snapshot<'s>(
-    scope: &mut v8::PinScope<'s, '_>, value: &Description<'s>, _: SnapshotPrototype,
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &Description<'s>,
+    _: SnapshotPrototype,
 ) -> Option<v8::Local<'s, v8::Value>> {
-        // Copy only after all dictionary getters and validity checks complete.
-        let bytes = value.0.to_vec(scope);
-        array_buffer_from_bytes(scope, bytes).map(Into::into)
+    // Copy only after all dictionary getters and validity checks complete.
+    let bytes = value.0.to_vec(scope);
+    array_buffer_from_bytes(scope, bytes).map(Into::into)
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]

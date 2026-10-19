@@ -1,10 +1,9 @@
 use crate::webvtt::{ParsedWebVtt, parse_vtt_file};
 
 use crate::context_bootstrap::{
-    dispatch_simple_event_target_event, initialize_simple_event_target, set_text_track_cue_track,
-    simple_object_event_set_handler, text_track_cue_id, text_track_cue_times, text_track_cue_track,
-    new_vtt_cue_for_parsed,
-    new_vtt_region_for_parsed,
+    dispatch_simple_event_target_event, initialize_simple_event_target, new_vtt_cue_for_parsed,
+    new_vtt_region_for_parsed, set_text_track_cue_track, simple_object_event_set_handler,
+    text_track_cue_id, text_track_cue_times, text_track_cue_track,
 };
 use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;

@@ -1,7 +1,8 @@
 use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
 use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{
-    BlobId, BlobStore, ObjectUrlData, ObjectUrlEntry, ObjectUrlTarget, blob_slice_relative_index, normalize_blob_mime_type,
+    BlobId, BlobStore, ObjectUrlEntry, ObjectUrlTarget, blob_slice_relative_index,
+    normalize_blob_mime_type,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};
@@ -563,4 +564,3 @@ fn new_uint8_array_from_bytes<'s>(
     let buffer = array_buffer_from_bytes(scope, bytes)?;
     v8::Uint8Array::new(scope, buffer, 0, len)
 }
-

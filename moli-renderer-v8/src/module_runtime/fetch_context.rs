@@ -157,7 +157,7 @@ impl NativeModuleFetchContext {
             crate::network_host::FetchResponseRequest {
                 method: "GET",
                 mode: request.request_mode,
-                redirect_mode: request.redirect_mode,
+                redirect_mode: request.redirect_mode(),
             }
             .network_response_filter(
                 &self.request_origin,

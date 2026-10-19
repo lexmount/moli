@@ -1,6 +1,23 @@
 use super::*;
 use base64::Engine;
 
+fn video_frame_native_state_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let object = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+    let (host, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, object)
+            .unwrap();
+    let state = unsafe { &*host }.media_video_state_for_test(handle);
+    rv.set(
+        crate::util::v8_string(scope, &state.to_string())
+            .unwrap()
+            .into(),
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn canvas_video_sources_decode_real_frames_and_follow_media_ownership() {
     run_page_vm_async_test(async move {
@@ -23,8 +40,6 @@ async fn canvas_video_sources_decode_real_frames_and_follow_media_ownership() {
         });
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
         loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Video, true);
-        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse(&base)?);
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
         let sources = serde_json::json!({
             "data": {
                 "pattern": format!("data:video/webm;base64,{}", base64::engine::general_purpose::STANDARD.encode(pattern)),
@@ -33,23 +48,56 @@ async fn canvas_video_sources_decode_real_frames_and_follow_media_ownership() {
             },
             "http": { "pattern": format!("{base}/pattern"), "counting": format!("{base}/counting"), "vp9": format!("{base}/vp9") },
         });
-        page.vm_mut().eval(&format!("document.body.innerHTML='<iframe></iframe>';globalThis.__videoFrameSources={sources};"))?;
-        page.vm_mut().eval(include_str!("../../../../tests/fixtures/canvas-video-frames.js"))?;
-        let deadline = Instant::now() + Duration::from_secs(120);
-        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
-            let _ = page.run_next_child_frame_task_source_for_semantic_test().await;
-            for selector in [PageSelectedTaskTestSelector::ResourceCompletion, PageSelectedTaskTestSelector::MediaElementEvent, PageSelectedTaskTestSelector::BitmapTask] {
-                let _ = page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+        let mut names = std::collections::BTreeSet::new();
+        for owner in ["main", "iframe"] {
+            for callee in ["main", "iframe"] {
+                for transport in ["data", "http"] {
+                    for residence in ["live", "windowless"] {
+                        for canvas in ["html", "offscreen"] {
+                            let scenario = format!("{owner}/{callee}/{transport}/{residence}/{canvas}");
+                            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse(&base)?);
+                            page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+                            page.vm_mut().with_default_context_scope_for_test(|scope, _| {
+                                let function = v8::FunctionTemplate::new(scope, video_frame_native_state_for_test).get_function(scope).unwrap();
+                                let global = scope.get_current_context().global(scope);
+                                global.create_data_property(scope, crate::util::v8str(scope, "__videoFrameNativeState").into(), function.into());
+                                Ok(())
+                            })?;
+                            page.vm_mut().eval(&format!("document.body.innerHTML='<iframe></iframe>';globalThis.__videoFrameScenario={scenario:?};globalThis.__videoFrameSources={sources};"))?;
+                            page.vm_mut().eval(include_str!("../../../../tests/fixtures/canvas-video-frames.js"))?;
+                            let deadline = Instant::now() + Duration::from_secs(120);
+                            while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+                                let _ = page.run_next_child_frame_task_source_for_semantic_test().await;
+                                // Complete already-ready source work before selecting a due timer.
+                                // Keep a bounded turn so decoding cannot starve timer delivery.
+                                for _ in 0..64 {
+                                    let mut advanced = false;
+                                    for selector in [PageSelectedTaskTestSelector::ResourceCompletion, PageSelectedTaskTestSelector::MediaElementEvent, PageSelectedTaskTestSelector::BitmapTask] {
+                                        advanced |= page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+                                    }
+                                    if !advanced { break; }
+                                }
+                                let _ = page.run_one_due_timer_selected_task_for_test(&loader).await?;
+                                anyhow::ensure!(Instant::now() < deadline, "video scenario {scenario} did not finish: {}", page.vm_mut().eval("__videoFrameProgress.stage")?);
+                                tokio::time::sleep(Duration::from_millis(1)).await;
+                            }
+                            let result: serde_json::Value = serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+                            let checks = result["checks"].as_array().unwrap();
+                            let failures: Vec<_> = checks.iter().filter(|check| check["passed"] != true).collect();
+                            assert!(failures.is_empty(), "{scenario}: {failures:#?}");
+                            assert_eq!(result["total"], 6, "all video operations: {scenario}");
+                            for check in checks {
+                                let name = check["name"].as_str().unwrap();
+                                assert!(name.starts_with(&format!("{scenario}/")), "{name}");
+                                assert!(names.insert(name.to_owned()), "duplicate check {name}");
+                            }
+                        }
+                    }
+                }
             }
-            let _ = page.run_one_due_timer_selected_task_for_test(&loader).await?;
-            anyhow::ensure!(Instant::now() < deadline, "video fixture did not finish: {}", page.vm_mut().eval("__videoFrameProgress.stage")?);
-            tokio::time::sleep(Duration::from_millis(1)).await;
         }
         server.abort();
-        let result: serde_json::Value = serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
-        let failures: Vec<_> = result["checks"].as_array().unwrap().iter().filter(|check| check["passed"] != true).collect();
-        assert!(failures.is_empty(), "{failures:#?}");
-        assert_eq!(result["total"], 192);
+        assert_eq!(names.len(), 192);
         Ok::<_, anyhow::Error>(())
     }).await.expect("decoded video sources across realms and transport paths");
 }

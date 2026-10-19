@@ -28,6 +28,17 @@ pub(super) struct UiEventInit<'s> {
 }
 
 impl<'s> UiEventInit<'s> {
+    pub(super) fn with_event_flags(bubbles: bool, cancelable: bool, composed: bool) -> Self {
+        Self {
+            base: super::EventInit {
+                bubbles,
+                cancelable,
+                composed,
+            },
+            ..Default::default()
+        }
+    }
+
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
         (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
@@ -72,7 +83,10 @@ pub(super) struct CompositionEventInit<'s> {
 
 impl Default for CompositionEventInit<'_> {
     fn default() -> Self {
-        Self { ui: UiEventInit::default(), data: webidl::DomString16(Vec::new()) }
+        Self {
+            ui: UiEventInit::default(),
+            data: webidl::DomString16(Vec::new()),
+        }
     }
 }
 
@@ -87,7 +101,8 @@ pub(super) fn initialize_composition_event<'s>(
     event: v8::Local<'s, v8::Object>,
     init: CompositionEventInit<'s>,
 ) {
-    init.initialize_snapshot(scope, event).expect("CompositionEvent state should initialize");
+    init.initialize_snapshot(scope, event)
+        .expect("CompositionEvent state should initialize");
 }
 
 pub(super) fn parse_ui_event_init<'s>(

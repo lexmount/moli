@@ -142,16 +142,17 @@ pub(crate) fn build_rtc_sdp_error<'s>(
     if object.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
     }
-    ObjectDeclaration::new(
-        v8_string(scope, message)?,
-        v8str(scope, ErrorDetail::SdpSyntaxError.token()),
-        v8::null(scope).into(),
-        v8::null(scope).into(),
-        v8::Integer::new(scope, line_number).into(),
-        v8::null(scope).into(),
-    )
-    .initialize(scope, object)
-    .ok()?;
+    ErrorInit {
+        error_detail: ErrorDetail::SdpSyntaxError,
+        received_alert: None,
+        sctp_cause_code: None,
+        sdp_line_number: Some(line_number),
+        sent_alert: None,
+    }
+    .initialize_snapshot(scope, object)?;
+    ObjectDeclaration::new(v8_string(scope, message)?)
+        .initialize(scope, object)
+        .ok()?;
     capture_dom_exception_stack(scope, object);
     Some(object)
 }

@@ -34,7 +34,6 @@ pub(crate) use self::event_target::dispatch_indexed_db_event_callback;
 use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
-pub(crate) use self::slots::INDEXED_DB_EVENT_LISTENERS_SLOT;
 use self::slots::*;
 use self::storage_bucket::{
     storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,

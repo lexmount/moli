@@ -64,6 +64,7 @@ fn native_midi_maps_are_live_lossless_and_support_registered_proxies() {
                     .unwrap();
             let port = v8::Object::new(scope);
             crate::web_api_interfaces::initialize(scope, port, interface).unwrap();
+            crate::context_bootstrap::initialize_simple_event_target(scope, port);
             assert_eq!(port.set_prototype(scope, prototype.into()), Some(true));
             assert_eq!(
                 global.create_data_property(

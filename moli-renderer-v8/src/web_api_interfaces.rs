@@ -56,6 +56,12 @@ interfaces! {
     ChapterInformation;
     MediaSourceHandle;
     MediaStream: EventTarget;
+    MediaStreamTrack: EventTarget;
+    CanvasCaptureMediaStreamTrack: MediaStreamTrack;
+    MediaRecorder: EventTarget;
+    MediaSession;
+    TimeRanges;
+    VideoPlaybackQuality;
     MediaStreamTrackEvent: Event;
     OverconstrainedError: DOMException;
     PictureInPictureEvent: Event;

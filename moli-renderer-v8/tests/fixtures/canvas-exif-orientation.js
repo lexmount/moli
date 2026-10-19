@@ -62,6 +62,7 @@
     const realms=[['main',globalThis],['iframe',document.querySelector('iframe').contentWindow]];
     for(const [ownerName,owner] of realms)for(const [calleeName,callee] of realms)
       for(const format of ['png','jpg','webp'])for(let orientation=1;orientation<=8;orientation++){
+        if(globalThis.__exifScenario && globalThis.__exifScenario !== `${ownerName}/${calleeName}/${format}`)continue;
         const prefix=`${ownerName}/${calleeName}/${format}/${orientation}`;
         progress.stage=prefix+'/load';
         const bytes=orientedBytes(format,orientation),mime=__exifSources[format].mime;
