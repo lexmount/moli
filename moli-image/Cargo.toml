@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 color = "0.3.3"
-image = { version = "0.25.10", default-features = false, features = ["gif", "webp", "bmp"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "webp"] }
 libjpeg-turbo-rs = { git = "https://github.com/lexmount/libjpeg-turbo-rs", rev = "82a1375407abda75ffc31ee0dad5920bc219d84e" }
 moxcms = { version = "0.8.1", features = ["extended_range"] }
 png = "0.18"
