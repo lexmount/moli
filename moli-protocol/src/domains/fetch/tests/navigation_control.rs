@@ -1,5 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
+use crate::testing::wait_until_renderer_document_load;
+
 use super::*;
 
 #[test]
@@ -1136,6 +1138,9 @@ async fn preload_navigations_can_round_trip_intercepted_text_through_fulfill_req
     let url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &url, "SID-1", "TID-1").await;
+    // The fixture commits before its load publication necessarily crosses the
+    // scheduler. Settle that exact Document before observing the next navigation.
+    wait_until_renderer_document_load(&mut ctx, Some("SID-1"), "TID-1", LOADER_ID).await;
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.sent.clear();
     for (id, method, params) in [
