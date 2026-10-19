@@ -231,7 +231,7 @@ async fn raw_memory_cache_only_redirects_stop_at_uncached_targets() -> Result<()
     // Prime the complete redirect representation independently. The browser
     // redirect loop may drop an unread body before its cache tee completes.
     assert_eq!(
-        fetch(&client, request().with_follow_redirects(false), false)
+        fetch(&client, request().with_single_hop(), false)
             .await?
             .0
             .status,

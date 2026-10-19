@@ -168,7 +168,7 @@ impl PreparedXhrSendBody {
 
     fn utf8_text(body: Vec<u8>, content_type: &str) -> Self {
         Self {
-            body: Some(body),
+            body: Some(body.into()),
             default_content_type: Some(content_type.to_owned()),
             rewrite_content_type_charset: true,
         }

@@ -1482,12 +1482,18 @@ pub(in crate::network_host) fn consume_network_body_value_from_object<'s>(
 }
 
 #[cfg(test)]
-pub(crate) fn consume_native_body_text_for_teardown_test<'s>(
+pub(crate) fn consume_native_body_for_teardown_test<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
+    method: &str,
 ) -> v8::Local<'s, v8::Promise> {
-    let result =
-        consume_network_body_value_from_object(scope, response, NetworkBodyConsumptionKind::Text);
+    let kind = match method {
+        "text" => NetworkBodyConsumptionKind::Text,
+        "json" => NetworkBodyConsumptionKind::Json,
+        "arrayBuffer" => NetworkBodyConsumptionKind::ArrayBuffer,
+        _ => panic!("unsupported native body teardown fixture: {method}"),
+    };
+    let result = consume_network_body_value_from_object(scope, response, kind);
     if let NetworkBodyConsumption::Pending(promise) = result {
         return promise;
     }

@@ -60,7 +60,7 @@ async fn handle_timing_request(
     if url.path() == "/compressed-worker.js" {
         let body = r#"self.onmessage = async event => {
             const probe = (0, eval)('(' + event.data.source + ')');
-            postMessage(await probe(event.data.origins, event.data.label));
+            postMessage(await probe(event.data.origins, event.data.label, event.data.filter));
             close();
         };"#;
         let head = format!(
@@ -398,14 +398,23 @@ fn xhr_resource_timing_reads_internal_headers_before_cors_exposure() {
 }
 
 async fn run_resource_timing_fixture(fixture: &str, expected_total: usize) {
+    run_resource_timing_fixture_scenario(fixture, expected_total, None).await;
+}
+
+async fn run_resource_timing_fixture_scenario(
+    fixture: &str,
+    expected_total: usize,
+    scenario: Option<&serde_json::Value>,
+) -> serde_json::Value {
     let first = timing_server().await;
     let second = timing_server().await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut page =
         new_storage_page_task_executor_test_vm_with_loader(&format!("{}/", first.origin), &loader);
     page.eval(&format!(
-        "globalThis.__fetchOrigins = {}; globalThis.__fetchTimingResult = null;",
+        "globalThis.__fetchOrigins = {}; globalThis.__fetchTimingResult = null;globalThis.__compressedTimingScenario = {};",
         serde_json::to_string(&[&first.origin, &second.origin]).unwrap(),
+        serde_json::to_string(&scenario).unwrap(),
     ))
     .unwrap();
     page.eval(&format!(
@@ -425,13 +434,58 @@ async fn run_resource_timing_fixture(fixture: &str, expected_total: usize) {
         .unwrap_or_else(|error| panic!("fetch timing probe returned {result:?}: {error}"));
     assert_eq!(result["total"], expected_total);
     assert_eq!(result["failures"], serde_json::json!([]));
+    result
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn compressed_resource_timing_sizes_survive_window_child_worker_and_memory_cache() {
-    run_resource_timing_fixture(
-        include_str!("../../../tests/fixtures/compressed-request-resource-timing.js"),
+    let mut names = std::collections::BTreeSet::new();
+    for realm in ["window", "child", "worker"] {
+        let apis = if realm == "worker" {
+            ["fetch", "xhr", "sync-xhr"].as_slice()
+        } else {
+            ["fetch", "xhr"].as_slice()
+        };
+        for api in apis {
+            let modes = if *api == "fetch" {
+                [
+                    "same",
+                    "cors",
+                    "cors-tao",
+                    "denied",
+                    "opaque",
+                    "opaque-tao",
+                    "cache",
+                ]
+                .as_slice()
+            } else {
+                ["same", "cors", "cors-tao", "denied", "cache"].as_slice()
+            };
+            for mode in modes {
+                let scenario = serde_json::json!({"realm": realm, "api": api, "mode": mode});
+                let total = if *mode == "cache" { 8 } else { 15 };
+                let result = run_resource_timing_fixture_scenario(
+                    include_str!("../../../tests/fixtures/compressed-request-resource-timing.js"),
+                    total,
+                    Some(&scenario),
+                )
+                .await;
+                let checks = result["names"].as_array().unwrap();
+                assert_eq!(checks.len(), total, "{scenario}");
+                for check in checks {
+                    let name = check.as_str().unwrap();
+                    assert!(
+                        name.starts_with(&format!("{realm}: {api}/")),
+                        "{scenario}: {name}"
+                    );
+                    assert!(names.insert(name.to_owned()), "duplicate check: {name}");
+                }
+            }
+        }
+    }
+    assert_eq!(
+        names.len(),
         566,
-    )
-    .await;
+        "all Window, child, worker, coding, API and cache cases must run"
+    );
 }

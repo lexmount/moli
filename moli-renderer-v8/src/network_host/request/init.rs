@@ -296,9 +296,12 @@ pub(crate) fn parse_fetch_init<'s>(
         Some(PreparedBodySource::Bytes(bytes)) => (Some(bytes), None),
         Some(PreparedBodySource::Blob(blob)) => {
             let blob = v8::Local::new(scope, blob);
-            (blob::blob_bytes_from_object(scope, blob), None)
+            (
+                blob::blob_bytes_from_object(scope, blob).map(bytes::Bytes::from),
+                None,
+            )
         }
-        Some(PreparedBodySource::Stream(stream)) => (Some(Vec::new()), Some(stream)),
+        Some(PreparedBodySource::Stream(stream)) => (Some(bytes::Bytes::new()), Some(stream)),
         None => (None, None),
     };
 

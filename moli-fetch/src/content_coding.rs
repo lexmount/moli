@@ -1,17 +1,9 @@
 use moli_header_field::{HeaderFieldTokenMode, HeaderFieldTokenizer};
 
 fn supported_content_codings() -> impl Iterator<Item = &'static str> {
-    let version = curl::Version::get();
-    [
-        ("deflate", version.feature_libz()),
-        ("gzip", version.feature_libz()),
-        ("br", version.feature_brotli()),
-        ("zstd", version.feature_zstd()),
-        ("dcb", version.feature_brotli()),
-        ("dcz", version.feature_zstd()),
-    ]
-    .into_iter()
-    .filter_map(|(coding, supported)| supported.then_some(coding))
+    // The bounded native decoder supplies the same coding set even when the
+    // linked libcurl lacks Zstandard or external-dictionary support.
+    ["deflate", "gzip", "br", "zstd", "dcb", "dcz"].into_iter()
 }
 
 /// Choose the browser's header before cache lookup and transport setup so
