@@ -95,7 +95,7 @@ async fn handle_timing_request(
     let status = get("status")
         .parse::<u16>()
         .unwrap_or(if redirect { 302 } else { 200 });
-    if status == 204 {
+    if matches!(status, 204 | 205) {
         body.clear();
     }
     let mut headers = format!(
@@ -116,6 +116,9 @@ async fn handle_timing_request(
     }
     headers.push_str("\r\n");
     if socket.write_all(headers.as_bytes()).await.is_err() {
+        return;
+    }
+    if request.starts_with("HEAD ") {
         return;
     }
     if get("truncate") == "1" {
@@ -160,5 +163,159 @@ async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
     let result: serde_json::Value = serde_json::from_str(&result)
         .unwrap_or_else(|error| panic!("fetch timing probe returned {result:?}: {error}"));
     assert_eq!(result["total"], 36);
+    assert_eq!(result["failures"], serde_json::json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_requests_report_resource_timing_for_success_and_network_errors() {
+    run_resource_timing_fixture(
+        include_str!("../../../tests/fixtures/window-request-resource-timing.js"),
+        38,
+    )
+    .await;
+}
+
+#[test]
+fn xhr_resource_timing_reads_internal_headers_before_cors_exposure() {
+    for streaming in [false, true] {
+        for tao in [false, true] {
+            let mut vm = new_storage_test_vm("https://xhr-timing-origin.test/");
+            vm.set_fetch_subresource_interception(
+                true,
+                Some(crate::types::SubresourceResourceType::Xhr),
+            );
+            vm.eval(
+                "globalThis.xhr = new XMLHttpRequest(); xhr.open('GET', 'https://xhr-timing-target.test/data'); xhr.send();",
+            ).unwrap();
+            let pending = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(pending.len(), 1);
+            let request = &pending[0];
+            let mut headers = vec![
+                ("content-type".to_owned(), b"text/plain".to_vec()),
+                ("content-encoding".to_owned(), b"identity".to_vec()),
+                ("access-control-allow-origin".to_owned(), b"*".to_vec()),
+            ];
+            if tao {
+                headers.push(("timing-allow-origin".to_owned(), b"*".to_vec()));
+            }
+            let head = moli_fetch::ResponseHead {
+                final_url: request.url.clone(),
+                status: 200,
+                status_text: None,
+                headers,
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                cache_state: Default::default(),
+                negotiated_http_version: None,
+            };
+            if streaming {
+                let body_source_id = crate::network_host::new_network_body_source_id();
+                vm.start_streaming_async_subresource_fetch(
+                    crate::types::AsyncSubresourceStreamingStarted {
+                        internal_id: request.internal_id,
+                        request_url: request.url.clone(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Default::default(),
+                        request_body: None,
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
+                        body_source_id,
+                        head,
+                        network_request_headers: None,
+                    },
+                )
+                .unwrap();
+                vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"body".to_vec());
+                vm.finish_streaming_async_subresource_fetch(
+                    request.internal_id,
+                    body_source_id,
+                    Ok(()),
+                )
+                .unwrap();
+            } else {
+                vm.complete_async_subresource_fetch(
+                    crate::types::AsyncSubresourceFetchCompletion {
+                        internal_id: request.internal_id,
+                        request_url: request.url.clone(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Default::default(),
+                        request_body: None,
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
+                        response_status_text: None,
+                        network_error_text: None,
+                        result: Ok(
+                            crate::protocol_types::NavigationResponse::from_head_and_body(
+                                head,
+                                "body".to_owned(),
+                                b"body".to_vec(),
+                            ),
+                        )
+                        .into(),
+                    },
+                )
+                .unwrap();
+            }
+            let actual = vm.eval(r#"JSON.stringify((() => {
+                const entries = performance.getEntriesByName(xhr.responseURL, 'resource');
+                const entry = entries[0];
+                return [entries.length, xhr.status, xhr.responseText,
+                    xhr.getResponseHeader('content-encoding'), xhr.getResponseHeader('timing-allow-origin'),
+                    entry.initiatorType, entry.responseStatus, entry.contentType, entry.contentEncoding,
+                    entry.encodedBodySize, entry.decodedBodySize, entry.transferSize];
+            })())"#).unwrap();
+            let expected = serde_json::json!([
+                1,
+                200,
+                "body",
+                null,
+                null,
+                "xmlhttprequest",
+                200,
+                "text/plain",
+                "@unknown",
+                4,
+                4,
+                if tao { 304 } else { 0 }
+            ]);
+            assert_eq!(
+                actual,
+                expected.to_string(),
+                "streaming={streaming}, tao={tao}"
+            );
+        }
+    }
+}
+
+async fn run_resource_timing_fixture(fixture: &str, expected_total: usize) {
+    let first = timing_server().await;
+    let second = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page =
+        new_storage_page_task_executor_test_vm_with_loader(&format!("{}/", first.origin), &loader);
+    page.eval(&format!(
+        "globalThis.__fetchOrigins = {}; globalThis.__fetchTimingResult = null;",
+        serde_json::to_string(&[&first.origin, &second.origin]).unwrap(),
+    ))
+    .unwrap();
+    page.eval(&format!(
+        "({}).then(value => __fetchTimingResult = value, error => __fetchTimingResult = String(error));",
+        fixture.trim().trim_end_matches(';'),
+    )).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(__fetchTimingResult !== null)",
+        "true",
+        "fetch Resource Timing",
+    )
+    .await;
+    let result = page.eval("__fetchTimingResult").unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result)
+        .unwrap_or_else(|error| panic!("fetch timing probe returned {result:?}: {error}"));
+    assert_eq!(result["total"], expected_total);
     assert_eq!(result["failures"], serde_json::json!([]));
 }

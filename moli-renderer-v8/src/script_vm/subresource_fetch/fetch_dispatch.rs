@@ -663,16 +663,14 @@ impl ScriptVm {
                             response.body_bytes().len()))
                     } else { None };
                     let mut observable_response = response;
-                    if matches!(
-                        pending.info.resource_type,
-                        SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-                    ) && !response_filter.is_some_and(|filter| filter.is_readable()) {
-                        observable_response.headers =
-                            crate::network_host::filter_cors_exposed_response_headers(
-                                &pending.request_origin,
-                                &observable_response.head(),
-                                pending.credentials_mode,
-                            );
+                    if pending.info.resource_type == SubresourceResourceType::Fetch
+                        && !response_filter.is_some_and(|filter| filter.is_readable())
+                    {
+                        observable_response.headers = crate::network_host::filter_cors_exposed_response_headers(
+                            &pending.request_origin,
+                            &observable_response.head(),
+                            pending.credentials_mode,
+                        );
                     }
                     let continuation_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
@@ -717,18 +715,31 @@ impl ScriptVm {
                             }
                             resolver.resolve(scope, response_obj.into());
                         }
-                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
-                            crate::context_bootstrap::record_resource_performance_entry(
-                                scope,
-                                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
-                                    pending.info.url.as_str(),
-                                    "xmlhttprequest",
-                                    None,
-                                    &observable_response,
-                                ),
-                            );
+                        PendingSubresourceContinuation::Xhr { xhr, timing, .. } => {
+                            let body_size = observable_response.body_bytes().len();
+                            let (mut head, body) = observable_response.into_body();
+                            let filter_headers = !response_filter.as_ref().is_some_and(|filter| filter.is_readable());
+                            let readable = response_filter.or_else(|| crate::network_host::network_response_filter(
+                                &pending.request_origin, &head, pending.request_mode,
+                            )).is_none_or(|filter| filter.is_readable());
+                            if let Some(mut timing) = timing {
+                                if let Some(native) = pending.load.response_timing() {
+                                    timing.observe_native_timing(native);
+                                }
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope,
+                                    timing.response(
+                                        &pending.info.url, &pending.request_origin,
+                                        &head, readable, body_size,
+                                    ),
+                                );
+                            }
+                            if filter_headers {
+                                head.headers = crate::network_host::filter_cors_exposed_response_headers(
+                                    &pending.request_origin, &head, pending.credentials_mode,
+                                );
+                            }
                             let xhr = v8::Local::new(scope, &xhr);
-                            let (head, body) = observable_response.into_body();
                             crate::network_host::apply_xhr_response_body_source_with_status_text(
                                 scope,
                                 xhr,
@@ -877,11 +888,17 @@ impl ScriptVm {
                     );
                     let continuation_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
+                    if let Some(timing) = pending.continuation.window_resource_timing_mut()
+                    {
+                        if let Some(native) = pending.load.response_timing() {
+                            timing.observe_native_timing(native);
+                        }
+                        crate::context_bootstrap::record_resource_performance_entry(
+                            scope, timing.failure(&pending.info.url),
+                        );
+                    }
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
-                            crate::context_bootstrap::record_resource_performance_entry(
-                                scope, fetch.timing.failure(&pending.info.url),
-                            );
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");

@@ -1449,10 +1449,10 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Xhr {
+                continuation: PendingSubresourceContinuation::new_window_xhr(
                     xhr,
                     use_cors_preflight,
-                },
+                ),
                 deferred_request_started: false,
             },
         );
@@ -1528,10 +1528,10 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Xhr {
+                continuation: PendingSubresourceContinuation::new_window_xhr(
                     xhr,
                     use_cors_preflight,
-                },
+                ),
                 deferred_request_started: false,
             },
         );
