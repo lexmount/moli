@@ -177,6 +177,25 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
     value: v8::Local<'s, v8::Value>,
     setter: TrustedAttributeSetter,
 ) -> Option<String> {
+    trusted_attribute_value_string16(
+        scope,
+        runtime_and_handle,
+        attribute_namespace,
+        local_name,
+        value,
+        setter,
+    )
+    .map(|units| String::from_utf16_lossy(&units))
+}
+
+pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
+    attribute_namespace: Option<&str>,
+    local_name: &str,
+    value: v8::Local<'s, v8::Value>,
+    setter: TrustedAttributeSetter,
+) -> Option<Vec<u16>> {
     let input_kind = crate::context_bootstrap::trusted_type_kind(scope, value);
     let sink = runtime_and_handle.and_then(|(runtime_ptr, handle)| {
         let element = unsafe { &*runtime_ptr }
@@ -250,14 +269,16 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
             sink,
             setter.api_name(),
             Some(global),
-        );
+        )
+        .map(|value| value.encode_utf16().collect());
     }
 
     if let Some(kind) = input_kind {
-        return crate::context_bootstrap::trusted_type_string(scope, value, kind);
+        return crate::context_bootstrap::trusted_type_string(scope, value, kind)
+            .map(|value| value.encode_utf16().collect());
     }
 
-    match crate::webidl::convert::<crate::webidl::DomString>(
+    match crate::webidl::convert::<crate::webidl::DomString16>(
         scope,
         value,
         setter.conversion_context(),
