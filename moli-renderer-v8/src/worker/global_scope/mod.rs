@@ -64,7 +64,6 @@ use crate::network_host::{
     XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
     append_default_body_content_type, apply_xhr_failure, apply_xhr_response,
     apply_xhr_response_body_source, apply_xhr_timeout,
-    browser_request_needs_manual_preflight_redirects,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
