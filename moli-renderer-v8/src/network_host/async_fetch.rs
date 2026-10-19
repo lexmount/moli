@@ -215,6 +215,7 @@ impl ManualCorsRedirectState {
             return Ok(ManualCorsRedirectTransition::FinalResponse);
         };
 
+        self.request.check_redirect_target(&next_url)?;
         if !matches!(next_url.scheme(), "http" | "https") {
             return Err(format!("CORS redirect requires an HTTP(S) URL: {next_url}"));
         }

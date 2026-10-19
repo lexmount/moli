@@ -370,7 +370,11 @@ impl ResourceRequestClient {
                         stage = "script_text_cache_wait_start",
                     );
                 }
-                let result = load.wait().await.map_err(anyhow::Error::msg);
+                let result = load
+                    .wait()
+                    .await
+                    .and_then(|response| script_response_for_cache_consumer(&request, response))
+                    .map_err(anyhow::Error::msg);
                 if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
                     let status = result.as_ref().ok().map(|response| response.status);
                     tracing::info!(
@@ -389,6 +393,7 @@ impl ResourceRequestClient {
             ScriptTextCacheLookup::CompletedHit(result) => {
                 let result = result
                     .map(response_with_memory_cache_hit)
+                    .and_then(|response| script_response_for_cache_consumer(&request, response))
                     .map_err(anyhow::Error::msg);
                 if let Some(url) = timing_url.as_deref() {
                     let status = result.as_ref().ok().map(|response| response.status);
@@ -543,6 +548,7 @@ impl ResourceRequestClient {
             ScriptTextCacheLookup::CompletedHit(result) => {
                 let result = result
                     .map(response_with_memory_cache_hit)
+                    .and_then(|response| script_response_for_cache_consumer(&request, response))
                     .map_err(anyhow::Error::msg);
                 resource_load.finish();
                 if let Some(url) = timing_url.as_deref() {
@@ -579,7 +585,12 @@ impl ResourceRequestClient {
         }
         let callback_resource_load = resource_load.clone();
         let callback_timing_url = timing_url.clone();
+        let consumer_request = (!owns_transport).then(|| request.clone());
         let consumer = load.wait_callback(Box::new(move |result| {
+            let result = result.and_then(|response| match &consumer_request {
+                Some(request) => script_response_for_cache_consumer(request, response),
+                None => Ok(response),
+            });
             callback_resource_load.finish();
             if let (Some(started), Some(url)) = (started, callback_timing_url.as_deref()) {
                 let status = result.as_ref().ok().map(|response| response.status);
@@ -1178,6 +1189,16 @@ impl fmt::Debug for ResourceRequestClientOwner {
             .field("client", &self.client)
             .finish_non_exhaustive()
     }
+}
+
+fn script_response_for_cache_consumer(
+    request: &Request,
+    response: Response,
+) -> std::result::Result<Response, String> {
+    for redirect in &response.redirect_chain {
+        request.check_redirect_target(&redirect.to_url)?;
+    }
+    Ok(response)
 }
 
 async fn collect_streaming_raw_response_as_text(

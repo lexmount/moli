@@ -1,4 +1,12 @@
 use super::*;
+use crate::content_security_policy::{
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
+    ContentSecurityPolicyResourceKind,
+    content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
+    current_script_violation_location,
+};
+use crate::worker::WorkerMessage;
+use moli_url::WebOrigin;
 
 pub(super) struct WorkerImportScriptSource {
     pub(super) final_url: Url,
@@ -41,33 +49,10 @@ fn materialize_worker_import_source(
     state: &Rc<RefCell<WorkerGlobalState>>,
     script_url: &Url,
 ) -> Result<WorkerImportScriptSource, WorkerImportScriptError> {
-    if let Some(violation) = {
-        let state = state.borrow();
-        state.current_script_url.as_ref().and_then(|protected_url| {
-            worker_content_security_policy_report_only_violation(
-                &state,
-                protected_url,
-                script_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
-            )
-        })
-    } {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-    }
-    if let Some(violation) = {
-        let state = state.borrow();
-        state.current_script_url.as_ref().and_then(|protected_url| {
-            worker_content_security_policy_violation(
-                &state,
-                protected_url,
-                script_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
-            )
-        })
-    } {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-        let message = worker_content_security_policy_error_message(&violation, "importScripts");
-        return Err(WorkerImportScriptError::network(message));
+    let csp = WorkerImportScriptCsp::capture(scope, state, script_url);
+    if let Some(csp) = &csp {
+        csp.check_url(script_url, ContentSecurityPolicyRedirectStatus::NoRedirect)
+            .map_err(WorkerImportScriptError::network)?;
     }
     match script_url.scheme() {
         "data" => {
@@ -105,32 +90,137 @@ fn materialize_worker_import_source(
             })
         }
         "http" | "https" => {
-            let (loader, initiator_url, referrer_policy, network_partition_key) = {
+            let (loader, initiator_url, referrer_policy, network_partition_key, policy_context) = {
                 let state = state.borrow();
                 (
                     state.loader.clone(),
                     state.current_script_url.clone(),
                     state.referrer_policy.clone(),
                     state.network_partition_key.clone(),
+                    state.policy_context,
                 )
             };
-            fetch_worker_import_source_blocking(
+            let source = fetch_worker_import_source_blocking(
                 loader,
                 script_url.clone(),
                 initiator_url,
+                worker_global_origin(scope).unwrap_or(WebOrigin::Opaque),
                 referrer_policy,
                 network_partition_key,
+                policy_context,
+                csp.map(|csp| {
+                    moli_fetch::RequestRedirectCheck::new(move |checked_url| {
+                        csp.check_url(
+                            checked_url,
+                            ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                        )
+                    })
+                }),
             )
-            .inspect(|source| {
-                if let Some(resource) = source.resource.clone() {
-                    report_service_worker_imported_script_loaded(state, resource);
-                }
-            })
-            .map_err(WorkerImportScriptError::network)
+            .map_err(WorkerImportScriptError::network)?;
+            if let Some(resource) = source.resource.clone() {
+                report_service_worker_imported_script_loaded(state, resource);
+            }
+            Ok(source)
         }
         scheme => Err(WorkerImportScriptError::network(format!(
             "Failed to execute 'importScripts': URL scheme `{scheme}` is not allowed."
         ))),
+    }
+}
+
+// Redirect checks run on the network thread. Keep the caller's location and
+// an owned policy snapshot, and send violations back to the Worker's task queue.
+struct WorkerImportScriptCsp {
+    enforced_policies: Vec<String>,
+    report_only_policies: Vec<String>,
+    reporting_endpoints: crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
+    protected_url: Url,
+    request_url: Url,
+    location: Option<(String, i32, i32)>,
+    wake_tx: tokio::sync::mpsc::UnboundedSender<WorkerMessage>,
+}
+
+impl WorkerImportScriptCsp {
+    fn capture(
+        scope: &mut v8::PinScope<'_, '_>,
+        state: &Rc<RefCell<WorkerGlobalState>>,
+        request_url: &Url,
+    ) -> Option<Self> {
+        let (enforced_policies, report_only_policies, reporting_endpoints, protected_url, wake_tx) = {
+            let state = state.borrow();
+            (
+                state.content_security_policies.clone(),
+                state.content_security_report_only_policies.clone(),
+                state.content_security_reporting_endpoints.clone(),
+                state.current_script_url.clone()?,
+                state.worker_wake_tx.clone(),
+            )
+        };
+        if enforced_policies.is_empty() && report_only_policies.is_empty() {
+            return None;
+        }
+        Some(Self {
+            enforced_policies,
+            report_only_policies,
+            reporting_endpoints,
+            protected_url,
+            request_url: request_url.clone(),
+            location: current_script_violation_location(scope),
+            wake_tx,
+        })
+    }
+
+    fn check_url(
+        &self,
+        checked_url: &Url,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> Result<(), String> {
+        let mut failure = None;
+        for disposition in [
+            ContentSecurityPolicyDisposition::Report,
+            ContentSecurityPolicyDisposition::Enforce,
+        ] {
+            let policies = match disposition {
+                ContentSecurityPolicyDisposition::Enforce => &self.enforced_policies,
+                ContentSecurityPolicyDisposition::Report => &self.report_only_policies,
+            };
+            for policy in policies {
+                let Some(violation) = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
+                    std::slice::from_ref(policy),
+                    &self.protected_url,
+                    checked_url,
+                    &self.request_url,
+                    ContentSecurityPolicyResourceKind::WorkerScript,
+                    redirect_status,
+                    disposition,
+                    &self.reporting_endpoints,
+                ) else {
+                    continue;
+                };
+                let mut violation = violation;
+                violation.document_uri =
+                    crate::content_security_policy::csp_url_for_report(&self.protected_url);
+                violation.source_file =
+                    crate::content_security_policy::csp_url_for_report(&self.protected_url);
+                if let Some((source_file, line_number, column_number)) = &self.location {
+                    violation.source_file = source_file.clone();
+                    violation.line_number = *line_number;
+                    violation.column_number = *column_number;
+                }
+                if disposition == ContentSecurityPolicyDisposition::Enforce {
+                    failure.get_or_insert_with(|| {
+                        worker_content_security_policy_error_message(&violation, "importScripts")
+                    });
+                }
+                let _ = self
+                    .wake_tx
+                    .send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+                        Box::new(violation),
+                    ));
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -152,25 +242,29 @@ pub(super) fn fetch_worker_import_source_blocking(
     loader: crate::network::context::WorkerResourceLoader,
     script_url: Url,
     initiator_url: Option<Url>,
+    origin: WebOrigin,
     referrer_policy: Option<String>,
     network_partition_key: Option<String>,
+    policy_context: crate::types::SubresourcePolicyContext,
+    redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) -> Result<WorkerImportScriptSource, String> {
     let request_url = script_url.clone();
     let mut request = moli_fetch::Request::new("GET", script_url.as_str(), None, vec![])
         .map_err(|error| error.to_string())?
         .with_page_network_policy()
-        .with_network_partition_key(network_partition_key);
-    let request_initiator_url = initiator_url.clone();
-    if let Some(ref initiator_url) = request_initiator_url {
-        request = request
-            .with_initiator_url(initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
-    }
-    if let Some(referrer_policy) = referrer_policy {
-        request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
-            document_referrer_policy: Some(referrer_policy),
+        .with_request_mode(RequestMode::NoCors)
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
+            document_referrer_policy: referrer_policy,
             ..moli_fetch::ScriptFetchRequestMetadata::default()
-        });
+        })
+        .with_network_partition_key(network_partition_key);
+    if let Some(redirect_check) = redirect_check {
+        request = request.with_redirect_check(redirect_check);
+    }
+    request = request.with_request_origin(origin.clone());
+    if let Some(ref initiator_url) = initiator_url {
+        request = request.with_initiator_url(initiator_url);
     }
     let response_started_at = Instant::now();
     let cancel_handle = FetchCancelHandle::new();
@@ -191,22 +285,37 @@ pub(super) fn fetch_worker_import_source_blocking(
         .elapsed()
         .as_millis()
         .min(u64::MAX as u128) as u64;
-    moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-        .map_err(|error| error.to_string())?;
-    crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    )?;
-    if request_initiator_url.as_ref().is_some_and(|initiator_url| {
-        matches!(initiator_url.scheme(), "http" | "https")
-            && !moli_url::same_origin(initiator_url, &response.final_url)
-    }) {
-        return Err(format!(
-            "Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '{}' failed to load.",
-            response.final_url
-        ));
-    }
+    // Classic imported scripts use no-cors, unlike the worker's top-level
+    // same-origin fetch and module CORS fetches. Any cross-origin response in
+    // the URL chain taints the result, even if it redirects back to the worker.
+    let head = response.head();
+    let muted_errors = head.url_list().has_cross_origin_url(&origin);
+    let response_validation = (|| {
+        moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
+            .map_err(|error| error.to_string())?;
+        crate::worker::ensure_worker_script_mime_acceptable(
+            &response.final_url,
+            &response.headers,
+            response.body_bytes(),
+        )?;
+        validate_fetch_response_security_policy(
+            origin,
+            &head,
+            RequestMode::NoCors,
+            RequestCredentialsMode::SameOrigin,
+            policy_context,
+        )?;
+        Ok::<_, String>(())
+    })();
+    response_validation.map_err(|error| {
+        if muted_errors {
+            format!(
+                "Failed to execute 'importScripts': The script at '{script_url}' failed to load."
+            )
+        } else {
+            error
+        }
+    })?;
     let (head, body, body_bytes) = response.into_parts();
     let resource = crate::worker::WorkerScriptResource::from_response_parts(
         request_url,
@@ -217,7 +326,7 @@ pub(super) fn fetch_worker_import_source_blocking(
     Ok(WorkerImportScriptSource {
         final_url: head.final_url,
         source: body,
-        muted_errors: false,
+        muted_errors,
         resource: Some(resource),
     })
 }
@@ -246,74 +355,93 @@ fn report_service_worker_imported_script_loaded(
 
 fn evaluate_worker_script(
     scope: &mut v8::PinScope<'_, '_>,
-    state: Rc<RefCell<WorkerGlobalState>>,
+    request_url: &Url,
     script_url: &Url,
     script_source: &str,
     muted_errors: bool,
 ) -> Result<(), WorkerImportScriptError> {
-    let previous_url = {
-        let mut state = state.borrow_mut();
-        state.current_script_url.replace(script_url.clone())
+    let source = v8::String::new(scope, script_source).ok_or_else(|| {
+        WorkerImportScriptError::error(
+            scope,
+            format!("failed to allocate worker source for `{script_url}`"),
+        )
+    })?;
+    let name = v8::String::new(scope, script_url.as_str()).expect("worker script origin");
+    let sanitized_base = Url::parse("about:blank").expect("valid sanitized script base");
+    let base_url = if muted_errors {
+        &sanitized_base
+    } else {
+        script_url
     };
-    let outcome = (|| {
-        let source = v8::String::new(scope, script_source).ok_or_else(|| {
-            WorkerImportScriptError::error(
-                scope,
-                format!("failed to allocate worker source for `{script_url}`"),
-            )
-        })?;
-        let origin = create_script_origin(scope, script_url.as_str());
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let mut scope = try_catch.init();
-        let Some(script) = v8::Script::compile(&scope, source, Some(&origin)) else {
-            if muted_errors {
-                return Err(WorkerImportScriptError::network(format!(
-                    "Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '{script_url}' failed to load."
-                )));
-            }
-            let error = scope
-                .exception()
-                .map(|value| {
-                    let message = scope.message();
-                    annotate_worker_exception_location(&mut scope, value, message);
-                    WorkerImportScriptError::Exception(v8::Global::new(&scope, value))
-                })
-                .unwrap_or_else(|| {
-                    WorkerImportScriptError::error(
-                        &mut scope,
-                        format!("failed to compile `{script_url}`"),
-                    )
-                });
-            return Err(error);
-        };
-        let _ = crate::script_execution::execute_compiled_script(&mut scope, script);
-        if scope.has_caught() {
-            if muted_errors {
-                return Err(WorkerImportScriptError::network(format!(
-                    "Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '{script_url}' failed to load."
-                )));
-            }
-            let error = scope
-                .exception()
-                .map(|value| {
-                    let message = scope.message();
-                    annotate_worker_exception_location(&mut scope, value, message);
-                    WorkerImportScriptError::Exception(v8::Global::new(&scope, value))
-                })
-                .unwrap_or_else(|| {
-                    WorkerImportScriptError::error(
-                        &mut scope,
-                        format!("failed to execute `{script_url}`"),
-                    )
-                });
-            return Err(error);
+    let host_defined_options = crate::util::script_host_defined_options_with_fetch_metadata(
+        scope,
+        base_url,
+        None,
+        false,
+        muted_errors,
+        Some(request_url),
+    );
+    let origin = v8::ScriptOrigin::new(
+        scope,
+        name.into(),
+        0,
+        0,
+        false,
+        -1,
+        None,
+        muted_errors,
+        false,
+        false,
+        host_defined_options,
+    );
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    let Some(script) = v8::Script::compile(&scope, source, Some(&origin)) else {
+        if muted_errors {
+            return Err(WorkerImportScriptError::network(
+                "Failed to execute 'importScripts': A cross-origin script failed to execute."
+                    .to_owned(),
+            ));
         }
-        scope.perform_microtask_checkpoint();
-        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(&mut scope);
-        Ok(())
-    })();
-    state.borrow_mut().current_script_url = previous_url;
-    outcome
+        let error = scope
+            .exception()
+            .map(|value| {
+                let message = scope.message();
+                annotate_worker_exception_location(&mut scope, value, message);
+                WorkerImportScriptError::Exception(v8::Global::new(&scope, value))
+            })
+            .unwrap_or_else(|| {
+                WorkerImportScriptError::error(
+                    &mut scope,
+                    format!("failed to compile `{script_url}`"),
+                )
+            });
+        return Err(error);
+    };
+    let _ = crate::script_execution::execute_compiled_script(&mut scope, script);
+    if scope.has_caught() {
+        if muted_errors {
+            return Err(WorkerImportScriptError::network(
+                "Failed to execute 'importScripts': A cross-origin script failed to execute."
+                    .to_owned(),
+            ));
+        }
+        let error = scope
+            .exception()
+            .map(|value| {
+                let message = scope.message();
+                annotate_worker_exception_location(&mut scope, value, message);
+                WorkerImportScriptError::Exception(v8::Global::new(&scope, value))
+            })
+            .unwrap_or_else(|| {
+                WorkerImportScriptError::error(
+                    &mut scope,
+                    format!("failed to execute `{script_url}`"),
+                )
+            });
+        return Err(error);
+    }
+    Ok(())
 }
 
 // ─── console ────────────────────────────────────────────────────────────────
@@ -480,6 +608,7 @@ pub(super) fn worker_import_scripts_callback<'s>(
         });
     }
     for mut script in prepared {
+        let request_url = script.final_url.clone();
         if script.source.is_none() {
             let import_source =
                 match materialize_worker_import_source(scope, &state, &script.final_url) {
@@ -496,7 +625,7 @@ pub(super) fn worker_import_scripts_callback<'s>(
         let source = script.source.as_deref().unwrap_or_default();
         if let Err(error) = evaluate_worker_script(
             scope,
-            state.clone(),
+            &request_url,
             &script.final_url,
             source,
             script.muted_errors,
@@ -505,21 +634,4 @@ pub(super) fn worker_import_scripts_callback<'s>(
             return;
         }
     }
-}
-
-fn create_script_origin<'s>(scope: &mut v8::PinScope<'s, '_>, url: &str) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, url).expect("worker script origin");
-    v8::ScriptOrigin::new(
-        scope,
-        name.into(),
-        0,
-        0,
-        false,
-        -1,
-        None,
-        false,
-        false,
-        false,
-        None,
-    )
 }

@@ -459,7 +459,7 @@ pub(crate) fn content_security_policy_report_to_endpoints(
 pub(crate) fn content_security_policy_violation_report_body(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> String {
-    json!({
+    let mut report = json!({
         "csp-report": {
             "document-uri": fields.document_uri,
             "referrer": fields.referrer,
@@ -472,8 +472,14 @@ pub(crate) fn content_security_policy_violation_report_body(
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
-    })
-    .to_string()
+    });
+    if fields.line_number != 0 {
+        report["csp-report"]["line-number"] = json!(fields.line_number);
+    }
+    if fields.column_number != 0 {
+        report["csp-report"]["column-number"] = json!(fields.column_number);
+    }
+    report.to_string()
 }
 
 pub(crate) fn content_security_policy_reporting_api_report_body(
@@ -884,7 +890,7 @@ fn content_security_policy_url_violation_for_checked_url_with_redirect_status_di
     })
 }
 
-fn csp_url_for_report(url: &Url) -> String {
+pub(crate) fn csp_url_for_report(url: &Url) -> String {
     if !matches!(url.scheme(), "http" | "https" | "ws" | "wss") {
         return url.scheme().to_owned();
     }
@@ -913,6 +919,63 @@ pub(crate) fn content_security_policy_source_file_for_report(source_file: &str) 
     source_url.set_query(None);
     source_url.set_fragment(None);
     source_url.to_string()
+}
+
+pub(crate) fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    // Imported worker scripts retain the originally requested URL separately
+    // from their final resource name and their (possibly muted) import base.
+    // Reporting the final URL could disclose a cross-origin redirect target.
+    let source_file = scope
+        .get_current_host_defined_options()
+        .and_then(|options| {
+            crate::util::script_request_url_from_host_defined_options(scope, options)
+        })
+        .map(|url| url.to_string())
+        .or_else(|| {
+            frame
+                .get_script_name_or_source_url(scope)
+                .map(|source| source.to_rust_string_lossy(scope))
+        })
+        .map(|source| content_security_policy_source_file_for_report(&source))
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
+}
+
+pub(crate) fn content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+    policy: &str,
+    protected_url: &Url,
+    policy_name: &str,
+    disposition: ContentSecurityPolicyDisposition,
+    reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    if policy_allows_trusted_type_policy_name(policy, policy_name) {
+        return None;
+    }
+    let document_uri = csp_url_for_report(protected_url);
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: TRUSTED_TYPES,
+        blocked_uri: "trusted-types-policy".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.to_owned(),
+        disposition,
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: policy_name.chars().take(40).collect(),
+        line_number: 0,
+        column_number: 0,
+    })
 }
 
 pub(crate) fn content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
@@ -1879,11 +1942,12 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
-            Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
+            Self::DocumentScriptElement | Self::WorkerDynamicModuleImport | Self::WorkerScript => {
+                SCRIPT_SRC_ELEM
+            }
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
             Self::SharedWorkerScript | Self::WorkerStaticModuleImport => WORKER_SRC,
             Self::WorkerConnect => CONNECT_SRC,
-            Self::WorkerScript => SCRIPT_SRC,
         }
     }
 
@@ -1899,7 +1963,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::SharedWorkerScript => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerConnect => &[CONNECT_SRC, DEFAULT_SRC],
             Self::WorkerDynamicModuleImport => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
-            Self::WorkerScript => &[SCRIPT_SRC, DEFAULT_SRC],
+            Self::WorkerScript => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerStaticModuleImport => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
         }
     }
@@ -2007,25 +2071,6 @@ fn inline_source_matches_hash(source: &str, hash_source: CspHashSourceValue<'_>)
             b'_' => b'/',
             _ => byte,
         }))
-}
-
-pub(crate) fn current_script_violation_location(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<(String, i32, i32)> {
-    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
-    let frame = stack.get_frame(scope, 0)?;
-    let source_file = frame
-        .get_script_name_or_source_url(scope)
-        .map(|source| source.to_rust_string_lossy(scope))
-        .map(|source| {
-            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
-        })
-        .unwrap_or_default();
-    let line_number = i32::try_from(frame.get_line_number())
-        .unwrap_or_default()
-        .max(0);
-    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
-    Some((source_file, line_number, column_number))
 }
 
 #[cfg(test)]
@@ -3816,6 +3861,35 @@ mod tests {
             violation.report_uri_endpoints,
             vec!["https://app.test/csp-report".to_owned()]
         );
+    }
+
+    #[test]
+    fn violation_report_formats_preserve_captured_script_locations() {
+        let mut violation = content_security_policy_url_violation_with_redirect_status(
+            &["connect-src 'none'".to_owned()],
+            &protected_url(),
+            &request_url("https://api.test/data.json"),
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .unwrap();
+        violation.source_file = "https://app.test/imported/script.js".into();
+        violation.line_number = 12;
+        violation.column_number = 34;
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        assert_eq!(fields.source_file, violation.source_file);
+        assert_eq!((fields.line_number, fields.column_number), (12, 34));
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        assert_eq!(legacy["csp-report"]["source-file"], violation.source_file);
+        assert_eq!(legacy["csp-report"]["line-number"], 12);
+        assert_eq!(legacy["csp-report"]["column-number"], 34);
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
+        assert_eq!(reporting[0]["body"]["lineNumber"], 12);
+        assert_eq!(reporting[0]["body"]["columnNumber"], 34);
     }
 
     #[test]

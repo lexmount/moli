@@ -1756,3 +1756,70 @@ async fn loader_opt_in_network_policy_enforces_blocked_and_offline() -> Result<(
     server.await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn script_memory_cache_rechecks_each_consumers_redirect_policy() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (release_tx, release_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut release = Some(release_rx);
+        for (expected, reply) in [
+            (
+                "GET /start.js ",
+                "HTTP/1.1 302 Found\r\nLocation: /final.js\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ),
+            (
+                "GET /final.js ",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCache-Control: max-age=600\r\nContent-Length: 5\r\nConnection: close\r\n\r\ntrue;",
+            ),
+        ] {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await?);
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with(expected));
+            if expected.contains("final.js") {
+                release.take().unwrap().await?;
+            }
+            stream.write_all(reply.as_bytes()).await?;
+        }
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "cache consumers must not recontact either origin URL"
+        );
+        Ok::<_, anyhow::Error>(())
+    });
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let url = format!("http://{addr}/start.js");
+    let request = || {
+        browser_navigation_request(&url).map(|request| {
+            request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
+        })
+    };
+    let blocked = request()?.with_redirect_check(moli_fetch::RequestRedirectCheck::new(|url| {
+        assert_eq!(url.path(), "/final.js");
+        Err("cached redirect blocked by consumer policy".to_owned())
+    }));
+    let (first, blocked, ()) = tokio::join!(
+        biased;
+        loader.fetch_cacheable_script_text_stream(request()?),
+        loader.fetch_cacheable_script_text_stream(blocked),
+        async { release_tx.send(()).unwrap(); },
+    );
+    let first = first?;
+    assert_eq!(first.body_text(), "true;");
+    assert_eq!(first.redirect_chain.len(), 1);
+    assert_eq!(first.final_url.path(), "/final.js");
+    let error = blocked.expect_err("a shared in-flight redirect must obey each consumer's policy");
+    assert!(
+        error
+            .to_string()
+            .contains("cached redirect blocked by consumer policy")
+    );
+    server.await??;
+    Ok(())
+}

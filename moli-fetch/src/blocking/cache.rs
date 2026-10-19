@@ -171,6 +171,9 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     if request.transport_follows_redirects()
         && let Some(next_url) = next_url.as_ref()
     {
+        request
+            .check_redirect_target(next_url)
+            .map_err(anyhow::Error::msg)?;
         ensure_http_network_transport_url(next_url)?;
         request.validate_request_mode_for_url(next_url)?;
     }

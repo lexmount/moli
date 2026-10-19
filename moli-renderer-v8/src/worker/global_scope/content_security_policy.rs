@@ -8,10 +8,12 @@ use crate::content_security_policy::{
     ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
     ContentSecurityPolicyResourceKind, ContentSecurityPolicyUrlViolation,
     ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
+    content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
-    create_security_policy_violation_event, send_content_security_policy_reports,
+    create_security_policy_violation_event, current_script_violation_location,
+    send_content_security_policy_reports,
 };
 use crate::context_bootstrap::dispatch_simple_event_target_event;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
@@ -77,22 +79,65 @@ pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
     sink: &str,
     sample: &str,
 ) {
-    let violation = {
+    let violations = {
         let state_ref = state.borrow();
         let Some(protected_url) = state_ref.current_script_url.as_ref() else {
             return;
         };
-        content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-                &state_ref.content_security_policies,
-                protected_url,
-                sink,
-                sample,
-                ContentSecurityPolicyDisposition::Enforce,
-                &state_ref.content_security_reporting_endpoints,
-        )
+        worker_trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition)| {
+                content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
+                    std::slice::from_ref(policy),
+                    protected_url,
+                    sink,
+                    sample,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                )
+            })
+            .collect()
     };
-    if let Some(violation) = violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+    queue_worker_trusted_types_violations(scope, state, violations);
+}
+
+fn worker_trusted_types_policies(
+    state: &WorkerGlobalState,
+) -> impl Iterator<Item = (&String, ContentSecurityPolicyDisposition)> {
+    state
+        .content_security_policies
+        .iter()
+        .map(|policy| (policy, ContentSecurityPolicyDisposition::Enforce))
+        .chain(
+            state
+                .content_security_report_only_policies
+                .iter()
+                .map(|policy| (policy, ContentSecurityPolicyDisposition::Report)),
+        )
+}
+
+fn queue_worker_trusted_types_violations(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violations: Vec<ContentSecurityPolicyUrlViolation>,
+) {
+    if violations.is_empty() {
+        return;
+    }
+    // Capture the importer now, but deliver after policy creation or the sink
+    // returns so a violation listener cannot reenter the original operation.
+    let location = current_script_violation_location(scope);
+    let wake_tx = state.borrow().worker_wake_tx.clone();
+    for mut violation in violations {
+        if let Some((source_file, line_number, column_number)) = &location {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line_number;
+            violation.column_number = *column_number;
+        }
+        let _ = wake_tx.send(
+            crate::worker::WorkerMessage::DispatchContentSecurityPolicyViolation(Box::new(
+                violation,
+            )),
+        );
     }
 }
 
@@ -817,21 +862,6 @@ pub(super) fn worker_content_security_policy_violation_for_checked_url_with_redi
     )
 }
 
-pub(super) fn worker_content_security_policy_report_only_violation(
-    state: &WorkerGlobalState,
-    protected_url: &Url,
-    request_url: &Url,
-    kind: ContentSecurityPolicyResourceKind,
-) -> Option<ContentSecurityPolicyUrlViolation> {
-    worker_content_security_policy_report_only_violation_with_redirect_status(
-        state,
-        protected_url,
-        request_url,
-        kind,
-        ContentSecurityPolicyRedirectStatus::NoRedirect,
-    )
-}
-
 pub(super) fn worker_content_security_policy_report_only_violation_with_redirect_status(
     state: &WorkerGlobalState,
     protected_url: &Url,
@@ -961,12 +991,29 @@ pub(crate) fn worker_allows_trusted_type_policy_name(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
 ) -> Option<bool> {
-    Some(
-        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_name(
-            &get_worker_state(scope)?.borrow().content_security_policies,
-            name,
-        ),
-    )
+    let state = get_worker_state(scope)?;
+    let violations: Vec<_> = {
+        let state_ref = state.borrow();
+        let Some(protected_url) = state_ref.current_script_url.as_ref() else {
+            return Some(true);
+        };
+        worker_trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition)| {
+                content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    protected_url,
+                    name,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                )
+            })
+            .collect()
+    };
+    let allowed = !violations
+        .iter()
+        .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
+    queue_worker_trusted_types_violations(scope, &state, violations);
+    Some(allowed)
 }
 
 pub(crate) fn worker_trusted_types_for_script_requirements(
