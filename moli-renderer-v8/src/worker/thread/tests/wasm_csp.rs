@@ -61,8 +61,16 @@ async fn worker_wasm_csp_covers_sync_async_and_streaming_compilation() {
             "require-trusted-types-for 'script'; script-src 'trusted-types-eval'",
             false,
         ),
-        ("script-src \u{000b}'wasm-unsafe-eval'", false),
-        ("script-src 'unsafe-eval'\u{000b}", false),
+        ("script-src \u{000b}'wasm-unsafe-eval'", true),
+        ("script-src 'unsafe-eval'\u{000b}", true),
+        (
+            "default-src 'none'; script-src \u{000b}'wasm-unsafe-eval'",
+            false,
+        ),
+        (
+            "default-src 'none'; script-src 'unsafe-eval'\u{000b}",
+            false,
+        ),
     ] {
         let result = wasm_csp_result(
             wasm_csp_options(if allowed { 0 } else { 5 })

@@ -50,7 +50,7 @@ fn document_csp_eval_keywords_preserve_source_token_boundaries() {
                 ("\u{000b}", "", false),
                 ("", "\u{000b}", false),
             ] {
-                let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+                let policy = format!("default-src 'none'; script-src {prefix}'{keyword}'{suffix}");
                 let mut vm = new_storage_test_vm("https://csp-source-tokens.test/");
                 if from_meta {
                     vm.document_runtime
