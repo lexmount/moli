@@ -884,7 +884,7 @@ fn content_security_policy_url_violation_for_checked_url_with_redirect_status_di
     })
 }
 
-fn csp_url_for_report(url: &Url) -> String {
+pub(crate) fn csp_url_for_report(url: &Url) -> String {
     if !matches!(url.scheme(), "http" | "https" | "ws" | "wss") {
         return url.scheme().to_owned();
     }
