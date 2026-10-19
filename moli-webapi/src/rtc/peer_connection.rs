@@ -1,5 +1,7 @@
-//! Signaling-only peer connections, channels and codec capability values.
-//! No network transport or native host is retained by these V8-managed bindings.
+//! Peer connection bindings and codec capability values.
+//! The embedder installs certificate, RTP, signaling and operation runtimes
+//! before exposing peer connections. Native tasks complete through that runtime;
+//! V8-managed configuration snapshots retain no native host.
 use super::session_description::{self, RtcSessionDescriptionInitDeclaration};
 use crate::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 use crate::interfaces as web_api_interfaces;
@@ -8,7 +10,7 @@ use moli_v8_util::{
     throw_type_error, v8_string, v8str,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-use moli_webidl::{self as webidl, WebIdlDictionarySerialize};
+use moli_webidl as webidl;
 
 pub mod certificate;
 pub mod configuration;
@@ -74,7 +76,6 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 }
-
 
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable)]
@@ -418,7 +419,9 @@ fn reject_sdp_error<'s>(
     request: v8::Local<'s, v8::Object>,
     error: &sdp::SyntaxError,
 ) -> bool {
-    let Some(reason) = crate::dom_exception::build_rtc_sdp_error(scope, &error.message, error.line_number) else {
+    let Some(reason) =
+        crate::dom_exception::build_rtc_sdp_error(scope, &error.message, error.line_number)
+    else {
         return false;
     };
     operations::reject(scope, request, reason.into());
