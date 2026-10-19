@@ -619,6 +619,7 @@ enum MainDocumentResponseVisibility {
 pub struct MainDocumentBodyProgressSource {
     live_source: Option<MainDocumentLiveNetworkProgressSource>,
     response_visibility: MainDocumentResponseVisibility,
+    response_mime_type: Option<String>,
 }
 
 impl MainDocumentBodyProgressSource {
@@ -629,7 +630,13 @@ impl MainDocumentBodyProgressSource {
         Self {
             live_source,
             response_visibility,
+            response_mime_type: None,
         }
+    }
+
+    pub(crate) fn with_response_mime_type(mut self, mime_type: String) -> Self {
+        self.response_mime_type = Some(mime_type);
+        self
     }
 
     pub(crate) fn body_network_progress_for_response_head(
@@ -715,6 +722,7 @@ impl MainDocumentBodyProgressSource {
                     network_extra_info_available,
                     response_from_cache,
                     negotiated_http_version,
+                    self.response_mime_type.as_deref(),
                 );
             }
             MainDocumentResponseVisibility::AfterResponseStageContinue => {
@@ -725,6 +733,7 @@ impl MainDocumentBodyProgressSource {
                     network_extra_info_available,
                     response_from_cache,
                     negotiated_http_version,
+                    self.response_mime_type.as_deref(),
                 );
             }
         }
@@ -749,6 +758,7 @@ impl MainDocumentBodyProgressSource {
                 final_url: final_url.clone(),
                 status: response_status,
                 headers: response_headers.to_vec(),
+                mime_type: self.response_mime_type.clone(),
                 cookie_set_reports: Vec::new(),
                 extra_info_status: response_status,
                 extra_info_headers: response_headers.to_vec(),
@@ -905,6 +915,9 @@ impl MainDocumentBodyProgressSource {
         events.response_stage_metadata_already_emitted =
             self.response_visibility == MainDocumentResponseVisibility::AfterResponseStageContinue;
         events
+            .response_mime_type
+            .clone_from(&self.response_mime_type);
+        events
     }
 }
 
@@ -915,6 +928,7 @@ pub(crate) struct CompletedMainDocumentNetworkEvents {
     pub(crate) final_request_cookie_report: Option<StoredCookieQueryReport>,
     pub(crate) response_status: u16,
     pub(crate) response_headers: Vec<(String, Vec<u8>)>,
+    response_mime_type: Option<String>,
     pub(crate) response_cookie_reports: Vec<StoredCookieSetReport>,
     pub(crate) redirect_chain: Vec<NavigationRedirect>,
     pub(crate) network_extra_info_available: bool,
@@ -925,6 +939,11 @@ pub(crate) struct CompletedMainDocumentNetworkEvents {
 }
 
 impl CompletedMainDocumentNetworkEvents {
+    pub(crate) fn with_response_mime_type(mut self, mime_type: String) -> Self {
+        self.response_mime_type = Some(mime_type);
+        self
+    }
+
     pub(crate) fn new(
         request_method: String,
         request_headers: Vec<(String, String)>,
@@ -942,6 +961,7 @@ impl CompletedMainDocumentNetworkEvents {
             final_request_cookie_report,
             response_status,
             response_headers,
+            response_mime_type: None,
             response_cookie_reports,
             redirect_chain,
             network_extra_info_available,
@@ -1225,6 +1245,7 @@ impl MainDocumentLiveNetworkProgressSource {
         network_extra_info_available: bool,
         response_from_cache: bool,
         negotiated_http_version: Option<NegotiatedHttpVersion>,
+        response_mime_type: Option<&str>,
     ) {
         let (extra_info_status, extra_info_headers) = observed_response_metadata(
             network_observation_journal,
@@ -1245,6 +1266,7 @@ impl MainDocumentLiveNetworkProgressSource {
             response_from_cache,
             negotiated_http_version,
             network_extra_info_available && !response_from_cache,
+            response_mime_type,
         );
     }
 
@@ -1256,6 +1278,7 @@ impl MainDocumentLiveNetworkProgressSource {
         network_extra_info_available: bool,
         response_from_cache: bool,
         negotiated_http_version: Option<NegotiatedHttpVersion>,
+        response_mime_type: Option<&str>,
     ) {
         self.emit_response_received_with_extra_info_policy(
             final_url,
@@ -1269,6 +1292,7 @@ impl MainDocumentLiveNetworkProgressSource {
             response_from_cache,
             negotiated_http_version,
             network_extra_info_available && !response_from_cache,
+            response_mime_type,
         );
     }
 
@@ -1285,6 +1309,7 @@ impl MainDocumentLiveNetworkProgressSource {
         response_from_cache: bool,
         negotiated_http_version: Option<NegotiatedHttpVersion>,
         has_extra_info: bool,
+        response_mime_type: Option<&str>,
     ) {
         self.send_progress_events(
             MainDocumentProgressPhase::ResponseReceived,
@@ -1293,6 +1318,7 @@ impl MainDocumentLiveNetworkProgressSource {
                 final_url: final_url.clone(),
                 status: response_status,
                 headers: response_headers.to_vec(),
+                mime_type: response_mime_type.map(str::to_owned),
                 cookie_set_reports: response_cookie_reports.to_vec(),
                 extra_info_status,
                 extra_info_headers,
@@ -1481,6 +1507,7 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         final_url,
         status: network.status,
         headers: network.response_headers.clone(),
+        mime_type: None,
         cookie_set_reports: Vec::new(),
         extra_info_status: network.status,
         extra_info_headers: network.response_headers.clone(),
@@ -1901,6 +1928,7 @@ impl CompletedMainDocumentProgressContext {
             final_url: final_url.clone(),
             status: events.response_status,
             headers: events.response_headers.clone(),
+            mime_type: events.response_mime_type.clone(),
             cookie_set_reports: events.response_cookie_reports.clone(),
             extra_info_status,
             extra_info_headers,
@@ -1981,6 +2009,7 @@ enum MainDocumentNavigationProgressEvent {
         final_url: Url,
         status: u16,
         headers: Vec<(String, Vec<u8>)>,
+        mime_type: Option<String>,
         cookie_set_reports: Vec<StoredCookieSetReport>,
         extra_info_status: u16,
         extra_info_headers: Vec<(String, Vec<u8>)>,
@@ -2205,6 +2234,7 @@ impl MainDocumentNavigationProgressEvent {
                 final_url,
                 status,
                 headers,
+                mime_type,
                 cookie_set_reports,
                 extra_info_status,
                 extra_info_headers,
@@ -2235,6 +2265,7 @@ impl MainDocumentNavigationProgressEvent {
                         from_cache,
                         negotiated_http_version,
                         has_extra_info,
+                        mime_type.as_deref(),
                     );
                 }
             }

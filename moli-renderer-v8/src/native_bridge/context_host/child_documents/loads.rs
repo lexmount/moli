@@ -888,7 +888,7 @@ fn child_document_load_outcome_from_response(
         let body_bytes = response_body
             .try_bytes()
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
-        let mime = navigation_response_content_type(&head.headers, &body_bytes);
+        let mime = navigation_response_content_type(&head.final_url, &head.headers, &body_bytes);
         if !moli_web_mime::is_supported_document_mime_type(&mime) {
             return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
         }

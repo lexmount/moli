@@ -6,6 +6,7 @@ use super::*;
 use crate::document_response_decoder::{decode_document_response, new_document_response_decoder};
 use moli_encoding::DocumentStreamingDecoder;
 use moli_web_mime::response_headers_indicate_attachment_download;
+use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
 pub(in crate::runtime) struct StreamingHtmlPageCreationResult {
@@ -88,81 +89,24 @@ impl ConcurrentParseTimeRuntime {
     ) -> Result<StreamingNavigationPageCreationResult> {
         let response_status = response.status;
         let response_headers = response.headers.clone();
-        debug_assert!(!response_headers_indicate_download(&response_headers));
-        let response_final_url = response.final_url.clone();
-        let mut env = env.clone();
-        env.apply_navigation_response_headers(&response_final_url, &response_headers);
-
-        let mut body_source = RawDocumentBodySource::fetch_response(response);
-        let (mut state, mut decoder) =
-            response_document_parser(response_final_url, &response_headers, &env);
-        state
-            .buffered_document_preloads
-            .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
-                &env,
-            ));
-        state
-            .buffered_document_preloads
-            .set_response_csp_requires_parser_admission(
-                !env.document_policy_container
-                    .response_content_security_policies
-                    .is_empty(),
-            );
-        state
-            .buffered_document_preloads
-            .set_response_referrer_policy(env.document_policy_container.referrer_policy.clone());
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
-        let service_worker_preload_context =
-            env.reserved_service_worker_client_id.map(|client_id| {
-                ServiceWorkerScriptPreloadContext::new(
-                    runtime_hooks.browser_context_runtime.clone(),
-                    client_id,
-                    state.final_url.clone(),
-                    runtime_hooks.owner_wake(),
-                )
-            });
-        state.service_worker_preload_context = service_worker_preload_context.clone();
-        // Raw navigation bodies are decoded during prebootstrap scan. The decoder
-        // is carried forward so split multibyte sequences are not decoded twice or
-        // lost between the scan and parser handoff.
-        let prebootstrap_chunks = prebootstrap_scan_ready_streaming_raw_chunks(
-            &mut state,
-            &mut body_source,
-            &mut decoder,
-            loader,
-            service_worker_preload_context.as_ref(),
-        );
-        let bootstrap_outcome = Self::start_creation_from_streaming_html_bootstrap_with_state(
+        let final_url = response.final_url.clone();
+        let content_type = response.navigation_mime_type().map(str::to_owned);
+        Self::create_from_committed_raw_document_response(
             page_id,
             local_executor,
             loader,
-            &env,
+            env,
             runtime_hooks,
-            state,
             stage,
             started,
-        )
-        .await?;
-        let outcome = settle_streaming_raw_response_at_boundary(
-            bootstrap_outcome,
-            body_source,
-            prebootstrap_chunks,
-            decoder,
-            service_worker_preload_context,
-            started,
+            final_url,
+            response_status,
+            response_headers,
+            RawDocumentBodySource::fetch_response(response),
+            content_type,
             boundary,
         )
-        .await?;
-        Ok(StreamingNavigationPageCreationResult::Html(Box::new(
-            StreamingHtmlPageCreationResult {
-                response_status,
-                response_headers,
-                outcome,
-            },
-        )))
+        .await
     }
 
     pub(in crate::runtime) async fn create_external_raw_document_response_at_reply_boundary(
@@ -293,19 +237,57 @@ impl ConcurrentParseTimeRuntime {
         raw_body: ExternalRawDocumentBodyStream,
         boundary: CommittedNavigationBootstrapBoundary,
     ) -> Result<StreamingNavigationPageCreationResult> {
-        debug_assert!(!response_headers_indicate_download(&response_headers));
         let runtime_hooks = match raw_body.page_creation_progress() {
             Some(progress) => runtime_hooks.with_page_creation_progress(progress),
             None => runtime_hooks,
         };
+        let content_type = raw_body.navigation_mime_type.clone();
+        Self::create_from_committed_raw_document_response(
+            page_id,
+            local_executor,
+            loader,
+            env,
+            runtime_hooks,
+            stage,
+            started,
+            final_url,
+            response_status,
+            response_headers,
+            RawDocumentBodySource::External(raw_body),
+            content_type,
+            boundary,
+        )
+        .await
+    }
+
+    async fn create_from_committed_raw_document_response(
+        page_id: PageId,
+        local_executor: JsLocalExecutor,
+        loader: &ResourceRequestClient,
+        env: &PageVmEnvConfig,
+        runtime_hooks: PageVmRuntimeHooks,
+        stage: PageVmInitStage,
+        started: Instant,
+        final_url: Url,
+        response_status: u16,
+        response_headers: Vec<(String, Vec<u8>)>,
+        mut body_source: RawDocumentBodySource,
+        content_type: Option<String>,
+        boundary: CommittedNavigationBootstrapBoundary,
+    ) -> Result<StreamingNavigationPageCreationResult> {
+        debug_assert!(!response_headers_indicate_download(&response_headers));
         let mut env = env.clone();
         env.apply_navigation_response_headers(&final_url, &response_headers);
 
-        let mut body_source = RawDocumentBodySource::External(raw_body);
-        if response_headers_indicate_xml_document(&response_headers) {
+        let content_type = content_type.or_else(|| {
+            moli_web_mime::navigation_response_mime_type_from_headers(&response_headers)
+        });
+        if content_type
+            .as_deref()
+            .is_some_and(moli_web_mime::is_xml_document_mime)
+        {
             let body = collect_streaming_raw_body(&mut body_source).await?;
-            let content_type = moli_web_mime::response_document_content_type(&response_headers)
-                .unwrap_or_else(|| "application/xml".to_owned());
+            let content_type = content_type.expect("checked XML MIME type");
             let (source, character_set) = decode_document_response(
                 &body,
                 &response_headers,
@@ -338,7 +320,12 @@ impl ConcurrentParseTimeRuntime {
                 },
             )));
         }
-        let (mut state, mut decoder) = response_document_parser(final_url, &response_headers, &env);
+        let (mut state, mut decoder) = response_document_parser_with_mime(
+            final_url,
+            &response_headers,
+            &env,
+            content_type.as_deref(),
+        );
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
@@ -485,15 +472,12 @@ impl ConcurrentParseTimeRuntime {
     }
 }
 
-fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
-    moli_web_mime::response_document_content_type(headers)
-        .is_some_and(|mime| moli_web_mime::is_xml_document_mime(&mime))
-}
-
 const EXTERNAL_RAW_DOCUMENT_BODY_BUFFERED_CHUNKS: usize = 8;
 
 pub struct ExternalRawDocumentBodyStream {
     body_chunks: mpsc::Receiver<Vec<u8>>,
+    buffered_body_chunks: VecDeque<Vec<u8>>,
+    navigation_mime_type: Option<String>,
     completion: Option<oneshot::Receiver<Result<()>>>,
     page_creation_progress: Option<crate::runtime::RendererPageCreationProgress>,
 }
@@ -520,6 +504,8 @@ impl ExternalRawDocumentBodyStream {
             body_tx,
             Self {
                 body_chunks,
+                buffered_body_chunks: VecDeque::new(),
+                navigation_mime_type: None,
                 completion: Some(completion),
                 page_creation_progress: Some(page_creation_progress),
             },
@@ -532,6 +518,8 @@ impl ExternalRawDocumentBodyStream {
     ) -> Self {
         Self {
             body_chunks,
+            buffered_body_chunks: VecDeque::new(),
+            navigation_mime_type: None,
             completion: Some(completion),
             page_creation_progress: None,
         }
@@ -546,8 +534,70 @@ impl ExternalRawDocumentBodyStream {
         body_stream
     }
 
+    pub fn with_navigation_mime_type(mut self, mime_type: String) -> Self {
+        self.navigation_mime_type = Some(mime_type);
+        self
+    }
+
+    pub(crate) async fn resolve_navigation_mime_type(
+        &mut self,
+        final_url: &Url,
+        headers: &[(String, Vec<u8>)],
+    ) -> Result<()> {
+        if self.navigation_mime_type.is_some() {
+            return Ok(());
+        }
+        let mut sniffer = moli_web_mime::NavigationMimeSniffer::new(final_url.scheme(), headers);
+        for chunk in &self.buffered_body_chunks {
+            sniffer.push(chunk);
+        }
+        loop {
+            if let Some(mime_type) = sniffer.mime_type() {
+                self.navigation_mime_type = Some(mime_type.to_owned());
+                return Ok(());
+            }
+            match self.body_chunks.recv().await {
+                Some(chunk) => {
+                    sniffer.push(&chunk);
+                    if !chunk.is_empty() {
+                        self.buffered_body_chunks.push_back(chunk);
+                    }
+                }
+                None => {
+                    self.finish_transfer().await?;
+                    self.navigation_mime_type = Some(sniffer.finish().to_owned());
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    async fn next_chunk(&mut self) -> Option<Vec<u8>> {
+        match self.buffered_body_chunks.pop_front() {
+            Some(chunk) => Some(chunk),
+            None => self.body_chunks.recv().await,
+        }
+    }
+
+    fn try_next_chunk(&mut self) -> Option<Vec<u8>> {
+        self.buffered_body_chunks
+            .pop_front()
+            .or_else(|| self.body_chunks.try_recv().ok())
+    }
+
+    async fn finish_transfer(&mut self) -> Result<()> {
+        let Some(completion) = self.completion.as_mut() else {
+            return Ok(());
+        };
+        let result = completion.await;
+        self.completion = None;
+        result.map_err(|_| anyhow!("external raw document body completion channel closed"))?
+    }
+
     fn body_chunk_stream_is_exhausted(&self) -> bool {
-        self.body_chunks.is_closed() && self.body_chunks.is_empty()
+        self.buffered_body_chunks.is_empty()
+            && self.body_chunks.is_closed()
+            && self.body_chunks.is_empty()
     }
 
     fn page_creation_progress(&self) -> Option<crate::runtime::RendererPageCreationProgress> {
@@ -568,7 +618,7 @@ impl RawDocumentBodySource {
     pub(super) async fn next_chunk(&mut self) -> Option<Vec<u8>> {
         match self {
             Self::FetchResponse(response) => response.next_chunk().await,
-            Self::External(source) => source.body_chunks.recv().await,
+            Self::External(source) => source.next_chunk().await,
         }
     }
 
@@ -578,7 +628,7 @@ impl RawDocumentBodySource {
         // from the response source into the parser loop.
         match self {
             Self::FetchResponse(response) => response.try_next_chunk(),
-            Self::External(source) => source.body_chunks.try_recv().ok(),
+            Self::External(source) => source.try_next_chunk(),
         }
     }
 
@@ -592,12 +642,7 @@ impl RawDocumentBodySource {
     pub(super) async fn finish(&mut self) -> Result<()> {
         match self {
             Self::FetchResponse(response) => response.finish().await,
-            Self::External(source) => source
-                .completion
-                .take()
-                .expect("external raw document body completion should only be awaited once")
-                .await
-                .map_err(|_| anyhow!("external raw document body completion channel closed"))?,
+            Self::External(source) => source.finish_transfer().await,
         }
     }
 }
@@ -625,20 +670,27 @@ fn scan_prebootstrap_html_chunk_into_state(
         );
 }
 
+#[cfg(test)]
 fn response_document_parser(
     final_url: Url,
     headers: &[(String, Vec<u8>)],
     env: &PageVmEnvConfig,
 ) -> (ParseTimeDriverState, DocumentStreamingDecoder) {
     let content_type = moli_web_mime::navigation_response_mime_type_from_headers(headers);
-    let text_type = content_type
-        .as_deref()
-        .filter(|mime| moli_web_mime::is_text_document_mime(mime));
+    response_document_parser_with_mime(final_url, headers, env, content_type.as_deref())
+}
+
+fn response_document_parser_with_mime(
+    final_url: Url,
+    headers: &[(String, Vec<u8>)],
+    env: &PageVmEnvConfig,
+    content_type: Option<&str>,
+) -> (ParseTimeDriverState, DocumentStreamingDecoder) {
+    let text_type = content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime));
     let mut state = if let Some(mime) = text_type {
         ParseTimeDriverState::new_text(final_url, mime)
-    } else if let Some(mime) = content_type
-        .as_deref()
-        .filter(|mime| crate::navigation_document::is_image_document_mime(mime))
+    } else if let Some(mime) =
+        content_type.filter(|mime| crate::navigation_document::is_image_document_mime(mime))
     {
         ParseTimeDriverState::new_image(final_url, mime, headers)
     } else {
@@ -647,8 +699,7 @@ fn response_document_parser(
             main_document_parser_scripting_enabled(env),
         )
     };
-    let decoder =
-        new_document_response_decoder(headers, content_type.as_deref(), &state.final_url, None);
+    let decoder = new_document_response_decoder(headers, content_type, &state.final_url, None);
     state.response_links =
         crate::response_links::DocumentResponseLinks::parse(&state.final_url, headers);
     // Headers/defaults are observable even when no body chunk is ready yet.

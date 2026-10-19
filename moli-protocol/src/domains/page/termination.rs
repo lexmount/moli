@@ -425,6 +425,10 @@ pub(super) async fn complete_stop_loading_command_dispatch(
         pending_subresource_responses,
     )
     .await;
+    // Paused Fetch requests above retain their operation-specific replies.
+    // A live provisional response can instead be waiting on its MIME prefix,
+    // outside that registry. Cancel its exact navigation generation as well.
+    conn.cancel_uncommitted_navigation_for_owner(owner);
     let mut plan = CommandOutputPlan::success();
     for event in out {
         plan.push_background_event(event);
