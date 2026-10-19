@@ -13,6 +13,7 @@ pub(crate) use context_host::{
     WindowAccessOrigin,
     WindowOriginKey,
     DecodedImageContent,
+    NavigationImageDocumentCompletion, NavigationImageDocumentLoad,
 };
 pub(crate) use current_input::{
     CurrentInputEvent, CurrentInputEventScope, InputNavigationPolicy, navigation_policy_from_event,

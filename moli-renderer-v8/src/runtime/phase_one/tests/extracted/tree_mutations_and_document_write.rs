@@ -1106,6 +1106,8 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
             input_closed: &state.input_closed,
+
+            image_document: &mut state.image_document,
         };
 
         let html = "<!doctype html><html><head><script>document.write('<style>.runtime-style{color:red}</style>');document.write('<script>window.__docWriteHeadMutation=true;<\\/script>');</script><meta charset='utf-8'><title>x</title></head><body><main>late</main></body></html>";
@@ -1315,6 +1317,8 @@ fn document_write_fostered_text_updates_live_range_boundaries() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r##"<!doctype html><html><body><table id="t"><script>

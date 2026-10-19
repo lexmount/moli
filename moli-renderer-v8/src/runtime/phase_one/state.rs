@@ -11,6 +11,7 @@ pub(super) struct ParseTimeDriverState {
     pub(super) service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
     pub(super) input_closed: bool,
     pub(super) is_text_document: bool,
+    pub(super) image_document: Option<super::image_document::StreamingImageDocument>,
 }
 
 impl ParseTimeDriverState {
@@ -33,6 +34,7 @@ impl ParseTimeDriverState {
             service_worker_preload_context: None,
             input_closed: false,
             is_text_document: false,
+            image_document: None,
         }
     }
 
@@ -50,6 +52,7 @@ impl ParseTimeDriverState {
             service_worker_preload_context: None,
             input_closed: false,
             is_text_document: true,
+            image_document: None,
         }
     }
 
@@ -64,12 +67,25 @@ impl ParseTimeDriverState {
             service_worker_preload_context: None,
             input_closed: false,
             is_text_document: false,
+            image_document: None,
         }
+    }
+
+    pub(super) fn new_image(final_url: Url, mime: &str, headers: &[(String, Vec<u8>)]) -> Self {
+        let mut state = Self::new_with_scripting_enabled(final_url.clone(), false);
+        state.parser_session = DocumentParserSession::start_main_image_document(final_url, mime);
+        state.image_document = Some(super::image_document::StreamingImageDocument::new(headers));
+        state
     }
 
     pub(super) fn close_input(&mut self) {
         if self.input_closed {
             return;
+        }
+        if let Some(image) = self.image_document.as_mut()
+            && let Some(shell) = image.queue_shell()
+        {
+            self.parser_session.queue_arrived_chunk(shell);
         }
         self.parser_session.request_finish();
         self.input_closed = true;

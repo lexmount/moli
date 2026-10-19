@@ -51,6 +51,27 @@ impl ScriptVm {
         }
 
         match work {
+            MainDocumentPostParseWork::FinishNavigationImageDocument { owner, completion } => {
+                if owner != selected_owner.document_owner() {
+                    return MainDocumentPostParseWork::FinishNavigationImageDocument {
+                        owner,
+                        completion,
+                    }
+                    .discarded_stale(current_owner);
+                }
+                self.finish_navigation_image_document_load(
+                    completion.load,
+                    &completion.headers,
+                    completion.bytes,
+                )
+                .expect("navigation image completion must enter its live main Window");
+                MainDocumentPostParseExecution::FinishNavigationImageDocument(
+                    MainDocumentPostParseStateExecution::new(
+                        self.applied_main_document_post_parse_target(selected_owner),
+                        (),
+                    ),
+                )
+            }
             MainDocumentPostParseWork::SeedDocumentOwnedBlockingStylesheets(inputs) => {
                 let accepted = self.accept_main_document_blocking_stylesheet_inputs(
                     selected_owner.document_owner(),

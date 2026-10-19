@@ -45,6 +45,10 @@ pub(crate) enum PostParseLifecycleWork {
     DispatchDomContentLoaded {
         owner: FrameDocumentTaskOwner,
     },
+    FinishNavigationImageDocument {
+        owner: FrameDocumentTaskOwner,
+        completion: crate::native_bridge::NavigationImageDocumentCompletion,
+    },
     CheckMainDocumentCompletion {
         owner: FrameDocumentTaskOwner,
     },
@@ -176,6 +180,9 @@ impl PostParseLifecycleWork {
             Self::ApplyMainDocumentInteractive(_) => {
                 panic!("main interactive owner action has no legacy PageTask projection")
             }
+            Self::FinishNavigationImageDocument { .. } => {
+                panic!("navigation image completion has no legacy PageTask projection")
+            }
             Self::DispatchDomContentLoaded { .. } => PageTask::DispatchDomContentLoaded,
             Self::CheckMainDocumentCompletion { owner } => {
                 PageTask::CheckMainDocumentCompletion { owner }
@@ -204,6 +211,7 @@ impl PostParseLifecycleWork {
             }
             Self::ApplyMainDocumentInteractive(_) => "main document interactive task",
             Self::DispatchDomContentLoaded { .. } => "domcontentloaded task",
+            Self::FinishNavigationImageDocument { .. } => "navigation image response task",
             Self::CheckMainDocumentCompletion { .. } => "main document completion recheck task",
             Self::DispatchConnectedStyleLoad(_) => "connected style load task",
             Self::RecordDetachedPostParseRuns(_) => "detached post-parse runs task",
@@ -222,6 +230,7 @@ impl PostParseLifecycleWork {
             | Self::ReportWindowScriptFailure(_) => (3, self.position()),
             Self::SettleMainDocumentScriptLoadDelay(_) => (3, self.position()),
             Self::DispatchDomContentLoaded { .. } => (4, self.position()),
+            Self::FinishNavigationImageDocument { .. } => (6, self.position()),
             Self::CheckMainDocumentCompletion { .. } => (7, self.position()),
             Self::DispatchConnectedStyleLoad(_) => (6, self.position()),
             Self::RecordDetachedPostParseRuns(_) => (6, self.position()),
@@ -240,6 +249,7 @@ impl PostParseLifecycleWork {
             Self::ReportWindowScriptFailure(_) => usize::MAX - 5,
             Self::SettleMainDocumentScriptLoadDelay(_) => usize::MAX - 4,
             Self::DispatchDomContentLoaded { .. } => usize::MAX - 3,
+            Self::FinishNavigationImageDocument { .. } => usize::MAX - 2,
             Self::CheckMainDocumentCompletion { .. } => usize::MAX - 1,
             Self::DispatchConnectedStyleLoad(_) => usize::MAX - 2,
             Self::RecordDetachedPostParseRuns(_) => usize::MAX - 1,
@@ -281,7 +291,8 @@ impl PostParseLifecycleWork {
             Self::DispatchDomContentLoaded { owner } | Self::DispatchWindowLoad { owner } => {
                 Some(*owner)
             }
-            Self::CheckMainDocumentCompletion { owner } => Some(*owner),
+            Self::CheckMainDocumentCompletion { owner }
+            | Self::FinishNavigationImageDocument { owner, .. } => Some(*owner),
             _ => None,
         }
     }
@@ -294,7 +305,10 @@ impl PostParseLifecycleWork {
     }
 
     pub(crate) fn starts_after_domcontentloaded_boundary(&self) -> bool {
-        matches!(self, Self::RecordDetachedPostParseRuns(_))
+        matches!(
+            self,
+            Self::RecordDetachedPostParseRuns(_) | Self::FinishNavigationImageDocument { .. }
+        )
     }
 
     pub(crate) fn detached_run_count(&self) -> usize {
@@ -532,6 +546,7 @@ impl PostParsePageOwnedWork {
                     || matches!(
                         work.as_ref(),
                         PostParseLifecycleWork::SettleMainDocumentScriptLoadDelay(_)
+                            | PostParseLifecycleWork::FinishNavigationImageDocument { .. }
                     ) =>
             {
                 None
@@ -563,6 +578,7 @@ impl PostParsePageOwnedWork {
                     PageTask::ReportWindowScriptFailure(task.clone())
                 }
                 PostParseLifecycleWork::SettleMainDocumentScriptLoadDelay(_) => return None,
+                PostParseLifecycleWork::FinishNavigationImageDocument { .. } => return None,
                 PostParseLifecycleWork::ApplyMainDocumentInteractive(_) => return None,
                 PostParseLifecycleWork::DispatchDomContentLoaded { .. } => {
                     PageTask::DispatchDomContentLoaded
