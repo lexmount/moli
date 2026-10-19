@@ -801,7 +801,7 @@ impl DocumentRuntime {
             && (removed
                 || !runtime.child_browsing_context_attribute_bootstrap_requires_async_load(handle))
         {
-            runtime.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
+            runtime.sync_existing_child_browsing_context_window_state(scope, handle);
         }
         true
     }

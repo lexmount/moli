@@ -1,6 +1,171 @@
 use super::*;
 
 #[tokio::test]
+async fn blob_child_navigation_preserves_text_mime_and_never_sniffs_html() {
+    const PAYLOAD: &str = "<script>parent.__blobChildScriptRuns++</script><p>literal\0line\r\n</p>";
+    for supplied in ["", "not a MIME", "text/plain", "application/json"] {
+        let mut vm = new_storage_test_vm("https://blob-child-text.test/");
+        vm.eval(&format!(
+            r#"
+globalThis.__blobChildScriptRuns = 0;
+globalThis.__blobChildLoads = 0;
+globalThis.__blobChildFrame = document.createElement('iframe');
+globalThis.__blobChildURL = URL.createObjectURL(new Blob([{}], {{type:{}}}));
+__blobChildFrame.onload = () => ++__blobChildLoads;
+__blobChildFrame.src = __blobChildURL;
+(document.body || document.documentElement || document).appendChild(__blobChildFrame);
+"#,
+            serde_json::to_string(PAYLOAD).unwrap(),
+            serde_json::to_string(supplied).unwrap(),
+        ))
+        .expect("Blob text navigation should queue");
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "Blob text navigation").await;
+        let observed = vm
+            .eval(
+                r#"JSON.stringify({
+mime:__blobChildFrame.contentDocument.contentType,
+element:__blobChildFrame.contentDocument.body.firstElementChild.localName,
+text:__blobChildFrame.contentDocument.body.textContent,
+scripts:__blobChildFrame.contentDocument.querySelectorAll('script').length,
+scriptRuns:__blobChildScriptRuns,
+loads:__blobChildLoads,
+sameURL:__blobChildFrame.contentWindow.location.href===__blobChildURL
+})"#,
+            )
+            .expect("a supported Blob text document must remain same-origin");
+        let observed: serde_json::Value = serde_json::from_str(&observed).unwrap();
+        let expected_mime = if supplied == "application/json" {
+            supplied
+        } else {
+            "text/plain"
+        };
+        assert_eq!(
+            observed,
+            serde_json::json!({
+                "mime":expected_mime,
+                "element":"pre",
+                "text":PAYLOAD.replace('\0', "\u{fffd}").replace("\r\n", "\n"),
+                "scripts":0,
+                "scriptRuns":0,
+                "loads":1,
+                "sameURL":true,
+            }),
+            "supplied MIME: {supplied:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn unsupported_blob_child_navigation_preserves_document_owner_and_history() {
+    for committed in [false, true] {
+        let mut vm = new_storage_test_vm("https://blob-child-ignored.test/");
+        vm.eval(
+            r#"
+globalThis.__ignoredBlobFrame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(__ignoredBlobFrame);
+"#,
+        )
+        .expect("initial child should materialize");
+        assert_initial_about_blank_child_completed_synchronously_for_test(
+            &mut vm,
+            "ignored Blob initial child",
+        )
+        .await;
+        if committed {
+            vm.eval(
+                "__ignoredBlobFrame.src = URL.createObjectURL(new Blob(['<p>old</p>'], {type:'text/html'}))",
+            )
+            .expect("the old Blob HTML document should queue");
+            run_child_navigation_commit_and_host_load_for_test(&mut vm, "old Blob HTML document")
+                .await;
+        }
+        let owner = current_single_child_document_owner_for_test(&vm, "old Blob navigation owner");
+        if committed {
+            vm.eval(
+                "__ignoredBlobFrame.contentWindow.history.replaceState({marker:'retained'}, '')",
+            )
+            .expect("the committed child should retain its structured history state");
+        }
+        vm.eval(
+            r#"
+globalThis.__ignoredBlobDocument = __ignoredBlobFrame.contentDocument;
+globalThis.__ignoredBlobWindow = __ignoredBlobFrame.contentWindow;
+globalThis.__ignoredBlobWindowURL = __ignoredBlobWindow.location.href;
+globalThis.__ignoredBlobDocumentURL = __ignoredBlobDocument.URL;
+__ignoredBlobDocument.body.textContent = 'retained child';
+globalThis.__ignoredBlobEntry = __ignoredBlobWindow.navigation.currentEntry;
+globalThis.__ignoredBlobHistoryLength = __ignoredBlobWindow.history.length;
+globalThis.__ignoredBlobHistoryState = __ignoredBlobWindow.history.state;
+if (__ignoredBlobHistoryState !== null) {
+  __ignoredBlobHistoryState.marker = 'local mutation';
+}
+globalThis.__ignoredBlobLoads = 0;
+globalThis.__ignoredBlobUnloads = 0;
+globalThis.__ignoredBlobScriptRuns = 0;
+__ignoredBlobFrame.onload = () => ++__ignoredBlobLoads;
+__ignoredBlobWindow.addEventListener('unload', () => ++__ignoredBlobUnloads);
+"#,
+        )
+        .expect("old document identity should be retained for inspection");
+        for mime in [
+            "unknown/unknown",
+            "application/unknown",
+            "application/octet-stream",
+        ] {
+            vm.eval(&format!(
+                "__ignoredBlobFrame.src = URL.createObjectURL(new Blob(['<script>parent.__ignoredBlobScriptRuns++</script>'], {{type:{}}}))",
+                serde_json::to_string(mime).unwrap(),
+            ))
+            .expect("unsupported Blob navigation should queue");
+            assert_eq!(
+                vm.eval("JSON.stringify([__ignoredBlobWindow.location.href===__ignoredBlobWindowURL,__ignoredBlobDocument.URL===__ignoredBlobDocumentURL,__ignoredBlobWindow.navigation.currentEntry===__ignoredBlobEntry,__ignoredBlobWindow.history.state===__ignoredBlobHistoryState])")
+                    .expect("provisional navigation must retain the active document projection"),
+                "[true,true,true,true]",
+                "committed={committed}, MIME={mime}: state must not change before document commit"
+            );
+            assert!(
+                vm.run_child_frame_task_source_once_for_test(
+                    ChildFrameSemanticTurnKind::NavigationCommit
+                )
+                .await,
+                "unsupported Blob navigation should settle: {mime}"
+            );
+            assert!(
+                !vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::HostLoad)
+                    .await,
+                "an ignored Blob navigation must not dispatch load: {mime}"
+            );
+            assert_eq!(
+                current_single_child_document_owner_for_test(&vm, "retained Blob navigation owner"),
+                owner,
+                "an ignored navigation must not retire its owner: {mime}"
+            );
+            assert_eq!(
+                vm.eval(
+                    r#"JSON.stringify([
+__ignoredBlobFrame.contentDocument===__ignoredBlobDocument,
+__ignoredBlobFrame.contentWindow===__ignoredBlobWindow,
+__ignoredBlobFrame.contentWindow.location.href===__ignoredBlobDocument.URL,
+__ignoredBlobWindow.navigation.currentEntry===__ignoredBlobEntry,
+__ignoredBlobWindow.history.length===__ignoredBlobHistoryLength,
+__ignoredBlobWindow.location.href===__ignoredBlobWindowURL,
+__ignoredBlobDocument.URL===__ignoredBlobDocumentURL,
+__ignoredBlobWindow.history.state===__ignoredBlobHistoryState,
+__ignoredBlobWindow.history.state===null || __ignoredBlobWindow.history.state.marker==='local mutation',
+__ignoredBlobDocument.body.textContent,
+__ignoredBlobLoads,__ignoredBlobUnloads,__ignoredBlobScriptRuns
+])"#,
+                )
+                .expect("ignored Blob navigation must not create a cross-origin window"),
+                r#"[true,true,true,true,true,true,true,true,true,"retained child",0,0,0]"#,
+                "committed={committed}, MIME={mime}, URLs={}",
+                vm.eval("JSON.stringify({windowBefore:__ignoredBlobWindowURL,documentBefore:__ignoredBlobDocumentURL,windowNow:__ignoredBlobWindow.location.href,documentNow:__ignoredBlobDocument.URL})").unwrap()
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn child_navigation_retires_runtime_binding_context_and_stale_function() {
     let mut vm = new_storage_test_vm("https://child-runtime-binding-owner.test/");
     vm.set_stored_runtime_bindings(&[crate::protocol_types::RuntimeBindingRegistration {

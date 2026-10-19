@@ -1,13 +1,15 @@
+use super::history_runtime::state::{history_entries, history_state_value};
 use super::navigation_activation::{
     install_navigation_activation_runtime_state, set_navigation_current_entry,
 };
 use super::navigation_entry::{
-    cache_current_history_state, set_history_entries, set_history_index,
+    cache_current_history_state, history_index, set_history_entries, set_history_index,
 };
 use super::navigation_entry_state::clone_history_entry_state;
 use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_from_seed,
+    refresh_history_entries_from_seed,
 };
 use super::navigation_window::{
     navigation_has_current_document, window_history_for_holder, window_navigation_for_holder,
@@ -86,7 +88,7 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     if super::history_runtime::state::window_has_shared_history(scope, owner) {
         return;
     }
-    install_navigation_entry_view_for_holder(scope, owner, entry_seed);
+    install_navigation_entry_projection(scope, owner, entry_seed, EntryProjection::Restore);
     commit_navigation_history_for_document(scope, owner, entry_seed);
 }
 
@@ -109,6 +111,20 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     entry_seed: &NavigationHistoryEntrySeed,
+) {
+    install_navigation_entry_projection(scope, owner, entry_seed, EntryProjection::Refresh);
+}
+
+enum EntryProjection {
+    Restore,
+    Refresh,
+}
+
+fn install_navigation_entry_projection<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    entry_seed: &NavigationHistoryEntrySeed,
+    projection: EntryProjection,
 ) {
     if super::history_runtime::state::window_has_shared_history(scope, owner) {
         return;
@@ -141,7 +157,23 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return;
     };
-    let (entries, current_index) = build_history_entries_from_seed(scope, owner, entry_seed);
+    let previous_index = history_index(scope, history);
+    let previous_entry = history_entries(scope, history)
+        .and_then(|entries| entries.get(previous_index as usize).cloned());
+    let previous_state = previous_entry
+        .as_ref()
+        .and_then(|entry| entry.borrow().history_state.clone());
+    let (entries, current_index) = match projection {
+        EntryProjection::Restore => build_history_entries_from_seed(scope, owner, entry_seed),
+        EntryProjection::Refresh => refresh_history_entries_from_seed(scope, owner, entry_seed),
+    };
+    let retains_current_state = previous_entry
+        .as_ref()
+        .zip(entries.get(current_index as usize))
+        .is_some_and(|(previous, current)| {
+            std::rc::Rc::ptr_eq(previous, current)
+                && previous_state == current.borrow().history_state
+        });
     let current_entry = entries
         .get(current_index as usize)
         .map(|entry| entry_wrappers::for_window(scope, owner, entry.clone()))
@@ -153,8 +185,11 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
                 v8::null(scope).into(),
             )
         });
-    let current_state =
-        clone_history_entry_state(scope, current_entry).unwrap_or_else(|| v8::null(scope).into());
+    let current_state = if retains_current_state {
+        history_state_value(scope, history)
+    } else {
+        clone_history_entry_state(scope, current_entry).unwrap_or_else(|| v8::null(scope).into())
+    };
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, current_index);
     cache_current_history_state(scope, history, current_state);
