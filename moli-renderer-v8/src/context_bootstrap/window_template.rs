@@ -39,7 +39,7 @@ pub(in crate::context_bootstrap) fn is_window_named_properties_object<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(
         method,
@@ -123,7 +123,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowObsoleteTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_obsolete_noop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     capture_events: (),
@@ -133,13 +133,14 @@ struct WindowObsoleteTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(
         method = "createImageBitmap",
         length = 1,
         callback = window_create_image_bitmap_callback,
-        returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+        returns_promise,
+        receiver_access_check = false, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     create_image_bitmap: (),
 
     #[webapi(method, length = 0, callback = window_alert_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
@@ -154,13 +155,13 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_report_error_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     report_error: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise, receiver_access_check = false, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_to: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise, receiver_access_check = false, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback, returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback, returns_promise, receiver_access_check = false, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_by: (),
 
     #[webapi(
@@ -203,21 +204,21 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowSelectionTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_get_selection_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     get_selection: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowMediaTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_match_media_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     match_media: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowIdentityAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_closed_getter)]
     #[webapi(receiver_access_check = false)]
@@ -291,78 +292,75 @@ struct WindowIdentityAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowPostRuntimeAccessorsDeclaration {
-    #[webapi(accessor_property, getter = window_opener_getter, setter = window_opener_setter)]
-    #[webapi(receiver_access_check = "setter")]
+    #[webapi(accessor_property, getter = window_opener_getter, setter = window_opener_setter, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     opener: (),
 
-    #[webapi(accessor_property, getter = window_inner_width_getter)]
+    #[webapi(accessor_property, getter = window_inner_width_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     inner_width: (),
 
-    #[webapi(accessor_property, getter = window_inner_height_getter)]
+    #[webapi(accessor_property, getter = window_inner_height_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     inner_height: (),
 
-    #[webapi(accessor_property, getter = window_outer_width_getter)]
+    #[webapi(accessor_property, getter = window_outer_width_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     outer_width: (),
 
-    #[webapi(accessor_property, getter = window_outer_height_getter)]
+    #[webapi(accessor_property, getter = window_outer_height_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     outer_height: (),
 
-    #[webapi(accessor_property, getter = window_device_pixel_ratio_getter)]
+    #[webapi(accessor_property, getter = window_device_pixel_ratio_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     device_pixel_ratio: (),
 
-    #[webapi(accessor_property, getter = window_credentialless_getter)]
+    #[webapi(accessor_property, getter = window_credentialless_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     credentialless: (),
 
     #[webapi(
         accessor_property = "crossOriginIsolated",
-        getter = window_cross_origin_isolated_getter
-    )]
+        getter = window_cross_origin_isolated_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     cross_origin_isolated: (),
 
-    #[webapi(accessor_property, getter = window_navigator_getter)]
+    #[webapi(accessor_property, getter = window_navigator_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     navigator: (),
 
-    #[webapi(accessor_property, getter = window_history_getter)]
+    #[webapi(accessor_property, getter = window_history_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     history: (),
 
     #[webapi(
         accessor_property,
         getter = window_navigation_getter,
-        setter = window_navigation_setter, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+        setter = window_navigation_setter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     navigation: (),
 
-    #[webapi(accessor_property, getter = window_screen_getter)]
+    #[webapi(accessor_property, getter = window_screen_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     screen: (),
 
     #[webapi(
         accessor_property = "speechSynthesis",
-        getter = window_speech_synthesis_getter
-    )]
+        getter = window_speech_synthesis_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     speech_synthesis: (),
 
-    #[webapi(accessor_property, getter = window_performance_getter)]
+    #[webapi(accessor_property, getter = window_performance_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     performance: (),
 
-    #[webapi(accessor_property, getter = window_visual_viewport_getter)]
+    #[webapi(accessor_property, getter = window_visual_viewport_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     visual_viewport: (),
 
-    #[webapi(accessor_property, getter = window_scroll_x_getter)]
+    #[webapi(accessor_property, getter = window_scroll_x_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_x: (),
 
-    #[webapi(accessor_property, getter = window_scroll_y_getter)]
+    #[webapi(accessor_property, getter = window_scroll_y_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_y: (),
 
-    #[webapi(accessor_property, getter = window_scroll_x_getter)]
+    #[webapi(accessor_property, getter = window_scroll_x_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     page_x_offset: (),
 
-    #[webapi(accessor_property, getter = window_scroll_y_getter)]
+    #[webapi(accessor_property, getter = window_scroll_y_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     page_y_offset: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowStorageAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_local_storage_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     local_storage: (),
@@ -376,7 +374,7 @@ struct WindowStorageAccessorsDeclaration {
     )]
     indexed_db: (),
 
-    #[webapi(accessor_property, getter = window_custom_elements_getter)]
+    #[webapi(accessor_property, getter = window_custom_elements_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     custom_elements: (),
 
     #[webapi(accessor_property, getter = window_length_getter)]

@@ -2311,7 +2311,13 @@ impl PageScriptHost {
             .retained_current_element_state(unsafe { &*dom_host }, element)
     }
 
-    pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
+    pub(crate) fn set_select_value(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+        value: impl Into<moli_dom::native::DomStringValue>,
+    ) -> bool {
         // Capture selected peers before the native multi-option commit. The
         // same wrapper serves the Web setter and native autofill.
         let old_states = self

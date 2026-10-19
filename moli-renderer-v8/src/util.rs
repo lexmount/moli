@@ -4,7 +4,7 @@ pub(crate) use moli_v8_util::v8_string_from_utf16_units;
 pub use moli_v8_util::{
     array_contains_strict, array_push_value, call_object_method, callable_relevant_context, callback_data_index_value,
     callback_data_item, constructor_object, constructor_prototype, constructor_prototype_object,
-    define_non_enumerable_static_bool_property, define_non_enumerable_static_number_property,
+    define_non_enumerable_static_bool_property,
     define_non_enumerable_static_property, define_non_enumerable_static_string_property,
     get_own_static_property, get_private_object, get_private_value, get_property,
     global_constructor_object, global_constructor_prototype,
@@ -311,24 +311,8 @@ pub(crate) use moli_v8_util::materialize_hidden_function_template_prototype;
 pub(crate) use moli_webapi_declare::{serialize_v8_array, serialize_v8_iter_array};
 
 pub(crate) use moli_v8_util::{
-    new_target_realm_constructor_prototype,
-    receiver_uses_new_target_realm_object_fallback,
+    new_target_realm_constructor_prototype, receiver_uses_new_target_realm_object_fallback,
 };
-
-pub(super) fn create_script_origin_with_base_url<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resource_name: &str,
-    line_offset: i32,
-    base_url: Option<&Url>,
-) -> v8::ScriptOrigin<'s> {
-    create_script_origin_with_base_url_and_fetch_metadata(
-        scope,
-        resource_name,
-        line_offset,
-        base_url,
-        &crate::module_runtime::ModuleFetchMetadata::default(),
-    )
-}
 
 pub(super) fn create_function_origin_with_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,

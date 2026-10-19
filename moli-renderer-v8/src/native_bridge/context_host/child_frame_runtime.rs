@@ -1,3 +1,4 @@
+pub(crate) use window::cross_origin_location_replace_function;
 mod document;
 pub(in crate::native_bridge::context_host) mod document_slots;
 mod isolated_world;

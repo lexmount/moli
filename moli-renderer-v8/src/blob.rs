@@ -1,8 +1,7 @@
 use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
 use crate::native_bridge;
-use moli_file_api::{BlobData, BlobId, BlobStore, ObjectUrlData, ObjectUrlEntry, ObjectUrlTarget};
+use moli_file_api::{BlobData, BlobId, BlobStore, ObjectUrlEntry, ObjectUrlTarget};
 pub(super) use moli_v8_util::buffer_source_bytes_from_value;
-pub(crate) use moli_webapi::blob::{blob_id_from_object, world_wrapper};
 use moli_webapi::blob::{BlobReadMode, BlobRuntime};
 pub(super) use moli_webapi::blob::{
     blob_constructor_callback, blob_data_from_object, blob_mime_type_from_object,

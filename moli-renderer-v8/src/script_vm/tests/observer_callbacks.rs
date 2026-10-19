@@ -840,6 +840,7 @@ async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_prox
 (() => {
   const child = __observerCallbackFrame.contentWindow;
   const target = document.body.appendChild(document.createElement("div"));
+  target.style.cssText = "width:20px;height:10px";
   globalThis.__observerCallbackFacts = [];
   globalThis.__observerProxyCalls = [];
   globalThis.__observerCallbackChild = child;
@@ -982,9 +983,20 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         .unwrap();
         let loader =
             ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "registration must not build a layout: {policy:?}"
+        );
         vm.advance_timers_until_deadline_for_test(&loader)
             .await
             .expect("deliver Document intersection task");
+        let sampled_builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            sampled_builds,
+            builds + u64::from(policy == moli_page_types::LayoutPolicy::OnDemand),
+            "one rendering update publishes one real layout and none for Mock: {policy:?}"
+        );
         assert_eq!(
             vm.eval("JSON.stringify(rows)").unwrap(),
             r#"[{"callbackRealm":true,"observerRealm":true,"receiver":true,"arrayRealm":true,"entryRealm":true,"rectRealm":true,"target":true,"count":1,"argc":2}]"#,
@@ -995,8 +1007,8 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         }
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
-            builds,
-            "observer registration, delivery and record reads must reuse the initial sample: {policy:?}"
+            sampled_builds,
+            "delivery and record reads must reuse the rendering update's sample: {policy:?}"
         );
     }
 }
@@ -1072,6 +1084,7 @@ async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_wind
 (() => {
   const child = __observerCallbackFrame.contentWindow;
   const target = document.body.appendChild(document.createElement("div"));
+  target.style.cssText = "width:20px;height:10px";
   globalThis.__observerCallbackErrors = [];
   child.addEventListener("error", child.Function(
     "event",

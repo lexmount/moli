@@ -1,9 +1,7 @@
-use super::helpers::{
-    window_current_dispatch_scope, window_hidden_value, window_host_ptr, window_is_closed,
-};
+use super::helpers::{window_hidden_value, window_host_ptr, window_is_closed};
 use super::*;
 
-pub(super) fn window_alias_value<'s>(
+pub(in crate::context_bootstrap) fn window_alias_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,

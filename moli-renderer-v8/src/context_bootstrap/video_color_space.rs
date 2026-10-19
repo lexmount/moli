@@ -1,7 +1,5 @@
 //! Immutable color metadata, independent of video decoding and rendering.
 
-use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
-
 use crate::{
     util::{get_private_value, throw_type_error, v8str},
     web_api_interfaces, webidl,

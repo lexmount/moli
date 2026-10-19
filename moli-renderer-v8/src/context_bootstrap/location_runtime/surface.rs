@@ -22,8 +22,7 @@ struct WindowHistoryAccessorDeclaration {
     #[webapi(
         accessor_property,
         getter = window_history_getter,
-        enumerable
-    )]
+        enumerable, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     history: (),
 }
 
@@ -34,7 +33,7 @@ struct WindowNavigationAccessorDeclaration {
         accessor_property,
         getter = window_navigation_getter,
         setter = window_navigation_setter,
-        enumerable, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+        enumerable, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     navigation: (),
 }
 
@@ -239,9 +238,7 @@ pub(in crate::context_bootstrap) fn window_location_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    if crate::native_bridge::CrossOriginWindowAccessor::for_receiver(scope, receiver).is_none()
-        && !super::super::window_receiver::is_window_receiver(scope, receiver)
-    {
+    if !super::super::window_receiver::is_window_receiver(scope, receiver) {
         webidl::throw_type_error(
             scope,
             "Window.location setter called on incompatible receiver.",

@@ -140,7 +140,7 @@ impl PageScriptHost {
             .collect()
     }
 
-    fn window_child_browsing_context_handles_for_document(
+    pub(in crate::native_bridge::context_host) fn window_child_browsing_context_handles_for_document(
         &self,
         document: DomHandle,
     ) -> Vec<DomHandle> {
@@ -243,25 +243,10 @@ impl PageScriptHost {
         parent: Option<DomHandle>,
         key: &str,
     ) -> Option<DomHandle> {
-        let handle = self.child_browsing_context_named_object_handle(parent, key)?;
-        // Deduplicate before filtering by origin: a cross-origin first match
-        // must not expose a later same-origin child with the same target name.
-        self.child_browsing_context_child_is_same_origin(parent, handle)
-            .then_some(handle)
-    }
-
-    pub(crate) fn child_browsing_context_child_is_same_origin(
-        &self,
-        parent: Option<DomHandle>,
-        child: DomHandle,
-    ) -> bool {
-        let parent = match parent {
-            Some(parent) => self.child_window_access_origin(parent),
-            None => self.main_window_access_origin(),
-        };
-        parent
-            .zip(self.child_window_access_origin(child))
-            .is_some_and(|(parent, child)| parent.is_same_origin(&child))
+        self.child_browsing_context_named_child_handle_for_scope(
+            parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child),
+            key,
+        )
     }
 
     // Named objects also include cross-origin children when a Document's
@@ -305,7 +290,7 @@ impl PageScriptHost {
                 self.child_browsing_context_direct_host_handles(parent)
             }
             OwnerDispatchScope::Top => {
-                self.top_level_child_browsing_context_handles_in_frame_tree_order()
+                self.top_level_child_browsing_context_handles_in_document_order()
             }
             OwnerDispatchScope::LightweightPopup(id) => self
                 .window_child_browsing_context_handles_for_document(

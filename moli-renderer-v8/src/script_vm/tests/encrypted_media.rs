@@ -109,10 +109,8 @@ fn encrypted_media_session_handlers_use_native_event_targets_and_registered_prox
     #[derive(WebApiObject)]
     #[webapi(interface = crate::web_api_interfaces::MediaKeySession, require_prototype)]
     struct TestSession {
-        #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_SLOT, value = "__moliMediaKeySessionListeners")]
+        #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
         target_slot: (),
-        #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-        ordered_handlers: (),
     }
 
     let mut vm = new_storage_page_task_executor_test_vm("https://eme-events.test/");

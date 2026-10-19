@@ -3,10 +3,7 @@ use super::{
     new_event_state,
 };
 use crate::interfaces as web_api_interfaces;
-use moli_v8_util::{
-    callback_data_index_value, callback_data_item,
-    throw_type_error,
-};
+use moli_v8_util::{callback_data_index_value, callback_data_item, throw_type_error};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiInterfaceDescriptor};
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;

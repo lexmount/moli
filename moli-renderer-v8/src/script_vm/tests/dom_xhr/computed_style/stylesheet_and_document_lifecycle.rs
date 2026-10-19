@@ -1412,7 +1412,7 @@ yield; // Publish this scene before reading its geometry.
 }
 
 #[test]
-fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
+fn nested_iframe_cached_viewport_units_follow_published_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 
     let before = vm
@@ -1514,22 +1514,29 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
 "#;
     let after = vm
         .eval(query)
-        .expect("warm queries refresh invalidated frame viewports");
-    assert_eq!(after, "100|80|50|40|5px|4px|2px|5px|4px");
+        .expect("warm queries reuse the published frame viewports");
+    assert_eq!(after, "200|160|100|80|10px|8px|4px|10px|8px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
-        updates + 1,
-        "warm observation must consume the changed viewport once"
+        updates,
+        "ordinary reads must not publish a new recursive layout"
     );
     publish_layout_for_test(&mut vm);
     let refreshed = vm
         .eval(query)
-        .expect("explicit refresh retains the already current recursive frame viewports");
+        .expect("explicit refresh publishes the changed recursive frame viewports");
     assert_eq!(refreshed, "100|80|50|40|5px|4px|2px|5px|4px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
         updates + 1,
-        "explicit refresh must not consume the viewport transition a second time",
+        "the published viewport transition must update the retained style world once",
+    );
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(query).unwrap(), refreshed);
+    assert_eq!(
+        vm.retained_style_system_update_count_for_document_for_test(inner_document),
+        updates + 1,
+        "republication must not consume the same viewport transition twice",
     );
     assert_eq!(
         vm.retained_stylist_identity_for_document_for_test(inner_document),
@@ -2043,4 +2050,131 @@ fn child_parser_quirks_mode_does_not_mutate_the_top_document() {
         .expect("top and child document compatMode should evaluate");
 
     assert_eq!(result, "CSS1Compat|BackCompat");
+}
+
+#[test]
+fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
+    let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
+
+    let before = vm
+        .eval(
+            r#"
+(() => {
+  const outerFrame = document.createElement('iframe');
+  outerFrame.id = 'nested-viewport-outer-frame';
+  outerFrame.style.cssText = 'width:200px;height:160px;border:0';
+  (document.body || document.documentElement || document).appendChild(outerFrame);
+
+  const outerWindow = outerFrame.contentWindow;
+  const outerDocument = outerWindow.document;
+  outerDocument.open();
+  outerDocument.write(`
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; }
+      #nested-viewport-inner-frame {
+        display: block;
+        width: 50%;
+        height: 50%;
+        border: 0;
+      }
+    </style>
+    <body><iframe id="nested-viewport-inner-frame"></iframe></body>`);
+  outerDocument.close();
+
+  const innerFrame = outerDocument.getElementById('nested-viewport-inner-frame');
+  const innerWindow = innerFrame.contentWindow;
+  const innerDocument = innerWindow.document;
+  innerDocument.open();
+  innerDocument.write(`
+    <style>
+      #nested-viewport-target {
+        width: 10vw;
+        height: 10vh;
+        padding-left: 5vmin;
+      }
+    </style>
+    <body><div id="nested-viewport-target"></div></body>`);
+  innerDocument.close();
+
+  outerFrame.getBoundingClientRect();
+  innerFrame.getBoundingClientRect();
+  const target = innerDocument.getElementById('nested-viewport-target');
+  const held = innerWindow.getComputedStyle(target);
+  globalThis.__nestedViewportUnitFixture = {
+    outerFrame,
+    innerFrame,
+    outerWindow,
+    innerWindow,
+    target,
+    held
+  };
+  return [
+    outerWindow.innerWidth,
+    outerWindow.innerHeight,
+    innerWindow.innerWidth,
+    innerWindow.innerHeight,
+    held.width,
+    held.height,
+    held.paddingLeft
+  ].join('|');
+})()
+"#,
+        )
+        .expect("nested viewport-unit styles should be cached");
+    assert_eq!(before, "200|160|100|80|10px|8px|4px");
+    let inner_document = child_document_handle_for_frame_id(&vm, "nested-viewport-inner-frame");
+    let updates = vm.retained_style_system_update_count_for_document_for_test(inner_document);
+    let stylist = vm.retained_stylist_identity_for_document_for_test(inner_document);
+
+    let query = r#"
+(() => {
+  const {
+    outerFrame,
+    innerFrame,
+    outerWindow,
+    innerWindow,
+    target,
+    held
+  } = __nestedViewportUnitFixture;
+  outerFrame.style.width = '100px';
+  outerFrame.style.height = '80px';
+  outerFrame.getBoundingClientRect();
+  innerFrame.getBoundingClientRect();
+  const heldValues = [held.width, held.height, held.paddingLeft];
+  const fresh = innerWindow.getComputedStyle(target);
+  return [
+    outerWindow.innerWidth,
+    outerWindow.innerHeight,
+    innerWindow.innerWidth,
+    innerWindow.innerHeight,
+    ...heldValues,
+    fresh.width,
+    fresh.height
+  ].join('|');
+})()
+"#;
+    let after = vm
+        .eval(query)
+        .expect("warm queries refresh invalidated frame viewports");
+    assert_eq!(after, "100|80|50|40|5px|4px|2px|5px|4px");
+    assert_eq!(
+        vm.retained_style_system_update_count_for_document_for_test(inner_document),
+        updates + 1,
+        "warm observation must consume the changed viewport once"
+    );
+    publish_layout_for_test(&mut vm);
+    let refreshed = vm
+        .eval(query)
+        .expect("explicit refresh retains the already current recursive frame viewports");
+    assert_eq!(refreshed, "100|80|50|40|5px|4px|2px|5px|4px");
+    assert_eq!(
+        vm.retained_style_system_update_count_for_document_for_test(inner_document),
+        updates + 1,
+        "explicit refresh must not consume the viewport transition a second time",
+    );
+    assert_eq!(
+        vm.retained_stylist_identity_for_document_for_test(inner_document),
+        stylist,
+        "recursive iframe resizing must retain the innermost Stylist",
+    );
 }

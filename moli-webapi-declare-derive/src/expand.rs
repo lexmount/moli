@@ -174,6 +174,34 @@ pub(crate) fn expand_webapi_function_template(
             None
         }
     });
+    let getter_callbacks = fields.iter().filter_map(|DeclaredField { attrs, .. }| {
+        if !matches!(attrs.kind, FieldKind::AccessorProperty) {
+            return None;
+        }
+        let name = webapi_field_name_literal(attrs.name.as_ref())?;
+        let callback = expand_callback(attrs.getter.as_ref()?, attrs, false);
+        Some(quote! {
+            #name => ::std::option::Option::Some(
+                ::moli_webapi_declare::v8::MapFnTo::<
+                    ::moli_webapi_declare::v8::FunctionCallback,
+                >::map_fn_to(#callback)
+            ),
+        })
+    });
+    let setter_callbacks = fields.iter().filter_map(|DeclaredField { attrs, .. }| {
+        if !matches!(attrs.kind, FieldKind::AccessorProperty) {
+            return None;
+        }
+        let name = webapi_field_name_literal(attrs.name.as_ref())?;
+        let callback = expand_callback(attrs.setter.as_ref()?, attrs, true);
+        Some(quote! {
+            #name => ::std::option::Option::Some(
+                ::moli_webapi_declare::v8::MapFnTo::<
+                    ::moli_webapi_declare::v8::FunctionCallback,
+                >::map_fn_to(#callback)
+            ),
+        })
+    });
     let mut callback_mappings = CallbackMappings::default();
     let template_fields =
         expand_function_template_fields(&fields, &template_name, &mut callback_mappings)?;
@@ -226,6 +254,24 @@ pub(crate) fn expand_webapi_function_template(
         impl #impl_generics ::moli_webapi_declare::WebApiFunctionTemplateDeclaration for #struct_name #ty_generics #where_clause {
             const NAME: &'static str = #template_name;
             const PROTOTYPE_ATTRIBUTE_NAMES: &'static [&'static str] = &[#(#prototype_attribute_names),*];
+
+            fn accessor_getter_callback(__moli_accessor_name: &str) -> ::std::option::Option<::moli_webapi_declare::v8::FunctionCallback> {
+                match __moli_accessor_name {
+                    #(#getter_callbacks)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+
+
+            fn accessor_setter_callback(__moli_accessor_name: &str) -> ::std::option::Option<::moli_webapi_declare::v8::FunctionCallback> {
+                match __moli_accessor_name {
+                    #(#setter_callbacks)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+
+
+
 
             fn build<'s>(
                 scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_, ()>,

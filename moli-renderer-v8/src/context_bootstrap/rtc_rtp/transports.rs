@@ -1,17 +1,17 @@
 //! Native local transports. Applying an offer exposes the planned ICE/DTLS
 //! objects; only a transport backend may supply candidates or advance them.
 
-use super::{operations, rtp_transceivers, signaling, SIMPLE_EVENT_TARGET_LISTENERS_SLOT};
-use moli_webapi::rtc::peer_connection::{configuration, set_string_slot};
+use super::{SIMPLE_EVENT_TARGET_LISTENERS_SLOT, operations, rtp_transceivers, signaling};
+use crate::page_task_queue::RendererPageWebRtcTaskKind;
+use crate::util::get_private_object;
 use crate::{
     context_bootstrap::media_queries,
     util::{get_private_value, set_private_value, v8_string, v8str},
     web_api_interfaces,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-use crate::page_task_queue::RendererPageWebRtcTaskKind;
-use crate::util::get_private_object;
 use base64::Engine as _;
+use moli_webapi::rtc::peer_connection::{configuration, set_string_slot};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable)]
@@ -21,7 +21,8 @@ struct PeerPrototype {
 }
 
 pub(super) fn install_peer<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>, prototype: v8::Local<'s, v8::ObjectTemplate>,
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
 ) {
     PeerPrototype::initialize_prototype_template(scope, prototype);
 }
@@ -257,7 +258,7 @@ pub(super) fn close_sctp<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s,
         // Unlike rollback, close retains pc.sctp. Notify within the SCTP shutdown
         // step; the following steps of PC.close() shut down DTLS and ICE.
         set_string_slot(scope, sctp, STATE, "closed");
-        signaling::dispatch_event(scope, sctp, LISTENERS, "statechange");
+        signaling::dispatch_event(scope, sctp, "statechange");
     }
 }
 

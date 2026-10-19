@@ -164,7 +164,7 @@ impl PageScriptHost {
             opener: (),
         }
         .initialize(scope, window)?;
-        install_simple_event_target_methods(scope, window);
+        initialize_simple_event_target(scope, window);
         install_simple_window_event_handlers(scope, window);
         crate::context_bootstrap::install_secure_window_event_handler_accessors(
             scope, window, secure,

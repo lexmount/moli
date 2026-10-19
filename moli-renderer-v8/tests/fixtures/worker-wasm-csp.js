@@ -2,7 +2,9 @@
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
   const events = [];
   let microtaskRan = false;
-  const listener = event => events.push({
+  let reportsComplete;
+  const reportsDone = new Promise(resolve => { reportsComplete = resolve; });
+  const listener = event => { events.push({
     blocked: event.blockedURI,
     directive: event.effectiveDirective,
     policy: event.originalPolicy,
@@ -12,6 +14,8 @@
     native: event instanceof SecurityPolicyViolationEvent,
     afterMicrotask: microtaskRan,
   });
+    if (events.length === globalThis.__expectedWasmCspReports) reportsComplete();
+  };
   addEventListener('securitypolicyviolation', listener);
   queueMicrotask(() => { microtaskRan = true; });
   const response = () => new Response(bytes, { headers: { 'Content-Type': 'application/wasm' } });
@@ -35,7 +39,9 @@
     }
   }
   const valid = WebAssembly.validate(bytes);
-  await new Promise(resolve => setTimeout(resolve, 30));
+  const observation = new Promise(resolve => setTimeout(resolve, 30));
+  if (globalThis.__expectedWasmCspReports > 0) await reportsDone;
+  await observation;
   removeEventListener('securitypolicyviolation', listener);
   return { results, synchronousEvents, valid, events };
 })()

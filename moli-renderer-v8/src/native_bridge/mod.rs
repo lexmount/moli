@@ -1,3 +1,4 @@
+pub(crate) use context_host::cross_origin_location_replace_function;
 pub(crate) mod abort;
 mod active_child_window;
 pub(super) mod bindings;

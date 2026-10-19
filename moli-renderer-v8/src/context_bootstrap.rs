@@ -235,7 +235,7 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
-    HyperlinkNavigationOptions, LocationNavigationKind, blocks_ancestor_location_navigation,
+    HyperlinkNavigationOptions, LocationNavigationKind,
     dispatch_top_level_navigation_event_with_source_element,
     history_entry_seed_for_cross_document_location, is_native_location, navigate_borrowed_location,
     navigate_child_meta_refresh, navigate_location_object_for_element_fragment,
@@ -265,8 +265,6 @@ pub(crate) use navigation_traversal_execution::{
     apply_authorized_history_traversal_task, reject_canceled_history_traversal_results,
     resume_pending_history_traversals,
 };
-pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
-pub(crate) use performance_runtime::performance_slot_number;
 #[cfg(feature = "devtools")]
 pub(crate) use selection_surface::window_selection_is_collapsed;
 pub(crate) use selection::focus_element_selection;

@@ -1,9 +1,7 @@
 //! Shared native identity, state and attributes for Window and Worker bindings.
 
 use super::*;
-use crate::util::{
-    callback_data_index_value, callback_data_item, get_private_value, set_private_value,
-};
+use crate::util::{callback_data_index_value, callback_data_item, get_private_value};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -144,24 +142,7 @@ fn handler_setter<'s>(
     else {
         return;
     };
-    let value = args.get(0);
-    let active = value.is_object();
-    let value = if active {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, args.this(), slot, value);
-    if let Some(listeners) = simple_event_target_slot_name(scope, args.this()) {
-        simple_object_event_set_ordered_handler(
-            scope,
-            args.this(),
-            &listeners,
-            event_type,
-            slot,
-            active,
-        );
-    }
+    simple_object_event_set_handler(scope, args.this(), event_type, slot, args.get(0));
 }
 
 /// The generated binding rejects invalid receivers in the callee realm. Native

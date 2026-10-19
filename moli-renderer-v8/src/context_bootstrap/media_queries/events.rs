@@ -1,7 +1,4 @@
-use super::{
-    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, object_property_as_array, object_string_property_defined,
-    v8str,
-};
+use super::{SIMPLE_EVENT_TARGET_LISTENERS_SLOT, object_string_property_defined, v8str};
 const SIMPLE_EVENT_TARGET_HANDLER_SLOT_FIELD: &str = "handlerSlot";
 
 mod media_query_list;

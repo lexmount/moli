@@ -55,7 +55,6 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) struct ChildWind
 pub(in crate::native_bridge::context_host::child_frame_runtime) struct ChildWindowRealmProjection<
     's,
 > {
-    pub(in crate::native_bridge::context_host::child_frame_runtime) top: v8::Local<'s, v8::Object>,
     pub(in crate::native_bridge::context_host::child_frame_runtime) document:
         v8::Local<'s, v8::Object>,
 }

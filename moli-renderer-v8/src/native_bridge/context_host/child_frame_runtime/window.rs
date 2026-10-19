@@ -26,6 +26,7 @@ use std::{
 };
 
 mod cross_origin_bindings;
+pub(crate) use cross_origin_bindings::cross_origin_location_replace_function;
 mod location;
 use cross_origin_bindings::*;
 
@@ -114,14 +115,6 @@ impl ChildWindowProxyRecords {
         handle: DomHandle,
     ) -> Option<v8::Global<v8::Context>> {
         self.records.get_mut(&handle)?.facade_context.take()
-    }
-
-    fn clear_retired_realm_projections(&mut self, handle: DomHandle) {
-        let Some(record) = self.records.get_mut(&handle) else {
-            return;
-        };
-        record.cross_origin_endpoint_projections.clear();
-        record.realm_top_window_wrapper = None;
     }
 
     pub(in crate::native_bridge::context_host) fn promote_shell_to_live(
@@ -319,16 +312,6 @@ impl ChildWindowProxyRecords {
     ) {
         self.detached_content_document_wrappers
             .insert(handle, v8::Weak::new(scope, document));
-    }
-
-    pub(in crate::native_bridge::context_host) fn detached_content_window<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.detached_content_window_wrappers
-            .get(&handle)
-            .and_then(|wrapper| wrapper.to_local(scope))
     }
 
     pub(in crate::native_bridge::context_host) fn set_detached_content_window(
@@ -634,7 +617,11 @@ pub(crate) fn synthetic_window_context_can_access<'s>(
     else {
         return true;
     };
-    let Ok(host_ptr) = crate::native_bridge::runtime_ptr_from_object(scope, window) else {
+    let Some(host_ptr) = window
+        .get_creation_context(scope)
+        .and_then(crate::util::context_host_ptr_from_context_slot)
+        .or_else(|| crate::native_bridge::runtime_ptr_from_object(scope, window).ok())
+    else {
         return false;
     };
     if crate::util::context_host_ptr_from_context_slot(accessing_context) != Some(host_ptr) {
@@ -671,17 +658,19 @@ pub(crate) fn caller_can_access_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> bool {
+    let accessing = cross_origin_accessing_context(scope);
+    if let Some(accessed) = window.get_creation_context(scope)
+        && window.strict_equals(accessed.global(scope).into())
+        && crate::util::context_host_ptr_from_context_slot(accessed).is_some()
+    {
+        return contexts_can_script_access(scope, accessing, accessed);
+    }
     if crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_some() {
-        return synthetic_window_context_can_access(
-            scope,
-            cross_origin_accessing_context(scope),
-            window,
-        );
+        return synthetic_window_context_can_access(scope, accessing, window);
     }
     let Some(accessed) = window.get_creation_context(scope) else {
         return false;
     };
-    let accessing = cross_origin_accessing_context(scope);
     contexts_can_script_access(scope, accessing, accessed)
 }
 
@@ -998,12 +987,6 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_, ()>,
         handle: DomHandle,
     ) -> bool {
-        // Endpoint projections contain functions from the outgoing Realm.
-        // Clear them for both same-origin and cross-origin navigation; a
-        // successor must not reuse a parent's postMessage function whose
-        // creating child Realm has already retired.
-        self.child_window_proxy_records
-            .clear_retired_realm_projections(handle);
         // A same-origin caller can retain functions from the retired inner
         // global. Keep that proxy detached until the replacement LocalWindow
         // takes it over so those closures continue to resolve against their
@@ -1570,28 +1553,6 @@ impl PageScriptHost {
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.lightweight_popup_window(scope, popup_id)
     }
-
-    fn cross_origin_window_endpoint_projection_for_child<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        _accessing_handle: DomHandle,
-        endpoint: PendingWindowMessageEndpoint,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        match endpoint {
-            PendingWindowMessageEndpoint::TopWindow => {
-                let dispatch = super::super::OwnerDispatchScope::Top;
-                let owner = self.current_window_execution_context_owner(dispatch)?;
-                let (_, context) = self.window_execution_context(scope, owner, dispatch)?;
-                Some(context.global(scope))
-            }
-            PendingWindowMessageEndpoint::ChildWindow(handle) => {
-                self.child_browsing_context_cross_origin_window_proxy(scope, handle)
-            }
-            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
-                self.lightweight_popup_window(scope, popup_id)
-            }
-        }
-    }
 }
 
 impl PageScriptHost {
@@ -1893,19 +1854,6 @@ fn get_cross_origin_proxy_private_value<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let storage = cross_origin_proxy_storage_object(scope, object);
     get_private_value(scope, storage, slot)
-}
-
-fn set_cross_origin_window_self_identity_slots(
-    scope: &mut v8::PinScope<'_, '_>,
-    window: v8::Local<'_, v8::Object>,
-    identity: v8::Local<'_, v8::Object>,
-) {
-    set_cross_origin_object_slot(scope, window, "self", identity.into());
-    set_cross_origin_object_slot(scope, window, "window", identity.into());
-    set_cross_origin_object_slot(scope, window, "globalThis", identity.into());
-    set_cross_origin_object_slot(scope, window, "parent", identity.into());
-    set_cross_origin_object_slot(scope, window, "top", identity.into());
-    set_cross_origin_object_slot(scope, window, "frames", identity.into());
 }
 
 fn wrap_cross_origin_window_with_has_trap<'s>(
@@ -2368,7 +2316,7 @@ fn cross_origin_location_proxy_set_callback<'s>(
 fn cross_origin_window_close_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     if crate::native_bridge::lightweight_popup_id_from_window(scope, args.this()).is_some() {
         super::super::popups::lightweight_popup_close_callback(scope, args, rv);

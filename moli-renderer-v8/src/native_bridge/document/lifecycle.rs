@@ -15,8 +15,7 @@ use crate::native_bridge::element::{
 use crate::{
     custom_elements,
     document_runtime::{DomHandle, EventTargetHandle},
-    dom::native::{DocumentReadyState, NativeDom, Node, NodeData},
-    parser::HtmlParser,
+    dom::native::{DocumentReadyState, Node},
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
         utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, v8_string, v8str,
