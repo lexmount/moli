@@ -111,6 +111,7 @@ fn script_preloads_require_owner_admission(env: &PageVmEnvConfig) -> bool {
 
 pub(in crate::runtime) fn main_document_parser_scripting_enabled(env: &PageVmEnvConfig) -> bool {
     !env.document_settings.script_execution_disabled
+        && env.document_policy_container.sandbox.allows_scripts
         && crate::content_security_policy::content_security_policy_sandbox_allows_scripts(
             &env.document_policy_container
                 .response_content_security_policies,

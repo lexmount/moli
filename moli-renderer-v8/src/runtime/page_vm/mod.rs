@@ -1234,6 +1234,21 @@ struct PageVmRendererDocumentIsolateBootstrap {
 }
 
 impl PageVmRuntimeHooks {
+    pub(in crate::runtime) fn inherit_auxiliary_sandbox(
+        &self,
+        policy: &mut crate::document_runtime::DocumentPolicyContainer,
+    ) {
+        if let Some((Some(window), _)) = self
+            .renderer_page_script_environment
+            .as_ref()
+            .and_then(|environment| environment.window_identity())
+        {
+            policy.sandbox = window
+                .frame_sandbox()
+                .with_response_content_security_policy(policy.sandbox);
+        }
+    }
+
     pub(in crate::runtime) fn with_web_mcp_navigation(
         mut self,
         id: Option<moli_page_types::RendererWebMcpNavigation>,
