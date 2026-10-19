@@ -263,7 +263,7 @@ pub(crate) fn current_document_referrer_policy<'s>(
         .or_else(|| current_entry_referrer_policy(scope, owner))
 }
 
-pub(super) fn document_referrer_policy_for_native_document(
+pub(crate) fn document_referrer_policy_for_native_document(
     runtime: &crate::native_bridge::JsContextHost,
     document_handle: DomHandle,
 ) -> Option<String> {
