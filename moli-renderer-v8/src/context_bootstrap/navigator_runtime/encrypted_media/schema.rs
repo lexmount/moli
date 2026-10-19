@@ -11,16 +11,6 @@ pub(in crate::context_bootstrap::navigator_runtime) enum MediaKeysRequirement {
     NotAllowed,
 }
 
-impl MediaKeysRequirement {
-    pub(in crate::context_bootstrap::navigator_runtime) fn as_str(self) -> &'static str {
-        match self {
-            Self::Required => "required",
-            Self::Optional => "optional",
-            Self::NotAllowed => "not-allowed",
-        }
-    }
-}
-
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MediaKeySystemMediaCapability")]
 struct Capability {
