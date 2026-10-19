@@ -7,6 +7,7 @@ FileAPI/blob/Blob-stream-byob-crash.html
 FileAPI/blob/Blob-stream-sync-xhr-crash.html
 FileAPI/file/File-constructor-endings.html
 FileAPI/filelist-section/filelist.html
+FileAPI/idlharness.html
 IndexedDB/database-names-by-origin.html
 IndexedDB/idb_webworkers.htm
 IndexedDB/idbfactory-databases-opaque-origin.html
@@ -133,6 +134,8 @@ content-security-policy/form-action/form-action-src-javascript-prevented.html
 content-security-policy/frame-ancestors/frame-ancestors-from-serviceworker.https.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-self-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-star-allow.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-self-block.html
@@ -164,11 +167,14 @@ content-security-policy/generic/generic-0_1-img-src.html
 content-security-policy/generic/generic-0_1-script-src.html
 content-security-policy/generic/generic-0_2.html
 content-security-policy/generic/generic-0_2_3.html
+content-security-policy/generic/invalid-characters-in-policy.html
 content-security-policy/img-src/img-src-none-blocks-data-uri.html
 content-security-policy/img-src/img-src-none-blocks.html
+content-security-policy/img-src/img-src-self-unique-origin.html
 content-security-policy/img-src/img-src-targeting.html
 content-security-policy/img-src/img-src-wildcard-allowed.html
 content-security-policy/inheritance/blob-inherits-from-meta-http-equiv-with-invalid-characters.html
+content-security-policy/inheritance/inherited-csp-list-modifications-are-local.html
 content-security-policy/media-src/media-src-7_1.html
 content-security-policy/media-src/media-src-7_2.html
 content-security-policy/media-src/media-src-blocked-blob-url.html
@@ -1625,6 +1631,7 @@ css/css-grid/abspos/grid-abspos-staticpos-justify-self-rtl-last-baseline-001.htm
 css/css-grid/abspos/grid-abspos-staticpos-justify-self-rtl-last-baseline-002.html
 css/css-grid/abspos/grid-paint-positioned-children-001.html
 css/css-grid/abspos/grid-positioned-item-dynamic-change-001.html
+css/css-grid/abspos/grid-positioned-item-dynamic-change-002.html
 css/css-grid/abspos/grid-positioned-item-dynamic-change-004.html
 css/css-grid/abspos/grid-positioned-item-dynamic-change-005.html
 css/css-grid/abspos/grid-positioned-item-dynamic-change-006.html
@@ -1699,6 +1706,8 @@ css/css-grid/abspos/positioned-grid-items-016.html
 css/css-grid/abspos/positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-items-018.html
 css/css-grid/abspos/positioned-grid-items-019.html
+css/css-grid/abspos/positioned-grid-items-020.html
+css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-022.html
 css/css-grid/abspos/positioned-grid-items-023.html
 css/css-grid/abspos/positioned-grid-items-025.html
@@ -1706,6 +1715,7 @@ css/css-grid/abspos/positioned-grid-items-026.html
 css/css-grid/abspos/positioned-grid-items-crash.html
 css/css-grid/abspos/positioned-grid-items-negative-indices-001.html
 css/css-grid/abspos/positioned-grid-items-negative-indices-002.html
+css/css-grid/abspos/positioned-grid-items-negative-indices-003.html
 css/css-grid/abspos/positioned-grid-items-should-not-create-implicit-tracks-001.html
 css/css-grid/abspos/positioned-grid-items-should-not-take-up-space-001.html
 css/css-grid/abspos/positioned-grid-items-sizing-001.html
@@ -2282,6 +2292,7 @@ css/css-grid/subgrid/standalone-axis-size-002.html
 css/css-grid/subgrid/standalone-axis-size-003.html
 css/css-grid/subgrid/standalone-axis-size-004.html
 css/css-grid/subgrid/standalone-axis-size-005.html
+css/css-grid/subgrid/standalone-axis-size-006.html
 css/css-grid/subgrid/standalone-axis-size-008.html
 css/css-grid/subgrid/standalone-axis-size-009.html
 css/css-grid/subgrid/sticky-subgrid-item.html
@@ -2756,6 +2767,7 @@ css/css-sizing/intrinsic-percent-replaced-017.html
 css/css-sizing/intrinsic-percent-replaced-021.html
 css/css-sizing/intrinsic-percent-replaced-024.html
 css/css-sizing/intrinsic-percent-replaced-026.html
+css/css-sizing/intrinsic-size-min-content-box-sizing.html
 css/css-sizing/margin-collapse-with-indefinite-block-size-001.html
 css/css-sizing/margin-collapse-with-indefinite-block-size-002.html
 css/css-sizing/margin-collapse-with-indefinite-block-size-003.html
@@ -3299,7 +3311,6 @@ css/cssom/cssstyledeclaration-setter-logical.html
 css/cssom/declaration-block-all-crash.html
 css/cssom/delete-namespace-rule-when-child-rule-exists.html
 css/cssom/escape.html
-css/cssom/font-family-serialization-001.html
 css/cssom/font-shorthand-serialization.html
 css/cssom/font-variant-shorthand-serialization.html
 css/cssom/getComputedStyle-animations-replaced-into-ib-split.html
@@ -3307,6 +3318,7 @@ css/cssom/getComputedStyle-detached-subtree.html
 css/cssom/getComputedStyle-display-none-001.html
 css/cssom/getComputedStyle-display-none-002.html
 css/cssom/getComputedStyle-display-none-003.html
+css/cssom/getComputedStyle-dynamic-subdoc.html
 css/cssom/getComputedStyle-insets-absolute-crash.html
 css/cssom/getComputedStyle-insets-absolute-logical-crash.html
 css/cssom/getComputedStyle-insets-absolute-roundtrip.html
@@ -3363,7 +3375,6 @@ css/cssom/serialize-all-longhands.html
 css/cssom/serialize-custom-props.html
 css/cssom/serialize-media-rule.html
 css/cssom/serialize-namespaced-type-selectors.html
-css/cssom/serialize-values.html
 css/cssom/serialize-variable-reference.html
 css/cssom/set-selector-text-attachment.html
 css/cssom/set-selector-text-detached-rule-delete-crash.html
@@ -3981,8 +3992,6 @@ dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
 dom/nodes/NodeList-static-length-getter-tampered-1.html
-dom/nodes/NodeList-static-length-getter-tampered-2.html
-dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-2.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html
@@ -5647,9 +5656,11 @@ html/browsers/browsing-the-web/history-traversal/event-order/same-document-trave
 html/browsers/browsing-the-web/history-traversal/events.html
 html/browsers/browsing-the-web/history-traversal/hash-empty-string.html
 html/browsers/browsing-the-web/history-traversal/hashchange-same-fragment-does-not-fire.html
+html/browsers/browsing-the-web/history-traversal/hashchange_event.html
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigate-parent-while-child-loading.html
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigates-multiple-frames.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-basic.html
+html/browsers/browsing-the-web/history-traversal/popstate_event.html
 html/browsers/browsing-the-web/history-traversal/same-url.html
 html/browsers/browsing-the-web/history-traversal/window-name-after-same-origin-main-frame-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/003.html
@@ -5830,6 +5841,8 @@ html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
 html/browsers/history/the-location-interface/security_location_0.htm
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
+html/browsers/origin/cross-origin-objects/cross-origin-objects-function-length.html
+html/browsers/origin/cross-origin-objects/cross-origin-objects-function-name.html
 html/browsers/origin/inheritance/about-blank-iframe.html
 html/browsers/origin/inheritance/about-blank-window.html
 html/browsers/origin/inheritance/about-srcdoc.html
@@ -5870,6 +5883,10 @@ html/browsers/the-window-object/named-access-on-the-window-object/window-null-na
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
 html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
+html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?combination
+html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?position
+html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?single-1
+html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?single-2
 html/browsers/the-window-object/open-close/open-features-negative-innerwidth-innerheight.html
 html/browsers/the-window-object/open-close/open-features-negative-screenx-screeny.html
 html/browsers/the-window-object/open-close/open-features-negative-top-left.html
@@ -5883,6 +5900,7 @@ html/browsers/the-window-object/window-open-noopener.html?_parent
 html/browsers/the-window-object/window-open-noopener.html?_self
 html/browsers/the-window-object/window-open-noopener.html?_top
 html/browsers/the-window-object/window-open-noreferrer.html
+html/browsers/the-window-object/window-open-windowfeatures-values.html
 html/browsers/the-window-object/window-prototype-chain.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unforgeable-same-origin.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
@@ -6134,6 +6152,7 @@ html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-ht
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
 html/semantics/document-metadata/the-meta-element/the-lang-attribute-012.html
 html/semantics/document-metadata/the-style-element/historical.html
@@ -6211,7 +6230,9 @@ html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_remove_
 html/semantics/embedded-content/the-iframe-element/iframe_navigate_javascript_url.htm
 html/semantics/embedded-content/the-iframe-element/iframe_remove_src.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_script.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3.html
@@ -6225,6 +6246,7 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_itsel
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
+html/semantics/embedded-content/the-iframe-element/move-node-local-root.html
 html/semantics/embedded-content/the-iframe-element/multiple-iframes-with-allow-scripts-crash.html
 html/semantics/embedded-content/the-iframe-element/same-origin-contextual-fragment.html
 html/semantics/embedded-content/the-iframe-element/same_origin_parentage.html
@@ -6356,7 +6378,6 @@ html/semantics/forms/form-submission-0/form-data-set-usv.html
 html/semantics/forms/form-submission-0/form-double-submit-2.html
 html/semantics/forms/form-submission-0/form-double-submit-3.html
 html/semantics/forms/form-submission-0/form-double-submit-default-action.html
-html/semantics/forms/form-submission-0/form-double-submit-input-type-change.html
 html/semantics/forms/form-submission-0/form-double-submit-multiple-targets.html
 html/semantics/forms/form-submission-0/form-double-submit-preventdefault-click.html
 html/semantics/forms/form-submission-0/form-double-submit-to-different-origin-frame.html
@@ -6805,6 +6826,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/079.html
 html/semantics/scripting-1/the-script-element/execution-timing/081.html
 html/semantics/scripting-1/the-script-element/execution-timing/082.html
 html/semantics/scripting-1/the-script-element/execution-timing/084.html
+html/semantics/scripting-1/the-script-element/execution-timing/085.html
 html/semantics/scripting-1/the-script-element/execution-timing/086.html
 html/semantics/scripting-1/the-script-element/execution-timing/087.html
 html/semantics/scripting-1/the-script-element/execution-timing/088.html
@@ -7422,6 +7444,7 @@ html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-03.ht
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-encoding.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
@@ -7539,7 +7562,6 @@ import-maps/csp/hash.html
 import-maps/csp/nonce-failure.html
 import-maps/csp/nonce.html
 import-maps/csp/unsafe-inline.html
-import-maps/dynamic-integrity.html
 import-maps/dynamic-module-map-key.html
 import-maps/external-import-map-errors.html
 import-maps/module-map-key.html
@@ -8039,11 +8061,14 @@ page-visibility/test_read_only.html
 payment-request/PaymentRequestUpdateEvent/constructor.http.html
 payment-request/payment-request-insecure.http.html
 performance-timeline/buffered-does-not-sync-invoke.html
+performance-timeline/get-invalid-entries.html
+performance-timeline/navigation-id-worker-created-entries.html
 performance-timeline/not-clonable.html
 performance-timeline/po-observe.html
 performance-timeline/po-resource.html
 performance-timeline/supportedEntryTypes-cross-realm-access.html
 performance-timeline/timing-removed-iframe.html
+performance-timeline/worker-with-performance-observer.html
 permissions-policy/historical-feature-policy-header.html
 permissions/all-permissions.html
 permissions/midi-permission.html
@@ -8144,9 +8169,13 @@ resource-timing/initiator-type/img.html
 resource-timing/initiator-type/script.html
 resource-timing/internal-resources-not-counted.html
 resource-timing/link-sequence-of-events.html
+resource-timing/nested-context-navigations-embed.html
+resource-timing/nested-context-navigations-iframe.html
+resource-timing/nested-context-navigations-object.html
 resource-timing/queue-entry-regardless-buffer-size.html
 resource-timing/resource-ignore-data-url.html
 resource-timing/resource-timing-failed-fetch.html
+resource-timing/resource_dedicated_worker.html
 resource-timing/resource_subframe_self_navigation.html
 resource-timing/script-rt-entries.html
 resource-timing/shared-worker-rt-entry.html
@@ -8492,6 +8521,8 @@ shadow-dom/untriaged/user-interaction/active-element/test-002.html
 shadow-dom/untriaged/user-interaction/editing/inheritance-of-content-editable-001.html
 shadow-dom/untriaged/user-interaction/ranges-and-selections/test-001.html
 shadow-dom/user-agent-shadow-root-crash.html
+streams/idlharness.any.js?moli-wpt-any=dedicatedworker
+streams/idlharness.any.js?moli-wpt-any=window
 streams/piping/abort.any.js?moli-wpt-any=dedicatedworker
 streams/piping/abort.any.js?moli-wpt-any=window
 streams/piping/close-propagation-backward.any.js?moli-wpt-any=dedicatedworker
@@ -8565,6 +8596,8 @@ streams/readable-streams/default-reader.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/default-reader.any.js?moli-wpt-any=window
 streams/readable-streams/floating-point-total-queue-size.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/floating-point-total-queue-size.any.js?moli-wpt-any=window
+streams/readable-streams/from.any.js?moli-wpt-any=dedicatedworker
+streams/readable-streams/from.any.js?moli-wpt-any=window
 streams/readable-streams/garbage-collection.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/garbage-collection.any.js?moli-wpt-any=window
 streams/readable-streams/general.any.js?moli-wpt-any=dedicatedworker
@@ -8873,6 +8906,11 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
+trusted-types/trusted-types-navigation.html?01-05
+trusted-types/trusted-types-navigation.html?06-10
+trusted-types/trusted-types-navigation.html?11-15
+trusted-types/trusted-types-navigation.html?16-20
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -9607,9 +9645,12 @@ xhr/responseText-status.html
 xhr/responseType-document-in-worker.html
 xhr/responseXML-unavailable-in-worker.html
 xhr/responseurl.html
+xhr/responsexml-basic.htm
 xhr/responsexml-get-twice.htm
 xhr/responsexml-invalid-type.html
+xhr/responsexml-media-type.htm
 xhr/responsexml-non-document-types.htm
+xhr/responsexml-non-well-formed.htm
 xhr/send-accept-language.htm
 xhr/send-after-setting-document-domain.htm
 xhr/send-blob-with-no-mime-type.html
