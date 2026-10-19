@@ -12,6 +12,7 @@ mod client_hints;
 mod compression_dictionary;
 mod config;
 mod content_coding;
+mod content_decoding;
 mod cors;
 mod cross_origin_resource_policy;
 mod dns;

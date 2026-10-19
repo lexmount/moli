@@ -1007,7 +1007,6 @@ async fn fetch_response_head_once(
             .map(|response| response.head());
     }
 
-    let cancel_handle = cancel_handle.unwrap_or_default();
     let response = loader
         .fetch_raw_stream_with_cancel(request, cancel_handle)
         .await
@@ -1254,6 +1253,7 @@ mod tests {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 None,

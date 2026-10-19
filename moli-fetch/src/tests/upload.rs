@@ -3,15 +3,15 @@ use crate::{UploadEvent, UploadObserver};
 
 async fn upload_response(
     client: &FetchClient,
-    mut request: Request,
+    request: Request,
     transport: &str,
     cancel: FetchCancelHandle,
 ) -> Result<u16> {
     match transport {
-        "buffered" => {
-            request = request.with_single_hop();
-            Ok(client.fetch_with_cancel(request, cancel).await?.status)
-        }
+        "buffered" => Ok(client
+            .fetch_with_cancel(request.with_single_hop(), cancel)
+            .await?
+            .status),
         "html" => {
             let mut response = client.fetch_html_stream(request).await?;
             while response.next_chunk().await.is_some() {}

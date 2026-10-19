@@ -93,6 +93,13 @@ impl ResponseProgress {
         timing.body_bytes_received |= bytes > 0;
     }
 
+    pub(crate) fn record_encoded_response_body_chunk(&self, bytes: usize) {
+        let mut timing = self.inner.timing.lock();
+        let sizes = timing.body_sizes.get_or_insert_with(Default::default);
+        sizes.encoded = sizes.encoded.saturating_add(bytes as u64);
+        timing.body_bytes_received |= bytes > 0;
+    }
+
     pub(crate) fn record_decoded_response_body_size(&self, bytes: usize) {
         let mut timing = self.inner.timing.lock();
         let sizes = timing.body_sizes.get_or_insert_with(Default::default);
