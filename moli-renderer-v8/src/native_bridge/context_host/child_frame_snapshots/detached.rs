@@ -383,6 +383,7 @@ impl PageScriptHost {
             ),
             ChildBrowsingContextBootstrap::Url(url) => self
                 .materialize_local_child_snapshot_for_url(url, None)
+                .into_snapshot()
                 .map(|snapshot| self.apply_page_csp_bypass_to_child_snapshot(snapshot)),
             ChildBrowsingContextBootstrap::Request(_) => None,
         }

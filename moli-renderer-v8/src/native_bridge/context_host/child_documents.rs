@@ -22,6 +22,25 @@ use crate::{
 use moli_storage_key::OpaqueOriginNonce;
 use url::Url;
 
+pub(crate) enum LocalChildDocumentPreparation {
+    /// No local snapshot is available; ordinary fetching/failure handling applies.
+    Unavailable,
+    /// A local response is available, but must not replace the active Document.
+    IgnoredNavigation,
+    Ready(Box<super::ChildBrowsingContextSnapshot>),
+}
+
+impl LocalChildDocumentPreparation {
+    /// Read-only projections need only a snapshot. Navigation commits must
+    /// inspect the disposition so an ignored response cannot clear a Document.
+    pub(crate) fn into_snapshot(self) -> Option<super::ChildBrowsingContextSnapshot> {
+        match self {
+            Self::Ready(snapshot) => Some(*snapshot),
+            Self::Unavailable | Self::IgnoredNavigation => None,
+        }
+    }
+}
+
 pub(in crate::native_bridge::context_host) use frame_owner_resource_timing::{
     ChildDocumentNavigationInitiator, CompletedFrameOwnerResourceTiming,
     PendingFrameOwnerResourceTiming,
