@@ -12,6 +12,7 @@ use crate::{
     *,
 };
 
+mod record_revision;
 mod schema_validation;
 
 struct TestDir {

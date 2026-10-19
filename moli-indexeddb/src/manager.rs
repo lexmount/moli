@@ -384,6 +384,7 @@ impl IndexedDbManager {
                 stores: store_set,
                 state: TransactionLifecycle::Active,
                 working_copy: current,
+                record_revision: 0,
             },
         );
         Ok(handle)
@@ -746,6 +747,8 @@ impl IndexedDbManager {
             }
         }
 
+        let tx = self.active_transaction_mut(transaction)?;
+        tx.record_revision = tx.record_revision.wrapping_add(1);
         Ok(resolved_key)
     }
 
@@ -758,7 +761,9 @@ impl IndexedDbManager {
         let tx = self.active_transaction_mut(transaction)?;
         ensure_writeable(tx)?;
         let store = transaction_store_mut(tx, store_name)?;
-        store.records.remove(key);
+        if store.records.remove(key).is_some() {
+            tx.record_revision = tx.record_revision.wrapping_add(1);
+        }
         Ok(())
     }
 
@@ -770,8 +775,20 @@ impl IndexedDbManager {
         let tx = self.active_transaction_mut(transaction)?;
         ensure_writeable(tx)?;
         let store = transaction_store_mut(tx, store_name)?;
-        store.records.clear();
+        if !store.records.is_empty() {
+            store.records.clear();
+            tx.record_revision = tx.record_revision.wrapping_add(1);
+        }
         Ok(())
+    }
+
+    /// Changes after successful writes which invalidate retained record scans.
+    /// Schema changes and no-op deletions do not invalidate record snapshots.
+    pub fn transaction_record_revision(
+        &self,
+        transaction: TransactionHandle,
+    ) -> Result<u64, IndexedDbError> {
+        Ok(self.active_transaction(transaction)?.record_revision)
     }
 
     pub fn commit_transaction(
@@ -863,6 +880,7 @@ impl IndexedDbManager {
                 stores,
                 state: TransactionLifecycle::Active,
                 working_copy,
+                record_revision: 0,
             },
         );
         handle
@@ -892,6 +910,20 @@ impl IndexedDbManager {
             .ok_or_else(|| {
                 IndexedDbError::NotFound(format!(
                     "database `{name}` for origin `{origin}` was not found"
+                ))
+            })
+    }
+
+    fn active_transaction(
+        &self,
+        handle: TransactionHandle,
+    ) -> Result<&TransactionState, IndexedDbError> {
+        self.transactions
+            .get(&handle)
+            .filter(|tx| tx.state == TransactionLifecycle::Active)
+            .ok_or_else(|| {
+                IndexedDbError::TransactionInactive(format!(
+                    "transaction handle {handle:?} is not active"
                 ))
             })
     }
