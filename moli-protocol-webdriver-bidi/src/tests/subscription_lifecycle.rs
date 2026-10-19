@@ -1557,6 +1557,71 @@ fn context_scoped_replay_matches_service_worker_realm_created_owner_context() {
 }
 
 #[test]
+fn native_service_worker_realms_match_protocol_logs_and_destruction() {
+    let (mut state, mut registry) = bidi_connection_with_session();
+    let owner = "TID-service-worker";
+    let native_realm = "TID-service-worker:-5857654653247543937.8461351526676111284";
+    let expected_realm = json!("service-worker-TID-service-worker");
+    record_bidi_context_tree(&mut state, &[(owner, "BID-service-worker")]);
+    let subscribe = state.handle_message_with_session_registry(
+        json!({
+            "id": 2_u64,
+            "method": "session.subscribe",
+            "params": {
+                "events": ["script.realmCreated", "script.realmDestroyed", "log.entryAdded"],
+                "contexts": [owner]
+            }
+        }),
+        &mut registry,
+    );
+    assert_eq!(subscribe.response["type"], json!("success"));
+    let created = json!({
+        "method": "Runtime.executionContextCreated",
+        "params": {"context": {
+            "id": 20_000_007,
+            "origin": "https://example.test/sw.js",
+            "name": "",
+            "uniqueId": native_realm,
+            "auxData": {"isDefault": true, "type": "service-worker"}
+        }}
+    });
+    state.record_protocol_message_state(&created, Some(owner));
+    let native_context = RuntimeExecutionContextEvent {
+        target_id: Some(DevToolsTargetId::from(owner)),
+        context_id: Some(20_000_007),
+        realm_id: Some(DevToolsRealmId::from(native_realm)),
+        frame_id: None,
+        origin: Some("https://example.test/sw.js".to_owned()),
+        name: Some(String::new()),
+        is_default: Some(true),
+        context_type: Some("service-worker".to_owned()),
+        grant_universal_access: None,
+    };
+    let events = state.subscribed_bidi_events_from_automation_events([
+        &AutomationEvent::RuntimeExecutionContextCreated(native_context.clone()),
+    ]);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["params"]["realm"], expected_realm);
+    assert!(events[0]["params"].get("context").is_none());
+    let console = json!({
+        "method": "Runtime.consoleAPICalled",
+        "params": {
+            "type": "log", "args": [{"type": "string", "value": "worker ready"}],
+            "executionContextId": 20_000_007, "timestamp": 1.25
+        }
+    });
+    let logs =
+        state.subscribed_bidi_events_from_protocol_messages_with_context([&console], Some(owner));
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["params"]["source"]["realm"], expected_realm);
+    let destroyed = state.subscribed_bidi_events_from_automation_events([
+        &AutomationEvent::RuntimeExecutionContextDestroyed(native_context),
+    ]);
+    assert_eq!(destroyed.len(), 1);
+    assert_eq!(destroyed[0]["params"]["realm"], expected_realm);
+}
+
+#[test]
 fn user_context_scoped_subscribe_matches_service_worker_realm_created_owner_context() {
     let mut state = super::super::BidiConnectionState::new();
     let mut registry = super::super::BidiSessionRegistry::new();

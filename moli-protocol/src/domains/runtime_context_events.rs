@@ -324,7 +324,9 @@ fn qualify_worker_runtime_context_event_for_session_owner(
         }
         CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => {
             tag_runtime_context_event_with_target_id(event, &target_id);
-            if let RuntimeContextProtocolEvent::Created(event) = event {
+            if let RuntimeContextProtocolEvent::Created(event)
+            | RuntimeContextProtocolEvent::Destroyed(event) = event
+            {
                 event.context_type = Some("service-worker".to_owned());
                 event.frame_id = None;
             }
@@ -648,6 +650,30 @@ mod tests {
         assert_eq!(event.frame_id, None);
         assert_eq!(
             event.realm_id.as_ref().map(|realm| realm.as_str()),
+            Some("TID-service-worker:native-realm")
+        );
+        let mut destroyed = super::RuntimeContextProtocolEvent::Destroyed(
+            super::runtime_context_destroyed_event_from_cdp_params(json!({
+                "executionContextId": 91_081,
+                "executionContextUniqueId": "native-realm"
+            })),
+        );
+        super::qualify_runtime_context_protocol_event_for_session_owner_typed(
+            &conn,
+            &mut destroyed,
+            Some("SID-service-worker"),
+        );
+        let super::RuntimeContextProtocolEvent::Destroyed(destroyed) = destroyed else {
+            panic!("expected context-destroyed event");
+        };
+        assert_eq!(destroyed.context_type.as_deref(), Some("service-worker"));
+        assert_eq!(destroyed.frame_id, None);
+        assert_eq!(
+            destroyed.target_id.as_ref().map(|target| target.as_str()),
+            Some("TID-service-worker")
+        );
+        assert_eq!(
+            destroyed.realm_id.as_ref().map(|realm| realm.as_str()),
             Some("TID-service-worker:native-realm")
         );
     }
