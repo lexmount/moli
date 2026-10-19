@@ -1584,10 +1584,9 @@ mod trusted_types_reporting;
 mod wasm_csp;
 mod xhr_failure;
 
-
 mod performance_handler_order;
 
-mod performance_user_timing;
 mod path2d_native;
+mod performance_user_timing;
 
 mod abort_controller_receivers;

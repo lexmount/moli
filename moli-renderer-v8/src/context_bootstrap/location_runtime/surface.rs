@@ -279,9 +279,7 @@ pub(in crate::context_bootstrap) fn window_location_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    if crate::native_bridge::CrossOriginWindowAccessor::for_receiver(scope, receiver).is_none()
-        && !super::super::window_receiver::is_window_receiver(scope, receiver)
-    {
+    if !super::super::window_receiver::is_window_receiver(scope, receiver) {
         webidl::throw_type_error(
             scope,
             "Window.location setter called on incompatible receiver.",

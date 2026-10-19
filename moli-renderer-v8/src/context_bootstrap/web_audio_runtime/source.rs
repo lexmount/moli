@@ -4,10 +4,7 @@
 //! sources through the legacy oscillator fingerprint. PCM playback and timed
 //! `ended` dispatch still need a rendering backend.
 
-use super::super::media_queries::{
-    install_simple_event_target_ordered_handlers, simple_event_target_slot_name,
-    simple_object_event_set_ordered_handler,
-};
+use super::super::media_queries::simple_object_event_set_handler;
 use super::*;
 
 const BUFFER: &str = "__moliBufferSourceBuffer";
@@ -94,7 +91,6 @@ pub(super) fn initialize_scheduling<'s>(
 ) {
     graph::initialize_source(scope, node);
     set_private_value(scope, node, ONENDED, v8::null(scope).into());
-    install_simple_event_target_ordered_handlers(scope, node);
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -537,28 +533,7 @@ fn onended_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s>,
 ) {
-    let value = args.get(0);
-    let active = value.is_object();
-    set_private_value(
-        scope,
-        args.this(),
-        ONENDED,
-        if active {
-            value
-        } else {
-            v8::null(scope).into()
-        },
-    );
-    if let Some(listeners) = simple_event_target_slot_name(scope, args.this()) {
-        simple_object_event_set_ordered_handler(
-            scope,
-            args.this(),
-            &listeners,
-            "ended",
-            ONENDED,
-            active,
-        );
-    }
+    simple_object_event_set_handler(scope, args.this(), "ended", ONENDED, args.get(0));
 }
 
 pub(super) fn needs_rendering_backend<'s>(

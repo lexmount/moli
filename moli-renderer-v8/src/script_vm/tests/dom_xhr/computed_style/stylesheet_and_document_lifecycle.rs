@@ -1412,7 +1412,7 @@ yield; // Publish this scene before reading its geometry.
 }
 
 #[test]
-fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
+fn nested_iframe_cached_viewport_units_follow_published_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 
     let before = vm
@@ -1514,22 +1514,29 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
 "#;
     let after = vm
         .eval(query)
-        .expect("warm queries refresh invalidated frame viewports");
-    assert_eq!(after, "100|80|50|40|5px|4px|2px|5px|4px");
+        .expect("warm queries reuse the published frame viewports");
+    assert_eq!(after, "200|160|100|80|10px|8px|4px|10px|8px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
-        updates + 1,
-        "warm observation must consume the changed viewport once"
+        updates,
+        "ordinary reads must not publish a new recursive layout"
     );
     publish_layout_for_test(&mut vm);
     let refreshed = vm
         .eval(query)
-        .expect("explicit refresh retains the already current recursive frame viewports");
+        .expect("explicit refresh publishes the changed recursive frame viewports");
     assert_eq!(refreshed, "100|80|50|40|5px|4px|2px|5px|4px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
         updates + 1,
-        "explicit refresh must not consume the viewport transition a second time",
+        "the published viewport transition must update the retained style world once",
+    );
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(query).unwrap(), refreshed);
+    assert_eq!(
+        vm.retained_style_system_update_count_for_document_for_test(inner_document),
+        updates + 1,
+        "republication must not consume the same viewport transition twice",
     );
     assert_eq!(
         vm.retained_stylist_identity_for_document_for_test(inner_document),

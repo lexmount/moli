@@ -13,9 +13,7 @@ pub(crate) fn is_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    is_current_window_receiver(scope, receiver)
-        || is_live_window_receiver(scope, receiver)
-
+    is_current_window_receiver(scope, receiver) || is_live_window_receiver(scope, receiver)
 }
 
 fn is_current_window_receiver<'s>(
@@ -159,10 +157,8 @@ pub(in crate::context_bootstrap) fn bound_callback_data_item<'s>(
     // The original getter can return its captured SameObject after retirement.
     // A live receiver, including a reused WindowProxy, must pass authorization
     // before any private cache read or entry into its relevant Realm.
-    if !original_retired_receiver
-        && !crate::native_bridge::caller_can_access_window(scope, args.this())
+    if !original_retired_receiver && !require_same_origin_window_receiver(scope, args.this(), false)
     {
-        crate::native_bridge::throw_cross_origin_location_security_error(scope);
         return None;
     }
     let Some(item) = index.and_then(|index| items.get(index)).copied() else {

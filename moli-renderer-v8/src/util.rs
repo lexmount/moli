@@ -377,21 +377,6 @@ pub(crate) fn receiver_uses_new_target_realm_object_fallback<'s>(
     receiver_prototype.strict_equals(object_prototype.into())
 }
 
-pub(super) fn create_script_origin_with_base_url<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resource_name: &str,
-    line_offset: i32,
-    base_url: Option<&Url>,
-) -> v8::ScriptOrigin<'s> {
-    create_script_origin_with_base_url_and_fetch_metadata(
-        scope,
-        resource_name,
-        line_offset,
-        base_url,
-        &crate::module_runtime::ModuleFetchMetadata::default(),
-    )
-}
-
 pub(super) fn create_function_origin_with_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: &crate::dom::native::SourceLocation,

@@ -49,6 +49,17 @@ pub(super) struct LocationMembers {
     replace: (),
 }
 
+pub(crate) fn cross_origin_location_replace_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let moli_webapi_declare::CrossOriginProperty::Method { function, .. } =
+        LocationMembers::cross_origin_property("replace")?
+    else {
+        return None;
+    };
+    function.get(scope)
+}
+
 fn is_location_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
@@ -77,7 +88,6 @@ fn set_href_value<'s>(
 /// supplies parent/top and children while a replacement document is pending.
 struct WindowTarget<'s> {
     window: v8::Local<'s, v8::Object>,
-    context: v8::Local<'s, v8::Context>,
     host: *mut JsContextHost,
     child: Option<DomHandle>,
     popup: Option<u64>,
@@ -92,8 +102,15 @@ impl<'s> WindowTarget<'s> {
         let context = receiver.get_creation_context(scope)?;
         let host = crate::util::context_host_ptr_from_context_slot(context)?;
         let owner = unsafe { &*host };
-        if let Some(popup) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver) {
-            return Some(Self { window: receiver, context, host, child: None, popup: Some(popup), closed: !owner.lightweight_popup_is_open(popup) });
+        if let Some(popup) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+        {
+            return Some(Self {
+                window: receiver,
+                host,
+                child: None,
+                popup: Some(popup),
+                closed: !owner.lightweight_popup_is_open(popup),
+            });
         }
         let identity = owner.window_execution_context_identity_for_access_check(context);
         let current = identity
@@ -122,7 +139,6 @@ impl<'s> WindowTarget<'s> {
         };
         Some(Self {
             window: context.global(scope),
-            context,
             host,
             child,
             popup: None,
@@ -130,30 +146,14 @@ impl<'s> WindowTarget<'s> {
         })
     }
 
-    fn sync_children(&self, scope: &mut v8::PinScope<'s, '_>) {
-        let host = unsafe { &mut *self.host };
-        let document = if let Some(popup) = self.popup {
-            host.lightweight_popup_document_handle(popup)
-        } else {
-            match self.child {
-                Some(handle) => host.child_browsing_context_document_handle(handle),
-                None => Some(host.document_handle()),
-            }
-        };
-        let scope = &mut v8::ContextScope::new(scope, self.context);
-        if let Some(document) = document {
-            host.sync_child_browsing_context_subtree(scope, document);
-        }
-    }
-
-    fn children(&self, scope: &mut v8::PinScope<'s, '_>) -> Vec<DomHandle> {
+    fn children(&self, _scope: &mut v8::PinScope<'s, '_>) -> Vec<DomHandle> {
         if self.closed {
             return Vec::new();
         }
-        self.sync_children(scope);
         let host = unsafe { &*self.host };
         if let Some(popup) = self.popup {
-            return host.lightweight_popup_document_handle(popup)
+            return host
+                .lightweight_popup_document_handle(popup)
                 .map(|document| host.window_child_browsing_context_handles_for_document(document))
                 .unwrap_or_default();
         }
@@ -185,10 +185,12 @@ impl<'s> WindowTarget<'s> {
         if self.closed || name.is_empty() {
             return None;
         }
-        self.sync_children(scope);
         let host = unsafe { &mut *self.host };
         let handle = if let Some(popup) = self.popup {
-            host.child_browsing_context_named_child_handle_for_scope(super::super::super::OwnerDispatchScope::LightweightPopup(popup), name)?
+            host.child_browsing_context_named_child_handle_for_scope(
+                super::super::super::OwnerDispatchScope::LightweightPopup(popup),
+                name,
+            )?
         } else {
             host.child_browsing_context_named_child_handle(self.child, name)?
         };

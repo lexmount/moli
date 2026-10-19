@@ -1,8 +1,7 @@
 use super::{
-    SIMPLE_EVENT_TARGET_SLOT, dispatch_simple_event_target_event,
-    ensure_intrinsic_interface_prototype, events::initialize_event_object,
-    install_simple_event_target_ordered_handlers, mark_event_trusted,
-    simple_object_event_set_ordered_handler, throw_dom_exception_value,
+    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, dispatch_simple_event_target_event,
+    ensure_intrinsic_interface_prototype, events::initialize_event_object, mark_event_trusted,
+    simple_object_event_set_handler, throw_dom_exception_value,
 };
 use crate::{
     abort_signal_route::ResolvedAbortSignal,
@@ -17,7 +16,6 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const REALM_ANCHOR_SLOT: &str = "__moliCloseWatcherRealmAnchor";
 const ACTIVE_SLOT: &str = "__moliCloseWatcherActive";
 const RUNNING_CANCEL_SLOT: &str = "__moliCloseWatcherRunningCancel";
-const LISTENERS_SLOT: &str = "__moliCloseWatcherListeners";
 const ONCANCEL_SLOT: &str = "__moliCloseWatcherOncancel";
 const ONCLOSE_SLOT: &str = "__moliCloseWatcherOnclose";
 const SIGNAL_SLOT: &str = "__moliCloseWatcherSignal";
@@ -32,7 +30,7 @@ struct CloseWatcherObjectDeclaration<'scope> {
     active: (),
     #[webapi(slot = RUNNING_CANCEL_SLOT, init = false)]
     running_cancel: (),
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = LISTENERS_SLOT)]
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_target_slot: (),
     #[webapi(slot = ONCANCEL_SLOT, init = "null")]
     oncancel: (),
@@ -124,7 +122,6 @@ pub(in crate::context_bootstrap) fn close_watcher_constructor_callback<'s>(
     {
         return;
     }
-    install_simple_event_target_ordered_handlers(scope, watcher);
     let Some(host_ptr) = context_host_ptr_from_context_slot(context) else {
         return;
     };
@@ -260,7 +257,7 @@ fn fire_event<'s>(
     let _ = event.set_prototype(scope, prototype.into());
     initialize_event_object(scope, event, event_type, false, cancelable);
     mark_event_trusted(scope, event);
-    dispatch_simple_event_target_event(scope, watcher, LISTENERS_SLOT, event_type, event)
+    dispatch_simple_event_target_event(scope, watcher, event_type, event)
 }
 
 fn close<'s>(scope: &mut v8::PinScope<'s, '_>, watcher: v8::Local<'s, v8::Object>) {
@@ -402,26 +399,7 @@ fn set_handler<'s>(
     let Some(watcher) = receiver(scope, args.this()) else {
         return;
     };
-    let value = args.get(0);
-    let active = value.is_object();
-    set_private_value(
-        scope,
-        watcher,
-        slot,
-        if active {
-            value
-        } else {
-            v8::null(scope).into()
-        },
-    );
-    simple_object_event_set_ordered_handler(
-        scope,
-        watcher,
-        LISTENERS_SLOT,
-        event_type,
-        slot,
-        active,
-    );
+    simple_object_event_set_handler(scope, watcher, event_type, slot, args.get(0));
 }
 
 fn oncancel_getter<'s>(

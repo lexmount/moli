@@ -237,7 +237,7 @@ pub(super) fn close_sctp<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s,
         // Unlike rollback, close retains pc.sctp. Notify within the SCTP shutdown
         // step; the following steps of PC.close() shut down DTLS and ICE.
         set_string_slot(scope, sctp, STATE, "closed");
-        signaling::dispatch_event(scope, sctp, LISTENERS, "statechange");
+        signaling::dispatch_event(scope, sctp, "statechange");
     }
 }
 
@@ -465,5 +465,11 @@ fn set_handler<'s>(
     let target = rtp_transceivers::target(scope, args.this());
     let event = args.data().to_rust_string_lossy(scope);
     let slot = handler_slot(&event);
-    media_queries::simple_object_event_set_handler(scope, target, event.as_str(), slot, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        target,
+        event.as_str(),
+        slot,
+        args.get(0),
+    );
 }

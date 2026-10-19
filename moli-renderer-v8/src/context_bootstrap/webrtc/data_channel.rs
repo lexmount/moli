@@ -346,7 +346,13 @@ fn set_handler<'s>(
     let channel = rtp_transceivers::target(scope, args.this());
     let event = args.data().to_rust_string_lossy(scope);
     let slot = handler_slot(&event);
-    media_queries::simple_object_event_set_handler(scope, channel, event.as_str(), slot, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        channel,
+        event.as_str(),
+        slot,
+        args.get(0),
+    );
 }
 
 fn close<'s>(

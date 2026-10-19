@@ -11,10 +11,10 @@ use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
     context_bootstrap::{
-        SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
-        apply_local_window_location_navigation, clear_simple_window_event_handler_values,
-        deep_clone_shared_web_storage_store, construct_original_event, dispatch_simple_event_target_event_with_original_target,
-        construct_original_page_transition_event, dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
+        SharedWebStorageStore, WINDOW_NAME_SLOT, apply_local_window_location_navigation,
+        construct_original_event, construct_original_page_transition_event,
+        deep_clone_shared_web_storage_store,
+        dispatch_simple_event_target_event_with_original_target,
         finish_cross_document_navigation_for_window,
         history_entry_seed_for_cross_document_location,
         install_navigation_bootstrap_entry_for_holder, initialize_simple_event_target,
@@ -66,7 +66,9 @@ mod event_handlers;
 mod lifecycle;
 pub(super) mod realm;
 use document_stream::{PopupDocumentStream, PopupStreamScriptMode};
-use event_handlers::{PopupWindowContentEventHandlers, clear_lightweight_popup_window_document_event_state};
+use event_handlers::{
+    PopupWindowContentEventHandlers, clear_lightweight_popup_window_document_event_state,
+};
 const LIGHTWEIGHT_POPUP_ID_SLOT: &str = "__lmLightweightPopupId";
 const LIGHTWEIGHT_POPUP_OPENER_SLOT: &str = "__lmLightweightPopupOpener";
 const ACTIVE_LIGHTWEIGHT_POPUP_ID_SLOT: &str = "__lmActiveLightweightPopupId";
@@ -3693,7 +3695,6 @@ impl JsContextHost {
             crate::context_bootstrap::invoke_simple_event_target_listeners(
                 scope,
                 window,
-                LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
                 event_type,
                 event,
                 capture,

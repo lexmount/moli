@@ -1,3 +1,4 @@
+pub(crate) const WINDOW_DOCUMENT_SLOT: &str = "__moliWindowAssociatedDocument";
 pub(in crate::context_bootstrap) const WINDOW_LOCATION_SLOT: &str = "__moliWindowLocation";
 pub(in crate::context_bootstrap) const WINDOW_LOCATION_HREF_SLOT: &str = "__moliWindowLocationHref";
 pub(in crate::context_bootstrap) const WINDOW_CONSOLE_SLOT: &str = "__moliWindowConsole";

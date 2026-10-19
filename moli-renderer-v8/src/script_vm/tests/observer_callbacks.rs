@@ -650,7 +650,8 @@ async fn observer_callback_test_vm(url: &str) -> crate::runtime::PageVmTaskExecu
 
 #[tokio::test(flavor = "current_thread")]
 async fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
-    let mut vm = observer_callback_test_vm("https://performance-borrowed-method-realms.test/").await;
+    let mut vm =
+        observer_callback_test_vm("https://performance-borrowed-method-realms.test/").await;
     let source = format!(
         "({})(window, __observerCallbackFrame.contentWindow).then(result => globalThis.__borrowedTimeline = result, error => globalThis.__borrowedTimeline = {{ error: String(error) }});",
         include_str!("performance_timeline_borrowed_methods.js"),
@@ -665,7 +666,8 @@ async fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffer() {
-    let mut vm = observer_callback_test_vm("https://performance-borrowed-buffered-observe.test/").await;
+    let mut vm =
+        observer_callback_test_vm("https://performance-borrowed-buffered-observe.test/").await;
     vm.eval(
         r#"
 (() => {
@@ -693,7 +695,8 @@ async fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffe
 
 #[tokio::test(flavor = "current_thread")]
 async fn borrowed_performance_delivery_survives_retirement_of_the_method_realm() {
-    let mut vm = observer_callback_test_vm("https://performance-method-realm-retirement.test/").await;
+    let mut vm =
+        observer_callback_test_vm("https://performance-method-realm-retirement.test/").await;
     vm.eval(
         r#"
 (() => {
@@ -746,7 +749,8 @@ new PerformanceObserver(list => {
 
 #[tokio::test(flavor = "current_thread")]
 async fn performance_observer_registration_uses_its_own_global_with_a_foreign_callback_realm() {
-    let mut vm = observer_callback_test_vm("https://performance-observer-global-isolation.test/").await;
+    let mut vm =
+        observer_callback_test_vm("https://performance-observer-global-isolation.test/").await;
     vm.eval(
         r#"
 (() => {
@@ -836,6 +840,7 @@ async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_prox
 (() => {
   const child = __observerCallbackFrame.contentWindow;
   const target = document.body.appendChild(document.createElement("div"));
+  target.style.cssText = "width:20px;height:10px";
   globalThis.__observerCallbackFacts = [];
   globalThis.__observerProxyCalls = [];
   globalThis.__observerCallbackChild = child;
@@ -976,8 +981,22 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         "#,
         )
         .unwrap();
-        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-        vm.advance_timers_until_deadline_for_test(&loader).await.expect("deliver Document intersection task");
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "registration must not build a layout: {policy:?}"
+        );
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("deliver Document intersection task");
+        let sampled_builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            sampled_builds,
+            builds + u64::from(policy == moli_page_types::LayoutPolicy::OnDemand),
+            "one rendering update publishes one real layout and none for Mock: {policy:?}"
+        );
         assert_eq!(
             vm.eval("JSON.stringify(rows)").unwrap(),
             r#"[{"callbackRealm":true,"observerRealm":true,"receiver":true,"arrayRealm":true,"entryRealm":true,"rectRealm":true,"target":true,"count":1,"argc":2}]"#,
@@ -988,8 +1007,8 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         }
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
-            builds,
-            "observer registration, delivery and record reads must reuse the initial sample: {policy:?}"
+            sampled_builds,
+            "delivery and record reads must reuse the rendering update's sample: {policy:?}"
         );
     }
 }
@@ -1000,7 +1019,8 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
     ] {
-        let mut vm = new_storage_page_task_executor_test_vm("https://intersection-isolated-world.test/");
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://intersection-isolated-world.test/");
         vm.set_layout_policy(policy);
         vm.eval(
             r#"
@@ -1036,8 +1056,11 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
         "#,
         )
         .unwrap();
-        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-        vm.advance_timers_until_deadline_for_test(&loader).await.expect("deliver Document intersection task");
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("deliver Document intersection task");
         assert_eq!(
             vm.eval_in_isolated_context(isolated, "JSON.stringify(rows)")
                 .unwrap(),
@@ -1061,6 +1084,7 @@ async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_wind
 (() => {
   const child = __observerCallbackFrame.contentWindow;
   const target = document.body.appendChild(document.createElement("div"));
+  target.style.cssText = "width:20px;height:10px";
   globalThis.__observerCallbackErrors = [];
   child.addEventListener("error", child.Function(
     "event",

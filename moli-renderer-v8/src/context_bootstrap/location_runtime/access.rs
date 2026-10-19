@@ -115,7 +115,7 @@ fn location_proxy_set<'s>(
     }
 }
 
-pub(super) fn set_location_href<'s>(
+pub(in crate::context_bootstrap) fn set_location_href<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
@@ -212,8 +212,6 @@ struct CrossOriginSurfaceDeclaration<'s> {
     surface: v8::Local<'s, v8::Object>,
     #[webapi(method = "set href", callback = cross_origin_href_setter, data = self.surface, length = 1)]
     href: (),
-    #[webapi(method, callback = super::methods::location_replace_callback, data = self.surface, length = 1, readonly)]
-    replace: (),
 }
 
 pub(super) fn install_access_check(template: v8::Local<'_, v8::ObjectTemplate>) {
@@ -307,13 +305,16 @@ fn surface_for<'s>(
     }
     let surface = new_null_prototype_object(scope);
     set_private_value(scope, surface, SURFACE_TARGET_SLOT, target.into());
-    CrossOriginSurfaceDeclaration {
-        surface,
-        href: (),
-        replace: (),
-    }
-    .initialize(scope, surface)
-    .ok()?;
+    CrossOriginSurfaceDeclaration { surface, href: () }
+        .initialize(scope, surface)
+        .ok()?;
+    let replace = crate::native_bridge::cross_origin_location_replace_function(scope)?;
+    surface.define_own_property(
+        scope,
+        v8str(scope, "replace").into(),
+        replace.into(),
+        v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_ENUM,
+    )?;
     let setter_name = v8str(scope, "set href");
     let setter = surface.get(scope, setter_name.into())?;
     surface.delete(scope, setter_name.into())?;

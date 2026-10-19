@@ -23,8 +23,10 @@ fn document_import_and_adopt_use_webidl_node_and_dictionary_conversion() {
     vm.eval(include_str!("document_import_adopt_webidl.js"))
         .expect("Document import/adopt WebIDL matrix should evaluate");
     assert_eq!(
-        vm.eval("JSON.stringify(__documentImportAdoptResults.checks.filter(row => !row.passed))")
-            .unwrap(),
+        vm.eval_after_selected_page_tasks(
+            "JSON.stringify(__documentImportAdoptResults.checks.filter(row => !row.passed))"
+        )
+        .unwrap(),
         "[]"
     );
     assert_eq!(

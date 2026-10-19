@@ -65,16 +65,3 @@ pub(in crate::context_bootstrap) fn urls_equal_ignoring_fragment(
     target_without_fragment.set_fragment(None);
     current_without_fragment == target_without_fragment
 }
-
-pub(in crate::context_bootstrap) fn urls_refer_to_same_document(
-    current_href: &str,
-    target_href: &str,
-) -> bool {
-    let Ok(current) = url::Url::parse(current_href) else {
-        return false;
-    };
-    let Ok(target) = url::Url::parse(target_href) else {
-        return false;
-    };
-    urls_equal_ignoring_fragment(&current, &target)
-}

@@ -303,7 +303,13 @@ fn handler_setter<'s>(
     let object = target(scope, args.this());
     let event = args.data().to_rust_string_lossy(scope);
     let slot = handler_slot(&event);
-    media_queries::simple_object_event_set_handler(scope, object, event.as_str(), slot, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        object,
+        event.as_str(),
+        slot,
+        args.get(0),
+    );
 }
 
 fn handler_slot(event: &str) -> &'static str {

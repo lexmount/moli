@@ -16,7 +16,7 @@ pub(crate) fn construct_native_touch_event<'s>(
     initialize_event_object(scope, state, event_type, true, true);
     let composed = v8::Boolean::new(scope, true);
     define_event_property(scope, state, "composed", composed.into());
-    EventModifierInit::default().initialize(scope, state);
+    EventModifierInit::with_event_flags(true, true, true).initialize(scope, state);
     touch_runtime::initialize_touch_event_lists(
         scope, state, &touches, &target_touches, &changed_touches,
     );

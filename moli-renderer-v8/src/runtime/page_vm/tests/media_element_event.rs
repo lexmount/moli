@@ -1375,13 +1375,19 @@ async fn media_canplaythrough_from_a_retired_document_does_not_checkpoint_the_re
         page.vm_mut().eval(
             r#"
 globalThis.retiredMediaEvents = [];
-const media = document.createElement('video');
+globalThis.retiredMediaPhases = [];
+const retiringFrame = document.createElement('iframe');
+document.body.append(retiringFrame);
+const media = retiringFrame.contentDocument.createElement('video');
+for (const type of ['loadstart','durationchange','resize','loadedmetadata','loadeddata','canplay']) {
+  media.addEventListener(type, () => retiredMediaPhases.push(type));
+}
 media.oncanplaythrough = () => retiredMediaEvents.push('stale canplaythrough');
-document.body.append(media);
+retiringFrame.contentDocument.body.append(media);
 media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
 "#,
         )?;
-        for _ in 0..4 {
+        for _ in 0..6 {
             let turn = page
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MediaElementEvent,
@@ -1390,14 +1396,20 @@ media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
             page.run_claimed_selected_page_task_for_test(turn, &loader)
                 .await?;
         }
+        assert_eq!(
+            page.vm_mut().eval("retiredMediaPhases.join('|')")?,
+            "loadstart|durationchange|resize|loadedmetadata|loadeddata|canplay",
+        );
         let retired = page
             .claim_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MediaElementEvent,
             )
             .expect("capture the terminal task before its Document is retired");
         page.vm_mut().eval(
-            "document.open();document.write('<!doctype html><body>replacement</body>');document.close();",
+            "retiringFrame.remove();document.open();document.write('<!doctype html><body>replacement</body>');document.close();",
         )?;
+        // Removing the frame retires its real LocalWindow. document.open alone
+        // preserves ongoing media in the same Window and is not retirement.
         page.vm_mut().eval_without_microtask_checkpoint_for_test(
             r#"
 globalThis.replacementMediaEvents = [];

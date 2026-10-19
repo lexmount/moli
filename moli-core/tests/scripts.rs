@@ -6812,10 +6812,5 @@ mod child_markup_insertion;
 #[path = "scripts/child_input_stream_readiness.rs"]
 mod child_input_stream_readiness;
 
-#[path = "scripts/document_close.rs"]
-mod document_close;
-
-#[path = "scripts/post_parse_async.rs"]
-mod post_parse_async;
 #[path = "scripts/preload_consumption.rs"]
 mod preload_consumption;

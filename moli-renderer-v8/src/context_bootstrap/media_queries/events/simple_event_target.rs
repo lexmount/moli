@@ -18,8 +18,8 @@ pub(crate) use dispatch::{
     dispatch_simple_event_target_event_with_original_target,
 };
 pub(crate) use handlers::{
-    install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback,
+    install_simple_event_target_handlers,
+    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
 };
 use listeners::SimpleObjectEventListenerSnapshot;
 pub(crate) use listeners::simple_object_event_target_register_webidl_listener;

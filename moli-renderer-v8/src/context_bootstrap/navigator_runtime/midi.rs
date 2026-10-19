@@ -3,7 +3,7 @@
 
 use super::super::{context_host_ptr_from_global_bridge, media_queries};
 use crate::{
-    util::{get_private_object, get_private_value, set_private_value, v8str},
+    util::{get_private_object, get_private_value, v8str},
     web_api_interfaces, webidl,
     webidl_iterator::{
         MaplikeWebIdlIteratorMethod, call_live_maplike_webidl_for_each,
@@ -13,7 +13,6 @@ use crate::{
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 const BACKING: &str = "__moliMidiMapBacking";
-const LISTENERS: &str = "__moliMidiListeners";
 const STATE_HANDLER: &str = "__moliMidiStateChangeHandler";
 const MESSAGE_HANDLER: &str = "__moliMidiMessageHandler";
 
@@ -276,18 +275,7 @@ fn handler_setter<'s>(
 ) {
     let object = target(scope, args.this());
     let (slot, event) = handler_slot(scope, args.data());
-    media_queries::mark_simple_event_target_slot(scope, object, LISTENERS);
-    media_queries::install_simple_event_target_ordered_handlers(scope, object);
-    let active = args.get(0).is_object();
-    let value = if active {
-        args.get(0)
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, object, slot, value);
-    media_queries::simple_object_event_set_ordered_handler(
-        scope, object, LISTENERS, event, slot, active,
-    );
+    media_queries::simple_object_event_set_handler(scope, object, event, slot, args.get(0));
 }
 
 fn backing<'s>(
@@ -429,6 +417,6 @@ pub(crate) fn map_for_test<'s>(
     let object = v8::Object::new(scope);
     web_api_interfaces::initialize(scope, object, interface).unwrap();
     assert_eq!(object.set_prototype(scope, prototype.into()), Some(true));
-    set_private_value(scope, object, BACKING, map.into());
+    crate::util::set_private_value(scope, object, BACKING, map.into());
     object
 }

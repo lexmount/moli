@@ -2421,4 +2421,3 @@ fn svg_animated_integers_use_native_identity_in_windowless_and_child_documents()
       return true;
     })()"#).unwrap(), "true");
 }
-

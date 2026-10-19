@@ -9,13 +9,12 @@ mod schedule;
 pub(crate) use mutation_record::install_template_bindings as install_mutation_record_template_bindings;
 
 pub(crate) use dom_access::{
-    ObserverStoreAccessToken, activate_resize_observer_callback,
-    active_resize_observer_callbacks, coalesce_child_list_replacement_records,
-    deactivate_resize_observer_callback, deliver_document_intersections,
-    document_has_rendering_observers, flush_slotchange_microtask, queue_intersection_checks,
-    queue_mutation_records, queue_resize_observer_rendering_updates, queue_style_rendering_update,
-    retire_context_token, retire_execution_context_owner, update_document_intersections,
-    rendering_observer_documents,
+    ObserverStoreAccessToken, activate_resize_observer_callback, active_resize_observer_callbacks,
+    coalesce_child_list_replacement_records, deactivate_resize_observer_callback,
+    deliver_document_intersections, document_has_rendering_observers, flush_slotchange_microtask,
+    queue_intersection_checks, queue_mutation_records, queue_resize_observer_rendering_updates,
+    queue_style_rendering_update, rendering_observer_documents, retire_context_token,
+    retire_execution_context_owner, update_document_intersections,
 };
 
 use crate::web_api_interfaces;
@@ -902,7 +901,9 @@ fn invoke_intersection_delivery<'s>(
     host_ptr: *mut JsContextHost,
     delivery: IntersectionObserverDelivery<'s>,
 ) {
-    if !delivery.callback.is_current(scope) { return; }
+    if !delivery.callback.is_current(scope) {
+        return;
+    }
     let callback_context = delivery.callback.relevant_context(scope);
     // Web IDL entry conversion belongs to the callback's relevant Realm.
     let entries = {
@@ -912,7 +913,10 @@ fn invoke_intersection_delivery<'s>(
     let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
     let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     delivery.callback.invoke_and_report(
-        scope, "intersectionobserver", "IntersectionObserver callback", observer_value,
+        scope,
+        "intersectionobserver",
+        "IntersectionObserver callback",
+        observer_value,
         &[entries.into(), observer_value],
     );
     drop(execution_scope);

@@ -159,22 +159,6 @@ fn popup_document_target_is_active(
             .is_some_and(|popup_id| runtime.lightweight_popup_is_open(popup_id))
 }
 
-fn target_context_epoch_is_current<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
-    style: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(value) = get_private_value(scope, style, STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT)
-    else {
-        return false;
-    };
-    let Ok(value) = v8::Local::<v8::BigInt>::try_from(value) else {
-        return false;
-    };
-    let (epoch, lossless) = value.u64_value();
-    lossless && epoch == runtime.style_target_context_epoch()
-}
-
 fn cache_target_empty_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime: &JsContextHost,

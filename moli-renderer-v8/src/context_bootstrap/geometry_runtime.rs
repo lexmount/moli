@@ -963,17 +963,6 @@ fn dom_point_setter_callback<'s>(
     };
     let point = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("validated DOMPoint receiver");
-    if get_private_value(scope, point, DOM_POINT_READ_ONLY_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
-        throw_dom_exception(
-            scope,
-            "NoModificationAllowedError",
-            7,
-            "The SVG point is read-only.",
-        );
-        return;
-    }
     let context = webidl::Context::member("DOMPoint", slot);
     let value = if get_private_value(scope, point, DOM_POINT_RESTRICTED_NUMBER_SLOT)
         .is_some_and(|value| value.boolean_value(scope))

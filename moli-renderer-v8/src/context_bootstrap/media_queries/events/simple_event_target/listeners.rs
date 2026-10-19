@@ -677,10 +677,16 @@ fn handler_belongs_to_target<'s>(
     candidate: v8::Local<'s, v8::Value>,
     target: v8::Local<'s, v8::Object>,
 ) -> bool {
+    let target = moli_webapi_declare::web_api_object_target(scope, target).unwrap_or(target);
     v8::Local::<v8::Object>::try_from(candidate)
         .ok()
         .and_then(|entry| get_private_value(scope, entry, HANDLER_TARGET_SLOT))
-        .is_some_and(|owner| owner.strict_equals(target.into()))
+        .and_then(|owner| v8::Local::<v8::Object>::try_from(owner).ok())
+        .is_some_and(|owner| {
+            moli_webapi_declare::web_api_object_target(scope, owner)
+                .unwrap_or(owner)
+                .strict_equals(target.into())
+        })
 }
 
 /// An uncompiled or failed content handler retains its active listener's

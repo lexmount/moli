@@ -45,7 +45,7 @@ struct StoragePrototypeMetadataDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(plain, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct StorageAliasesDeclaration {
     #[webapi(accessor_property = "localStorage", getter = window_local_storage_getter)]
     local_storage: (),

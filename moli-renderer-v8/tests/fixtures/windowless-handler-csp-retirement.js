@@ -11,7 +11,8 @@ meta.content = "script-src-attr 'none' 'report-sample'";
 creator.document.head.appendChild(meta);
 const synthetic = inert.createElement('iframe');
 inert.body.appendChild(synthetic);
-if (synthetic.contentWindow === null) throw Error('missing synthetic Window');
+if (synthetic.contentWindow !== null || synthetic.contentDocument !== null || inert.defaultView !== null)
+    throw Error('a windowless iframe acquired a browsing context');
 const target = inert.createElement('button');
 const prior = () => 17;
 target.onclick = prior;

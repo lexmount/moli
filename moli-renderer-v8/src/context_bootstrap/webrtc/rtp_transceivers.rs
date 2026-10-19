@@ -744,7 +744,13 @@ fn negotiation_handler_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let pc = target(scope, args.this());
-    media_queries::simple_object_event_set_handler(scope, pc, "negotiationneeded", NEGOTIATION_HANDLER, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        pc,
+        "negotiationneeded",
+        NEGOTIATION_HANDLER,
+        args.get(0),
+    );
 }
 pub(crate) fn apply_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,

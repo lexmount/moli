@@ -1,4 +1,4 @@
-use super::helpers::{window_child_context_handle, window_host_ptr, window_receiver};
+use super::helpers::{same_origin_window_receiver, window_child_context_handle, window_host_ptr};
 use crate::{
     document_runtime::DomHandle,
     native_bridge::{JsContextHost, WindowEnvironmentSettings},
@@ -18,9 +18,6 @@ pub(in crate::context_bootstrap) fn window_document_getter_template<'s>(
         None => v8::FunctionTemplate::new(scope, window_document_getter),
     };
     template.remove_prototype();
-    // WindowProxy checks ordinary property reads before using the cache.
-    // Explicit getter calls must reach our receiver check in the callee's
-    // realm so a borrowed getter creates errors with the correct intrinsic.
     template
 }
 
@@ -67,7 +64,7 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let Some(context) = receiver.get_creation_context(scope) else {

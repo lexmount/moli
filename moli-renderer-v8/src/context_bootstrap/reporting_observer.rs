@@ -2,7 +2,9 @@
 //! scheduler. Reports in the global buffer are immutable serialized snapshots;
 //! each observer receives separate application-visible dictionaries.
 
-use crate::common_runtime::{CommonRuntimeState, CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence};
+use crate::common_runtime::{
+    CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence, CommonRuntimeState,
+};
 use crate::util::{
     context_host_ptr_from_global_bridge, define_v8_array_data_property, get_private_value,
     set_private_value, throw_type_error, v8_string, v8_string_from_utf16_units,
@@ -82,8 +84,17 @@ pub(super) fn constructor<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    let Some(common) = CommonRuntimeState::from_scope(scope) else { return; };
-    let Some(residence) = common.callbacks.register(scope, args.this(), parsed.callback, CallbackRegistrationKind::ReportingObserver) else { return; };
+    let Some(common) = CommonRuntimeState::from_scope(scope) else {
+        return;
+    };
+    let Some(residence) = common.callbacks.register(
+        scope,
+        args.this(),
+        parsed.callback,
+        CallbackRegistrationKind::ReportingObserver,
+    ) else {
+        return;
+    };
     let (id, callback, relevant, incumbent) = residence.into_parts();
     let id = id.as_u32();
     let types = v8::Array::new(scope, 0);
@@ -115,9 +126,18 @@ fn observe<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let Some(common) = CommonRuntimeState::from_scope(scope) else { return; };
-    let Some(id) = callback_id(scope, observer) else { return; };
-    if !common.callbacks.activate_reporting_observer(scope, id, observer) { return; }
+    let Some(common) = CommonRuntimeState::from_scope(scope) else {
+        return;
+    };
+    let Some(id) = callback_id(scope, observer) else {
+        return;
+    };
+    if !common
+        .callbacks
+        .activate_reporting_observer(scope, id, observer)
+    {
+        return;
+    }
     if !get_private_value(scope, observer, BUFFERED).is_some_and(|value| value.is_true()) {
         return;
     }
@@ -144,9 +164,10 @@ fn disconnect<'s>(
     if let Some(common) = CommonRuntimeState::from_scope(scope)
         && let Some(id) = callback_id(scope, observer)
     {
-        common.callbacks.deactivate_reporting_observer(scope, id, observer);
+        common
+            .callbacks
+            .deactivate_reporting_observer(scope, id, observer);
     }
-
 }
 
 fn take_records<'s>(
@@ -282,19 +303,36 @@ fn invoke_observers<'s>(
         let relevant = slot_object(scope, observer, CALLBACK_RELEVANT);
         let incumbent = slot_object(scope, observer, CALLBACK_INCUMBENT);
         let residence = CallbackResidence::from_parts(
-            callback_id(scope, observer).expect("reporting callback identity"), callback, relevant, incumbent,
+            callback_id(scope, observer).expect("reporting callback identity"),
+            callback,
+            relevant,
+            incumbent,
         );
-        let Some(common) = CommonRuntimeState::from_scope(scope) else { continue; };
-        let Some(callback) = common.callbacks.prepare(scope, observer, CallbackRegistrationKind::ReportingObserver, residence) else { continue; };
+        let Some(common) = CommonRuntimeState::from_scope(scope) else {
+            continue;
+        };
+        let Some(callback) = common.callbacks.prepare(
+            scope,
+            observer,
+            CallbackRegistrationKind::ReportingObserver,
+            residence,
+        ) else {
+            continue;
+        };
         let context = callback.relevant_context(scope);
         let scope = &mut v8::ContextScope::new(scope, context);
         // Materialize sequence dictionaries only in the callback's relevant realm.
         let arguments = [expose_reports(scope, reports).into(), observer.into()];
         let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
-        callback.invoke_and_report(scope, "reportingobserver", "ReportingObserver callback", observer.into(), &arguments);
+        callback.invoke_and_report(
+            scope,
+            "reportingobserver",
+            "ReportingObserver callback",
+            observer.into(),
+            &arguments,
+        );
         drop(execution_scope);
         crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
-
     }
 }
 
@@ -303,18 +341,23 @@ fn registered<'s>(scope: &mut v8::PinScope<'s, '_>) -> Vec<v8::Local<'s, v8::Obj
     CommonRuntimeState::from_scope(scope)
         .map(|common| common.callbacks.active_reporting_observers(scope, context))
         .unwrap_or_default()
-
 }
 
 fn callback_current<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(common) = CommonRuntimeState::from_scope(scope) else { return false; };
+    let Some(common) = CommonRuntimeState::from_scope(scope) else {
+        return false;
+    };
     callback_id(scope, observer).is_some_and(|id| {
-        common.callbacks.is_current(scope, id, observer, CallbackRegistrationKind::ReportingObserver)
+        common.callbacks.is_current(
+            scope,
+            id,
+            observer,
+            CallbackRegistrationKind::ReportingObserver,
+        )
     })
-
 }
 
 fn queue_task<'s>(

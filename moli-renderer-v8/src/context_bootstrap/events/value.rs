@@ -42,9 +42,14 @@ pub(in crate::context_bootstrap) fn construct_css_animation_start_event<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let state = new_event_state(scope);
     super::initialize_event_object(scope, state, "animationstart", true, false);
-    AnimationEventInit { base: EventInit::default(), animation: Some(animation), animation_name: name, elapsed_time, pseudo_element: v8str(scope, "") }
-        .initialize_snapshot(scope, state)
-        .ok()?;
+    AnimationEventInit {
+        base: EventInit::default(),
+        animation: Some(animation),
+        animation_name: name,
+        elapsed_time,
+        pseudo_element: v8str(scope, ""),
+    }
+    .initialize_own_snapshot(scope, state)?;
     web_api_interfaces::AnimationEvent::DESCRIPTOR
         .initialize(scope, state)
         .ok()?;
@@ -717,19 +722,39 @@ fn value_event_constructor<'s>(
             ValueEventKind::MediaEncrypted => {
                 let parsed =
                     webidl::parse_dictionary_object::<MediaEncryptedEventInit>(scope, dictionary)?;
-                parsed.initialize_snapshot(scope, state).expect("media event snapshot");
-                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("media event snapshot");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::MediaKeyMessage => {
                 let parsed =
                     webidl::parse_dictionary_object::<MediaKeyMessageEventInit>(scope, dictionary)?;
-                parsed.initialize_snapshot(scope, state).expect("media event snapshot");
-                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("media event snapshot");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::MediaStreamTrack => {
-                let parsed = webidl::parse_dictionary_object::<MediaStreamTrackEventInit>(scope, dictionary)?;
-                parsed.initialize_snapshot(scope, state).expect("MediaStreamTrackEvent snapshot");
-                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+                let parsed = webidl::parse_dictionary_object::<MediaStreamTrackEventInit>(
+                    scope, dictionary,
+                )?;
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("MediaStreamTrackEvent snapshot");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
         };
         initialize_event_object_with_type(scope, state, event_type, bubbles, cancelable);

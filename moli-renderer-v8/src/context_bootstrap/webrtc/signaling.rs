@@ -3,7 +3,7 @@
 
 use crate::{
     context_bootstrap::{events, exposed_interfaces, media_queries},
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
+    util::{callback_data_index_value, callback_data_item, get_private_value},
     web_api_interfaces,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -97,18 +97,20 @@ fn handler_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let pc = super::rtp_transceivers::target(scope, args.this());
-    media_queries::simple_object_event_set_handler(scope, pc, "signalingstatechange", HANDLER, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        pc,
+        "signalingstatechange",
+        HANDLER,
+        args.get(0),
+    );
 }
 
 pub(super) fn dispatch_state_change<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     pc: v8::Local<'s, v8::Object>,
 ) -> bool {
-    dispatch_event(
-        scope,
-        pc,
-        "signalingstatechange",
-    )
+    dispatch_event(scope, pc, "signalingstatechange")
 }
 
 pub(super) fn dispatch_event<'s>(
@@ -133,8 +135,6 @@ pub(super) fn dispatch_event<'s>(
     {
         return false;
     }
-    media_queries::dispatch_simple_event_target_event(
-        scope, target, event_type, wrapper,
-    );
+    media_queries::dispatch_simple_event_target_event(scope, target, event_type, wrapper);
     true
 }

@@ -910,20 +910,6 @@ impl JsContextHost {
         accessing_origin.can_access(&accessed_origin)
     }
 
-    pub(crate) fn current_realm_can_access_child_window(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-    ) -> bool {
-        self.current_runtime_window_execution_context_identity(scope)
-            .is_some_and(|accessing| {
-                self.window_execution_context_can_access_dispatch_scope(
-                    accessing,
-                    OwnerDispatchScope::Child(handle),
-                )
-            })
-    }
-
     fn window_access_origin(
         &self,
         identity: WindowExecutionContextIdentity,
@@ -1102,31 +1088,6 @@ pub(crate) enum WindowAccessOrigin {
 }
 
 impl WindowAccessOrigin {
-    /// Compare document origins without document.domain relaxation.
-    pub(in crate::native_bridge::context_host) fn is_same_origin(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::Tuple {
-                    serialized_origin: left,
-                    ..
-                },
-                Self::Tuple {
-                    serialized_origin: right,
-                    ..
-                },
-            ) => left == right,
-            (
-                Self::Opaque {
-                    identity: Some(left),
-                },
-                Self::Opaque {
-                    identity: Some(right),
-                },
-            ) => left == right,
-            _ => false,
-        }
-    }
-
     fn effective_domain(&self) -> Option<String> {
         let Self::Tuple {
             serialized_origin,
@@ -1335,9 +1296,9 @@ mod tests {
         assert!(inherited.can_access(&WindowAccessOrigin::opaque(inherited_identity)));
         assert!(!inherited.can_access(&WindowAccessOrigin::opaque(distinct_identity)));
         assert!(!inherited.can_access(&WindowAccessOrigin::Opaque { identity: None }));
-        assert!(inherited.is_same_origin(&WindowAccessOrigin::opaque(inherited_identity)));
-        assert!(!inherited.is_same_origin(&WindowAccessOrigin::opaque(distinct_identity)));
-        assert!(!inherited.is_same_origin(&WindowAccessOrigin::Opaque { identity: None }));
+        assert!(inherited.has_same_origin(&WindowAccessOrigin::opaque(inherited_identity)));
+        assert!(!inherited.has_same_origin(&WindowAccessOrigin::opaque(distinct_identity)));
+        assert!(!inherited.has_same_origin(&WindowAccessOrigin::Opaque { identity: None }));
     }
 
     #[test]
@@ -1349,11 +1310,11 @@ mod tests {
         let parent = origin("https://a.example.test:8443", Some("example.test"));
         let same = origin("https://a.example.test:8443", None);
         let relaxed = origin("https://b.example.test:9443", Some("example.test"));
-        assert!(parent.is_same_origin(&same));
+        assert!(parent.has_same_origin(&same));
         assert!(parent.can_access(&relaxed));
-        assert!(!parent.is_same_origin(&relaxed));
-        assert!(!parent.is_same_origin(&origin("http://a.example.test:8443", None)));
-        assert!(!parent.is_same_origin(&origin("https://a.example.test:9443", None)));
+        assert!(!parent.has_same_origin(&relaxed));
+        assert!(!parent.has_same_origin(&origin("http://a.example.test:8443", None)));
+        assert!(!parent.has_same_origin(&origin("https://a.example.test:9443", None)));
     }
 
     #[test]

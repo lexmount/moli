@@ -1,9 +1,7 @@
-use super::helpers::{
-    window_current_dispatch_scope, window_hidden_value, window_host_ptr, window_is_closed,
-};
+use super::helpers::{window_hidden_value, window_host_ptr, window_is_closed};
 use super::*;
 
-pub(super) fn window_alias_value<'s>(
+pub(in crate::context_bootstrap) fn window_alias_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
@@ -50,9 +48,7 @@ pub(crate) fn window_length_value<'s>(
     {
         let host = unsafe { &mut *host };
         match super::helpers::window_document_handle(scope, receiver, host) {
-            Some(document) => {
-                host.child_browsing_context_count_for_document(document)
-            }
+            Some(document) => host.child_browsing_context_count_for_document(document),
             None => 0,
         }
     } else {
@@ -71,11 +67,21 @@ pub(crate) fn window_opener_value<'s>(
     }
     if let Some(host_ptr) = window_host_ptr(scope, receiver) {
         let host = unsafe { &*host_ptr };
-        if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver) {
-            return Some(host.lightweight_popup_opener_window(scope, popup_id).map(Into::into).unwrap_or(null));
+        if let Some(popup_id) =
+            crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+        {
+            return Some(
+                host.lightweight_popup_opener_window(scope, popup_id)
+                    .map(Into::into)
+                    .unwrap_or(null),
+            );
         }
         if let Some(handle) = window_child_context_handle(scope, receiver) {
-            return Some(host.child_browsing_context_opener(scope, handle).map(Into::into).unwrap_or(null));
+            return Some(
+                host.child_browsing_context_opener(scope, handle)
+                    .map(Into::into)
+                    .unwrap_or(null),
+            );
         }
         if let Some(opener) = host.top_window_opener(scope) {
             return Some(opener.into());

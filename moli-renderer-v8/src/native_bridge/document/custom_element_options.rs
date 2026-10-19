@@ -1,7 +1,6 @@
 use crate::custom_elements;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::{JsContextHost, throw_dom_exception};
-use crate::util::{throw_type_error, v8str};
 use crate::web_api_interfaces;
 use crate::webidl;
 

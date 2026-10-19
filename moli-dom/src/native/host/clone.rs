@@ -185,7 +185,12 @@ impl DomHost {
                 connected,
                 in_document_tree,
             );
-        self.mark_shadow_tree_scope_for_subtree(handle, Some(document_handle), connected, &mut owners);
+        self.mark_shadow_tree_scope_for_subtree(
+            handle,
+            Some(document_handle),
+            connected,
+            &mut owners,
+        );
         let owner_changes = owners
             .into_iter()
             .map(|owner| {

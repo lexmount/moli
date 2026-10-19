@@ -1,7 +1,6 @@
 use super::helpers::{
-    same_origin_window_receiver,
-    window_child_context_handle, window_current_dispatch_scope, window_hidden_value,
-    window_host_ptr, window_receiver,
+    same_origin_window_receiver, window_child_context_handle, window_current_dispatch_scope,
+    window_hidden_value, window_host_ptr, window_receiver,
 };
 use super::*;
 
@@ -32,7 +31,6 @@ pub(in crate::context_bootstrap) fn window_frame_element_getter<'s>(
     };
     let Some(handle) = window_current_dispatch_scope(scope, receiver, unsafe { &*host_ptr })
         .and_then(|owner| owner.child_window())
-        .filter(|handle| unsafe { &*host_ptr }.frame_owner_can_access_content_document(*handle))
     else {
         rv.set_null();
         return;
@@ -71,7 +69,7 @@ pub(in crate::context_bootstrap) fn window_credentialless_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let Some(handle) = window_child_context_handle(scope, receiver) else {
@@ -90,7 +88,7 @@ pub(in crate::context_bootstrap) fn window_cross_origin_isolated_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let Some(host_ptr) = window_host_ptr(scope, receiver) else {

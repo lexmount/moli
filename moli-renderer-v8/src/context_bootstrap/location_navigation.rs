@@ -1091,6 +1091,10 @@ pub(crate) fn navigate_borrowed_location<'s>(
     if !is_native_location(scope, receiver) {
         return false;
     }
+    if kind == LocationNavigationKind::Assign {
+        let _ = super::location_runtime::set_location_href(scope, receiver, value);
+        return true;
+    }
     let raw = match crate::webidl::convert::<crate::webidl::UsvString>(
         scope,
         value,
@@ -1102,10 +1106,9 @@ pub(crate) fn navigate_borrowed_location<'s>(
             return true;
         }
     };
-    let Some(context) = receiver.get_creation_context(scope) else {
-        return true;
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
+    // The navigation algorithm resolves the native receiver's owner itself.
+    // Preserve the caller's entry/incumbent settings and exception Realm until
+    // that boundary has captured them.
     navigate_location_object_with_child_navigate_event(scope, receiver, kind, Some(raw));
     true
 }

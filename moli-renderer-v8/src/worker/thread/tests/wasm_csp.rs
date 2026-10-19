@@ -1,9 +1,9 @@
 use super::*;
 
-fn wasm_csp_options() -> WorkerSpawnOptions {
+fn wasm_csp_options(expected_reports: usize) -> WorkerSpawnOptions {
     WorkerSpawnOptions::new(
         format!(
-            "{}.then(value => {{ postMessage(value); close(); }});",
+            "globalThis.__expectedWasmCspReports = {expected_reports}; {}.then(value => {{ postMessage(value); close(); }});",
             include_str!("../../../../tests/fixtures/worker-wasm-csp.js"),
         ),
         "https://app.test/worker/main.js".to_owned(),
@@ -65,7 +65,8 @@ async fn worker_wasm_csp_covers_sync_async_and_streaming_compilation() {
         ("script-src 'unsafe-eval'\u{000b}", false),
     ] {
         let result = wasm_csp_result(
-            wasm_csp_options().with_content_security_policies(vec![policy.to_owned()]),
+            wasm_csp_options(if allowed { 0 } else { 5 })
+                .with_content_security_policies(vec![policy.to_owned()]),
         )
         .await;
         assert_wasm_compilation_result(&result, allowed);
@@ -88,7 +89,7 @@ async fn worker_wasm_csp_reports_every_policy_without_enforcing_report_only() {
     let policies = ["script-src 'none'", "default-src 'self'"].map(str::to_owned);
     for enforce in [false, true] {
         let result = wasm_csp_result(
-            wasm_csp_options()
+            wasm_csp_options(if enforce { 20 } else { 10 })
                 .with_content_security_policies(if enforce { policies.to_vec() } else { vec![] })
                 .with_content_security_report_only_policies(policies.to_vec()),
         )
@@ -118,7 +119,7 @@ async fn worker_wasm_csp_reports_every_policy_without_enforcing_report_only() {
 #[tokio::test]
 async fn worker_wasm_csp_uses_inherited_header_meta_and_report_only_policies() {
     ensure_v8();
-    let result = wasm_csp_result(wasm_csp_options().with_content_security_policy_snapshot(
+    let result = wasm_csp_result(wasm_csp_options(10).with_content_security_policy_snapshot(
         crate::content_security_policy::InheritedContentSecurityPolicy {
             self_url: Some(url::Url::parse("https://creator.test/").unwrap()),
             header_policies: vec!["script-src 'wasm-unsafe-eval'".to_owned()],

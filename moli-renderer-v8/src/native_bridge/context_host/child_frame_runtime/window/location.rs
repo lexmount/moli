@@ -151,6 +151,10 @@ fn navigate_cross_origin_child<'s>(
     {
         return None;
     }
+    let initiator_context = scope
+        .get_incumbent_context()
+        .unwrap_or_else(|| scope.get_current_context());
+    let initiator = host.window_dispatch_scope_for_context(scope, initiator_context);
     // A foreign initiator navigates the browsing context, without firing a
     // destination navigate event or editing the outgoing Window's local history.
     Some(match kind {
@@ -162,10 +166,15 @@ fn navigate_cross_origin_child<'s>(
                 handle,
                 target.as_str(),
                 true,
+                initiator,
             ),
-        crate::context_bootstrap::LocationNavigationKind::Reload => {
-            host.queue_child_browsing_context_reload_from_existing_seed(handle, target.as_str())
-        }
+        crate::context_bootstrap::LocationNavigationKind::Reload => host
+            .queue_child_browsing_context_navigation_without_seed_update(
+                handle,
+                target.as_str(),
+                None,
+                initiator,
+            ),
     })
 }
 
@@ -184,10 +193,21 @@ pub(super) fn window_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    if caller_can_access_window(scope, window) {
-        return get_private_value(scope, window, WINDOW_LOCATION_SLOT);
+    if let Some(location) = native_window_location(scope, window) {
+        return Some(location.into());
     }
     shared_cross_origin_location(scope, window).map(Into::into)
+}
+
+fn native_window_location<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = window.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    get_private_value(scope, global, WINDOW_LOCATION_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
 pub(super) fn set_window_location<'s>(
@@ -195,6 +215,18 @@ pub(super) fn set_window_location<'s>(
     window: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<()> {
+    // Keep the native Location's identity and checked exotic surface across
+    // origins. Its setter preserves entry/incumbent settings and validates
+    // the exact Document again after argument conversion.
+    if let Some(location) = native_window_location(scope, window) {
+        crate::context_bootstrap::navigate_borrowed_location(
+            scope,
+            location,
+            value,
+            crate::context_bootstrap::LocationNavigationKind::Assign,
+        );
+        return Some(());
+    }
     let block_javascript = !caller_can_access_window(scope, window);
     navigate_window(
         scope,
