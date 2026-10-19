@@ -7,9 +7,11 @@ use crate::page_task_queue::{
     PageImageLoadEventTargetEffect, RendererPageImageLoadEventKind,
     RendererPageImageLoadEventTaskId,
 };
+use crate::protocol_types::EmulatedMediaOverrides;
+use crate::style_engine::{StyleViewport, media_list::evaluate_source_size_list};
 use crate::types::{ImageRequestCorsMode, ImageRequestKey, SubresourceRequestInitiatorType};
 use crate::util::{context_host_ptr_from_global_bridge, v8_string};
-use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
+use cssparser::{Parser, ParserInput};
 
 use crate::context_bootstrap::evaluate_match_media_query_list_with_viewport;
 
@@ -456,6 +458,7 @@ fn image_selected_source_candidate(
             image_auto_source_size(runtime, handle),
             image_allows_auto_sizes(runtime, handle),
             image_selection_viewport(runtime, handle),
+            Some(runtime.emulated_media()),
         )
     {
         return Some(candidate);
@@ -518,6 +521,7 @@ fn image_selected_picture_source(
                 image_auto_source_size(runtime, handle),
                 image_allows_auto_sizes(runtime, handle),
                 image_selection_viewport(runtime, handle),
+                Some(runtime.emulated_media()),
             )
         {
             return Some(candidate);
@@ -921,7 +925,8 @@ fn selected_srcset_candidate(
     sizes: Option<&str>,
     auto_source_size: Option<f64>,
     allows_auto_sizes: bool,
-    viewport: ImageSelectionViewport,
+    viewport: StyleViewport,
+    emulated_media: Option<&EmulatedMediaOverrides>,
 ) -> Option<SelectedImageSource> {
     let mut candidates = parse_srcset_candidates(srcset);
     candidates.retain(|candidate| image_source_is_fetchable(&candidate.url));
@@ -929,8 +934,20 @@ fn selected_srcset_candidate(
         return None;
     }
 
-    let source_size =
-        source_size_for_sizes_attribute(sizes, auto_source_size, allows_auto_sizes, viewport);
+    let source_size = if candidates
+        .iter()
+        .any(|candidate| candidate.descriptor.width.is_some())
+    {
+        source_size_for_sizes_attribute(
+            sizes,
+            auto_source_size,
+            allows_auto_sizes,
+            viewport,
+            emulated_media,
+        )
+    } else {
+        1.0
+    };
     for candidate in &mut candidates {
         if candidate.descriptor.density.is_some() {
             continue;
@@ -939,7 +956,15 @@ fn selected_srcset_candidate(
             candidate
                 .descriptor
                 .width
-                .map(|width| f64::from(width) / source_size)
+                .map(|width| {
+                    // CSS zero, including negative zero, gives positive infinite
+                    // density. Do not let the floating-point sign reach division.
+                    if source_size == 0.0 {
+                        f64::INFINITY
+                    } else {
+                        f64::from(width) / source_size
+                    }
+                })
                 .unwrap_or(1.0),
         );
     }
@@ -961,7 +986,7 @@ fn selected_srcset_candidate(
         .min_by(|left, right| {
             let left_density = left.descriptor.density.unwrap_or(1.0);
             let right_density = right.descriptor.density.unwrap_or(1.0);
-            let dpr = viewport.device_pixel_ratio;
+            let dpr = viewport.device_pixel_ratio.unwrap_or(1.0);
             match (left_density >= dpr, right_density >= dpr) {
                 (true, true) => left_density.total_cmp(&right_density),
                 (true, false) => std::cmp::Ordering::Less,
@@ -979,29 +1004,15 @@ fn image_source_is_fetchable(source: &str) -> bool {
     !source.is_empty() && source != "undefined"
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ImageSelectionViewport {
-    width: f64,
-    height: f64,
-    device_pixel_ratio: f64,
-}
-
-fn image_selection_viewport(runtime: &JsContextHost, handle: DomHandle) -> ImageSelectionViewport {
-    let viewport = runtime
-        .dom_host()
-        .owner_document_handle(handle)
-        .map(|document| runtime.layout_viewport_for_document(document));
-    ImageSelectionViewport {
-        width: viewport
-            .map(|viewport| f64::from(viewport.css_width))
-            .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
-        height: viewport
-            .map(|viewport| f64::from(viewport.css_height))
-            .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
-        device_pixel_ratio: viewport
-            .map(|viewport| f64::from(viewport.device_pixel_ratio))
-            .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio),
+fn image_selection_viewport(runtime: &JsContextHost, handle: DomHandle) -> StyleViewport {
+    let mut viewport = runtime.style_viewport();
+    if let Some(document) = runtime.dom_host().owner_document_handle(handle) {
+        let document_viewport = runtime.layout_viewport_for_document(document);
+        viewport.width = Some(f64::from(document_viewport.css_width));
+        viewport.height = Some(f64::from(document_viewport.css_height));
+        viewport.device_pixel_ratio = Some(f64::from(document_viewport.device_pixel_ratio));
     }
+    viewport
 }
 
 fn parse_srcset_candidates(input: &str) -> Vec<SrcsetCandidate> {
@@ -1026,70 +1037,20 @@ fn source_size_for_sizes_attribute(
     sizes: Option<&str>,
     auto_source_size: Option<f64>,
     allows_auto_sizes: bool,
-    viewport: ImageSelectionViewport,
+    viewport: StyleViewport,
+    emulated_media: Option<&EmulatedMediaOverrides>,
 ) -> f64 {
-    let Some(sizes) = sizes else {
-        return viewport.width;
-    };
-    sizes
-        .split(',')
-        .enumerate()
-        .find_map(|(index, component)| {
-            parse_source_size_component(
-                component.trim(),
-                auto_source_size,
-                allows_auto_sizes && index == 0,
-                viewport,
-            )
-        })
-        .unwrap_or(viewport.width)
-}
-
-fn parse_source_size_component(
-    component: &str,
-    auto_source_size: Option<f64>,
-    allows_auto_sizes: bool,
-    viewport: ImageSelectionViewport,
-) -> Option<f64> {
-    if allows_auto_sizes
-        && component
-            .trim_start()
-            .get(..4)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("auto"))
-    {
-        return Some(auto_source_size.unwrap_or(300.0).max(1.0));
+    let sizes = sizes.unwrap_or_default();
+    if allows_auto_sizes {
+        let mut input = ParserInput::new(sizes);
+        let mut parser = Parser::new(&mut input);
+        if parser.expect_ident_matching("auto").is_ok()
+            && (parser.is_exhausted() || parser.expect_comma().is_ok())
+        {
+            return auto_source_size.unwrap_or(300.0).max(1.0);
+        }
     }
-    if component.trim_start().starts_with("(max-width") {
-        return None;
-    }
-    let length = component
-        .rsplit_once(')')
-        .map(|(_, tail)| tail.trim())
-        .filter(|tail| !tail.is_empty())
-        .unwrap_or(component);
-    parse_source_size_length(length, viewport).filter(|value| value.is_finite() && *value >= 0.0)
-}
-
-fn parse_source_size_length(length: &str, viewport: ImageSelectionViewport) -> Option<f64> {
-    let length = length.trim();
-    if let Some(value) = length.strip_suffix("px") {
-        return value.trim().parse::<f64>().ok();
-    }
-    if let Some(value) = length.strip_suffix("vw") {
-        return value
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|value| viewport.width * value / 100.0);
-    }
-    if let Some(value) = length.strip_suffix("vh") {
-        return value
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|value| viewport.height * value / 100.0);
-    }
-    None
+    evaluate_source_size_list(sizes, emulated_media, viewport)
 }
 
 fn image_allows_auto_sizes(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -1288,14 +1249,11 @@ fn image_current_src_value_for_handle(runtime: &JsContextHost, handle: DomHandle
 mod tests {
     use super::*;
 
-    const TEST_VIEWPORT: ImageSelectionViewport = ImageSelectionViewport {
-        width: 1_280.0,
-        height: 720.0,
-        device_pixel_ratio: 1.0,
-    };
+    const TEST_VIEWPORT: StyleViewport =
+        StyleViewport::new(Some(1_280.0), Some(720.0)).with_device_pixel_ratio(Some(1.0));
 
     fn select(srcset: &str, sizes: Option<&str>) -> Option<String> {
-        selected_srcset_candidate(srcset, sizes, None, false, TEST_VIEWPORT)
+        selected_srcset_candidate(srcset, sizes, None, false, TEST_VIEWPORT, None)
             .map(|candidate| candidate.url)
     }
 
@@ -1378,6 +1336,7 @@ mod tests {
                 Some(10.0),
                 true,
                 TEST_VIEWPORT,
+                None,
             )
             .map(|candidate| candidate.url)
             .as_deref(),
@@ -1390,6 +1349,7 @@ mod tests {
                 Some(10.0),
                 true,
                 TEST_VIEWPORT,
+                None,
             )
             .map(|candidate| candidate.url)
             .as_deref(),
@@ -1399,13 +1359,19 @@ mod tests {
 
     #[test]
     fn srcset_selection_uses_the_live_device_pixel_ratio() {
-        let high_dpr = ImageSelectionViewport {
-            device_pixel_ratio: 2.0,
+        let high_dpr = StyleViewport {
+            device_pixel_ratio: Some(2.0),
             ..TEST_VIEWPORT
         };
-        let selected =
-            selected_srcset_candidate("normal.png 1x, retina.png 2x", None, None, false, high_dpr)
-                .expect("a responsive image candidate");
+        let selected = selected_srcset_candidate(
+            "normal.png 1x, retina.png 2x",
+            None,
+            None,
+            false,
+            high_dpr,
+            None,
+        )
+        .expect("a responsive image candidate");
 
         assert_eq!(selected.url, "retina.png");
         assert_eq!(selected.density, 2.0);
@@ -1413,11 +1379,66 @@ mod tests {
 
     #[test]
     fn srcset_zero_source_size_produces_infinite_density() {
-        let selected =
-            selected_srcset_candidate("image.png 256w", Some("0px"), None, false, TEST_VIEWPORT)
-                .expect("a responsive image candidate");
+        let selected = selected_srcset_candidate(
+            "image.png 256w",
+            Some("0px"),
+            None,
+            false,
+            TEST_VIEWPORT,
+            None,
+        )
+        .expect("a responsive image candidate");
 
         assert_eq!(selected.url, "image.png");
         assert!(selected.density.is_infinite());
+    }
+
+    #[test]
+    fn srcset_zero_lengths_keep_positive_density_and_valid_request_keys() {
+        for sizes in ["0", "-0", "+0", "-0px", "-0e-0px", "calc(-0px)"] {
+            let selected = selected_srcset_candidate(
+                "image.png 256w",
+                Some(sizes),
+                None,
+                false,
+                TEST_VIEWPORT,
+                None,
+            )
+            .expect("zero is a valid source size");
+            assert_eq!(selected.density, f64::INFINITY, "{sizes}");
+            let key = ImageRequestKey::with_density(
+                selected.url,
+                ImageRequestCorsMode::NoCors,
+                selected.density,
+            );
+            assert_eq!(key.density(), f64::INFINITY);
+        }
+    }
+
+    #[test]
+    fn srcset_auto_size_requires_the_whole_leading_css_identifier() {
+        for sizes in ["autofoo, 1px", "auto 1px, 1px", "auto() 1px, 1px"] {
+            assert_eq!(
+                source_size_for_sizes_attribute(
+                    Some(sizes),
+                    Some(100.0),
+                    true,
+                    TEST_VIEWPORT,
+                    None,
+                ),
+                1.0,
+                "{sizes}"
+            );
+        }
+        assert_eq!(
+            source_size_for_sizes_attribute(
+                Some("/**/ AUTO /**/, 1px"),
+                Some(100.0),
+                true,
+                TEST_VIEWPORT,
+                None,
+            ),
+            100.0
+        );
     }
 }
