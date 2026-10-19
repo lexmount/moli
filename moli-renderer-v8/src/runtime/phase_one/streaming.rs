@@ -630,7 +630,7 @@ fn response_document_parser(
     headers: &[(String, Vec<u8>)],
     env: &PageVmEnvConfig,
 ) -> (ParseTimeDriverState, DocumentStreamingDecoder) {
-    let content_type = moli_web_mime::response_document_content_type(headers);
+    let content_type = moli_web_mime::navigation_response_mime_type_from_headers(headers);
     let text_type = content_type
         .as_deref()
         .filter(|mime| moli_web_mime::is_text_document_mime(mime));
@@ -1053,6 +1053,70 @@ mod tests {
         }).await;
     }
 
+    #[test]
+    fn nosniff_without_valid_mime_parses_literal_text_without_executing_scripts() {
+        super::super::tests::run_phase_one_large_stack_test("nosniff-literal-response", || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime should build");
+            runtime.block_on(async {
+                let _js_runtime_owner = crate::JsRuntime::initialize();
+                tokio::task::LocalSet::new()
+                    .run_until(async {
+                        let payload = "<!doctype html><script>globalThis.literalScriptExecuted = true</script><p>literal</p>";
+                        for supplied in [None, Some("invalid")] {
+                            let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+                            let mut headers = vec![("X-Content-Type-Options".to_owned(), b"nosniff".to_vec())];
+                            if let Some(mime) = supplied {
+                                headers.push(("Content-Type".to_owned(), mime.as_bytes().to_vec()));
+                            }
+                            let executor = JsLocalExecutor::new();
+                            let creation_executor = executor.clone();
+                            let creation = super::super::access::run_named_owner_local_task(
+                                executor,
+                                "nosniff document bootstrap closed",
+                                async move {
+                                    ConcurrentParseTimeRuntime::finish_creation_from_committed_external_raw_document_response(
+                                        PageId::new_for_testing(1),
+                                        creation_executor,
+                                        &loader,
+                                        &default_test_page_vm_env_config(),
+                                        PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+                                        PageVmInitStage::Load,
+                                        Instant::now(),
+                                        Url::parse("https://example.test/literal.html").unwrap(),
+                                        200,
+                                        headers,
+                                        ExternalRawDocumentBodyStream::from_bytes(payload.as_bytes().to_vec()),
+                                    ).await
+                                },
+                            ).await.unwrap();
+                            let StreamingNavigationPageCreationResult::Html(creation) = creation else {
+                                panic!("a nosniff text document must not become a download");
+                            };
+                            let ParseTimePageVmCreationOutcome::ContinuePhaseTwo { mut page_vm, .. } = creation.outcome else {
+                                panic!("the finite text response must finish parsing");
+                            };
+                            let observation = super::super::access::run_named_owner_local_task(
+                                page_vm.local_executor.clone(),
+                                "nosniff document observation closed",
+                                async move {
+                                    page_vm.vm_mut().eval("JSON.stringify([document.contentType, globalThis.literalScriptExecuted === true, document.scripts.length, document.body.firstElementChild.localName, document.body.textContent])")
+                                },
+                            ).await.unwrap();
+                            assert_eq!(
+                                serde_json::from_str::<serde_json::Value>(&observation).unwrap(),
+                                serde_json::json!(["text/plain", false, 0, "pre", payload]),
+                                "{supplied:?}"
+                            );
+                        }
+                    })
+                    .await;
+            });
+        });
+    }
+
     #[tokio::test]
     async fn text_document_charset_is_visible_to_document_start_before_body_arrives() {
         let _js_runtime_owner = crate::JsRuntime::initialize();
@@ -1122,14 +1186,24 @@ mod tests {
         let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("default loader");
         let runtime_hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-        for (mime, expected_preload) in [
-            ("text/plain", false),
-            ("application/json", false),
-            ("text/html", true),
+        for (mime, nosniff, expected_preload) in [
+            (Some("text/plain"), false, false),
+            (Some("application/json"), false, false),
+            (Some("text/html"), false, true),
+            (Some("text/html"), true, true),
+            (None, true, false),
+            (Some("invalid"), true, false),
         ] {
+            let mut headers = Vec::new();
+            if let Some(mime) = mime {
+                headers.push(("Content-Type".to_owned(), mime.as_bytes().to_vec()));
+            }
+            if nosniff {
+                headers.push(("X-Content-Type-Options".to_owned(), b"nosniff".to_vec()));
+            }
             let (mut state, _) = response_document_parser(
                 Url::parse("https://example.test/data").unwrap(),
-                &[("Content-Type".to_owned(), mime.as_bytes().to_vec())],
+                &headers,
                 &default_test_page_vm_env_config(),
             );
             state.buffered_document_preloads.bind_resource_runtime(
@@ -1147,7 +1221,7 @@ mod tests {
                     &classic_preload_key_for_streaming_test("https://example.test/literal.js")
                 ),
                 expected_preload,
-                "{mime}",
+                "{mime:?}, nosniff={nosniff}",
             );
         }
     }
