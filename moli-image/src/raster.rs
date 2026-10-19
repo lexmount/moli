@@ -45,7 +45,7 @@ pub fn supports_image_mime_essence(essence: &str) -> bool {
         return true;
     }
     let essence = match essence {
-        "image/x-png" => "image/png",
+        "image/x-png" | "image/apng" => "image/png",
         "image/pjpeg" => "image/jpeg",
         _ => essence,
     };
