@@ -6,7 +6,6 @@
   ];
   for (const style of styles) for (const [property, alias] of [
     ['timeline-trigger', 'timelineTrigger'],
-    ['font-optical-sizing', 'fontOpticalSizing'],
     ['-webkit-locale', 'webkitLocale']
   ]) {
     assert(property in style && alias in style, 'property accessors');
@@ -37,7 +36,8 @@
   }
   for (const style of styles) {
     // Already implemented native grammars remain available alongside the shells.
-    for (const [property, value] of [['width', '12px'], ['opacity', '0.5'], ['font-size', '16px']]) {
+    for (const [property, value] of [['width', '12px'], ['opacity', '0.5'], ['font-size', '16px'],
+                                   ['font-optical-sizing', 'none'], ['font-variation-settings', '"opsz" 18']]) {
       assert(CSS.supports(property, value), 'implemented grammar preserved: ' + property);
       style.setProperty(property, value);
       assert(style.getPropertyValue(property) === value, 'implemented native value preserved: ' + property);

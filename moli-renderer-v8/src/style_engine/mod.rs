@@ -1151,6 +1151,7 @@ pub(crate) fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.css.tree-counting-functions.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.zoom.enabled", true);
         stylo_static_prefs::set_pref!("layout.grid.enabled", true);
+        stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
         // Stylo exposes the experimental CSS Sizing `fit-content(<length>)`
         // form behind a Servo pref. Chromium 147 rejects that function for
         // width/height while still accepting the bare `fit-content` keyword

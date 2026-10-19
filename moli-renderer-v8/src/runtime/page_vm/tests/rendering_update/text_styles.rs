@@ -2,6 +2,83 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn variable_font_optical_sizing_and_explicit_axes_control_wrapping() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/font-optical-sizing.html")?,
+        );
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem-optical.ttf"
+        )));
+        // The auto/explicit equivalence and explicit override follow Chromium's
+        // css/css-fonts/variations/variable-opsz.html and variable-opsz-ref.html.
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face{{font-family:MoliOptical;src:url(data:font/ttf;base64,{font})}}
+html,body{{margin:0}}
+.probe{{width:160px;font:72px/80px MoliOptical}}
+#none{{font-optical-sizing:none}}
+#explicit-high{{font-optical-sizing:none;font-variation-settings:'opsz' 72}}
+#explicit-low{{font-variation-settings:'opsz' 12}}
+</style>`;
+document.body.innerHTML=`<div class=probe id=auto>B B</div><div class=probe id=none>B B</div>
+<div class=probe id=explicit-high>B B</div><div class=probe id=explicit-low>B B</div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 600, 1.0))?
+            .expect("variable font layout");
+        assert!(
+            snapshot
+                .fonts
+                .iter()
+                .any(|resource| resource.font.data.as_ref()
+                    == include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../moli-layout/tests/fixtures/moli-ahem-optical.ttf"
+                    ))),
+            "the fixture must use its variable web font"
+        );
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(
+            ['auto','none','explicit-high','explicit-low'].map(id=>{
+              const el=document.getElementById(id),s=getComputedStyle(el);
+              return [id,{height:el.getBoundingClientRect().height,
+                optical:s.getPropertyValue('font-optical-sizing'),
+                variations:s.getPropertyValue('font-variation-settings')}];
+            })))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "auto":{"height":160,"optical":"auto","variations":"normal"},
+                "none":{"height":80,"optical":"none","variations":"normal"},
+                "explicit-high":{"height":160,"optical":"none","variations":"\"opsz\" 72"},
+                "explicit-low":{"height":80,"optical":"auto","variations":"\"opsz\" 12"}
+            })
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("optical font sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn baseline_atomic_inline_keeps_parent_strut_descent_in_flex_header() {
     run_page_vm_async_test(async move {
         let loader =
