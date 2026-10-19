@@ -1,7 +1,7 @@
 //! Typed execution boundary for the remaining main-Document post-parse work.
 //!
 //! `PostParseLifecycleWork` is a broad transport enum shared with parser and
-//! lifecycle machinery. Once one of the eight generic callback/state entries
+//! lifecycle machinery. Once one of the generic callback/state entries
 //! is selected, this module narrows it to [`MainDocumentPostParseWork`] and
 //! preserves its concrete identity through body execution. The resulting
 //! [`MainDocumentPostParseExecution`] is short-lived: it is never queued and
@@ -41,7 +41,7 @@ impl MainDocumentPostParseOwner {
     }
 }
 
-/// The eight post-parse callback/state bodies whose task-end checkpoint was
+/// The post-parse callback/state bodies whose task-end checkpoint was
 /// previously hidden behind the generic `BeforeTask` compatibility policy.
 ///
 /// This is an execution-only narrowing of an already-selected queue payload;
@@ -54,8 +54,14 @@ pub(crate) enum MainDocumentPostParseWork {
     DispatchScriptEvent(ScriptEventTask),
     ReportWindowScriptFailure(WindowScriptFailureReportTask),
     SettleMainDocumentScriptLoadDelay(MainDocumentScriptLoadDelayLease),
-    CheckMainDocumentCompletion { owner: FrameDocumentTaskOwner },
+    CheckMainDocumentCompletion {
+        owner: FrameDocumentTaskOwner,
+    },
     RecordDetachedPostParseRuns(Vec<ScriptRun>),
+    FinishNavigationImageDocument {
+        owner: FrameDocumentTaskOwner,
+        completion: crate::native_bridge::NavigationImageDocumentCompletion,
+    },
 }
 
 impl MainDocumentPostParseWork {
@@ -100,6 +106,9 @@ impl MainDocumentPostParseWork {
             }
             PostParseLifecycleWork::RecordDetachedPostParseRuns(runs) => {
                 Ok(Self::RecordDetachedPostParseRuns(runs))
+            }
+            PostParseLifecycleWork::FinishNavigationImageDocument { owner, completion } => {
+                Ok(Self::FinishNavigationImageDocument { owner, completion })
             }
             other => Err(Box::new(other)),
         }
@@ -153,6 +162,11 @@ impl MainDocumentPostParseWork {
             Self::RecordDetachedPostParseRuns(runs) => {
                 MainDocumentPostParseExecution::RecordDetachedPostParseRuns(
                     MainDocumentPostParseStateExecution::new(target, runs),
+                )
+            }
+            Self::FinishNavigationImageDocument { .. } => {
+                MainDocumentPostParseExecution::FinishNavigationImageDocument(
+                    MainDocumentPostParseStateExecution::new(target, ()),
                 )
             }
         }
@@ -381,6 +395,7 @@ pub(crate) enum MainDocumentPostParseExecution {
         MainDocumentPostParseStateExecution<MainDocumentCompletionRecheckEffect>,
     ),
     RecordDetachedPostParseRuns(MainDocumentPostParseStateExecution<Vec<ScriptRun>>),
+    FinishNavigationImageDocument(MainDocumentPostParseStateExecution<()>),
 }
 
 impl MainDocumentPostParseExecution {
@@ -394,6 +409,7 @@ impl MainDocumentPostParseExecution {
             Self::SettleMainDocumentScriptLoadDelay(_) => "script-load-delay-settlement",
             Self::CheckMainDocumentCompletion(_) => "main-document-completion-recheck",
             Self::RecordDetachedPostParseRuns(_) => "detached-run-record",
+            Self::FinishNavigationImageDocument(_) => "navigation-image-response",
         }
     }
 
@@ -407,6 +423,7 @@ impl MainDocumentPostParseExecution {
             Self::SettleMainDocumentScriptLoadDelay(execution) => execution.target(),
             Self::CheckMainDocumentCompletion(execution) => execution.target(),
             Self::RecordDetachedPostParseRuns(execution) => execution.target(),
+            Self::FinishNavigationImageDocument(execution) => execution.target(),
         }
     }
 

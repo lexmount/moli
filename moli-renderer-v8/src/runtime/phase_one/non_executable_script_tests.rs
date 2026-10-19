@@ -39,6 +39,7 @@ fn data_block_completes_in_parser_turn_without_page_task() {
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let html = r#"<!doctype html><html><body>
 <script>

@@ -1541,6 +1541,7 @@ fn parser_custom_element_constructor_runs_before_following_siblings() {
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
+            image_document: &mut state.image_document,
         };
         let html = r#"<!doctype html><script>
 window.__containerChildNodesInConstructor = [];
@@ -1658,6 +1659,7 @@ fn parser_custom_element_inserts_constructor_returned_element() {
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
+            image_document: &mut state.image_document,
         };
         let html = r#"<!doctype html><script>
 let anotherElementCreatedBeforeSuperCall = undefined;
@@ -1812,6 +1814,8 @@ fn document_write_custom_element_direct_constructs_before_token_attributes() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>

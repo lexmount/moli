@@ -1,8 +1,32 @@
-use super::JsContextHost;
+use super::{ImageLoadEventId, JsContextHost};
 use crate::{
     document_runtime::DomHandle, dom::native::Node, navigation_document::NavigationImageDocument,
     types::SubresourceRequestInitiatorType,
 };
+
+/// The exact browser-created element and request sequence. Later mutations
+/// cannot consume this navigation's response.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NavigationImageDocumentLoad {
+    image: DomHandle,
+    sequence: ImageLoadEventId,
+}
+
+pub(crate) struct NavigationImageDocumentCompletion {
+    pub(crate) load: NavigationImageDocumentLoad,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
+    pub(crate) bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for NavigationImageDocumentCompletion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NavigationImageDocumentCompletion")
+            .field("load", &self.load)
+            .field("encoded_bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
 
 impl JsContextHost {
     /// Bind the exact browser-created host to its navigation response. This is
@@ -26,6 +50,19 @@ impl JsContextHost {
                     .is_some_and(|element| element.is_html_element("img"))
             })
             .expect("image document parser must create its native image host");
+        let load = self.begin_navigation_image_document_load(scope, image);
+        self.finish_navigation_image_document_load(load, source.headers(), source.bytes().to_vec());
+    }
+
+    pub(crate) fn begin_navigation_image_document_load(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        image: DomHandle,
+    ) -> NavigationImageDocumentLoad {
+        let document = self
+            .dom_host()
+            .owner_document_handle(image)
+            .expect("navigation image must belong to its Document");
         let url = self.document_url_for_handle(document);
         self.dom_host_mut()
             .set_attribute(image, "src", url.as_str());
@@ -47,6 +84,20 @@ impl JsContextHost {
             request.clone()
         ));
         self.set_current_image_request(image, Some(request));
+        NavigationImageDocumentLoad {
+            image,
+            sequence: pending.id(),
+        }
+    }
+
+    pub(crate) fn finish_navigation_image_document_load(
+        &mut self,
+        load: NavigationImageDocumentLoad,
+        headers: &[(String, Vec<u8>)],
+        bytes: Vec<u8>,
+    ) {
+        let descriptor = crate::network_host::image_response_descriptor_from_bytes(headers, &bytes);
+        let NavigationImageDocumentLoad { image, sequence } = load;
         let manager = self
             .owner_dispatch_scope_for_node(image)
             .and_then(|owner| self.document_resource_loader_for_dispatch_scope(owner))
@@ -57,20 +108,16 @@ impl JsContextHost {
                     loader.request_client().parkable_image_manager(&runner)
                 },
             );
-        let descriptor = crate::network_host::image_response_descriptor_from_bytes(
-            source.headers(),
-            source.bytes(),
-        );
         let completion = self.complete_pending_image_load_local_response_if_matches(
             image,
-            pending.id(),
+            sequence,
             descriptor,
-            manager.from_frozen_bytes(source.bytes().to_vec()),
+            manager.from_frozen_bytes(bytes),
         );
         crate::native_bridge::element::queue_image_load_network_terminal_followup(
             self,
             image,
-            pending.id(),
+            sequence,
             completion.followup(),
         );
     }
