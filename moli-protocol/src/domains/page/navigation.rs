@@ -3139,7 +3139,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         && let Some(source) = conn.target_page_residence_identity_for_owner(owner)
         && let Some(page) = conn
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
             .and_then(|slot| slot.loaded_page_mut())
     {
         let pending = page.start_check_main_document_beforeunload();
@@ -3605,7 +3604,6 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     ) && let Some(source) = conn.target_page_residence_identity_for_owner(&state.owner)
         && let Some(page) = conn
             .runtime_session_owner_slot_mut_for_owner(&state.owner)
-            .ok()
             .and_then(|slot| slot.loaded_page_mut())
     {
         match page.start_unload_main_document_for_navigation_commit() {

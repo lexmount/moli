@@ -59,7 +59,7 @@ impl NavigationAfterBeforeUnload {
             // without a CDP session. Refresh that exact Page, never the active
             // target selected by a missing session id.
             let output = if conn.target_page_residence_identity_is_current(&source)
-                && let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&owner)
                 && let Some(page) = slot.loaded_page_mut()
             {
                 page.finish_page_command_turn(completed)
