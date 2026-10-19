@@ -97,7 +97,9 @@ pub enum PaintError {
 impl fmt::Display for PaintError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidSvgImageTransform { transform } => write!(formatter, "SVG image mapping must be finite: {transform:?}"),
+            Self::InvalidSvgImageTransform { transform } => {
+                write!(formatter, "SVG image mapping must be finite: {transform:?}")
+            }
             Self::InvalidCaptureSurfaceDimensions { width, height } => {
                 write!(
                     formatter,
