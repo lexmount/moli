@@ -4,6 +4,8 @@
 //! execution, streaming HTML responses, and cookie-aware helper utilities used
 //! by higher-level browser code.
 
+mod content_coding;
+pub use content_coding::resource_timing_content_encoding;
 mod auth_retry;
 mod blocking;
 mod cancellation;
