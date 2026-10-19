@@ -172,6 +172,7 @@ fn parser_step_without_script_handoff_consumes_live_backend_dom() {
         buffered_document_preloads: &mut state.buffered_document_preloads,
         service_worker_preload_context: state.service_worker_preload_context.as_ref(),
         input_closed: &state.input_closed,
+        image_document: &mut state.image_document,
     };
 
     let crate::parser::ParserPumpOutcome {
@@ -224,6 +225,7 @@ fn parser_step_with_inline_svg_script_surfaces_shared_script_handoff() {
         buffered_document_preloads: &mut state.buffered_document_preloads,
         service_worker_preload_context: state.service_worker_preload_context.as_ref(),
         input_closed: &state.input_closed,
+        image_document: &mut state.image_document,
     };
 
     let crate::parser::ParserPumpOutcome {
@@ -321,6 +323,8 @@ fn parser_defined_autonomous_custom_element_reaches_parser_handoff() {
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let _js_runtime = crate::JsRuntime::initialize();
             let mut driver = ParserDriver {
+image_document: &mut state.image_document,
+
                 loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
@@ -493,6 +497,8 @@ fn empty_script_inside_template_does_not_crash_observer_delivery() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
@@ -568,6 +574,8 @@ fn declarative_shadow_respects_custom_element_disabled_shadow_feature() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
