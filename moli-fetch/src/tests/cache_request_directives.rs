@@ -14,13 +14,12 @@ async fn cache_only_requests_preserve_cancellation_before_local_completion() -> 
     for follow_redirects in [true, false] {
         let cancel = FetchCancelHandle::new();
         cancel.cancel();
-        let request = controlled(&server.url(), "only-if-cached")?.with_redirect_handling(
-            if follow_redirects {
-                crate::RequestRedirectHandling::Follow
-            } else {
-                crate::RequestRedirectHandling::FollowByCaller
-            },
-        );
+        let request = controlled(&server.url(), "only-if-cached")?;
+        let request = if follow_redirects {
+            request
+        } else {
+            request.with_single_hop()
+        };
         let error = client
             .fetch_with_cancel(request, cancel)
             .await
@@ -56,11 +55,11 @@ async fn cache_only_misses_never_contact_origin_on_raw_text_html_or_buffered_pat
                 response.head()
             }
             1 | 2 => {
-                let request = request.with_redirect_handling(if path == 1 {
-                    crate::RequestRedirectHandling::Follow
+                let request = if path == 1 {
+                    request
                 } else {
-                    crate::RequestRedirectHandling::FollowByCaller
-                });
+                    request.with_single_hop()
+                };
                 let observed = client
                     .fetch_with_cancel_and_network_metadata(request, cancel.clone())
                     .await?;
@@ -249,11 +248,7 @@ async fn disk_cache_only_redirects_stop_at_uncached_hops_without_network() -> Re
         let mut config = FetchConfig::default();
         config.set_http_cache_dir(Some(cache_dir.display().to_string()));
         let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-        let prime = Request::get(&server.url())?.with_redirect_handling(if false {
-            crate::RequestRedirectHandling::Follow
-        } else {
-            crate::RequestRedirectHandling::FollowByCaller
-        });
+        let prime = Request::get(&server.url())?.with_single_hop();
         assert_eq!(client.fetch_raw(prime).await?.status, 302);
         let request = controlled(&server.url(), "only-if-cached")?;
         let head = if html {

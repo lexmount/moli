@@ -1,6 +1,8 @@
 use moli_header_field::{HeaderFieldTokenMode, HeaderFieldTokenizer};
 
 fn supported_content_codings() -> impl Iterator<Item = &'static str> {
+    // The bounded native decoder supplies the same coding set even when the
+    // linked libcurl lacks Zstandard or external-dictionary support.
     ["deflate", "gzip", "br", "zstd", "dcb", "dcz"].into_iter()
 }
 
