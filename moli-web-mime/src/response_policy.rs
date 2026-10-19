@@ -24,11 +24,12 @@ pub fn determine_nosniff(headers: &[(String, Vec<u8>)]) -> bool {
         })
 }
 
-/// Resolves a navigation's MIME type when its headers are sufficient.
+/// Supplies navigation MIME metadata before a body decision is available.
 ///
-/// A supplied type is authoritative. Without one, `nosniff` makes the response
-/// a plain-text document; otherwise the caller still needs to inspect its body.
-/// This navigation default does not apply to image or other subresources.
+/// Without a supplied type, `nosniff` makes the response a plain-text document.
+/// Use [`crate::NavigationMimeSniffer`] to select a parser: supplied unknown and
+/// plain-text types can still require a body prefix. This navigation default
+/// does not apply to image or other subresources.
 pub fn navigation_response_mime_type_from_headers(headers: &[(String, Vec<u8>)]) -> Option<String> {
     extract_response_mime_essence(headers)
         .or_else(|| determine_nosniff(headers).then(|| "text/plain".to_owned()))

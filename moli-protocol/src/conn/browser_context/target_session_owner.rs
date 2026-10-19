@@ -1435,6 +1435,20 @@ impl CdpConnection {
         }
     }
 
+    pub(crate) fn cancel_uncommitted_navigation_for_owner(&mut self, owner: &CommandOwnerScope) {
+        let Some(mut resolved) = self.target_session_owner_mut_for_owner(owner) else {
+            return;
+        };
+        let target = resolved.target_mut();
+        if target
+            .runtime_slot
+            .page_slot_mut()
+            .cancel_uncommitted_document_navigation()
+        {
+            target.owner_state.clear_pending_navigation_history_update();
+        }
+    }
+
     pub(crate) async fn mark_target_crashed_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
