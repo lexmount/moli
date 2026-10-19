@@ -4043,6 +4043,15 @@ impl PageVm {
             .unwrap_or_default();
         let final_url = self.vm().document_runtime.host_document().url().clone();
         let document_title = self.vm().document_runtime.dom_host().dom().document_title();
+        let document_content_type = self
+            .vm()
+            .document_runtime
+            .dom_host()
+            .dom()
+            .document()
+            .map(|document| document.content_type())
+            .unwrap_or("text/html")
+            .to_owned();
         let report_started = profile_enabled.then(Instant::now);
         let report = self.report_snapshot();
         let report_us = report_started
@@ -4080,6 +4089,7 @@ impl PageVm {
             ),
             final_url,
             document_title,
+            document_content_type,
             document_activity: self.document_settings.document_activity,
             report,
             navigation_response: self.navigation_response.clone(),
