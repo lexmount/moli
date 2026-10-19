@@ -423,6 +423,7 @@ document.getElementById("stale-storage-recipient").contentWindow
   .addEventListener("storage", () => parent.__staleStorageEvents++);
 localStorage.setItem("stale-storage-key", "queued");
 document.getElementById("stale-storage-recipient").remove();
+localStorage.setItem("stale-storage-key", "after removal");
 "retired"
 "#,
         )?;
@@ -437,6 +438,10 @@ document.getElementById("stale-storage-recipient").remove();
             }
         );
         assert_eq!(page_vm.vm_mut().eval("String(__staleStorageEvents)")?, "0");
+        assert!(
+            !page_vm.has_ready_dom_manipulation_task_for_test(),
+            "a retired Window must no longer subscribe to later mutations"
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -569,4 +574,59 @@ document.getElementById("current-storage-source").contentWindow.localStorage
                 .expect("StorageEvent PageVm replacement server should finish");
         },
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn storage_area_publishes_native_mutations_without_a_window_api_enqueue() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page_vm, _resources, _wakes) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/native-storage-mutation").unwrap(),
+        );
+        page_vm.vm_mut().eval(
+            r#"
+window.nativeStorageEvents = [];
+onstorage = event => nativeStorageEvents.push([event.key, event.oldValue, event.newValue]);
+"listening"
+"#,
+        )?;
+        let store = page_vm.vm().web_storage_handles().local_storage();
+        let area_key = page_vm.vm_mut().top_document_storage_key_snapshot();
+        {
+            let mut store = store.lock();
+            assert!(store.try_set_item(&area_key, "native", "one").unwrap());
+            assert!(store.try_set_item(&area_key, "native", "one").unwrap());
+            assert!(store.try_remove_item(&area_key, "missing").is_ok());
+            assert!(store.try_set_item(&area_key, "native", "two").unwrap());
+            assert!(store.try_clear(&area_key).unwrap());
+            assert!(store.try_clear(&area_key).is_ok());
+        }
+        for _ in 0..3 {
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::DomManipulation(
+                            PageDomManipulationTestFamily::StorageEvent
+                        ),
+                        &loader
+                    )
+                    .await?
+            );
+        }
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(nativeStorageEvents)")?,
+            r#"[["native",null,"one"],["native","one","two"],[null,null,null]]"#
+        );
+        assert!(
+            !page_vm.has_ready_dom_manipulation_task_for_test(),
+            "no-op mutations must not publish storage events"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("native storage mutations should use the shared area publisher");
 }

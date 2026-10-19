@@ -66,10 +66,6 @@ impl WebStorageScope {
         self.context.origin()
     }
 
-    pub(crate) fn area_key(&self) -> &str {
-        &self.area_key
-    }
-
     pub(crate) fn storage_key(&self) -> &MoliStorageKey {
         self.context.storage_key()
     }
@@ -92,10 +88,6 @@ pub(crate) struct ActiveStorageContext {
 impl ActiveStorageContext {
     fn new(scope: StorageContextScope) -> Self {
         Self { scope }
-    }
-
-    pub(crate) fn origin(&self) -> &str {
-        self.scope.origin()
     }
 
     pub(crate) fn storage_key(&self) -> &MoliStorageKey {

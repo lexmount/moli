@@ -32,6 +32,8 @@ impl<'scope> webidl::WebIdlConverter<'scope> for StorageReference<'scope> {
 }
 
 mod accessors;
+mod area;
+pub(crate) use area::{WebStorageArea, WebStorageEventRoute};
 mod callbacks;
 mod helpers;
 mod install;

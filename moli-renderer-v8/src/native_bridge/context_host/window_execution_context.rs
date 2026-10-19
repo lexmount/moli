@@ -18,6 +18,8 @@ mod fetch;
 mod operation_receiver;
 mod registry;
 mod settings;
+mod storage;
+pub(super) use storage::WindowStorageBindings;
 
 pub(crate) use binding::WindowExecutionContextBinding;
 pub(crate) use fetch::{DetachedWindowFetchContext, WindowFetchContext, WindowTaskTarget};
