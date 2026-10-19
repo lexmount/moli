@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 mod fault_injection;
 
 const STORAGE_BUCKETS_JSON_VERSION: u32 = 5;
-const STORAGE_BUCKET_CACHE_JSON_VERSION: u32 = 1;
+const STORAGE_BUCKET_CACHE_JSON_VERSION: u32 = 2;
 pub const DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES: u64 = 1_073_741_824;
 pub const IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME: &str = "\0moli-implicit-default";
 
@@ -114,12 +114,11 @@ struct StorageBucketMetadata {
     #[serde(default, skip_serializing_if = "is_false")]
     persisted: bool,
     #[serde(skip)]
-    cache_storage: BTreeMap<String, BTreeMap<String, StorageBucketCacheEntry>>,
+    cache_storage: BTreeMap<String, Vec<StorageBucketCacheEntry>>,
     #[serde(skip)]
     cache_instance_ids: BTreeMap<String, StorageBucketCacheId>,
     #[serde(skip)]
-    detached_cache_storage:
-        BTreeMap<StorageBucketCacheId, BTreeMap<String, StorageBucketCacheEntry>>,
+    detached_cache_storage: BTreeMap<StorageBucketCacheId, Vec<StorageBucketCacheEntry>>,
     #[serde(skip)]
     cache_instance_ref_counts: BTreeMap<StorageBucketCacheId, u64>,
     #[serde(skip)]
@@ -173,6 +172,15 @@ pub struct StorageBucketCacheMatch {
     pub response: StorageBucketCachedResponse,
 }
 
+/// One fully materialized write in an atomic Cache batch.
+#[derive(Debug, Clone)]
+pub struct StorageBucketCachePut {
+    pub request_url: String,
+    pub request: StorageBucketCachedRequest,
+    pub response: StorageBucketCachedResponse,
+    pub usage_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StorageBucketCacheId(u64);
 
@@ -188,6 +196,7 @@ impl StorageBucketCacheId {
 
 #[derive(Debug, Clone)]
 struct StorageBucketCacheEntry {
+    request_url: String,
     usage_bytes: u64,
     request: StorageBucketCachedRequest,
     response: StorageBucketCachedResponse,
@@ -207,6 +216,7 @@ enum StorageBucketCacheSelector<'a> {
 pub enum StorageBucketCachePutOutcome {
     Stored,
     Stale,
+    Duplicate,
     QuotaExceeded { quota: u64, requested: u64 },
 }
 
@@ -378,11 +388,28 @@ struct StorageBucketsV1Json {
     origins: BTreeMap<String, Vec<String>>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageBucketCacheJson {
     version: u32,
-    entries: BTreeMap<String, StorageBucketCacheJsonEntry>,
+    entries: StorageBucketCacheJsonEntries,
+}
+
+/// Version 1 indexed entries by URL, which cannot represent Vary variants.
+/// Version 2 persists the request/response list without inventing URL keys.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StorageBucketCacheJsonEntries {
+    Ordered(Vec<StorageBucketCacheJsonRecord>),
+    Legacy(BTreeMap<String, StorageBucketCacheJsonEntry>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageBucketCacheJsonRecord {
+    request_url: String,
+    #[serde(flatten)]
+    entry: StorageBucketCacheJsonEntry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1331,7 +1358,46 @@ impl StorageBucketRegistry {
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
-        let outcome = {
+        self.put_cache_batch_for_selector_and_identity(
+            identity,
+            cache_selector,
+            vec![StorageBucketCachePut {
+                request_url: request_key.to_owned(),
+                request,
+                response,
+                usage_bytes,
+            }],
+            non_cache_usage_bytes,
+        )
+    }
+
+    pub fn put_cache_batch_for_handle_and_identity(
+        &mut self,
+        identity: &StorageBucketIdentity,
+        cache_name: &str,
+        cache_id: StorageBucketCacheId,
+        operations: Vec<StorageBucketCachePut>,
+        non_cache_usage_bytes: u64,
+    ) -> Result<StorageBucketCachePutOutcome> {
+        self.put_cache_batch_for_selector_and_identity(
+            identity,
+            StorageBucketCacheSelector::Handle {
+                cache_name,
+                cache_id,
+            },
+            operations,
+            non_cache_usage_bytes,
+        )
+    }
+
+    fn put_cache_batch_for_selector_and_identity(
+        &mut self,
+        identity: &StorageBucketIdentity,
+        cache_selector: StorageBucketCacheSelector<'_>,
+        operations: Vec<StorageBucketCachePut>,
+        non_cache_usage_bytes: u64,
+    ) -> Result<StorageBucketCachePutOutcome> {
+        let backup = {
             let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(StorageBucketCachePutOutcome::Stale);
             };
@@ -1342,53 +1408,75 @@ impl StorageBucketRegistry {
                     .or_default();
             }
             let current_cache_usage = bucket_cache_storage_usage(metadata);
-            let normalized_request_key = cache_request_key_without_fragment(request_key);
             let Some(cache_entries) = cache_entries_for_selector(metadata, cache_selector) else {
                 return Ok(StorageBucketCachePutOutcome::Stale);
             };
-            let replaced_request_keys: Vec<_> = cache_entries
-                .keys()
-                .filter(|key| cache_request_key_without_fragment(key) == normalized_request_key)
-                .cloned()
-                .collect();
-            let old_entry_usage = replaced_request_keys
+            let old_entry_usage = cache_entries
                 .iter()
-                .filter_map(|key| cache_entries.get(key))
                 .fold(0u64, |usage, entry| usage.saturating_add(entry.usage_bytes));
-            let next_cache_usage = current_cache_usage
-                .saturating_sub(old_entry_usage)
-                .saturating_add(usage_bytes);
+            let mut added = Vec::<StorageBucketCacheEntry>::with_capacity(operations.len());
+            for operation in operations {
+                let query = cache_put_query(&operation.request_url, &operation.request);
+                let entry = StorageBucketCacheEntry {
+                    request_url: operation.request_url,
+                    usage_bytes: operation.usage_bytes,
+                    request: operation.request,
+                    response: operation.response,
+                    insertion_order: 0,
+                };
+                // Vary matching is asymmetric: neither response may match an
+                // earlier batch request. A failure leaves the live list intact.
+                if added.iter().any(|previous| {
+                    cache_entry_matches_query(&previous.request_url, previous, &query)
+                        || cache_entry_matches_query(
+                            &entry.request_url,
+                            &entry,
+                            &cache_put_query(&previous.request_url, &previous.request),
+                        )
+                }) {
+                    return Ok(StorageBucketCachePutOutcome::Duplicate);
+                }
+                added.push(entry);
+            }
+            // Validate all duplicates before cloning the old list, then move
+            // the new bodies into staging without making a second body copy.
+            let mut staged = cache_entries.clone();
+            for mut entry in added {
+                let query = cache_put_query(&entry.request_url, &entry.request);
+                entry.insertion_order = staged
+                    .iter()
+                    .map(|stored| stored.insertion_order)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                staged.retain(|stored| {
+                    !cache_entry_matches_query(&stored.request_url, stored, &query)
+                });
+                staged.push(entry);
+            }
+            let next_cache_usage = staged.iter().fold(
+                current_cache_usage.saturating_sub(old_entry_usage),
+                |usage, entry| usage.saturating_add(entry.usage_bytes),
+            );
             let requested = non_cache_usage_bytes.saturating_add(next_cache_usage);
             let quota = metadata.quota.unwrap_or(DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES);
             if requested > quota {
                 return Ok(StorageBucketCachePutOutcome::QuotaExceeded { quota, requested });
             }
-            let insertion_order = cache_entries
-                .values()
-                .map(|entry| entry.insertion_order)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1);
             let entries = cache_entries_for_selector_mut(metadata, cache_selector)
                 .expect("Cache selector was resolved before quota evaluation");
-            for replaced_request_key in replaced_request_keys {
-                entries.remove(&replaced_request_key);
-            }
-            entries.insert(
-                request_key.to_owned(),
-                StorageBucketCacheEntry {
-                    usage_bytes,
-                    request,
-                    response,
-                    insertion_order,
-                },
-            );
-            StorageBucketCachePutOutcome::Stored
+            std::mem::replace(entries, staged)
         };
-        if matches!(outcome, StorageBucketCachePutOutcome::Stored) {
-            self.flush()?;
+        if let Err(error) = self.flush() {
+            // Persistent IO failure must not publish a partial in-memory batch.
+            if let Some(metadata) = self.metadata_for_identity_mut(identity)
+                && let Some(entries) = cache_entries_for_selector_mut(metadata, cache_selector)
+            {
+                *entries = backup;
+            }
+            return Err(error);
         }
-        Ok(outcome)
+        Ok(StorageBucketCachePutOutcome::Stored)
     }
 
     pub fn match_cache_entry_for_identity(
@@ -1448,12 +1536,12 @@ impl StorageBucketRegistry {
         let metadata = self.metadata_for_identity(identity)?;
         let mut matches = cache_entries_for_selector(metadata, cache_selector)?
             .iter()
-            .filter(|(request_url, entry)| cache_entry_matches_query(request_url, entry, query))
-            .map(|(request_url, entry)| {
+            .filter(|entry| cache_entry_matches_query(&entry.request_url, entry, query))
+            .map(|entry| {
                 (
                     entry.insertion_order,
                     StorageBucketCacheMatch {
-                        request_url: request_url.clone(),
+                        request_url: entry.request_url.clone(),
                         request: entry.request.clone(),
                         response: entry.response.clone(),
                     },
@@ -1498,11 +1586,11 @@ impl StorageBucketRegistry {
         let metadata = self.metadata_for_identity(identity)?;
         let mut entries = cache_entries_for_selector(metadata, cache_selector)?
             .iter()
-            .map(|(request_url, entry)| {
+            .map(|entry| {
                 (
                     entry.insertion_order,
                     StorageBucketCacheMatch {
-                        request_url: request_url.clone(),
+                        request_url: entry.request_url.clone(),
                         request: entry.request.clone(),
                         response: entry.response.clone(),
                     },
@@ -1524,7 +1612,7 @@ impl StorageBucketRegistry {
             .get(cache_name)
             .into_iter()
             .flat_map(|entries| entries.iter())
-            .map(|(key, entry)| (entry.insertion_order, key.clone()))
+            .map(|entry| (entry.insertion_order, entry.request_url.clone()))
             .collect::<Vec<_>>();
         keys.sort_by_key(|(order, _)| *order);
         Some(keys.into_iter().map(|(_, key)| key).collect())
@@ -1590,16 +1678,9 @@ impl StorageBucketRegistry {
             let Some(entries) = cache_entries_for_selector_mut(metadata, cache_selector) else {
                 return Ok(Some(false));
             };
-            let matching_request_keys: Vec<_> = entries
-                .iter()
-                .filter(|(request_url, entry)| cache_entry_matches_query(request_url, entry, query))
-                .map(|(request_url, _)| request_url.clone())
-                .collect();
-            let deleted = !matching_request_keys.is_empty();
-            for matching_request_key in matching_request_keys {
-                entries.remove(&matching_request_key);
-            }
-            deleted
+            let before = entries.len();
+            entries.retain(|entry| !cache_entry_matches_query(&entry.request_url, entry, query));
+            entries.len() != before
         };
         if deleted {
             self.flush()?;
@@ -1693,14 +1774,14 @@ fn bucket_cache_storage_usage(metadata: &StorageBucketMetadata) -> u64 {
     metadata
         .cache_storage
         .values()
-        .flat_map(|entries| entries.values())
+        .flat_map(|entries| entries.iter())
         .fold(0u64, |total, entry| total.saturating_add(entry.usage_bytes))
 }
 
 fn cache_entries_for_selector<'a>(
     metadata: &'a StorageBucketMetadata,
     selector: StorageBucketCacheSelector<'_>,
-) -> Option<&'a BTreeMap<String, StorageBucketCacheEntry>> {
+) -> Option<&'a Vec<StorageBucketCacheEntry>> {
     match selector {
         StorageBucketCacheSelector::Named(cache_name) => metadata.cache_storage.get(cache_name),
         StorageBucketCacheSelector::Handle {
@@ -1719,7 +1800,7 @@ fn cache_entries_for_selector<'a>(
 fn cache_entries_for_selector_mut<'a>(
     metadata: &'a mut StorageBucketMetadata,
     selector: StorageBucketCacheSelector<'_>,
-) -> Option<&'a mut BTreeMap<String, StorageBucketCacheEntry>> {
+) -> Option<&'a mut Vec<StorageBucketCacheEntry>> {
     match selector {
         StorageBucketCacheSelector::Named(cache_name) => metadata.cache_storage.get_mut(cache_name),
         StorageBucketCacheSelector::Handle {
@@ -1748,6 +1829,20 @@ fn cache_request_key_without_search_or_fragment(request_key: &str) -> &str {
             || cache_request_key_without_fragment(request_key),
             |(without_search, _)| without_search,
         )
+}
+
+fn cache_put_query(
+    request_url: &str,
+    request: &StorageBucketCachedRequest,
+) -> StorageBucketCacheQuery {
+    StorageBucketCacheQuery {
+        request_url: request_url.to_owned(),
+        method: request.method.clone(),
+        headers: request.headers.clone(),
+        ignore_search: false,
+        ignore_method: false,
+        ignore_vary: false,
+    }
 }
 
 fn cache_entry_matches_query(
@@ -1801,13 +1896,13 @@ fn cached_response_vary_matches_request(
     })
 }
 
-fn cache_header_value(headers: &[(String, String)], target: &str) -> String {
-    headers
+fn cache_header_value(headers: &[(String, String)], target: &str) -> Option<String> {
+    let values = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case(target))
         .map(|(_, value)| value.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then(|| values.join(", "))
 }
 
 fn storage_bucket_metadata_expired(metadata: &StorageBucketMetadata, now_ms: f64) -> bool {
@@ -2079,9 +2174,7 @@ fn decode_storage_bucket_cache_component(value: &str) -> Result<String> {
         .with_context(|| format!("failed to decode StorageBucket CacheStorage path `{value}`"))
 }
 
-fn load_storage_bucket_cache_file(
-    path: &Path,
-) -> Result<BTreeMap<String, StorageBucketCacheEntry>> {
+fn load_storage_bucket_cache_file(path: &Path) -> Result<Vec<StorageBucketCacheEntry>> {
     let bytes = fs::read(path).with_context(|| {
         format!(
             "failed to read StorageBucket CacheStorage file `{}`",
@@ -2094,7 +2187,7 @@ fn load_storage_bucket_cache_file(
             path.display()
         )
     })?;
-    if json.version != STORAGE_BUCKET_CACHE_JSON_VERSION {
+    if !matches!(json.version, 1 | STORAGE_BUCKET_CACHE_JSON_VERSION) {
         bail!(
             "unsupported StorageBucket CacheStorage version {} in `{}`; this Moli supports version {}",
             json.version,
@@ -2102,21 +2195,28 @@ fn load_storage_bucket_cache_file(
             STORAGE_BUCKET_CACHE_JSON_VERSION
         );
     }
-    json.entries
+    let records = match json.entries {
+        StorageBucketCacheJsonEntries::Legacy(entries) => entries
+            .into_iter()
+            .map(|(request_url, entry)| StorageBucketCacheJsonRecord { request_url, entry })
+            .collect(),
+        StorageBucketCacheJsonEntries::Ordered(entries) => entries,
+    };
+    let mut entries: Vec<_> = records
         .into_iter()
         .enumerate()
-        .map(|(index, (request_key, entry))| {
-            let body = BASE64_STANDARD
-                .decode(entry.body_base64.as_bytes())
-                .with_context(|| {
-                    format!(
-                        "failed to decode StorageBucket CacheStorage body in `{}`",
-                        path.display()
-                    )
-                })?;
-            Ok((
-                request_key,
-                StorageBucketCacheEntry {
+        .map(
+            |(index, StorageBucketCacheJsonRecord { request_url, entry })| {
+                let body = BASE64_STANDARD
+                    .decode(entry.body_base64.as_bytes())
+                    .with_context(|| {
+                        format!(
+                            "failed to decode StorageBucket CacheStorage body in `{}`",
+                            path.display()
+                        )
+                    })?;
+                Ok(StorageBucketCacheEntry {
+                    request_url,
                     usage_bytes: entry.usage_bytes,
                     request: StorageBucketCachedRequest {
                         method: entry.request_method,
@@ -2136,24 +2236,23 @@ fn load_storage_bucket_cache_file(
                     } else {
                         entry.insertion_order
                     },
-                },
-            ))
-        })
-        .collect()
+                })
+            },
+        )
+        .collect::<Result<_>>()?;
+    entries.sort_by_key(|entry| entry.insertion_order);
+    Ok(entries)
 }
 
-fn save_storage_bucket_cache_file(
-    path: &Path,
-    entries: &BTreeMap<String, StorageBucketCacheEntry>,
-) -> Result<()> {
+fn save_storage_bucket_cache_file(path: &Path, entries: &[StorageBucketCacheEntry]) -> Result<()> {
     let json = StorageBucketCacheJson {
         version: STORAGE_BUCKET_CACHE_JSON_VERSION,
-        entries: entries
-            .iter()
-            .map(|(request_key, entry)| {
-                (
-                    request_key.clone(),
-                    StorageBucketCacheJsonEntry {
+        entries: StorageBucketCacheJsonEntries::Ordered(
+            entries
+                .iter()
+                .map(|entry| StorageBucketCacheJsonRecord {
+                    request_url: entry.request_url.clone(),
+                    entry: StorageBucketCacheJsonEntry {
                         usage_bytes: entry.usage_bytes,
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
@@ -2166,9 +2265,9 @@ fn save_storage_bucket_cache_file(
                         headers: entry.response.headers.clone(),
                         body_base64: BASE64_STANDARD.encode(&entry.response.body),
                     },
-                )
-            })
-            .collect(),
+                })
+                .collect(),
+        ),
     };
     let bytes = serde_json::to_vec_pretty(&json)
         .context("failed to serialize StorageBucket CacheStorage")?;
@@ -2632,8 +2731,8 @@ fn storage_buckets_json_version(bytes: &[u8], path: &Path) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    mod cache_batches;
     use std::{
-        collections::BTreeMap,
         fs,
         panic::{AssertUnwindSafe, catch_unwind},
         path::PathBuf,
@@ -4564,15 +4663,13 @@ mod tests {
             headers: vec![("x-cache".to_owned(), b"legacy-path".to_vec())],
             body: b"legacy cache path".to_vec(),
         };
-        let entries = BTreeMap::from([(
-            "/cached".to_owned(),
-            StorageBucketCacheEntry {
-                usage_bytes: 17,
-                request: StorageBucketCachedRequest::default(),
-                response: response.clone(),
-                insertion_order: 1,
-            },
-        )]);
+        let entries = vec![StorageBucketCacheEntry {
+            request_url: "/cached".to_owned(),
+            usage_bytes: 17,
+            request: StorageBucketCachedRequest::default(),
+            response: response.clone(),
+            insertion_order: 1,
+        }];
         let legacy_dir =
             legacy_storage_bucket_cache_bucket_dir(&cache_root, storage_key, bucket_name);
         fs::create_dir_all(&legacy_dir)?;
