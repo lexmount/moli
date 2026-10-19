@@ -493,11 +493,13 @@ fn csp_invalid_directives_preserve_fallbacks_and_trusted_types_requirements() {
         assert!(policy_requires_trusted_types_for_script(
             &ContentSecurityPolicy::from(policy.as_str())
         ));
-        assert!(policy_allows_trusted_type_policy_name(
-            &ContentSecurityPolicy::from(policy.as_str()),
-            "unlisted",
-            false
-        ));
+        for duplicate in [false, true] {
+            assert!(policy_allows_trusted_type_policy_name(
+                &ContentSecurityPolicy::from(policy.as_str()),
+                "unlisted",
+                duplicate,
+            ));
+        }
 
         let policy = format!(
             "trusted-types allowed; require-trusted-types-for 'script'{invalid}; img-src 'none'"
@@ -552,11 +554,13 @@ fn csp_invalid_first_values_do_not_activate_later_duplicate_directives() {
             );
         }
         let policy = format!("trusted-types *{invalid}; TRUSTED-TYPES allowed");
-        assert!(policy_allows_trusted_type_policy_name(
-            &ContentSecurityPolicy::from(policy.as_str()),
-            "unlisted",
-            false
-        ));
+        for duplicate in [false, true] {
+            assert!(policy_allows_trusted_type_policy_name(
+                &ContentSecurityPolicy::from(policy.as_str()),
+                "unlisted",
+                duplicate,
+            ));
+        }
         let policy = format!("trusted-types allowed; TRUSTED-TYPES *{invalid}");
         assert!(policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
@@ -567,6 +571,11 @@ fn csp_invalid_first_values_do_not_activate_later_duplicate_directives() {
             &ContentSecurityPolicy::from(policy.as_str()),
             "unlisted",
             false
+        ));
+        assert!(!policy_allows_trusted_type_policy_name(
+            &ContentSecurityPolicy::from(policy.as_str()),
+            "allowed",
+            true,
         ));
     }
 }
@@ -2823,6 +2832,11 @@ fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
     // before policy-name checks, so parsing it would test an absent directive.
     assert!(!trusted_type_sources_allow_policy_name(
         &["valid", "\u{000b}'allow-duplicates'"],
+        "valid",
+        true,
+    ));
+    assert!(!policy_allows_trusted_type_policy_name(
+        &ContentSecurityPolicy::from("trusted-types valid x'allow-duplicates'"),
         "valid",
         true,
     ));
