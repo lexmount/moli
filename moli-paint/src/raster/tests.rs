@@ -931,4 +931,3 @@ fn canvas_svg_rasterization_clips_overflow_to_the_image_viewport() {
     assert_eq!(pixel(&image, 9, 5), [0, 255, 0, 255]);
     assert_eq!(pixel(&image, 10, 5), [0, 0, 0, 0]);
 }
-

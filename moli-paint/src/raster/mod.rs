@@ -13,20 +13,22 @@ mod filters;
 #[cfg(test)]
 mod tests;
 
-use crate::geometry::{device_transform, to_backend_shape, to_backend_path};
-use crate::scene::{paint_fragment, paint_svg_tree, sanitize_unit, to_backend_blend_mode, to_backend_color};
-use crate::validation::{PaintStreamMetrics, validate_fragment_stream, validate_paint_operation_budget};
-use crate::{PaintError, RasterImage, MAX_PAINT_LAYER_DEPTH, MAX_PAINT_OPERATIONS};
+use crate::geometry::{device_transform, to_backend_path, to_backend_shape};
+use crate::scene::{
+    paint_fragment, paint_svg_tree, sanitize_unit, to_backend_blend_mode, to_backend_color,
+};
+use crate::validation::{
+    PaintStreamMetrics, validate_fragment_stream, validate_paint_operation_budget,
+};
+use crate::{MAX_PAINT_LAYER_DEPTH, MAX_PAINT_OPERATIONS, PaintError, RasterImage};
 use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use filters::{apply_software_color_filter, is_software_color_filter};
-use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot, PaintPath};
-#[cfg(test)]
-use moli_layout::{PaintRect, PaintPathElement};
+use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintPath, PaintSnapshot};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
-    Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
+    Blob, Color, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
     ImageSampler,
 };
 use std::sync::Arc;
@@ -76,13 +78,7 @@ pub fn raster_canvas_clip_mask(
             max_operations: MAX_PAINT_OPERATIONS,
         });
     }
-    validate_resource_budget(
-        dimensions,
-        PaintStreamMetrics {
-            operation_count: operations,
-            ..PaintStreamMetrics::default()
-        },
-    )?;
+    validate_resource_budget(dimensions, PaintStreamMetrics::for_operations(operations))?;
     let mut renderer = VelloCpuImageRenderer::new(width, height);
     let mut rgba = Vec::new();
     renderer.render_to_vec(
