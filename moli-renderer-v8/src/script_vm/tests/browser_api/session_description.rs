@@ -172,3 +172,46 @@ fn rtc_session_description_preserves_subclasses_and_cross_realm_behavior() {
     "#).expect("RTCSessionDescription should use NewTarget prototypes and the toJSON method's realm");
     assert_eq!(result, "true");
 }
+
+#[test]
+fn rtc_session_description_snapshot_supports_registered_native_proxy_receivers() {
+    let mut vm = new_storage_test_vm("https://session-description-native-proxy.test/");
+    vm.eval("globalThis.snapshotDescription = new RTCSessionDescription({type: 'offer', sdp: 'sdp\\ud800\\0\\udc00'})").unwrap();
+    let context_ptr = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8str(scope, "snapshotDescription");
+        let target =
+            v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+        let handler = crate::util::new_null_prototype_object(scope);
+        let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+        moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+        assert_eq!(
+            global.create_data_property(scope, key.into(), proxy.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    let result = vm.eval(r#"
+      (() => {
+        const prototype = RTCSessionDescription.prototype;
+        const sdp = Object.getOwnPropertyDescriptor(prototype, 'sdp').get.call(snapshotDescription);
+        const json = prototype.toJSON.call(snapshotDescription);
+        if (sdp !== 'sdp\ud800\0\udc00' || json.sdp !== sdp || json.type !== 'offer' ||
+            Object.keys(json).join(',') !== 'type,sdp') return false;
+        json.sdp = 'changed';
+        let traps = 0;
+        const proxy = new Proxy(snapshotDescription, {
+          get() { traps++; throw 42; }, getPrototypeOf() { traps++; throw 42; }
+        });
+        const revoked = Proxy.revocable(snapshotDescription, {}); revoked.revoke();
+        for (const receiver of [proxy, revoked.proxy, Object.create(snapshotDescription)]) {
+          try { prototype.toJSON.call(receiver); return false; }
+          catch (error) { if (!(error instanceof TypeError)) return false; }
+        }
+        return traps === 0 && prototype.toJSON.call(snapshotDescription).sdp === sdp;
+      })()
+    "#).expect("description snapshots follow registered native identity and remain private from author proxies");
+    assert_eq!(result, "true");
+}
