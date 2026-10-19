@@ -4,6 +4,88 @@ These demos open public WebMCP sites in Moli, discover their native tools over
 CDP, invoke them, and check both the tool responses and the page state. No model
 account or API key is required: the scripts supply the tool arguments directly.
 
+## Built-in MCP service
+
+Moli can open a site and expose its native WebMCP tools directly as a
+[Streamable HTTP MCP service](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http):
+
+```bash
+cargo build --release -p moli
+target/release/moli webmcp serve \
+  https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/
+```
+
+Connect an MCP client to `http://127.0.0.1:9222/mcp`. CDP is available at
+`http://127.0.0.1:9222`, with discovery at `/json/version` and `/json/list`.
+Both protocols use the same live page, so calls preserve its state and CDP can
+inspect, navigate, or interact with it. The lightweight
+[`moli-protocol-mcp`](../../moli-protocol-mcp/README.md) crate implements the MCP
+tool transport using existing Axum, Tokio, and JSON dependencies. Its
+`ToolService` interface has no browser or V8 dependency; the native WebMCP page
+adapter lives in `moli-protocol-server`.
+It supports initialization, tool discovery and calls, cancellation, and
+list-change notifications. Legacy clients use isolated sessions and the
+2025-11-25, 2025-06-18, or 2025-03-26 protocol; sessions expire after 30 minutes
+without a request. The 2026-07-28 protocol uses per-request metadata,
+`server/discover`, and `subscriptions/listen` for notifications. Closing a modern
+call's response stream cancels that invocation; legacy clients cancel explicitly
+or terminate their session with HTTP DELETE.
+Modern `ping` requests return method-not-found; legacy clients can still ping.
+When the managed page closes, a modern subscription sends its final result with
+the original subscription ID and server metadata before ending the stream.
+
+In another terminal, run the pizza demo through the official Python MCP client:
+
+```bash
+uv run moli-playground/webmcp/webmcp_mcp_demo.py
+# Or inspect the catalog and make a single call:
+uv run moli-playground/webmcp/webmcp_mcp_demo.py --list
+uv run moli-playground/webmcp/webmcp_mcp_demo.py \
+  --tool set_pizza_size --input '{"size":"Small"}'
+```
+
+To discover tools without starting a service:
+
+```bash
+target/release/moli webmcp list \
+  https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/
+```
+
+`list` prints a JSON array of MCP tool definitions, including full input schemas.
+It waits one second after DOM readiness; adjust `--wait-for-tools-ms` for delayed
+registrations. An empty catalog prints `[]`. The running service continues to
+track tool registrations, removals, navigation, and child-frame detachment.
+Names are kept when possible, normalized to MCP's character set, and suffixed
+when they collide. `_meta["moli/webmcp"]` identifies the original tool name,
+frame, target, and declarative form node. JSON object results are returned as
+`structuredContent` with a text representation; other results use text content.
+Execution failures set `isError`.
+
+`serve` accepts the normal server options, including `--port`, `--profile-dir`,
+`--http-proxy`, and `--layout`. `--timeout` bounds initial navigation and
+`--tool-timeout` bounds calls (default: 60 seconds). Cancelled and timed-out
+calls abort the native invocation. The service opens one URL; other pages
+created through CDP have their own tool catalogs.
+
+Manual declarative forms wait for page confirmation by default. They can be
+confirmed through CDP while the MCP call is pending. To submit these forms
+automatically through their regular submit button, explicitly start with
+`--auto-submit`, for example:
+
+```bash
+target/release/moli webmcp serve \
+  https://googlechromelabs.github.io/webmcp-tools/demos/french-bistro/ \
+  --auto-submit
+```
+
+Forms already marked `toolautosubmit` use the site's own behavior. Tool calls
+still run the site's native handlers and form validation.
+
+Release verification on 2026-10-05 used the official Python MCP client for all
+five pizza calls and both manual and automatic bistro confirmation. CDP checked
+the same page state; navigation to an empty page cleared the MCP catalog, and
+navigating back registered callable tools again within the same MCP session.
+
 ## Operate any WebMCP site
 
 `webmcp.py` accepts a site URL and uses the site's native tool catalog. Build Moli

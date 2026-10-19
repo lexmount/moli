@@ -33,6 +33,43 @@ struct ProtocolOutputEnvelope {
     _pending_bytes: PendingByteReservation,
 }
 
+/// An in-process frontend uses the same bounded output queue as a socket.
+pub(crate) struct CdpOutputReceiver {
+    output_rx: mpsc::Receiver<SocketWriterCommand>,
+    close_rx: tokio::sync::watch::Receiver<SocketCloseSignal>,
+}
+
+pub(crate) fn channel_sink() -> (CdpSocketSink, CdpOutputReceiver) {
+    let (output_tx, output_rx) = mpsc::channel(DEFAULT_WRITER_QUEUE_CAPACITY);
+    let (close_tx, close_rx) = tokio::sync::watch::channel(SocketCloseSignal::Open);
+    (
+        CdpSocketSink {
+            output_tx,
+            close_tx,
+            pending_byte_budget: PendingByteBudget::new(DEFAULT_MAX_PENDING_WRITER_BYTES),
+            max_message_bytes: DEFAULT_MAX_WRITER_MESSAGE_BYTES,
+        },
+        CdpOutputReceiver {
+            output_rx,
+            close_rx,
+        },
+    )
+}
+
+impl CdpOutputReceiver {
+    pub(crate) async fn recv(&mut self) -> Option<String> {
+        let command = tokio::select! {
+            biased;
+            _ = self.close_rx.changed() => return None,
+            command = self.output_rx.recv() => command?,
+        };
+        match command {
+            SocketWriterCommand::Output(envelope) => Some(envelope.message),
+            SocketWriterCommand::CloseAfterFlush => None,
+        }
+    }
+}
+
 enum SocketWriterCommand {
     Output(ProtocolOutputEnvelope),
     CloseAfterFlush,

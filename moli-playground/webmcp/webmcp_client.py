@@ -161,6 +161,9 @@ class CdpPage:
             self.responded[params["invocationId"]] = params
         elif method == "Page.domContentEventFired":
             self.dom_ready = True
+        elif method == "Runtime.executionContextsCleared":
+            self.tools.clear()
+            self.dom_ready = False
         elif method == "Page.frameNavigated" and not params["frame"].get("parentId"):
             self.frame_id = params["frame"]["id"]
         elif method == "Page.frameDetached":

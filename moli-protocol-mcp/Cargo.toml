@@ -1,0 +1,23 @@
+[package]
+name = "moli-protocol-mcp"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Lightweight MCP tool server over Streamable HTTP"
+
+[dependencies]
+axum = { version = "0.8.6", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22"
+futures-util = "0.3.31"
+getrandom = "0.3"
+parking_lot = "0.12"
+serde_json = "1.0.145"
+tokio = { version = "1.51.0", features = ["macros", "rt", "sync"] }
+tokio-util = "0.7"
+url = "2.5.7"
+
+[dev-dependencies]
+tower = { version = "0.5.2", features = ["util"] }
+
+[lints]
+workspace = true
