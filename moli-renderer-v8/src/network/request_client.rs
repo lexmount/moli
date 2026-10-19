@@ -1048,8 +1048,8 @@ impl ResourceRequestClient {
     ) -> Result<Response> {
         // These buffered transport modes have no distinct header boundary.
         if request.auth_requires_buffered_transport()
-            || (!request.follow_redirects
-                && request.redirect_mode != moli_fetch::RequestRedirectMode::Error)
+            || (!request.transport_follows_redirects()
+                && request.redirect_mode() != moli_fetch::RequestRedirectMode::Error)
         {
             return self
                 .fetch_text_stream_with_cancel_after_policy(request, cancel_handle)
@@ -1252,7 +1252,7 @@ impl ResourceRequestClient {
             ));
         }
         if response.status == 304
-            && (!response.redirected || !request.follow_redirects)
+            && (!response.redirected || !request.transport_follows_redirects())
             && response.final_url == request.url
             && let Some(cached) = cached
         {
@@ -1340,7 +1340,7 @@ impl ResourceRequestClient {
         let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let resource_runtime = self.resource_runtime.clone();
-        let outward_cancel = FetchCancelHandle::new();
+        let outward_cancel = response.cancellation_handle().child_for_subrequest();
         response.share_response_progress(&outward_cancel);
         tokio::spawn(async move {
             let mut body = Vec::new();
@@ -1378,7 +1378,7 @@ impl ResourceRequestClient {
             if completion.as_ref().is_some_and(Result::is_ok) {
                 let mut materialized = RawResponse::from_head_and_body(response.head(), body)
                     .with_body_sizes(response.response_timing().body_sizes());
-                if !request.follow_redirects {
+                if !request.transport_follows_redirects() {
                     // The outer CORS loop owns the logical redirect history.
                     // Retain only this hop's representation, then let each
                     // consumer attach its own already-validated URL list.

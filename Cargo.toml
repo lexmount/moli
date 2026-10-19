@@ -152,3 +152,6 @@ codegen-units = 1
 
 [profile.test]
 debug = 1
+
+[patch."https://github.com/lexmount/curl-rust"]
+curl-sys = { path = "vendor/curl-sys-0.4.91" }

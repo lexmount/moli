@@ -392,7 +392,7 @@ fn transfer_progress_preserves_cancellation_and_body_observations_on_reuse() {
     for _ in 0..2 {
         cancel.begin_response_progress();
         handler.buffered_mut().unwrap().begin_request(None);
-        handler.begin_transfer(None, false);
+        handler.begin_transfer(None, false, None);
         assert!(handler.progress(4.0, 0.0, 0.0, 0.0));
         assert!(!cancel.response_timing().body_bytes_received());
         assert!(handler.progress(4.0, 1.0, 0.0, 0.0));

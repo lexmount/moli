@@ -1,0 +1,68 @@
+[package]
+name = "curl-sys"
+version = "0.4.91+curl-8.23.0"
+authors = ["Alex Crichton <alex@alexcrichton.com>", "Stephen M. Coakley <me@stephencoakley.com>"]
+links = "curl"
+build = "build.rs"
+license = "MIT"
+repository = "https://github.com/lexmount/curl-rust"
+description = "Native bindings to the libcurl library"
+documentation = "https://docs.rs/curl-sys"
+readme = "MOLI.md"
+categories = ["external-ffi-bindings"]
+edition = "2018"
+exclude = ["curl/docs/", "curl/tests/"]
+
+[badges.maintenance]
+status = "passively-maintained"
+
+[lib]
+name = "curl_sys"
+path = "lib.rs"
+
+[dependencies]
+libz-sys = { version = "1.0.18", default-features = false, features = ["libc"] }
+libc = "0.2.2"
+libnghttp2-sys = { optional = true, version = "0.1.3" }
+brotlic-sys = { optional = true, version = "0.2.2" }
+
+[dependencies.rustls-ffi]
+version = "0.15"
+optional = true
+features = ["no_log_capture"]
+
+[target.'cfg(all(unix))'.dependencies]
+openssl-sys = { version = "0.9.64", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
+
+[target.'cfg(target_env = "msvc")'.build-dependencies]
+vcpkg = "0.2"
+
+[build-dependencies]
+cc = "1.0"
+pkg-config = "0.3.3"
+
+[features]
+default = ["ssl"]
+ssl = ["openssl-sys"]
+http2 = ["libnghttp2-sys"]
+brotli = ["brotlic-sys"]
+mesalink = []
+rustls = ["rustls-ffi"]
+static-curl = []
+apple-sectrust = ["ssl", "static-curl"]
+windows-static-ssl = []
+static-ssl = ["openssl-sys/vendored"]
+spnego = []
+force-system-lib-on-osx = []
+protocol-ftp = []
+zlib-ng-compat = ["libz-sys/zlib-ng", "static-curl"]
+upkeep_7_62_0 = []
+poll_7_68_0 = []
+websocket = []
+ws_start_frame_8_16_0 = ["websocket"]
+ntlm = []
+
+[workspace]

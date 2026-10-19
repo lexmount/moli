@@ -12,6 +12,7 @@ mod client_hints;
 mod compression_dictionary;
 mod config;
 mod content_coding;
+mod content_decoding;
 mod cors;
 mod dns;
 mod error;
@@ -82,9 +83,10 @@ pub use referrer_policy::{
 pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, FetchPriorityHint,
     Request, RequestAuth, RequestAuthScheme, RequestAuthTarget, RequestCacheMode,
-    RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestPriorityHints, RequestRedirectCheck,
-    RequestRedirectHandling, RequestRedirectMode, RequestResourceType, ResourceLoadPriority,
-    ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
+    RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestPriorityHints,
+    RequestRedirectCheck, RequestRedirectHandling, RequestRedirectMode, RequestResourceType,
+    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    SubresourceRequestMetadata,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{

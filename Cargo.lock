@@ -2933,9 +2933,9 @@ name = "moli-fetch"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
  "base64 0.22.1",
  "brotlic-sys",
+ "bytes",
  "cidr",
  "crossbeam-channel",
  "curl",

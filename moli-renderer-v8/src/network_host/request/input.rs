@@ -292,9 +292,9 @@ fn request_input_snapshot_from_private_slots<'s>(
     let body = if body_unusable || for_constructor {
         None
     } else {
-        try_network_body_bytes_from_object(scope, object).map_err(|_| {
-            webidl::WebIdlError::custom_message("Failed to materialize request body")
-        })?.map(bytes::Bytes::from)
+        try_network_body_bytes_from_object(scope, object)
+            .map_err(|_| webidl::WebIdlError::custom_message("Failed to materialize request body"))?
+            .map(bytes::Bytes::from)
     };
     // A Request copies its internal list, without consulting a script-defined
     // headers getter or the Headers object's public iterator.

@@ -401,7 +401,7 @@ impl ServiceWorkerRuntimeService {
                         &started.response_head.response_type,
                         started.response_head.cors_exposed_header_names.as_deref(),
                         started.response_head.status,
-                        job.request.redirect_mode,
+                        job.request.redirect_mode(),
                     ),
                     skip_fetch_security_validation: true,
                     internal_id: job.internal_id,

@@ -1,7 +1,6 @@
-//! The native HTTP backend does not expose an external-dictionary option.
-//! Requests carrying a dictionary therefore decode their content-coding stack
-//! here, using the same native Brotli/zlib/Zstandard libraries. Other requests
-//! retain libcurl's content decoders and transfer accounting.
+//! Bounded content decoding shared by ordinary and dictionary responses.
+//! Native zlib, Brotli and Zstandard decoders are used when libcurl cannot
+//! decode the complete negotiated coding set or an external dictionary is needed.
 
 use std::{
     ffi::c_void,
@@ -12,34 +11,72 @@ use std::{
 use anyhow::{Result, anyhow, bail, ensure};
 use flate2::{Decompress, FlushDecompress, Status};
 
-use super::Dictionary;
+use crate::{Request, compression_dictionary::Dictionary};
 
 const OUTPUT_SIZE: usize = 16 * 1024;
 type Output<'a> = dyn FnMut(&[u8]) -> Result<()> + 'a;
 
-pub(crate) struct DictionaryDecoding {
-    dictionary: Arc<Dictionary>,
+pub(crate) struct ContentDecoding {
+    dictionary: Option<Arc<Dictionary>>,
     stages: Option<Vec<Stage>>,
+    head: bool,
+    status: u16,
+    headers: Vec<(String, Vec<u8>)>,
+    headers_finalized: bool,
 }
 
-impl DictionaryDecoding {
-    pub(crate) fn new(dictionary: Arc<Dictionary>) -> Self {
+impl ContentDecoding {
+    pub(crate) fn required(request: &Request) -> bool {
+        request.compression_dictionary.is_some() || !curl::Version::get().feature_zstd()
+    }
+
+    pub(crate) fn new(request: &Request) -> Self {
         Self {
-            dictionary,
+            dictionary: request.compression_dictionary.clone(),
             stages: None,
+            head: request.method == "HEAD",
+            status: 0,
+            headers: Vec::new(),
+            headers_finalized: false,
         }
     }
 
-    pub(crate) fn reset(&mut self) {
-        self.stages = None;
+    pub(crate) fn header(&mut self, data: &[u8]) -> Result<()> {
+        if let Some(line) = crate::response::parse_http_response_status_line(data) {
+            self.status = line.status;
+            self.headers.clear();
+            self.stages = None;
+            self.headers_finalized = false;
+            return Ok(());
+        }
+        if self.headers_finalized {
+            return Ok(());
+        }
+        if let Some(header) = crate::headers::parse_http_response_header_line(data) {
+            self.headers.push(header);
+            return Ok(());
+        }
+        if self.status >= 200 && data.iter().all(|byte| matches!(byte, b'\r' | b'\n')) {
+            self.headers_finalized = true;
+        }
+        Ok(())
     }
 
-    pub(crate) fn initialize(&mut self, headers: &[(String, Vec<u8>)]) -> Result<()> {
+    pub(crate) fn needs_readable_dictionary_response(&self) -> bool {
+        self.dictionary.is_some() && self.headers_finalized && !self.bodyless()
+    }
+
+    fn bodyless(&self) -> bool {
+        self.head || matches!(self.status, 204 | 205 | 304)
+    }
+
+    fn initialize(&mut self) -> Result<()> {
         if self.stages.is_some() {
             return Ok(());
         }
         let mut names = Vec::new();
-        for (_, value) in headers
+        for (_, value) in self
+            .headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
         {
@@ -61,7 +98,9 @@ impl DictionaryDecoding {
                 "zstd" => Stage::Zstd(Zstd::new(None)?),
                 "dcb" | "dcz" => Stage::Dictionary {
                     brotli: name == "dcb",
-                    dictionary: Arc::clone(&self.dictionary),
+                    dictionary: self.dictionary.clone().ok_or_else(|| {
+                        anyhow!("dictionary content encoding without a selected dictionary")
+                    })?,
                     prefix: Vec::new(),
                     decoder: None,
                 },
@@ -75,9 +114,10 @@ impl DictionaryDecoding {
 
     pub(crate) fn push(&mut self, input: &[u8], output: &mut Output<'_>) -> Result<()> {
         ensure!(
-            self.stages.is_some(),
+            self.headers_finalized,
             "compressed response body arrived before headers"
         );
+        self.initialize()?;
         feed(
             self.stages.as_mut().expect("initialized decoding stack"),
             input,
@@ -85,11 +125,12 @@ impl DictionaryDecoding {
         )
     }
 
-    pub(crate) fn finish(&mut self, headers: &[(String, Vec<u8>)], bodyless: bool) -> Result<()> {
-        if bodyless {
+    pub(crate) fn finish(&mut self) -> Result<()> {
+        // An empty encoded body never invokes a decoder, including for an
+        // unknown coding. A decoder that received bytes must finish cleanly.
+        if self.bodyless() || self.stages.is_none() {
             return Ok(());
         }
-        self.initialize(headers)?;
         for stage in self.stages.as_ref().expect("initialized decoding stack") {
             ensure!(stage.finished(), "truncated compressed response");
         }

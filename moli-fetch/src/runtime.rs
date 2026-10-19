@@ -910,7 +910,7 @@ impl RuntimeOwner {
         if request_cache_policy_for_url(&self.config, &job.request, &job.current_url).only_if_cached
         {
             let head = cache_only_miss_start(&job.request, &job.current_url).into_head();
-            job.cancel_handle.mark_response_terminal();
+            job.response_progress.commit();
             return Ok(JobOutcome::Complete(
                 job.response_tx,
                 Box::new(CompletedBufferedResponse::Raw(
@@ -1474,15 +1474,11 @@ impl RuntimeOwner {
         mut completion: RuntimeCurlCompletion,
     ) {
         if let Some(easy) = completion.easy.as_mut() {
-            if let Some(error) = easy.get_mut().dictionary_error.take() {
+            if let Some(error) = easy.get_mut().content_decoding_error.take() {
                 completion.result = Err(anyhow!(error));
             } else if completion.result.is_ok()
                 && !self.shutdown_requested.load(Ordering::SeqCst)
-                && !easy
-                    .get_ref()
-                    .response_timing
-                    .as_ref()
-                    .is_some_and(FetchCancelHandle::is_cancelled)
+                && !completion.context.is_cancelled()
             {
                 completion.result = easy.get_mut().finish_dictionary_response();
             }
@@ -2771,6 +2767,14 @@ enum ActiveTransferContext {
 }
 
 impl ActiveTransferContext {
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Buffered(context) => context.job.cancel_handle.is_cancelled(),
+            Self::Streaming(context) => context.job.cancel_handle.is_cancelled(),
+            Self::StreamingRaw(context) => context.job.cancel_handle.is_cancelled(),
+        }
+    }
+
     fn into_buffered(self) -> Option<ActiveBufferedTransferContext> {
         match self {
             Self::Buffered(context) => Some(*context),
@@ -2825,8 +2829,8 @@ pub(crate) struct FetchTransferHandler {
     upload_observer: Option<crate::UploadObserver>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
     dictionary_response: Option<crate::compression_dictionary::DictionaryResponse>,
-    dictionary_decoding: Option<crate::compression_dictionary::DictionaryDecoding>,
-    dictionary_error: Option<String>,
+    content_decoding: Option<crate::content_decoding::ContentDecoding>,
+    content_decoding_error: Option<String>,
 }
 
 enum FetchResponseCollector {
@@ -2873,8 +2877,8 @@ impl FetchTransferHandler {
             upload_observer: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
             dictionary_response: None,
-            dictionary_decoding: None,
-            dictionary_error: None,
+            content_decoding: None,
+            content_decoding_error: None,
         }
     }
 
@@ -2941,20 +2945,18 @@ impl FetchTransferHandler {
                 url.clone(),
             )
         });
-        self.dictionary_decoding = request.compression_dictionary.as_ref().map(|dictionary| {
-            crate::compression_dictionary::DictionaryDecoding::new(Arc::clone(dictionary))
-        });
-        self.dictionary_error = None;
+        self.content_decoding = crate::content_decoding::ContentDecoding::required(request)
+            .then(|| crate::content_decoding::ContentDecoding::new(request));
+        self.content_decoding_error = None;
     }
 
     fn finish_dictionary_response(&mut self) -> Result<()> {
-        let Some(response) = self.dictionary_response.as_mut() else {
-            return Ok(());
-        };
-        if let Some(decoding) = self.dictionary_decoding.as_mut() {
-            decoding.finish(response.headers(), response.bodyless())?;
+        if let Some(decoding) = self.content_decoding.as_mut() {
+            decoding.finish()?;
         }
-        response.finish();
+        if let Some(response) = self.dictionary_response.as_mut() {
+            response.finish();
+        }
         Ok(())
     }
 
@@ -2989,8 +2991,10 @@ impl Handler for FetchTransferHandler {
     }
 
     fn write(&mut self, data: &[u8]) -> std::result::Result<usize, WriteError> {
-        if !data.is_empty() { self.mark_response_body_received(); }
-        if self.dictionary_decoding.is_none() {
+        if !data.is_empty() {
+            self.mark_response_body_received();
+        }
+        if self.content_decoding.is_none() {
             if let Some(timing) = self.response_progress() {
                 timing.record_decoded_response_body_size(data.len());
             }
@@ -3008,12 +3012,17 @@ impl Handler for FetchTransferHandler {
             }
             return result;
         }
-        if self.dictionary_error.is_some() {
+        let timing = self.response_progress().cloned();
+        // A decoding failure can abort write before curl reports progress.
+        // Count the wire bytes at this boundary when we own content decoding.
+        if let Some(timing) = &timing {
+            timing.record_encoded_response_body_chunk(data.len());
+        }
+        if self.content_decoding_error.is_some() {
             return Ok(0);
         }
         let policy = &mut self.dictionary_response;
         let response = &mut self.response;
-        let timing = self.response_progress().cloned();
         let mut output = |bytes: &[u8]| -> Result<()> {
             if let Some(timing) = &timing {
                 timing.record_decoded_response_body_size(bytes.len());
@@ -3034,14 +3043,14 @@ impl Handler for FetchTransferHandler {
             Ok(())
         };
         let result = self
-            .dictionary_decoding
+            .content_decoding
             .as_mut()
-            .expect("dictionary decoding selected")
+            .expect("native content decoding selected")
             .push(data, &mut output);
         match result {
             Ok(()) => Ok(data.len()),
             Err(error) => {
-                self.dictionary_error = Some(error.to_string());
+                self.content_decoding_error = Some(error.to_string());
                 Ok(0)
             }
         }
@@ -3050,25 +3059,23 @@ impl Handler for FetchTransferHandler {
     fn header(&mut self, data: &[u8]) -> bool {
         if crate::response::parse_http_response_status_line(data)
             .is_some_and(|line| line.status >= 200)
-            && let Some(decoding) = self.dictionary_decoding.as_mut()
         {
-            decoding.reset();
-            self.dictionary_error = None;
+            self.content_decoding_error = None;
         }
         if let Some(response) = self.dictionary_response.as_mut() {
             response.header(data);
         }
-        if data.iter().all(|byte| matches!(byte, b'\r' | b'\n'))
-            && let Some(response) = self.dictionary_response.as_ref()
-            && response.headers_finalized()
-            && !response.bodyless()
-            && let Some(decoding) = self.dictionary_decoding.as_mut()
-        {
-            if !response.readable() {
-                self.dictionary_error =
+        if let Some(decoding) = self.content_decoding.as_mut() {
+            if let Err(error) = decoding.header(data) {
+                self.content_decoding_error = Some(error.to_string());
+            } else if decoding.needs_readable_dictionary_response()
+                && self
+                    .dictionary_response
+                    .as_ref()
+                    .is_none_or(|response| !response.readable())
+            {
+                self.content_decoding_error =
                     Some("dictionary response failed its CORS readability check".to_owned());
-            } else if let Err(error) = decoding.initialize(response.headers()) {
-                self.dictionary_error = Some(error.to_string());
             }
         }
         if crate::response::parse_http_response_status_line(data)
@@ -3091,7 +3098,10 @@ impl Handler for FetchTransferHandler {
         if dlnow > 0.0 {
             self.mark_response_body_received();
         }
-        if dlnow > 0.0 && let Some(timing) = self.response_progress() {
+        if self.content_decoding.is_none()
+            && dlnow > 0.0
+            && let Some(timing) = self.response_progress()
+        {
             timing.record_encoded_response_body_size(dlnow as u64);
         }
         let keep_going = match &mut self.response {
@@ -3277,7 +3287,9 @@ fn complete_cached_streaming_html_job(
         capture,
         job.cancel_handle.clone(),
     );
-    let response_timing = job.response_progress.mark_cached_response_available(body_sizes);
+    let response_timing = job
+        .response_progress
+        .mark_cached_response_available(body_sizes);
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
@@ -3425,7 +3437,9 @@ fn complete_cached_streaming_raw_job(
         capture,
         job.cancel_handle.clone(),
     );
-    let response_timing = job.response_progress.mark_cached_response_available(body_sizes);
+    let response_timing = job
+        .response_progress
+        .mark_cached_response_available(body_sizes);
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
@@ -3906,7 +3920,7 @@ fn complete_cache_only_html_miss(mut job: StreamingRuntimeJob) {
         (job.started_tx.take(), job.body_tx.take())
     };
     drop(body_tx);
-    job.cancel_handle.mark_response_terminal();
+    job.response_progress.commit();
     if let Some(started_tx) = started_tx {
         let _ = started_tx.send(Ok(start));
     }
@@ -3924,7 +3938,7 @@ fn complete_cache_only_raw_miss(mut job: StreamingRawRuntimeJob) {
         (job.started_tx.take(), job.body_tx.take())
     };
     drop(body_tx);
-    job.cancel_handle.mark_response_terminal();
+    job.response_progress.commit();
     if let Some(started_tx) = started_tx {
         let _ = started_tx.send(Ok(start));
     }
