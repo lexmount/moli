@@ -174,10 +174,10 @@ impl JsContextHost {
         is_xml_document: bool,
     ) -> Option<ChildDocumentInstallResult> {
         let source = if is_xml_document {
-            std::borrow::Cow::Borrowed(snapshot.markup.as_str())
+            std::borrow::Cow::Borrowed(snapshot.content.parser_source())
         } else {
             crate::dom_parser::preserve_decoded_bom_only_browsing_context_body(
-                &snapshot.markup,
+                snapshot.content.parser_source(),
                 snapshot.content_type.as_deref(),
             )
         };
@@ -251,6 +251,7 @@ impl JsContextHost {
             source.as_ref(),
             is_xml_document,
             snapshot.content_type.as_deref(),
+            snapshot.content.image(),
         );
         Some(ChildDocumentInstallResult {
             initial_classic_ready_work: parser_start.initial_classic_ready_work,
