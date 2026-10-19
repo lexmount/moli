@@ -493,7 +493,7 @@ pub(crate) fn image_response_origin_clean(
     }
 }
 
-fn image_response_descriptor_from_bytes(
+pub(crate) fn image_response_descriptor_from_bytes(
     headers: &[(String, Vec<u8>)],
     body: &[u8],
 ) -> Option<crate::native_bridge::ImageResponseDescriptor> {

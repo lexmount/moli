@@ -19,7 +19,7 @@ impl JsContextHost {
             let snapshot = self.child_browsing_context_snapshot_markup(owner_node_id)?;
             return Some(ChildBrowsingContextDocumentSnapshot {
                 url: snapshot.url.as_str().to_owned(),
-                markup: snapshot.markup,
+                markup: snapshot.markup().into_owned(),
             });
         }
 
@@ -36,7 +36,7 @@ impl JsContextHost {
                 &parent_frame_id,
                 frame_id,
                 &snapshot.url,
-                &snapshot.markup,
+                &snapshot.markup(),
                 scripting_enabled,
                 0,
             ) {
@@ -165,14 +165,14 @@ impl JsContextHost {
                 if frame_id == target_frame_id {
                     return Some(ChildBrowsingContextDocumentSnapshot {
                         url: snapshot.url.as_str().to_owned(),
-                        markup: snapshot.markup,
+                        markup: snapshot.markup().into_owned(),
                     });
                 }
                 if let Some(found) = self.find_detached_child_document_snapshot_by_frame_id(
                     &frame_id,
                     target_frame_id,
                     &snapshot.url,
-                    &snapshot.markup,
+                    &snapshot.markup(),
                     scripting_enabled,
                     depth + 1,
                 ) {

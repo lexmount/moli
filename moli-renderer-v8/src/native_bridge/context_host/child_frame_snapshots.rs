@@ -50,7 +50,7 @@ pub(crate) struct DetachedChildBrowsingContextDocumentSnapshot {
 pub(crate) struct ChildBrowsingContextSnapshot {
     pub(crate) url: Url,
     pub(crate) fallback_base_url: Option<Url>,
-    pub(crate) markup: String,
+    pub(crate) content: crate::navigation_document::NavigationDocumentContent,
     pub(crate) resource_was_cached: bool,
     pub(crate) content_type: Option<String>,
     pub(crate) character_set: String,
@@ -58,6 +58,10 @@ pub(crate) struct ChildBrowsingContextSnapshot {
 }
 
 impl ChildBrowsingContextSnapshot {
+    pub(crate) fn markup(&self) -> std::borrow::Cow<'_, str> {
+        self.content.snapshot_markup(&self.url)
+    }
+
     pub(crate) fn new(url: Url, markup: String, content_type: Option<String>) -> Self {
         Self::with_character_set(url, markup, content_type, "UTF-8")
     }
@@ -68,10 +72,19 @@ impl ChildBrowsingContextSnapshot {
         content_type: Option<String>,
         character_set: impl Into<String>,
     ) -> Self {
+        Self::with_content(url, markup.into(), content_type, character_set)
+    }
+
+    pub(crate) fn with_content(
+        url: Url,
+        content: crate::navigation_document::NavigationDocumentContent,
+        content_type: Option<String>,
+        character_set: impl Into<String>,
+    ) -> Self {
         Self {
             url,
             fallback_base_url: None,
-            markup,
+            content,
             resource_was_cached: false,
             content_type,
             character_set: character_set.into(),

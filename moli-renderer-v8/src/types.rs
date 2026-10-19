@@ -1710,7 +1710,7 @@ pub(super) struct LoadedChildDocument {
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) content_type: Option<String>,
     pub(super) character_set: String,
-    pub(super) markup: String,
+    pub(super) content: crate::navigation_document::NavigationDocumentContent,
     pub(super) document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
 }
 

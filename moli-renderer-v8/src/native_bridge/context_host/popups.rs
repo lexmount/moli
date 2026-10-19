@@ -2,8 +2,10 @@ mod renderer_owned;
 
 use super::{JsContextHost, NavigationHistoryEntrySeed};
 use crate::content_security_policy::ContentSecurityPolicy;
-use crate::document_response_decoder::decode_document_response;
 use crate::event_type::EventTypeKey;
+use crate::navigation_document::{
+    decode_navigation_document_response, navigation_response_content_type,
+};
 use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
@@ -2999,7 +3001,7 @@ impl JsContextHost {
                 policy_container,
                 content_type: snapshot.content_type,
                 character_set: snapshot.character_set,
-                markup: snapshot.markup,
+                content: snapshot.content,
                 document_network: None,
             };
             let completion = PopupDocumentLoadCompletion::new(
@@ -3058,10 +3060,13 @@ impl JsContextHost {
                     response.status,
                     false,
                 )?;
-                let content_type =
-                    super::child_documents::child_document_content_type_from_headers(&head.headers);
+                let mime = navigation_response_content_type(&head.headers, response.body_bytes());
+                if !moli_web_mime::is_supported_document_mime_type(&mime) {
+                    return Ok(PopupDocumentLoadOutcome::IgnoredNavigation);
+                }
+                let content_type = Some(mime);
                 // A top-level popup has no container Document encoding to inherit.
-                let (markup, character_set) = decode_document_response(
+                let (content, character_set) = decode_navigation_document_response(
                     response.body_bytes(),
                     &head.headers,
                     content_type.as_deref(),
@@ -3082,7 +3087,7 @@ impl JsContextHost {
                         policy_container,
                         content_type,
                         character_set: character_set.to_owned(),
-                        markup,
+                        content,
                         document_network: None,
                     },
                 )))
@@ -3321,7 +3326,7 @@ impl JsContextHost {
                         response_links: &loaded.response_links,
                         task,
                         document_url: &final_url,
-                        markup: &loaded.markup,
+                        markup: &loaded.content.snapshot_markup(&final_url),
                         content_type: loaded.content_type.as_deref(),
                         character_set: Some(&loaded.character_set),
                         policy_container: &loaded.policy_container,

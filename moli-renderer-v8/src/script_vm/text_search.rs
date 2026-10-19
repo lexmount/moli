@@ -53,17 +53,14 @@ impl ScriptVm {
             let Some(snapshot) = host.child_browsing_context_snapshot_markup(owner_handle) else {
                 return Ok(RendererResourceTextSearchOutcome::ContentUnavailable);
             };
-            if snapshot.markup.is_empty() && !snapshot.resource_was_cached {
+            let Some(source) = snapshot.content.text() else {
+                return Ok(RendererResourceTextSearchOutcome::ContentUnavailable);
+            };
+            if source.is_empty() && !snapshot.resource_was_cached {
                 return Ok(RendererResourceTextSearchOutcome::ContentUnavailable);
             }
             Ok(RendererResourceTextSearchOutcome::Matches(
-                search_text_by_lines_in_scope(
-                    scope,
-                    &snapshot.markup,
-                    query,
-                    case_sensitive,
-                    is_regex,
-                ),
+                search_text_by_lines_in_scope(scope, source, query, case_sensitive, is_regex),
             ))
         })
     }

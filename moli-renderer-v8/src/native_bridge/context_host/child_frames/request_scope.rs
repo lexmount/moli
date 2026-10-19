@@ -966,7 +966,7 @@ fn child_snapshot_base_url(
     scripting_enabled: bool,
 ) -> Url {
     let document = crate::parser::HtmlParser::with_scripting_enabled(scripting_enabled)
-        .parse(snapshot.url.clone(), snapshot.markup.clone());
+        .parse(snapshot.url.clone(), snapshot.markup().into_owned());
     document
         .document()
         .map(|doc| doc.base_url().clone())
