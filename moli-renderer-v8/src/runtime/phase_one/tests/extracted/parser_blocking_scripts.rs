@@ -231,6 +231,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
@@ -304,6 +305,7 @@ fn main_parser_blocking_load_event_document_open_is_ignored_during_parser_execut
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
@@ -395,6 +397,7 @@ fn parser_blocking_stylesheet_gate_retains_external_source_load() {
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let outcome = driver
                 .advance_parser_step(
@@ -468,6 +471,7 @@ fn parser_blocking_script_disabled_does_not_start_parser_discovered_source_load(
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let page_vm_ptr: *mut PageVm = &mut page_vm;
             let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
@@ -544,6 +548,7 @@ fn parser_blocking_csp_block_does_not_start_parser_discovered_source_load() {
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let page_vm_ptr: *mut PageVm = &mut page_vm;
             let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
@@ -626,6 +631,7 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
         buffered_document_preloads: &mut state.buffered_document_preloads,
         service_worker_preload_context: state.service_worker_preload_context.as_ref(),
         input_closed: &state.input_closed,
+        image_document: &mut state.image_document,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -748,6 +754,7 @@ fn parser_blocking_script_sees_parser_created_style_sources() {
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
+            image_document: &mut state.image_document,
         };
 
         let html = r#"<!doctype html><style>div { color: red } .foo { color: lime }</style><body>
@@ -907,6 +914,8 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
             input_closed: &state.input_closed,
+
+            image_document: &mut state.image_document,
         };
 
         let html = "<!doctype html><html><head><script>const body = document.createElement('body');document.documentElement.appendChild(body);const early = document.createElement('div');early.id = 'early';body.appendChild(early);</script><meta charset='utf-8'><title>x</title></head><body><main>late</main></body></html>";
@@ -1072,6 +1081,8 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
             input_closed: &state.input_closed,
+
+            image_document: &mut state.image_document,
         };
 
         let external_script = "globalThis.__runtimeHeadMutationStage='start';const body = document.createElement('body');globalThis.__runtimeHeadMutationStage='body-created';document.documentElement.appendChild(body);globalThis.__runtimeHeadMutationStage='body-appended';const early = document.createElement('div');early.id = 'early';body.appendChild(early);const style = document.createElement('style');style.textContent = '.runtime-style { color: red; }';document.head.appendChild(style);const script = document.createElement('script');script.textContent = 'window.__runtimeHeadMutation = true;';document.head.appendChild(script);globalThis.__runtimeHeadMutationStage='complete';";
@@ -1323,6 +1334,8 @@ fn empty_parser_blocking_script_drains_observers_before_declarative_shadow() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
@@ -1480,6 +1493,8 @@ fn parser_created_customized_builtin_direct_constructs_from_is_attribute() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
@@ -1749,6 +1764,7 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
+            image_document: &mut state.image_document,
         };
 
         let outcome = driver

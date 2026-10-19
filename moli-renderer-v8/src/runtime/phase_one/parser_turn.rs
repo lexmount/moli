@@ -44,6 +44,16 @@ fn disabled_script_run(script: &PreparedScript) -> crate::types::ScriptRun {
 
 struct PhaseOneParserOwner<'a> {
     vm: &'a mut ScriptVm,
+    image_document: Option<&'a mut super::image_document::StreamingImageDocument>,
+}
+
+impl<'a> PhaseOneParserOwner<'a> {
+    fn new(vm: &'a mut ScriptVm) -> Self {
+        Self {
+            vm,
+            image_document: None,
+        }
+    }
 }
 
 pub(in crate::runtime) fn rebind_main_document_parser_before_parsing(
@@ -63,7 +73,7 @@ pub(in crate::runtime) fn rebind_main_document_parser_before_parsing(
         parser.rebind_main_document_before_parsing(
             document_url,
             document_handle,
-            &mut PhaseOneParserOwner { vm },
+            &mut PhaseOneParserOwner::new(vm),
             scripting_enabled,
             &content_type,
         );
@@ -421,6 +431,31 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<NativeNodeId> {
+        if request.namespace == "http://www.w3.org/1999/xhtml"
+            && request.local_name == "img"
+            && let Some(document) = self.image_document.as_mut()
+            && document.needs_host()
+        {
+            // This parser consumes only IMAGE_DOCUMENT_SHELL. Capture the
+            // created element before publishing it or running author observers;
+            // looking up a later body child could bind an author-created image.
+            let image = self
+                .vm
+                .document_runtime
+                .create_parser_element_for_document_without_attributes_in_live_dom_host(
+                    request.construction,
+                    request.document_handle,
+                    request.local_name.to_owned(),
+                    request.namespace.to_owned(),
+                    request.prefix.map(str::to_owned),
+                );
+            let load = self
+                .vm
+                .begin_navigation_image_document_load(image)
+                .expect("navigation image creation must enter its main Window");
+            document.bind(load);
+            return Some(image);
+        }
         self.vm
             .create_and_construct_parser_custom_element_direct_in_default_context(
                 request.construction,
@@ -441,7 +476,7 @@ pub(super) fn finish_parser_session_for_test(
     parser_session: &mut DocumentParserSession,
     vm: &mut ScriptVm,
 ) {
-    let mut parser_owner = PhaseOneParserOwner { vm };
+    let mut parser_owner = PhaseOneParserOwner::new(vm);
     let _ = parser_session.finish(&mut parser_owner);
 }
 
@@ -530,6 +565,7 @@ pub(super) struct ParserDriver<'loader, 'state> {
     pub(super) buffered_document_preloads: &'state mut BufferedDocumentPreloadState,
     pub(super) service_worker_preload_context: Option<&'state ServiceWorkerScriptPreloadContext>,
     pub(super) input_closed: &'state bool,
+    pub(super) image_document: &'state mut Option<super::image_document::StreamingImageDocument>,
 }
 
 impl<'loader, 'state> ParserDriver<'loader, 'state> {
@@ -1411,7 +1447,10 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         self.sync_parser_defined_custom_elements(page_vm);
         let (outcome, null_custom_element_registry_elements) =
             page_vm.vm_mut().with_dom_host_parse_step(|vm| {
-                let mut parser_owner = PhaseOneParserOwner { vm };
+                let mut parser_owner = PhaseOneParserOwner {
+                    vm,
+                    image_document: self.image_document.as_mut(),
+                };
                 self.parser_session
                     .advance_step_and_take_null_custom_element_registry_elements(
                         chunk,
@@ -1438,7 +1477,10 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         self.sync_parser_defined_custom_elements(page_vm);
         let (outcome, null_custom_element_registry_elements) =
             page_vm.vm_mut().with_dom_host_parse_step(|vm| {
-                let mut parser_owner = PhaseOneParserOwner { vm };
+                let mut parser_owner = PhaseOneParserOwner {
+                    vm,
+                    image_document: self.image_document.as_mut(),
+                };
                 let outcome = self
                     .parser_session
                     .advance_next_step(max_bytes, &mut parser_owner);
@@ -1463,7 +1505,10 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         self.sync_parser_defined_custom_elements(page_vm);
         let (outcome, null_custom_element_registry_elements) =
             page_vm.vm_mut().with_dom_host_parse_step(|vm| {
-                let mut parser_owner = PhaseOneParserOwner { vm };
+                let mut parser_owner = PhaseOneParserOwner {
+                    vm,
+                    image_document: self.image_document.as_mut(),
+                };
                 let outcome = self
                     .parser_session
                     .advance_queued_or_resume_step(&mut parser_owner);
@@ -1539,7 +1584,10 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
     ) {
         self.sync_parser_defined_custom_elements(page_vm);
         let finish_signals = page_vm.vm_mut().with_dom_host_parse_step(|vm| {
-            let mut parser_owner = PhaseOneParserOwner { vm };
+            let mut parser_owner = PhaseOneParserOwner {
+                vm,
+                image_document: self.image_document.as_mut(),
+            };
             self.parser_session.finish(&mut parser_owner)
         });
         self.apply_parser_step_outputs(
@@ -1921,7 +1969,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             return Ok(None);
         }
         let handoff = page_vm.vm_mut().with_dom_host_parse_step(|vm| {
-            let mut owner = PhaseOneParserOwner { vm };
+            let mut owner = PhaseOneParserOwner::new(vm);
             self.parser_session.prepare_script(*request, &mut owner)
         });
         if page_vm.main_document_scripting_enabled()

@@ -359,6 +359,7 @@ fn parser_blocking_pending_preload_returns_streaming_boundary_without_wait() {
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             let outcome = tokio::time::timeout(
                 std::time::Duration::from_millis(50),

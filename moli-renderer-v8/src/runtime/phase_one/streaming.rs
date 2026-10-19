@@ -612,7 +612,7 @@ fn scan_prebootstrap_html_chunk_into_state(
     chunk: &str,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
-    if state.is_text_document {
+    if state.is_text_document || state.image_document.is_some() {
         return;
     }
     state
@@ -636,6 +636,11 @@ fn response_document_parser(
         .filter(|mime| moli_web_mime::is_text_document_mime(mime));
     let mut state = if let Some(mime) = text_type {
         ParseTimeDriverState::new_text(final_url, mime)
+    } else if let Some(mime) = content_type
+        .as_deref()
+        .filter(|mime| crate::navigation_document::is_image_document_mime(mime))
+    {
+        ParseTimeDriverState::new_image(final_url, mime, headers)
     } else {
         ParseTimeDriverState::new_with_scripting_enabled(
             final_url,
@@ -658,6 +663,12 @@ pub(super) fn enqueue_streaming_raw_chunk(
     chunk: Vec<u8>,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
+    if let Some(image) = runtime.state.image_document.as_mut() {
+        if let Some(shell) = image.push(&chunk) {
+            runtime.state.parser_session.queue_arrived_chunk(shell);
+        }
+        return;
+    }
     let text_chunks = decoder.push(&chunk);
     sync_document_character_set_from_decoder(runtime, decoder);
     for text_chunk in text_chunks {
@@ -675,6 +686,9 @@ fn scan_prebootstrap_raw_chunk_into_state(
     chunk: Vec<u8>,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) -> Vec<String> {
+    if let Some(image) = state.image_document.as_mut() {
+        return image.push(&chunk).into_iter().collect();
+    }
     let mut text_chunks = Vec::new();
     let decoded_chunks = decoder.push(&chunk);
     sync_state_document_character_set_from_decoder(state, decoder);
@@ -843,9 +857,7 @@ async fn drive_streaming_raw_response_through_phase_one(
     let input_finished = response.body_chunk_stream_is_exhausted();
     if input_finished {
         response.finish().await?;
-        if let Some(tail) = decoder.finish() {
-            runtime.enqueue_streaming_html_chunk(tail);
-        }
+        finish_streaming_raw_input(&mut runtime, &mut decoder);
         sync_document_character_set_from_decoder(&mut runtime, &decoder);
         runtime.close_streaming_html_input();
     }
@@ -913,7 +925,11 @@ pub(super) fn sync_document_character_set_from_decoder(
     runtime: &mut ConcurrentParseTimeRuntime,
     decoder: &DocumentStreamingDecoder,
 ) {
-    let encoding = decoder.document_encoding_name();
+    let encoding = if runtime.state.image_document.is_some() {
+        "UTF-8"
+    } else {
+        decoder.document_encoding_name()
+    };
     runtime.state.document_character_set = encoding.to_owned();
     runtime
         .state
@@ -926,11 +942,26 @@ fn sync_state_document_character_set_from_decoder(
     state: &mut ParseTimeDriverState,
     decoder: &DocumentStreamingDecoder,
 ) {
-    let encoding = decoder.document_encoding_name();
+    let encoding = if state.image_document.is_some() {
+        "UTF-8"
+    } else {
+        decoder.document_encoding_name()
+    };
     state.document_character_set = encoding.to_owned();
     state
         .buffered_document_preloads
         .set_document_character_set(encoding);
+}
+
+pub(super) fn finish_streaming_raw_input(
+    runtime: &mut ConcurrentParseTimeRuntime,
+    decoder: &mut DocumentStreamingDecoder,
+) {
+    if runtime.state.image_document.is_none()
+        && let Some(tail) = decoder.finish()
+    {
+        runtime.enqueue_streaming_html_chunk(tail);
+    }
 }
 
 pub(in crate::runtime) fn response_headers_indicate_download(
@@ -944,6 +975,83 @@ mod tests {
     use super::*;
     use crate::parser::ScriptSource;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn image_response_bytes_never_reach_the_tokenizer_or_preload_scanner() {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+        let headers = [(
+            "Content-Type".to_owned(),
+            b"image/png; charset=gbk".to_vec(),
+        )];
+        let (mut state, mut decoder) = response_document_parser(
+            Url::parse("https://example.test/picture").unwrap(),
+            &headers,
+            &default_test_page_vm_env_config(),
+        );
+        state
+            .buffered_document_preloads
+            .bind_resource_runtime(hooks.owner_wake(), hooks.resource_task_runner());
+        let chunks = scan_prebootstrap_raw_chunk_into_state(
+            &mut state,
+            &mut decoder,
+            &loader,
+            b"\xef\xbb\xbf<script src='/must-not-fetch.js'></script>".to_vec(),
+            None,
+        );
+        assert_eq!(chunks, [crate::navigation_document::IMAGE_DOCUMENT_SHELL]);
+        assert_eq!(state.document_character_set, "UTF-8");
+        assert!(state.buffered_document_preloads.entries.is_empty());
+        assert!(
+            scan_prebootstrap_raw_chunk_into_state(
+                &mut state,
+                &mut decoder,
+                &loader,
+                b"<body>not HTML</body>".to_vec(),
+                None,
+            )
+            .is_empty(),
+            "later binary chunks must not append HTML input"
+        );
+        for chunk in chunks {
+            state.parser_session.queue_arrived_chunk(chunk);
+        }
+        state.close_input();
+        assert_eq!(
+            state.parser_session.snapshot_pending_input(),
+            crate::navigation_document::IMAGE_DOCUMENT_SHELL
+        );
+    }
+
+    #[tokio::test]
+    async fn image_document_mime_is_visible_before_streaming_body_arrives() {
+        let _js_runtime_owner = crate::JsRuntime::initialize();
+        tokio::task::LocalSet::new().run_until(async {
+            let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let mut env = default_test_page_vm_env_config();
+            env.document_start_scripts.push(crate::DocumentStartScript {
+                registry_key: None, devtools_session: None,
+                source: "globalThis.documentStartImageMetadata = [document.contentType, document.characterSet, !!document.body].join('|')".to_owned(),
+                world_name: None, has_bidi_channel_argument: false, bidi_channel_handoffs: Vec::new(),
+            });
+            let (state, _) = response_document_parser(
+                Url::parse("https://example.test/image").unwrap(),
+                &[("Content-Type".to_owned(), b"image/png; charset=gbk".to_vec())], &env,
+            );
+            let (_, mut page_vm, navigated) = ConcurrentParseTimeRuntime::bootstrap_page_vm_from_state_on_fresh_local_task(
+                PageId::new_for_testing(1), JsLocalExecutor::new(), loader.handle(), env,
+                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(), state,
+                Instant::now(), "image MIME bootstrap closed",
+            ).await.unwrap();
+            assert!(!navigated);
+            let metadata = super::super::access::run_named_owner_local_task(
+                page_vm.local_executor.clone(),
+                "image document-start observation closed",
+                async move { page_vm.vm_mut().eval("globalThis.documentStartImageMetadata") },
+            ).await.unwrap();
+            assert_eq!(metadata, "image/png|UTF-8|false");
+        }).await;
+    }
 
     #[tokio::test]
     async fn text_document_charset_is_visible_to_document_start_before_body_arrives() {

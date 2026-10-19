@@ -1579,6 +1579,8 @@ fn parser_created_custom_element_direct_survives_table_foster_parenting() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>

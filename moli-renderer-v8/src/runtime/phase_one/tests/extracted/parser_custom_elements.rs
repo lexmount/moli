@@ -34,6 +34,8 @@ fn parser_created_custom_element_direct_constructs_before_token_attributes() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
@@ -206,6 +208,8 @@ fn parser_created_custom_element_token_attributes_queue_initial_reactions() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
@@ -324,6 +328,8 @@ fn parser_created_custom_element_direct_constructs_before_declarative_shadow() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
@@ -500,6 +506,8 @@ fn parser_created_custom_element_direct_waits_for_head_reprocess_body() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><head>
@@ -621,6 +629,8 @@ fn parser_created_custom_element_direct_skips_template_contents() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>
