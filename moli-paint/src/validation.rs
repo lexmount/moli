@@ -29,6 +29,15 @@ pub(crate) struct PaintStreamMetrics {
     pub(crate) operation_count: usize,
 }
 
+impl PaintStreamMetrics {
+    pub(crate) fn for_operations(operation_count: usize) -> Self {
+        Self {
+            operation_count,
+            ..Self::default()
+        }
+    }
+}
+
 pub(crate) fn validate_fragment_stream(
     snapshot: &PaintSnapshot,
 ) -> Result<PaintStreamMetrics, PaintError> {
