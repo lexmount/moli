@@ -18,7 +18,9 @@ fn video_frame_native_state_for_test<'s>(
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
+// The resource runner captures this runtime. Decode actors need the worker
+// pool while the LocalSet keeps V8 on the calling thread, as in production.
+#[tokio::test(flavor = "multi_thread")]
 async fn canvas_video_sources_decode_real_frames_and_follow_media_ownership() {
     run_page_vm_async_test(async move {
         let pattern: &[u8] = include_bytes!("../../../../../moli-media/tests/fixtures/pattern.webm");
