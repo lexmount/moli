@@ -971,6 +971,19 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
+        self.fetch_text_for_worker_blocking_boundary_with_response_start(
+            request,
+            cancel_handle,
+            || {},
+        )
+    }
+
+    pub(crate) fn fetch_text_for_worker_blocking_boundary_with_response_start(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+        on_response_start: impl FnOnce() + Send + 'static,
+    ) -> Result<Response> {
         let request_client = self.clone();
         let (response_tx, response_rx) = mpsc::sync_channel(1);
         thread::Builder::new()
@@ -985,9 +998,30 @@ impl ResourceRequestClient {
                     .build()
                     .context("failed to build worker script fetch runtime")
                     .and_then(|runtime| {
-                        runtime.block_on(
-                            request_client.fetch_text_stream_with_cancel(request, cancel_handle),
-                        )
+                        runtime.block_on(async {
+                            let request = request_client.apply_network_policy(request)?;
+                            // Buffered authentication and manual redirects keep their
+                            // existing transport path. It has no separate header boundary.
+                            if request.auth_requires_buffered_transport()
+                                || matches!(
+                                    request.redirect_handling(),
+                                    moli_fetch::RequestRedirectHandling::FollowByCaller
+                                        | moli_fetch::RequestRedirectHandling::Manual
+                                )
+                            {
+                                return request_client
+                                    .fetch_text_stream_with_cancel_after_policy(
+                                        request,
+                                        cancel_handle,
+                                    )
+                                    .await;
+                            }
+                            let response = request_client
+                                .fetch_raw_stream_with_cancel_after_policy(request, cancel_handle)
+                                .await?;
+                            on_response_start();
+                            collect_streaming_raw_response_as_text(response).await
+                        })
                     });
                 let _ = response_tx.send(result);
             })

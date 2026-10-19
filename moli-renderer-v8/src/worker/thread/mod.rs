@@ -44,6 +44,7 @@ mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
 
+use super::networking_tasks::WorkerNetworkingTaskQueue;
 use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
     create_script_origin, dispatch_broadcast_channel_event, dispatch_message_event,
@@ -56,7 +57,7 @@ use dispatch::{
     dispatch_worker_exception_with_phase, dispatch_worker_exception_with_phase_and_source,
     enqueue_service_worker_navigation_preload_stream_chunk,
     fail_service_worker_navigation_preload_response,
-    finish_service_worker_navigation_preload_stream, fire_timer_callback,
+    finish_service_worker_navigation_preload_stream, fire_timer_callback, fire_worker_callback,
     install_worker_promise_rejection_dispatch,
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections,
     report_exception_to_parent, start_service_worker_navigation_preload_response,
@@ -539,7 +540,8 @@ pub(super) struct ActiveTimer {
 
 fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
     let state = state.borrow();
-    !state.pending_fetches.is_empty()
+    !state.networking_tasks.is_empty()
+        || !state.pending_fetches.is_empty()
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
@@ -1573,6 +1575,10 @@ async fn worker_main(
     worker_isolate
         .worker_isolate_mut()
         .set_slot(worker_timer_queues.clone());
+    let worker_networking_tasks = WorkerNetworkingTaskQueue::new(worker_wake_tx.clone());
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(worker_networking_tasks.clone());
 
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
@@ -1624,6 +1630,7 @@ async fn worker_main(
     let state = Rc::new(RefCell::new(WorkerGlobalState {
         common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
         resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),
+        networking_tasks: worker_networking_tasks.clone(),
         parent_tx: parent_tx.clone(),
         worker_wake_tx,
         termination_requested: Arc::clone(&termination_requested),
@@ -2618,6 +2625,24 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(WorkerMessage::RunNetworkingTask)) => {
+                // Networking callbacks can complete a module's top-level await,
+                // so they remain runnable while module bootstrap is pending.
+                if let Some(callback) = worker_networking_tasks.pop_front() {
+                    fire_worker_callback(
+                        worker_isolate.worker_isolate_mut(),
+                        &callback,
+                        &[],
+                        &parent_tx,
+                        &script_url,
+                    );
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::DispatchPendingPromiseRejections)) => {
                 if pending_module_bootstrap.is_some() {
                     pending_bootstrap_messages
@@ -3360,6 +3385,10 @@ async fn worker_main(
     resource_loader.finish_detach();
     crate::blob::cleanup_owner_resources(resource_owner_id);
     *isolate_handle.lock() = None;
+    worker_networking_tasks.clear();
+    worker_isolate
+        .worker_isolate_mut()
+        .remove_slot::<WorkerNetworkingTaskQueue>();
     drop(active_timers);
     drop(context);
     drop(state);

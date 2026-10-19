@@ -20,6 +20,9 @@ pub(crate) struct WorkerGlobalState {
     /// Resource Timing capacity and overflow state belongs to this worker,
     /// independently from its creator's Window or any other worker.
     pub(crate) resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry,
+    /// Native networking callbacks owned by this Worker run.
+    pub(in crate::worker) networking_tasks:
+        crate::worker::networking_tasks::WorkerNetworkingTaskQueue,
     /// Channel to send messages back to the parent.
     pub(in crate::worker) parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     /// Internal wake channel used by worker-owned async runtime surfaces.

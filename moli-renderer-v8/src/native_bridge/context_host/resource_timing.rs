@@ -122,17 +122,12 @@ impl SharedResourceTimingBufferRegistry {
     }
 }
 
-impl JsContextHost {
-    pub(crate) fn resource_timing_buffer_registry(&self) -> SharedResourceTimingBufferRegistry {
-        self.resource_timing_buffers.clone()
-    }
-
+impl SharedResourceTimingBufferRegistry {
     pub(crate) fn resource_timing_buffer_can_add_immediately(
         &self,
         id: ResourceTimingBufferId,
     ) -> bool {
-        self.resource_timing_buffers
-            .0
+        self.0
             .borrow()
             .buffers
             .get(&id)
@@ -143,8 +138,7 @@ impl JsContextHost {
         &self,
         id: ResourceTimingBufferId,
     ) -> bool {
-        self.resource_timing_buffers
-            .0
+        self.0
             .borrow()
             .buffers
             .get(&id)
@@ -152,13 +146,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn note_resource_timing_primary_entry_added(&self, id: ResourceTimingBufferId) {
-        if let Some(state) = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-        {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id) {
             state.current_size = state.current_size.saturating_add(1);
         }
     }
@@ -167,7 +155,7 @@ impl JsContextHost {
         &self,
         id: ResourceTimingBufferId,
     ) -> bool {
-        let mut registry = self.resource_timing_buffers.0.borrow_mut();
+        let mut registry = self.0.borrow_mut();
         let Some(state) = registry.buffers.get_mut(&id) else {
             return false;
         };
@@ -179,13 +167,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn finish_resource_timing_buffer_full_task(&self, id: ResourceTimingBufferId) {
-        if let Some(state) = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-        {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id) {
             state.full_task_pending = false;
         }
     }
@@ -195,13 +177,7 @@ impl JsContextHost {
         id: ResourceTimingBufferId,
         entry: v8::Global<v8::Object>,
     ) {
-        if let Some(state) = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-        {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id) {
             state.secondary.push_back(entry);
         }
     }
@@ -210,8 +186,7 @@ impl JsContextHost {
         &self,
         id: ResourceTimingBufferId,
     ) -> Option<v8::Global<v8::Object>> {
-        self.resource_timing_buffers
-            .0
+        self.0
             .borrow_mut()
             .buffers
             .get_mut(&id)?
@@ -220,8 +195,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn secondary_resource_timing_buffer_len(&self, id: ResourceTimingBufferId) -> usize {
-        self.resource_timing_buffers
-            .0
+        self.0
             .borrow()
             .buffers
             .get(&id)
@@ -230,15 +204,15 @@ impl JsContextHost {
     }
 
     pub(crate) fn clear_secondary_resource_timing_buffer(&self, id: ResourceTimingBufferId) {
-        if let Some(state) = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-        {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id) {
             state.secondary.clear();
         }
+    }
+}
+
+impl JsContextHost {
+    pub(crate) fn resource_timing_buffer_registry(&self) -> SharedResourceTimingBufferRegistry {
+        self.resource_timing_buffers.clone()
     }
 
     #[cfg(test)]

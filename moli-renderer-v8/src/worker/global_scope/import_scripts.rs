@@ -20,7 +20,7 @@ fn resolve_import_script_url(
     input: &str,
 ) -> Result<Url, WorkerImportScriptError> {
     let base_url = state.borrow().current_script_url.clone();
-    let mut url = Url::parse(input)
+    let url = Url::parse(input)
         .or_else(|_| {
             base_url
                 .as_ref()
@@ -40,7 +40,6 @@ fn resolve_import_script_url(
             )));
         }
     }
-    url.set_fragment(None);
     Ok(url)
 }
 
@@ -54,13 +53,16 @@ fn materialize_worker_import_source(
         csp.check_url(script_url, ContentSecurityPolicyRedirectStatus::NoRedirect)
             .map_err(WorkerImportScriptError::network)?;
     }
+    let timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("other");
+    let mut fetch_url = script_url.clone();
+    fetch_url.set_fragment(None);
     match script_url.scheme() {
         "data" => {
             let source =
-                decode_data_url_script_source(script_url, "Failed to execute 'importScripts'")
+                decode_data_url_script_source(&fetch_url, "Failed to execute 'importScripts'")
                     .map_err(WorkerImportScriptError::network)?;
             let mime_type =
-                moli_web_mime::data_url_mime_type(script_url.as_str()).ok_or_else(|| {
+                moli_web_mime::data_url_mime_type(fetch_url.as_str()).ok_or_else(|| {
                     WorkerImportScriptError::network(format!(
                         "Failed to execute 'importScripts': invalid data URL `{script_url}`."
                     ))
@@ -74,7 +76,7 @@ fn materialize_worker_import_source(
             })
         }
         "blob" => {
-            let (body, mime_type) = crate::blob::object_url_body_and_type(script_url.as_str())
+            let (body, mime_type) = crate::blob::object_url_body_and_type(fetch_url.as_str())
                 .ok_or_else(|| {
                     WorkerImportScriptError::network(format!(
                         "Failed to execute 'importScripts': blob URL `{}` is unavailable.",
@@ -100,24 +102,31 @@ fn materialize_worker_import_source(
                     state.policy_context,
                 )
             };
-            let source = fetch_worker_import_source_blocking(
+            let fetched = fetch_worker_import_source_blocking(
                 loader,
-                script_url.clone(),
-                initiator_url,
-                worker_global_origin(scope).unwrap_or(WebOrigin::Opaque),
-                referrer_policy,
-                network_partition_key,
-                policy_context,
-                csp.map(|csp| {
-                    moli_fetch::RequestRedirectCheck::new(move |checked_url| {
-                        csp.check_url(
-                            checked_url,
-                            ContentSecurityPolicyRedirectStatus::FollowedRedirect,
-                        )
-                    })
-                }),
+                WorkerImportScriptRequest {
+                    script_url: script_url.clone(),
+                    initiator_url,
+                    origin: worker_global_origin(scope).unwrap_or(WebOrigin::Opaque),
+                    referrer_policy,
+                    network_partition_key,
+                    policy_context,
+                    timing,
+                    redirect_check: csp.map(|csp| {
+                        moli_fetch::RequestRedirectCheck::new(move |checked_url| {
+                            csp.check_url(
+                                checked_url,
+                                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                            )
+                        })
+                    }),
+                },
             )
             .map_err(WorkerImportScriptError::network)?;
+            // Publish before evaluating the source, and before propagating
+            // HTTP/MIME/network errors to the caller of importScripts().
+            crate::context_bootstrap::record_resource_performance_entry(scope, fetched.timing);
+            let source = fetched.script.map_err(WorkerImportScriptError::network)?;
             if let Some(resource) = source.resource.clone() {
                 report_service_worker_imported_script_loaded(state, resource);
             }
@@ -238,8 +247,7 @@ fn ensure_worker_import_script_mime_acceptable(
         .map_err(WorkerImportScriptError::network)
 }
 
-pub(super) fn fetch_worker_import_source_blocking(
-    loader: crate::network::context::WorkerResourceLoader,
+struct WorkerImportScriptRequest {
     script_url: Url,
     initiator_url: Option<Url>,
     origin: WebOrigin,
@@ -247,9 +255,32 @@ pub(super) fn fetch_worker_import_source_blocking(
     network_partition_key: Option<String>,
     policy_context: crate::types::SubresourcePolicyContext,
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
-) -> Result<WorkerImportScriptSource, String> {
+    timing: crate::context_bootstrap::FetchResourceTiming,
+}
+
+struct WorkerImportScriptFetch {
+    script: Result<WorkerImportScriptSource, String>,
+    timing: crate::context_bootstrap::ResourcePerformanceEntry,
+}
+
+fn fetch_worker_import_source_blocking(
+    loader: crate::network::context::WorkerResourceLoader,
+    request: WorkerImportScriptRequest,
+) -> Result<WorkerImportScriptFetch, String> {
+    let WorkerImportScriptRequest {
+        script_url,
+        initiator_url,
+        origin,
+        referrer_policy,
+        network_partition_key,
+        policy_context,
+        redirect_check,
+        timing,
+    } = request;
     let request_url = script_url.clone();
-    let mut request = moli_fetch::Request::new("GET", script_url.as_str(), None, vec![])
+    let mut fetch_url = script_url.clone();
+    fetch_url.set_fragment(None);
+    let mut request = moli_fetch::Request::new("GET", fetch_url.as_str(), None, vec![])
         .map_err(|error| error.to_string())?
         .with_page_network_policy()
         .with_request_mode(RequestMode::NoCors)
@@ -275,47 +306,81 @@ pub(super) fn fetch_worker_import_source_blocking(
             Some(cancel_handle.clone()),
         )
         .ok_or_else(|| "worker is shutting down".to_owned())?;
+    let timing = Arc::new(parking_lot::Mutex::new(timing));
+    let header_timing = timing.clone();
+    let header_cancel = cancel_handle.clone();
     let response = loader
         .request_client()
-        .fetch_text_for_worker_blocking_boundary_with_cancel(request, cancel_handle)
+        .fetch_text_for_worker_blocking_boundary_with_response_start(
+            request,
+            cancel_handle.clone(),
+            move || {
+                let mut timing = header_timing.lock();
+                timing.response_started();
+                timing.observe_native_timing(header_cancel.response_timing());
+            },
+        )
         .map_err(|error| format!("failed to fetch worker import `{script_url}`: {error}"));
+    timing
+        .lock()
+        .observe_native_timing(cancel_handle.response_timing());
     load.finish();
-    let response = response?;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(WorkerImportScriptFetch {
+                script: Err(error),
+                timing: timing.lock().failure(&request_url),
+            });
+        }
+    };
     let response_time_ms = response_started_at
         .elapsed()
         .as_millis()
         .min(u64::MAX as u128) as u64;
-    // Classic imported scripts use no-cors, unlike the worker's top-level
-    // same-origin fetch and module CORS fetches. Any cross-origin response in
-    // the URL chain taints the result, even if it redirects back to the worker.
+    // Classic imports use no-cors. Every cross-origin hop taints errors,
+    // even when a later redirect returns to the worker origin.
     let head = response.head();
     let muted_errors = head.url_list().has_cross_origin_url(&origin);
-    let response_validation = (|| {
+    let security_result = validate_fetch_response_security_policy(
+        origin.clone(),
+        &head,
+        RequestMode::NoCors,
+        RequestCredentialsMode::SameOrigin,
+        policy_context,
+    );
+    let performance_entry = if security_result.is_ok() {
+        timing.lock().classic_script_response(
+            &request_url,
+            &origin,
+            &head,
+            response.body_bytes().len(),
+        )
+    } else {
+        timing.lock().failure(&request_url)
+    };
+    let response_validation = security_result.and_then(|()| {
         moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
             .map_err(|error| error.to_string())?;
         crate::worker::ensure_worker_script_mime_acceptable(
             &response.final_url,
             &response.headers,
             response.body_bytes(),
-        )?;
-        validate_fetch_response_security_policy(
-            origin,
-            &head,
-            RequestMode::NoCors,
-            RequestCredentialsMode::SameOrigin,
-            policy_context,
-        )?;
-        Ok::<_, String>(())
-    })();
-    response_validation.map_err(|error| {
-        if muted_errors {
+        )
+    });
+    if let Err(error) = response_validation {
+        let error = if muted_errors {
             format!(
                 "Failed to execute 'importScripts': The script at '{script_url}' failed to load."
             )
         } else {
             error
-        }
-    })?;
+        };
+        return Ok(WorkerImportScriptFetch {
+            script: Err(error),
+            timing: performance_entry,
+        });
+    }
     let (head, body, body_bytes) = response.into_parts();
     let resource = crate::worker::WorkerScriptResource::from_response_parts(
         request_url,
@@ -323,11 +388,14 @@ pub(super) fn fetch_worker_import_source_blocking(
         &body_bytes,
         response_time_ms,
     );
-    Ok(WorkerImportScriptSource {
-        final_url: head.final_url,
-        source: body,
-        muted_errors,
-        resource: Some(resource),
+    Ok(WorkerImportScriptFetch {
+        script: Ok(WorkerImportScriptSource {
+            final_url: head.final_url,
+            source: body,
+            muted_errors,
+            resource: Some(resource),
+        }),
+        timing: performance_entry,
     })
 }
 

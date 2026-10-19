@@ -17,6 +17,7 @@ mod handle;
 mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
+mod networking_tasks;
 mod script_loading;
 mod script_mime;
 mod thread;
@@ -62,6 +63,7 @@ pub(crate) use module_mime::{
     ensure_worker_wasm_module_mime,
 };
 pub(crate) use module_runtime::worker_wasm_instance_for_namespace;
+pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) use script_loading::ensure_worker_script_redirect_chain_same_origin;
 pub(crate) use script_mime::{
     ensure_worker_script_mime_acceptable, worker_response_has_webassembly_mime,

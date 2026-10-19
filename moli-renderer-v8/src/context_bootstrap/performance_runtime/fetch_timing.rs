@@ -140,6 +140,34 @@ impl FetchResourceTiming {
         entry
     }
 
+    pub(crate) fn classic_script_response(
+        &self,
+        name: &Url,
+        origin: &WebOrigin,
+        head: &ResponseHead,
+        body_size: usize,
+    ) -> ResourcePerformanceEntry {
+        let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
+            name.as_str(),
+            self.initiator_type,
+            Some(self.start_unix_millis),
+            head,
+            body_size,
+        );
+        // Imported scripts execute opaque no-cors responses. TAO exposes their
+        // transfer/body sizes, but never changes the filtered response status.
+        if !self.finish_response(&mut entry, origin, head) {
+            entry.encoded_body_size = 0.0;
+            entry.decoded_body_size = 0.0;
+        }
+        if head.url_list().has_cross_origin_url(origin) {
+            entry.response_status = 0.0;
+            entry.content_type.clear();
+            entry.content_encoding.clear();
+        }
+        entry
+    }
+
     fn finish_response(
         &self,
         entry: &mut ResourcePerformanceEntry,
