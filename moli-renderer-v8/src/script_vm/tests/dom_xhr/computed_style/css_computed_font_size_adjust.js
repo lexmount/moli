@@ -55,8 +55,21 @@
     return true;
 })();
 
+// Retain branch Typed OM assertions alongside main native CSSOM checks.
 (() => {
     const check = (ok, message) => { if (!ok) throw new Error(message); };
+    for (const doc of [document, document.implementation.createHTMLDocument('')]) {
+        const style = doc.createElement('div').style;
+        style.cssText = 'font:16px serif;font-size-adjust:0';
+        check(style.font === '', 'non-initial size adjustment prevents font serialization');
+        style.font = '12px sans-serif';
+        check(style.fontSizeAdjust === 'none', 'font resets size adjustment');
+        check(style.font === '12px sans-serif', 'font serializes after reset');
+        style.fontSizeAdjust = '0.5';
+        style.setProperty('font', '16px serif', 'important');
+        check(style.fontSizeAdjust === 'none', 'important font resets size adjustment');
+        check(style.getPropertyPriority('font-size-adjust') === 'important', 'reset priority');
+    }
     const parent = document.createElement('div');
     const child = document.createElement('div');
     parent.style.cssText = 'font:20px serif;font-size-adjust:0.75;--font:16px serif';
