@@ -78,9 +78,11 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
         return;
     }
 
-    let cached_snapshot = Url::parse(&navigation_target)
-        .ok()
-        .and_then(|url| runtime.materialize_local_child_snapshot_for_navigation_url(handle, &url));
+    let cached_snapshot = Url::parse(&navigation_target).ok().and_then(|url| {
+        runtime
+            .materialize_local_child_snapshot_for_navigation_url(handle, &url)
+            .into_snapshot()
+    });
     runtime.cache_child_browsing_context_snapshot(scope, handle, cached_snapshot);
     runtime.sync_existing_child_browsing_context_window_state(scope, handle);
     let _ = runtime.queue_child_document_complete_lifecycle_if_ready(handle);
