@@ -78,6 +78,7 @@ mod source_owner;
 mod source_owner_text;
 mod source_record;
 mod source_scope_plan;
+mod source_sizes;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
