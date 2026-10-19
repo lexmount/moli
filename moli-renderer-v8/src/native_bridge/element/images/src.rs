@@ -500,6 +500,15 @@ fn image_selected_picture_source(
         {
             continue;
         }
+        if let Some(type_hint) = source.attribute_ns("", "type")
+            // An empty HTML hint leaves the format unconstrained. Nonempty
+            // hints use the same MIME parser and codec capabilities as preload.
+            && !type_hint.chars().all(|ch| matches!(ch, '\t' | '\n' | '\x0c' | '\r' | ' '))
+            && !moli_web_mime::mime_essence(type_hint)
+                .is_some_and(|essence| moli_image::supports_image_mime_essence(&essence))
+        {
+            continue;
+        }
         if let Some(srcset) = source.attribute("srcset")
             && let Some(candidate) = selected_srcset_candidate(
                 srcset,
