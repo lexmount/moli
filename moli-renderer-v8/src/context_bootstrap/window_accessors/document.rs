@@ -1,4 +1,4 @@
-use super::helpers::{window_child_context_handle, window_host_ptr, window_receiver};
+use super::helpers::{window_child_context_handle, window_host_ptr};
 use crate::{
     document_runtime::DomHandle,
     native_bridge::{PageScriptHost, WindowEnvironmentSettings},
@@ -20,16 +20,16 @@ pub(in crate::context_bootstrap) fn window_document_getter_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     cache_property: Option<v8::Local<'s, v8::Private>>,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
+    let callback = <WindowDocumentAccessorDeclaration as
+        moli_webapi_declare::WebApiFunctionTemplateDeclaration>::accessor_getter_callback("document")
+        .expect("declared Window.document getter");
     let template = match cache_property {
         Some(cache_property) => {
-            v8::FunctionTemplate::new_with_cache(scope, window_document_getter, cache_property)
+            v8::FunctionTemplate::new_with_cache_raw(scope, callback, cache_property)
         }
-        None => v8::FunctionTemplate::new(scope, window_document_getter),
+        None => v8::FunctionTemplate::new_raw(scope, callback),
     };
     template.remove_prototype();
-    // WindowProxy checks ordinary property reads before using the cache.
-    // Explicit getter calls must reach our receiver check in the callee's
-    // realm so a borrowed getter creates errors with the correct intrinsic.
     template
 }
 
@@ -82,9 +82,7 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = args.this();
     let Some(context) = receiver.get_creation_context(scope) else {
         rv.set_null();
         return;

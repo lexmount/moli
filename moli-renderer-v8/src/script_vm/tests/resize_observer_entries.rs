@@ -59,6 +59,7 @@ fn resize_observer_sampling_does_not_consume_pending_delivery() {
         Ok(())
     })
     .unwrap();
+    broadcast_published_resize_observations(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(deliveries)").unwrap(),
         r#"[[["content",80,94],["border",80,94],["device",80,94]]]"#,
@@ -85,6 +86,7 @@ fn resize_observer_reporting_commits_only_selected_measurements() {
         Ok(())
     })
     .unwrap();
+    broadcast_published_resize_observations(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(deliveries)").unwrap(),
         r#"[[["content",80,94],["device",80,94]]]"#
@@ -120,6 +122,26 @@ fn realtime_ro_sampling_does_not_treat_missing_snapshot_as_removed_boxes() {
     })
     .unwrap();
     assert_eq!(vm.eval("JSON.stringify(deliveries)").unwrap(), "[]");
+}
+
+// These projection tests isolate sampling from the rendering task's layout
+// publication. Only already-published geometry may be queried by a broadcast.
+fn broadcast_published_resize_observations(vm: &mut StandaloneScriptVmHarness) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+        let host = unsafe { &*host_ptr };
+        let dispatch = crate::native_bridge::OwnerDispatchScope::Top;
+        let target = host
+            .current_window_document_task_target_for_dispatch_scope(dispatch)
+            .unwrap();
+        let owner = host
+            .current_window_execution_context_owner(dispatch)
+            .unwrap();
+        crate::context_bootstrap::broadcast_document_resize_observers(
+            scope, host_ptr, target, owner, 0,
+        )?;
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -174,6 +196,7 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     "#,
     )
     .unwrap();
+    broadcast_published_resize_observations(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         "[[50,100,100,50,104,54]]"
@@ -181,6 +204,7 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 
     vm.eval("target.style.writingMode='horizontal-tb'").unwrap();
+    broadcast_published_resize_observations(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         "[[50,100,100,50,104,54]]",
@@ -193,6 +217,7 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     // This mutation schedules its existing check without requesting layout.
     vm.eval("target.setAttribute('data-resample','yes')")
         .unwrap();
+    broadcast_published_resize_observations(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         "[[50,100,100,50,104,54],[50,100,50,100,54,104]]"
@@ -229,6 +254,7 @@ fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
     "#,
     )
     .unwrap();
+    broadcast_published_resize_observations(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         r#"[["inline",0,0,0,0,0,0],["atomic",50,100,100,50,104,54]]"#,

@@ -81,7 +81,8 @@ mod document_parser_owner;
 mod svg_smil;
 pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
 pub(crate) use child_frame_runtime::{
-    install_synthetic_window_access_check_handlers, synthetic_window_context_can_access,
+    cross_origin_location_replace_function, install_synthetic_window_access_check_handlers,
+    synthetic_window_context_can_access,
 };
 mod child_frame_snapshots;
 mod child_frames;

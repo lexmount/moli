@@ -29,7 +29,7 @@ struct BarPropPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(plain, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowBarPropsDeclaration<'s> {
     locationbar_data: v8::Local<'s, v8::Value>,
     menubar_data: v8::Local<'s, v8::Value>,
@@ -38,28 +38,22 @@ struct WindowBarPropsDeclaration<'s> {
     statusbar_data: v8::Local<'s, v8::Value>,
     toolbar_data: v8::Local<'s, v8::Value>,
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
-        data = self.locationbar_data, setter_data = self.locationbar_data)]
-    #[webapi(receiver_access_check = "setter")]
+        data = self.locationbar_data, setter_data = self.locationbar_data, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     locationbar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
-        data = self.menubar_data, setter_data = self.menubar_data)]
-    #[webapi(receiver_access_check = "setter")]
+        data = self.menubar_data, setter_data = self.menubar_data, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     menubar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
-        data = self.personalbar_data, setter_data = self.personalbar_data)]
-    #[webapi(receiver_access_check = "setter")]
+        data = self.personalbar_data, setter_data = self.personalbar_data, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     personalbar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
-        data = self.scrollbars_data, setter_data = self.scrollbars_data)]
-    #[webapi(receiver_access_check = "setter")]
+        data = self.scrollbars_data, setter_data = self.scrollbars_data, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scrollbars: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
-        data = self.statusbar_data, setter_data = self.statusbar_data)]
-    #[webapi(receiver_access_check = "setter")]
+        data = self.statusbar_data, setter_data = self.statusbar_data, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     statusbar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
-        data = self.toolbar_data, setter_data = self.toolbar_data)]
-    #[webapi(receiver_access_check = "setter")]
+        data = self.toolbar_data, setter_data = self.toolbar_data, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     toolbar: (),
 }
 

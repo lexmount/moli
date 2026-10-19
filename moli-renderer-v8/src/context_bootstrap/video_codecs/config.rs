@@ -4,7 +4,7 @@
 
 use super::super::video_color_space::VideoColorSpaceInit;
 use crate::{blob::array_buffer_from_bytes, webidl};
-use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
+use webidl::SnapshotPrototype;
 
 fn codec_is_empty(codec: &webidl::DomString16) -> bool {
     codec

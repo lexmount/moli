@@ -3,12 +3,13 @@
 
 use crate::{
     context_bootstrap::{events, exposed_interfaces, media_queries},
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
+    util::{callback_data_index_value, callback_data_item, get_private_value},
     web_api_interfaces,
 };
+use moli_webapi::rtc::peer_connection::signaling::{
+    CURRENT_LOCAL, CURRENT_REMOTE, HANDLER, PENDING_LOCAL, PENDING_REMOTE,
+};
 use moli_webapi_declare::WebApiFunctionTemplate;
-use moli_webapi::rtc::peer_connection::signaling::{CURRENT_LOCAL, PENDING_LOCAL, CURRENT_REMOTE, PENDING_REMOTE, HANDLER};
-
 
 const DESCRIPTIONS: &[(&str, Option<&str>)] = &[
     (PENDING_LOCAL, Some(CURRENT_LOCAL)),

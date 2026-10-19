@@ -310,7 +310,7 @@ fn worker_global_onrtctransform_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONRTCTRANSFORM_SLOT,
-        Some("rtctransform"),
+        "rtctransform",
     );
 }
 

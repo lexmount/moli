@@ -2426,7 +2426,7 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,
-        value: &str,
+        value: impl Into<moli_dom::native::DomStringValue>,
     ) -> bool {
         // Capture selected peers before the native multi-option commit. The
         // same wrapper serves the Web setter and native autofill.

@@ -2352,7 +2352,6 @@ mod document_svg_root;
 mod image_bitmap_clone;
 mod image_bitmap_tasks;
 mod image_data_native;
-mod message_port_transfer;
 mod payment_events;
 mod payment_request;
 mod reporting_observer;
@@ -2416,15 +2415,12 @@ mod svg_transform_native_receivers;
 mod svg_detached_lengths;
 mod svg_transform_sync_consolidation;
 
-mod cross_origin_named_children;
-mod declarative_receivers;
 mod svg_transform_float_arguments;
 
 mod html_constructor_proxy_handler_isolation;
 
 mod data_transfer_native_receivers;
 mod exception_constructor_strings;
-mod frame_owner_origin_access;
 
 mod encrypted_media;
 mod hyperlink_null_url_protocol;

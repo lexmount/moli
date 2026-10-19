@@ -47,8 +47,7 @@ pub fn initialize_css_animation_start_event<'s>(
         elapsed_time,
         pseudo_element: v8str(scope, ""),
     }
-    .initialize_snapshot(scope, state)
-    .ok()?;
+    .initialize_own_snapshot(scope, state)?;
     web_api_interfaces::AnimationEvent::DESCRIPTOR
         .initialize(scope, state)
         .ok()?;

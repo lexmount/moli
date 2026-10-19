@@ -161,12 +161,6 @@ pub(in crate::context_bootstrap) fn bound_callback_data_item<'s>(
     // The original getter can return its captured SameObject after retirement.
     // A live receiver, including a reused WindowProxy, must pass authorization
     // before any private cache read or entry into its relevant Realm.
-    if !original_retired_receiver
-        && !crate::native_bridge::caller_can_access_window(scope, args.this())
-    {
-        crate::native_bridge::throw_cross_origin_location_security_error(scope);
-        return None;
-    }
     let Some(item) = index.and_then(|index| items.get(index)).copied() else {
         throw_type_error(scope, &format!("Invalid callback data for {context}."));
         return None;

@@ -1,6 +1,4 @@
 pub(crate) use crate::util::{
-    define_non_enumerable_static_bool_property as define_non_enumerable_bool_property,
-    define_non_enumerable_static_number_property as define_non_enumerable_number_property,
     define_non_enumerable_static_property as define_non_enumerable_value_property,
     define_non_enumerable_static_string_property as define_non_enumerable_string_property,
 };

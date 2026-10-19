@@ -29,7 +29,6 @@ use super::navigation_window::{
     navigation_document_has_disabled_entries, navigation_document_is_active,
     window_location_for_holder, window_navigation_for_holder,
 };
-use super::*;
 use crate::script_cleanup::ScriptExecutionScope;
 
 pub(super) fn dispatch_download_navigation_event<'s>(
@@ -187,10 +186,8 @@ fn finish_download_navigation_error<'s>(
     let committed_resolver = transition_resolver
         .filter(|resolver| navigation_transition_matches_resolver(scope, navigation, *resolver))
         .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation));
-    if let Some(signal) = outcome.signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = outcome.signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, href);
     if let Some(resolver) = committed_resolver {

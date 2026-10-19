@@ -366,7 +366,7 @@ fn resolve_named_measure_boundary<'s>(
         );
         return Err(());
     }
-    if name == "navigationStart" {
+    if timing_name == "navigationStart" {
         return Ok(0.0);
     }
     let timing = match super::lazy_subobjects::ensure_performance_subobject(
@@ -386,7 +386,7 @@ fn resolve_named_measure_boundary<'s>(
             return Err(());
         }
     };
-    let value = install::performance_timing_value(scope, timing, name)
+    let value = install::performance_timing_value(scope, timing, timing_name)
         .number_value(scope)
         .expect("native PerformanceTiming attributes should be numeric");
     if value == 0.0 {

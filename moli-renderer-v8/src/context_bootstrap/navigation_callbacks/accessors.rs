@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::{context_host_ptr_from_window_object, get_private_value};
+use crate::util::get_private_value;
 use crate::webidl;
 
 fn window_receiver<'s>(
@@ -8,7 +8,7 @@ fn window_receiver<'s>(
     member: &'static str,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if context_host_ptr_from_window_object(scope, receiver).is_some() {
+    if super::super::is_window_receiver(scope, receiver) {
         return Some(receiver);
     }
     webidl::throw_type_error(
@@ -58,8 +58,7 @@ pub(in crate::context_bootstrap) fn window_location_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args, "location") else {
         return;
     };
-    let Some(value) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT)
-        .filter(|v| !v.is_undefined())
+    let Some(value) = object_window_slot_value(scope, receiver, WINDOW_LOCATION_SLOT)
         .or_else(|| global_location_slot_value(scope))
     else {
         webidl::throw_type_error(
@@ -136,18 +135,13 @@ pub(in crate::context_bootstrap) fn document_location_setter<'s>(
     rv.set_undefined();
 }
 
-fn object_location_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    object_window_slot_value(scope, object, WINDOW_LOCATION_SLOT)
-}
-
 fn object_window_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let context = object.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     get_private_value(scope, object, slot).filter(|value| !value.is_undefined())
 }
 

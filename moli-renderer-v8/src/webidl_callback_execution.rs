@@ -51,6 +51,7 @@ pub(crate) enum WebIdlCallbackExecutionOutcome<R, E> {
 
 enum CallbackExecutionEnvironment {
     Window {
+        context: v8::Global<v8::Context>,
         // Some API registrations, including observers, authorize both the
         // API object's owner and the callback's potentially different Realm.
         owner_identity: Option<WindowExecutionContextIdentity>,
@@ -76,6 +77,7 @@ impl PreparedWebIdlCallbackExecution {
         Some(Self {
             callback,
             environment: CallbackExecutionEnvironment::Window {
+                context: v8::Global::new(scope, scope.get_current_context()),
                 owner_identity,
                 callback_identity,
             },
@@ -121,6 +123,7 @@ impl PreparedWebIdlCallbackExecution {
                 let callback_identity =
                     host.window_execution_context_identity_for_v8_context(scope, context)?;
                 CallbackExecutionEnvironment::Window {
+                    context: v8::Global::new(scope, scope.get_current_context()),
                     owner_identity: None,
                     callback_identity,
                 }
@@ -153,8 +156,22 @@ impl PreparedWebIdlCallbackExecution {
     }
 
     pub(crate) fn is_current(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
-        !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
-            && self.environment.can_invoke(scope, &self.binding)
+        if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
+            return false;
+        }
+        // Validate the exact preparation Context independently of the caller's
+        // ambient Realm. The neutral callback layer then enters the relevant
+        // Realm, which may belong to another Window or Page owner.
+        match &self.environment {
+            CallbackExecutionEnvironment::Window { context, .. } => {
+                let context = v8::Local::new(scope, context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                self.environment.can_invoke(scope, &self.binding)
+            }
+            CallbackExecutionEnvironment::Worker { .. } => {
+                self.environment.can_invoke(scope, &self.binding)
+            }
+        }
     }
 
     /// Execute the caller's invocation and return conversion while the Web
@@ -307,6 +324,7 @@ impl CallbackExecutionEnvironment {
                 Self::Window {
                     owner_identity,
                     callback_identity,
+                    ..
                 },
                 Some(RuntimeExecutionContext::Window(host_ptr)),
             ) => {

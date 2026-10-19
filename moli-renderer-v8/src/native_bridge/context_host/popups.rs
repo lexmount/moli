@@ -10,12 +10,10 @@ use crate::navigation_document::{
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
     context_bootstrap::{
-        SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
-        apply_local_window_location_navigation, clear_simple_window_event_handler_values,
+        SharedWebStorageStore, WINDOW_NAME_SLOT, apply_local_window_location_navigation,
         construct_original_event, construct_original_page_transition_event,
-        deep_clone_shared_web_storage_store, dispatch_beforeunload_for_runtime_owner,
-        dispatch_pagehide_for_runtime_owner,
-        dispatch_simple_event_target_event_with_original_target, dispatch_unload_for_runtime_owner,
+        deep_clone_shared_web_storage_store,
+        dispatch_simple_event_target_event_with_original_target,
         finish_cross_document_navigation_for_window,
         history_entry_seed_for_location_kind, initialize_simple_event_target,
         install_navigation_bootstrap_entry_for_holder, install_simple_window_event_handlers,
@@ -3746,7 +3744,6 @@ impl PageScriptHost {
             crate::context_bootstrap::invoke_simple_event_target_listeners(
                 scope,
                 window,
-                LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
                 event_type,
                 event,
                 capture,

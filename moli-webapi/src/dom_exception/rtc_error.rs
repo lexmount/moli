@@ -141,6 +141,7 @@ pub fn build_rtc_sdp_error<'s>(
         sent_alert: None,
     }
     .initialize_snapshot(scope, object)?;
+
     capture_dom_exception_stack(scope, object);
     Some(object)
 }

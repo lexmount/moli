@@ -67,9 +67,7 @@ pub(in crate::context_bootstrap) fn window_credentialless_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = args.this();
     let Some(handle) = window_child_context_handle(scope, receiver) else {
         rv.set_bool(false);
         return;
@@ -86,9 +84,7 @@ pub(in crate::context_bootstrap) fn window_cross_origin_isolated_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = args.this();
     let Some(host_ptr) = window_host_ptr(scope, receiver) else {
         rv.set_bool(false);
         return;
