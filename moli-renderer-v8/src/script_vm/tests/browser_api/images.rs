@@ -1885,3 +1885,160 @@ async fn picture_source_and_image_tree_mutations_reselect_requests() {
         );
     }
 }
+
+async fn complete_svg_image_request_for_test(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    path: &str,
+    width: u32,
+    height: u32,
+) {
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 1, "{path}: one SVG image request");
+    assert_eq!(requests[0].url.path(), path);
+    let pixels =
+        moli_image::RgbaImage::try_new(width, height, vec![255; (width * height * 4) as usize])
+            .unwrap();
+    let encoded = moli_image::encode_png(&pixels).unwrap();
+    vm.fulfill_pending_subresource_fetch(
+        requests[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/png".to_vec())],
+        crate::runtime::RendererSyntheticResponseBody::from_bytes(encoded.bytes),
+    )
+    .unwrap();
+    run_next_image_event_task(vm, loader, "SVG namespaced image resource").await;
+    let handle = vm
+        .document_runtime
+        .get_element_by_id("svg-shared-source")
+        .unwrap();
+    let runtime = vm._context_host.borrow();
+    let ready = runtime.ready_image_for_layout(handle).unwrap();
+    assert_eq!(
+        (ready.intrinsic_width, ready.intrinsic_height),
+        (width as f32, height as f32),
+        "the actual admitted representation must match the selected href",
+    );
+}
+
+#[tokio::test]
+async fn svg_image_href_mutations_use_the_shared_resource_pipeline() {
+    let assignments = [
+        "__svgImage.setAttributeNS(__svgNs, __svgQName, '/new.png')",
+        "__svgImage.setAttribute(__svgQName, '/new.png')",
+        "__svgImage.getAttributeNodeNS(__svgNs, 'href').value = '/new.png'",
+        "__svgImage.getAttributeNodeNS(__svgNs, 'href').nodeValue = '/new.png'",
+        "__svgImage.getAttributeNodeNS(__svgNs, 'href').textContent = '/new.png'",
+        "{ const attr = document.createAttributeNS(__svgNs, __svgQName); attr.value = '/new.png'; __svgImage.setAttributeNodeNS(attr); }",
+        "{ const attr = document.createAttributeNS(__svgNs, __svgQName); attr.value = '/new.png'; __svgImage.attributes.setNamedItemNS(attr); }",
+        "__svgImage.href.baseVal = '/new.png'",
+    ];
+    for xlink in [false, true] {
+        for assignment in assignments {
+            let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+            loader.set_image_fetch_enabled(true);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://svg-namespaced-image.test/page.html",
+                &loader,
+            );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+            vm.set_fetch_subresource_interception(
+                true,
+                Some(crate::types::SubresourceResourceType::Image),
+            );
+            vm.eval(&format!(r#"
+                globalThis.__svgNs = {xlink} ? 'http://www.w3.org/1999/xlink' : null;
+                globalThis.__svgQName = {xlink} ? 'xlink:href' : 'href';
+                globalThis.__svgImage = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+                globalThis.__svgEvents = '';
+                __svgImage.setAttribute('id', 'svg-shared-source');
+                __svgImage.onload = () => __svgEvents += 'load;';
+                __svgImage.onerror = () => __svgEvents += 'error;';
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.appendChild(__svgImage);
+                document.body.appendChild(svg);
+                __svgImage.setAttributeNS(__svgNs, __svgQName, '/old.png');
+            "#)).unwrap();
+            complete_svg_image_request_for_test(&mut vm, &loader, "/old.png", 1, 2).await;
+            assert_eq!(vm.eval("__svgEvents").unwrap(), "load;");
+            vm.eval(assignment).unwrap();
+            complete_svg_image_request_for_test(&mut vm, &loader, "/new.png", 2, 3).await;
+            assert_eq!(
+                vm.eval("__svgEvents").unwrap(),
+                "load;load;",
+                "{xlink}: {assignment}"
+            );
+            assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn svg_image_href_priority_ignores_foreign_namespaces_and_falls_back_on_removal() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://svg-href-priority.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        globalThis.__svgImage = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+        globalThis.__svgEvents = '';
+        __svgImage.setAttribute('id', 'svg-shared-source');
+        __svgImage.onload = () => __svgEvents += 'load;';
+        __svgImage.onerror = () => __svgEvents += 'error;';
+        __svgImage.setAttributeNS('urn:ignored', 'href', '/foreign.png');
+        __svgImage.setAttributeNS('urn:ignored', 'crossorigin', 'use-credentials');
+        __svgImage.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '/legacy.png');
+        __svgImage.setAttributeNS(null, 'href', '/primary.png');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.appendChild(__svgImage);
+        document.body.appendChild(svg);
+    "#,
+    )
+    .unwrap();
+    let handle = vm
+        .document_runtime
+        .get_element_by_id("svg-shared-source")
+        .unwrap();
+    assert_eq!(
+        crate::native_bridge::element::image_selected_request_key(
+            &vm._context_host.borrow(),
+            handle
+        )
+        .unwrap(),
+        crate::types::ImageRequestKey::with_density(
+            "https://svg-href-priority.test/primary.png".to_owned(),
+            crate::types::ImageRequestCorsMode::NoCors,
+            1.0,
+        ),
+    );
+    complete_svg_image_request_for_test(&mut vm, &loader, "/primary.png", 2, 3).await;
+    vm.eval(
+        r#"
+        __svgImage.setAttributeNS('urn:ignored', 'href', '/different-foreign.png');
+        __svgImage.setAttributeNS(null, 'HREF', '/uppercase.png');
+        __svgImage.removeAttributeNS('urn:ignored', 'href');
+        __svgImage.removeAttributeNS(null, 'HREF');
+    "#,
+    )
+    .unwrap();
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    assert_eq!(vm.eval("__svgEvents").unwrap(), "load;");
+    vm.eval("__svgImage.removeAttributeNS(null, 'href')")
+        .unwrap();
+    complete_svg_image_request_for_test(&mut vm, &loader, "/legacy.png", 1, 2).await;
+    assert_eq!(vm.eval("__svgEvents").unwrap(), "load;load;");
+    vm.eval("__svgImage.removeAttributeNS('http://www.w3.org/1999/xlink', 'href')")
+        .unwrap();
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    assert!(
+        vm._context_host
+            .borrow()
+            .ready_image_for_layout(handle)
+            .is_none()
+    );
+}
