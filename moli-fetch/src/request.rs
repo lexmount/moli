@@ -346,7 +346,7 @@ pub enum RequestRedirectMode {
 /// The valid combinations of Fetch redirect policy and redirect ownership.
 /// Keeping them in one value prevents manual/error requests from accidentally
 /// enabling automatic transport redirects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RequestRedirectHandling {
     /// The fetch runtime follows redirects.
     Follow,
@@ -941,6 +941,18 @@ impl Request {
 
     pub fn with_redirect_headers(mut self, headers: Option<crate::RequestHeaders>) -> Self {
         self.redirect_headers = headers;
+        self
+    }
+
+    /// Add a cached representation's validators to this hop only. A redirect
+    /// targets a different representation and must restore the original
+    /// headers, including any request-scoped interception override.
+    pub fn with_cache_validation_headers(mut self, headers: crate::RequestHeaders) -> Self {
+        if !headers.is_empty() {
+            self.redirect_headers
+                .get_or_insert_with(|| self.request_headers.clone());
+            self.request_headers.overlay(headers);
+        }
         self
     }
 
