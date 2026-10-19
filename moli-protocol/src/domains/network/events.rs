@@ -813,6 +813,14 @@ pub(crate) fn emit_cdp_network_automation_event(
                 let response_mime_type = network_event
                     .response_mime_type
                     .clone()
+                    .or_else(|| match network_event.resource_type {
+                        Some(DevToolsNetworkResourceType::Document) => {
+                            moli_web_mime::navigation_response_mime_type_from_headers(
+                                &network_event.response_headers,
+                            )
+                        }
+                        _ => None,
+                    })
                     .or_else(|| {
                         response_header_value(&network_event.response_headers, "content-type")
                     })

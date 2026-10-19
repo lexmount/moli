@@ -17,7 +17,7 @@ pub(crate) fn navigation_response_content_type(
     headers: &[(String, Vec<u8>)],
     bytes: &[u8],
 ) -> String {
-    moli_web_mime::response_document_content_type(headers).unwrap_or_else(|| {
+    moli_web_mime::navigation_response_mime_type_from_headers(headers).unwrap_or_else(|| {
         moli_web_mime::computed_response_mime_type(
             headers,
             moli_web_mime::MimeSniffingContext::Browsing,
@@ -161,6 +161,23 @@ mod tests {
                 assert_eq!(content.parser_source().as_bytes(), html);
             }
         }
+    }
+
+    #[test]
+    fn unsupplied_navigation_mime_with_nosniff_never_becomes_an_image_document() {
+        let headers = vec![("X-Content-Type-Options".to_owned(), b"nosniff".to_vec())];
+        let bytes = b"GIF89a\x01\x00\x01\x00";
+        let mime = navigation_response_content_type(&headers, bytes);
+        assert_eq!(mime, "text/plain");
+        let (content, _) = decode_navigation_document_response(
+            bytes,
+            &headers,
+            Some(&mime),
+            &Url::parse("https://example.test/picture.gif").unwrap(),
+            None,
+        );
+        assert!(content.image().is_none());
+        assert_eq!(content.parser_source().as_bytes(), bytes);
     }
 
     #[test]
