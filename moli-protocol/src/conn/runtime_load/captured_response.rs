@@ -55,7 +55,9 @@ impl PreparedCapturedNavigationResponse {
                 &self.body_progress_source,
             ));
         }
-        if super::super::downloads::response_headers_indicate_download(&self.head.headers) {
+        if super::super::downloads::response_headers_indicate_download(&self.head.headers)
+            || !moli_web_mime::is_supported_document_mime_type(&captured_navigation_mime_type(&self.head, &self.body)?)
+        {
             complete_auxiliary_download_response(&self.load_inputs, self.head.clone());
             let body = self
                 .body

@@ -508,7 +508,19 @@ async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents()
     for (name, mime, _, _, payload) in cases {
         fixture = fixture.route(
             &format!("/{name}"),
-            axum::routing::get(move || async move { ([(header::CONTENT_TYPE, mime)], payload) }),
+            axum::routing::get(move || async move {
+                let mut response = ([(header::CONTENT_TYPE, mime)], payload).into_response();
+                if name == "plain.xml" {
+                    // This payload contains NUL. Keep its literal-text parser
+                    // coverage explicit: without nosniff, browsers classify
+                    // the bytes as binary and download instead of navigating.
+                    response.headers_mut().insert(
+                        header::X_CONTENT_TYPE_OPTIONS,
+                        axum::http::HeaderValue::from_static("nosniff"),
+                    );
+                }
+                response
+            }),
         );
     }
     fixture = fixture.route(
@@ -568,6 +580,80 @@ async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents()
                 );
             }
         }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_binary_plain_text_download_retains_committed_document() {
+    const PAYLOAD: &str = "\n<&amp;\r\nbeta\rgamma\0</pre><script>window.executed=42</script>";
+    let cases = [
+        ("plain", "text/plain", false),
+        ("plain-utf8", "text/plain; charset=utf-8", false),
+        ("nosniff-plain", "text/plain", true),
+        ("nosniff-plain-utf8", "text/plain; charset=utf-8", true),
+    ];
+    let mut fixture = axum::Router::new().route(
+        "/seed",
+        axum::routing::get(|| async {
+            (
+                [(header::CONTENT_TYPE, "text/html")],
+                "<!doctype html><title>seed</title><body>old document</body>",
+            )
+        }),
+    );
+    for (name, mime, nosniff) in cases {
+        fixture = fixture.route(
+            &format!("/{name}"),
+            axum::routing::get(move || async move {
+                let mut response = ([(header::CONTENT_TYPE, mime)], PAYLOAD).into_response();
+                if nosniff {
+                    response.headers_mut().insert(
+                        header::X_CONTENT_TYPE_OPTIONS,
+                        axum::http::HeaderValue::from_static("nosniff"),
+                    );
+                }
+                response
+            }),
+        );
+    }
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "binary-plain-navigation");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (name, _, nosniff) in cases {
+        for path in ["seed", name] {
+            let navigated = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/url"),
+                json!({"url":format!("http://{addr}/{path}")}),
+            )
+            .await;
+            assert_eq!(navigated, json!({"value":null}), "{name}: {path}");
+        }
+        let observed = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({"script":"return [location.pathname,document.contentType,document.body.textContent,window.executed??null,document.querySelectorAll('script').length];","args":[]}),
+        )
+        .await;
+        let expected = if nosniff {
+            json!([
+                format!("/{name}"),
+                "text/plain",
+                PAYLOAD
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .replace('\0', "\u{fffd}"),
+                null,
+                0
+            ])
+        } else {
+            json!(["/seed", "text/html", "old document", null, 0])
+        };
+        assert_eq!(observed["value"], expected, "{name}");
     }
     classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
 }

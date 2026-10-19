@@ -1238,11 +1238,17 @@ impl BackgroundNavigationLoadJob {
                 .into_parts_with_observation_journal();
             let reserved_service_worker_client = navigation_response.reserved_service_worker_client;
             let document_fetch_context_seed = navigation_response.document_fetch_context_seed;
-            let defer_early_result_for_http_error_body =
-                response_status_may_use_http_error_page(response.status);
+            let defer_early_result_until_document_decision =
+                response_status_may_use_http_error_page(response.status)
+                    || moli_web_mime::NavigationMimeSniffer::new(
+                        response.final_url.scheme(),
+                        &response.headers,
+                    )
+                    .mime_type()
+                    .is_none_or(|mime| !moli_web_mime::is_supported_document_mime_type(mime));
             if !super::downloads::response_headers_indicate_download(&response.headers)
                 && !response_status_has_no_content(response.status)
-                && !defer_early_result_for_http_error_body
+                && !defer_early_result_until_document_decision
                 && let Some(early_result) = early_result.take()
             {
                 early_result_sent = early_result.emit();
@@ -1265,7 +1271,7 @@ impl BackgroundNavigationLoadJob {
                 reply_boundary,
             )
             .await;
-            if defer_early_result_for_http_error_body {
+            if defer_early_result_until_document_decision {
                 early_result_sent =
                     Self::emit_early_result_for_successful_document(&mut early_result, &navigation);
             }
@@ -1589,6 +1595,11 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         .into_iter()
         .map(Into::into)
         .collect::<Vec<_>>();
+    let navigation_mime_type = response
+        .sniff_navigation_mime_type(&response_headers)
+        .await?;
+    let body_progress_source =
+        body_progress_source.with_response_mime_type(navigation_mime_type.clone());
     let network_events = CompletedMainDocumentNetworkEvents::new(
         request_method.clone(),
         request_headers.to_byte_strings(),
@@ -1600,10 +1611,13 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         network_extra_info_available,
         response_from_cache,
     )
+    .with_response_mime_type(navigation_mime_type.clone())
     .with_negotiated_http_version(negotiated_http_version)
     .with_network_observation_journal(network_observation_journal.clone());
 
-    if super::downloads::response_headers_indicate_download(&response_headers) {
+    if super::downloads::response_headers_indicate_download(&response_headers)
+        || !moli_web_mime::is_supported_document_mime_type(&navigation_mime_type)
+    {
         let mut head = response.head();
         head.status = response_status;
         head.headers = response_headers;
@@ -1674,7 +1688,8 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     // including XML charsets and BOMs.
     let (body_tx, body_rx) = mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
     let (completion_tx, completion_rx) = oneshot::channel();
-    let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx);
+    let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx)
+        .with_navigation_mime_type(navigation_mime_type);
     let page_storage = load_inputs.page_storage_handles();
     let main_document_commit = load_inputs
         .main_document_commit_for_final_url(&final_url, None)
@@ -3532,6 +3547,27 @@ impl CdpConnection {
     }
 }
 
+fn captured_navigation_mime_type(
+    head: &ResponseHead,
+    body: &CapturedBody,
+) -> anyhow::Result<String> {
+    let mut sniffer =
+        moli_web_mime::NavigationMimeSniffer::new(head.final_url.scheme(), &head.headers);
+    if let Some(mime) = sniffer.mime_type() {
+        return Ok(mime.to_owned());
+    }
+    let mut reader = body.chunk_reader(moli_web_mime::NAVIGATION_MIME_PREFIX_LIMIT)?;
+    loop {
+        match reader.next_chunk()? {
+            Some(chunk) => sniffer.push(&chunk),
+            None => return Ok(sniffer.finish().to_owned()),
+        }
+        if let Some(mime) = sniffer.mime_type() {
+            return Ok(mime.to_owned());
+        }
+    }
+}
+
 async fn prepare_navigation_from_captured_raw_response_with_engine_async(
     engine: &mut NavigationEngine,
     page_reservation: RendererDocumentPreparationTarget,
@@ -3616,6 +3652,9 @@ async fn prepare_captured_document_response_with_engine_async(
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
 ) -> Result<ResponseCommitReady> {
+    let navigation_mime_type = captured_navigation_mime_type(&head, &body)?;
+    let body_progress_source =
+        body_progress_source.with_response_mime_type(navigation_mime_type.clone());
     let auxiliary_document_response = load_inputs
         .auxiliary_document_response
         .as_ref()
@@ -3636,7 +3675,8 @@ async fn prepare_captured_document_response_with_engine_async(
     let redirect_count = head.redirect_chain.len();
     let (body_tx, body_rx) = mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
     let (completion_tx, completion_rx) = oneshot::channel();
-    let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx);
+    let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx)
+        .with_navigation_mime_type(navigation_mime_type);
     let page_storage = load_inputs.page_storage_handles();
     let main_document_commit = load_inputs
         .main_document_commit_for_final_url(&final_url, network_error_page.as_ref())

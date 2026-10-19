@@ -563,7 +563,7 @@ impl JsRuntime {
         response_headers: Vec<(String, Vec<u8>)>,
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,
-        raw_body: ExternalRawDocumentBodyStream,
+        mut raw_body: ExternalRawDocumentBodyStream,
         wpt_extensions_enabled: bool,
         stage: PageVmInitStage,
         reply_boundary: crate::RendererReplyBoundary,
@@ -573,6 +573,27 @@ impl JsRuntime {
         lifecycle_decider: Option<crate::RendererLifecycleDecider>,
         options: RendererDocumentOptions,
     ) -> Result<PreparedRendererDocument> {
+        let page_target = page_target.into();
+        // Callers with an already reserved token transfer cancellation
+        // ownership before the first await. An existing-Page target is still
+        // non-owning until MIME classification accepts the response.
+        let reserved_preparation = match &page_target {
+            super::RendererDocumentPreparationTarget::NewPage(token) => {
+                Some(RendererDocumentPreparation {
+                    runtime: self.clone(),
+                    token: *token,
+                    cancel_on_drop: true,
+                    _document_replacement: None,
+                })
+            }
+            super::RendererDocumentPreparationTarget::ExistingPage(_) => None,
+        };
+        // Resolve outside the owner lane and before reserving a replacement.
+        // An undecided response must leave the old Document and its scripts
+        // alive, and dropping this future must still cancel the body producer.
+        raw_body
+            .resolve_navigation_mime_type(&final_url, &response_headers)
+            .await?;
         let mut request = self
             .inner
             .renderer_owner
@@ -601,17 +622,19 @@ impl JsRuntime {
         // dispatching owner work: queuing the wake itself would deadlock behind
         // a paused script. Downloads and intercepted responses never get here.
         let (page_reservation, replacement) = page_target
-            .into()
             .begin_and_reserve(&self.inner.renderer_owner)
             .await?;
         request.document_replacement = replacement.clone();
         // Own cancellation before awaiting the prepare reply, so abandoning
         // the future also retires a queued or already stored preparation.
-        let preparation = RendererDocumentPreparation {
-            runtime: self.clone(),
-            token: page_reservation,
-            cancel_on_drop: true,
-            _document_replacement: replacement,
+        let preparation = match reserved_preparation {
+            Some(preparation) => preparation,
+            None => RendererDocumentPreparation {
+                runtime: self.clone(),
+                token: page_reservation,
+                cancel_on_drop: true,
+                _document_replacement: replacement,
+            },
         };
         let reply = self
             .inner

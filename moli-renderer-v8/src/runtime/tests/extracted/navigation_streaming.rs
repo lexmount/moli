@@ -2389,6 +2389,150 @@ async fn completed_raw_body_for_replacement_test(source: &[u8]) -> ExternalRawDo
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn undecided_navigation_mime_keeps_the_old_document_live_on_cancel_and_failure() {
+    for fail in [false, true] {
+        let runtime = JsRuntime::initialize();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut page = create_test_html_page(
+            &runtime, &loader,
+            url::Url::parse("https://example.test/mime/original").unwrap(),
+            "<!doctype html><p>original</p><script>globalThis.retained=17;globalThis.oldCounter=0</script>",
+        ).await;
+        let testing = RendererPageTestingHandle::new_for_testing(&page);
+        let before = testing.renderer_page_view_async().await.unwrap();
+        let accounting = runtime.document_isolate_accounting_for_diagnostics();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+        body_tx.send(b"\x89PNG\r\n\x1a".to_vec()).await.unwrap();
+        let target = page.document_replacement_target(moli_fetch::FetchCancelHandle::new());
+        let url = url::Url::parse("https://example.test/mime/undecided").unwrap();
+        let mut prepare = Box::pin(runtime.prepare_streaming_raw_document_from_external_body(
+            target,
+            url.clone(),
+            url,
+            None,
+            false,
+            0,
+            Vec::new(),
+            200,
+            Vec::new(),
+            &loader,
+            crate::RendererWebStorageHandles::ephemeral(),
+            raw_body,
+            false,
+            PageVmInitStage::Load,
+            RendererReplyBoundary::DocumentCommit,
+            RendererTopLevelNavigationDispatch::DelegateToBrowser,
+            RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
+            None,
+            None,
+            crate::RendererDocumentOptions::default(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    _ = &mut prepare => panic!("an incomplete PNG signature must not prepare a Document"),
+                    _ = tokio::task::yield_now() => {},
+                }
+                if body_tx.capacity() == body_tx.max_capacity() {
+                    break;
+                }
+            }
+        }).await.unwrap();
+        let (reply, _) = page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([retained, document.querySelector('p').textContent, ++oldCounter])".to_owned(),
+            await_promise: false,
+        }).await.unwrap();
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::json!("[17,\"original\",1]"))
+        );
+        assert_eq!(
+            runtime.document_isolate_accounting_for_diagnostics(),
+            accounting
+        );
+        if fail {
+            drop(body_tx);
+            completion_tx
+                .send(Err(anyhow::anyhow!("sniff transport failed")))
+                .unwrap();
+            let error = prepare
+                .await
+                .err()
+                .expect("failed sniff must reject preparation");
+            assert!(
+                error.to_string().contains("sniff transport failed"),
+                "{error:#}"
+            );
+        } else {
+            drop(prepare);
+            assert!(
+                body_tx.is_closed(),
+                "cancelled sniff must release the producer"
+            );
+            assert!(completion_tx.send(Ok(())).is_err());
+        }
+        let after = testing.renderer_page_view_async().await.unwrap();
+        assert_eq!(after.vm_creation_id, before.vm_creation_id);
+        assert_eq!(
+            runtime.document_isolate_accounting_for_diagnostics(),
+            accounting
+        );
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "String(++oldCounter)".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(renderer_json_value(reply), Some(serde_json::json!("2")));
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sniffed_plain_navigation_replays_every_byte_without_executing_late_markup() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let source = format!(
+        "ordinary text {}<script>globalThis.sneaked=true</script>",
+        "a".repeat(1600)
+    );
+    let prepared = prepare_test_external_raw_document_with_content_type(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/mime/plain").unwrap(),
+        "",
+        ExternalRawDocumentBodyStream::from_bytes(source.as_bytes().to_vec()),
+    )
+    .await;
+    let permit = prepared.issue_commit_permit();
+    let (mut page, state, _, _, download) = prepared.commit(permit).await.unwrap();
+    assert!(download.is_none());
+    assert_eq!(state.document_content_type, "text/plain");
+    assert_eq!(
+        state.headers,
+        vec![("content-type".to_owned(), Vec::<u8>::new())]
+    );
+    let expression = format!(
+        "JSON.stringify([document.contentType,typeof sneaked,document.body.textContent==={}])",
+        serde_json::to_string(&source).unwrap(),
+    );
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression,
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[\"text/plain\",\"undefined\",true]"))
+    );
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn live_page_replacement_commits_into_the_same_page_and_window_proxy() {
     let runtime = JsRuntime::initialize();
     let (output_tx, mut output_rx) = renderer_external_activity_test_channel();

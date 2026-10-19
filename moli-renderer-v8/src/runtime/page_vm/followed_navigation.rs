@@ -124,7 +124,11 @@ pub(super) async fn load_followed_location_navigation(
         response.finish().await?;
         return Ok(LoadedFollowedLocationNavigation::NoDocument);
     }
-    if response_headers_indicate_download(&response.headers) {
+    let headers = response.headers.clone();
+    let mime_type = response.sniff_navigation_mime_type(&headers).await?;
+    if response_headers_indicate_download(&headers)
+        || !moli_web_mime::is_supported_document_mime_type(&mime_type)
+    {
         let mut body = Vec::new();
         while let Some(chunk) = response.next_chunk().await {
             body.extend_from_slice(&chunk);
