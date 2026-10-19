@@ -1421,6 +1421,10 @@ fn external_raw_document_body_from_streaming_response_with_observer_and_progress
         ),
         None => ExternalRawDocumentBodyStream::channel(completion_rx),
     };
+    let body_stream = match response.navigation_mime_type() {
+        Some(mime) => body_stream.with_navigation_mime_type(mime.to_owned()),
+        None => body_stream,
+    };
     tokio::spawn(async move {
         let result = async {
             loop {

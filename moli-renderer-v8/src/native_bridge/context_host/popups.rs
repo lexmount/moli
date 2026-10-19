@@ -3060,7 +3060,11 @@ impl JsContextHost {
                     response.status,
                     false,
                 )?;
-                let mime = navigation_response_content_type(&head.headers, response.body_bytes());
+                let mime = navigation_response_content_type(
+                    &head.final_url,
+                    &head.headers,
+                    response.body_bytes(),
+                );
                 if !moli_web_mime::is_supported_document_mime_type(&mime) {
                     return Ok(PopupDocumentLoadOutcome::IgnoredNavigation);
                 }

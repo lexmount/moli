@@ -296,7 +296,9 @@ fn drain_gate_until_body_finished_visible_into_protocol_messages(
     protocol_messages_from_background_events(events)
 }
 
-fn response_progress_batch_for_output_target() -> MainDocumentProgressEventBatch {
+fn response_progress_batch_for_output_target(
+    mime_type: Option<String>,
+) -> MainDocumentProgressEventBatch {
     MainDocumentProgressEventBatch::from_events(vec![
         MainDocumentNavigationProgressEvent::ResponseReceived {
             target: MainDocumentProgressEventTarget {
@@ -309,6 +311,7 @@ fn response_progress_batch_for_output_target() -> MainDocumentProgressEventBatch
             final_url: Url::parse("http://example.test/target").unwrap(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
+            mime_type,
             cookie_set_reports: Vec::new(),
             extra_info_status: 200,
             extra_info_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
@@ -338,15 +341,40 @@ fn pending_document_progress_transfer_keeps_body_unmaterialized() {
 }
 
 #[test]
+fn response_progress_preserves_computed_mime_separately_from_raw_headers() {
+    let mut events = Vec::new();
+    MainDocumentProgressOutputTarget::background_events(&mut events).emit_batch(
+        response_progress_batch_for_output_target(Some("image/png".to_owned())),
+    );
+    assert_eq!(events.len(), 2);
+    for event in events {
+        let (message, automation) = event.into_parts();
+        assert_eq!(message["params"]["response"]["mimeType"], "image/png");
+        assert_eq!(
+            message["params"]["response"]["headers"]["Content-Type"],
+            "text/html"
+        );
+        let Some(AutomationEvent::NetworkResponseStarted(network)) = automation else {
+            panic!("response progress must retain its automation event");
+        };
+        assert_eq!(network.response_mime_type.as_deref(), Some("image/png"));
+        assert_eq!(
+            network.response_headers,
+            vec![("Content-Type".to_owned(), b"text/html".to_vec())]
+        );
+    }
+}
+
+#[test]
 fn progress_output_target_serializes_background_targets_consistently() {
     let (sender, mut receiver) = unbounded_channel();
     let mut background = MainDocumentProgressOutputTarget::background_sender(&sender);
-    background.emit_batch(response_progress_batch_for_output_target());
+    background.emit_batch(response_progress_batch_for_output_target(None));
     drop(sender);
 
     let mut background_events = Vec::new();
     MainDocumentProgressOutputTarget::background_events(&mut background_events)
-        .emit_batch(response_progress_batch_for_output_target());
+        .emit_batch(response_progress_batch_for_output_target(None));
 
     let mut background_parts = Vec::new();
     while let Ok(value) = receiver.try_recv() {
@@ -506,6 +534,7 @@ fn live_progress_source_serializes_through_progress_emissions() {
         1,
         true,
         false,
+        None,
         None,
     );
     source.emit_body_finished(17);
@@ -1188,7 +1217,7 @@ fn live_ready_progress_emissions_reuse_streaming_output_queue() {
         MainDocumentProgressPhase::ResponseReceived,
         super::gate::MainDocumentProgressEmission::new(
             MainDocumentProgressPhase::ResponseReceived,
-            response_progress_batch_for_output_target(),
+            response_progress_batch_for_output_target(None),
         ),
     );
     let out = drain_into_protocol_messages(&mut drain);
@@ -1267,7 +1296,7 @@ fn progress_output_queue_buffers_body_finished_until_response_received() {
         MainDocumentProgressPhase::ResponseReceived,
         super::gate::MainDocumentProgressEmission::new(
             MainDocumentProgressPhase::ResponseReceived,
-            response_progress_batch_for_output_target(),
+            response_progress_batch_for_output_target(None),
         ),
     );
 

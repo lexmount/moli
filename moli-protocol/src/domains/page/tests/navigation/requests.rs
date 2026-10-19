@@ -240,6 +240,42 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stop_loading_cancels_uncommitted_navigation_outside_the_fetch_pause_registry() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    let committed = bc
+        .start_document_navigation_for_active_target("LOADER-committed".to_owned())
+        .unwrap();
+    bc.commit_document_navigation_if_matches(&committed);
+    let provisional = bc
+        .start_document_navigation_for_active_target("LOADER-provisional".to_owned())
+        .unwrap();
+    let cancellation = bc
+        .active_page_target()
+        .runtime_slot
+        .document_navigation_cancellation_handle(&provisional)
+        .unwrap();
+    assert!(!cancellation.is_cancelled());
+
+    ctx.process_async(json!({
+        "id": 159,
+        "method": "Page.stopLoading",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(159, json!({}), Some("SID-1"));
+    assert!(cancellation.is_cancelled());
+    let bc = ctx.conn.browser_context.as_ref().unwrap();
+    assert!(
+        !bc.active_page_target()
+            .runtime_slot
+            .has_pending_document_navigation()
+    );
+    assert!(bc.accepts_document_body_completion_event(&committed));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stop_loading_without_browser_context_returns_empty_result() {
     let mut ctx = TestContext::new();
 

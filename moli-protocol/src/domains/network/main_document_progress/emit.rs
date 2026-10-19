@@ -288,6 +288,7 @@ pub(super) fn emit_main_document_response_received(
     from_cache: bool,
     negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
     has_extra_info: bool,
+    response_mime_type: Option<&str>,
 ) {
     if from_cache {
         emit_request_served_from_cache(output, session_id, request_id);
@@ -325,7 +326,7 @@ pub(super) fn emit_main_document_response_received(
             status: Some(status),
             status_text: None,
             response_headers: response_headers.to_vec(),
-            response_mime_type: None,
+            response_mime_type: response_mime_type.map(str::to_owned),
             response_protocol: negotiated_http_version
                 .map(|version| version.protocol_name().to_owned()),
             encoded_data_length: Some(encoded_data_length),

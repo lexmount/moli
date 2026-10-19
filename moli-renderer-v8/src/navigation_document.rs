@@ -11,19 +11,16 @@ pub(crate) fn is_image_document_mime(mime: &str) -> bool {
     moli_web_mime::is_image_mime(mime) && !moli_web_mime::is_xml_document_mime(mime)
 }
 
-/// An absent HTTP Content-Type is resolved from the response, not its URL's
-/// extension. Keep an explicitly supplied type for the Document's metadata.
+/// Uses the same MIME decision for complete child responses and main streams.
+/// The URL scheme controls sniffing; a path extension does not select a parser.
 pub(crate) fn navigation_response_content_type(
+    final_url: &Url,
     headers: &[(String, Vec<u8>)],
     bytes: &[u8],
 ) -> String {
-    moli_web_mime::navigation_response_mime_type_from_headers(headers).unwrap_or_else(|| {
-        moli_web_mime::computed_response_mime_type(
-            headers,
-            moli_web_mime::MimeSniffingContext::Browsing,
-            bytes,
-        )
-    })
+    let mut sniffer = moli_web_mime::NavigationMimeSniffer::new(final_url.scheme(), headers);
+    sniffer.push(bytes);
+    sniffer.finish().to_owned()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,7 +149,7 @@ mod tests {
             (&[][..], gif.as_slice(), "image/gif", true),
             (supplied.as_slice(), html.as_slice(), "image/png", true),
         ] {
-            let mime = navigation_response_content_type(headers, bytes);
+            let mime = navigation_response_content_type(&url, headers, bytes);
             assert_eq!(mime, expected);
             let (content, _) =
                 decode_navigation_document_response(bytes, headers, Some(&mime), &url, None);
@@ -167,7 +164,11 @@ mod tests {
     fn unsupplied_navigation_mime_with_nosniff_never_becomes_an_image_document() {
         let headers = vec![("X-Content-Type-Options".to_owned(), b"nosniff".to_vec())];
         let bytes = b"GIF89a\x01\x00\x01\x00";
-        let mime = navigation_response_content_type(&headers, bytes);
+        let mime = navigation_response_content_type(
+            &Url::parse("https://example.test/picture.gif").unwrap(),
+            &headers,
+            bytes,
+        );
         assert_eq!(mime, "text/plain");
         let (content, _) = decode_navigation_document_response(
             bytes,
