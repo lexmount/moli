@@ -729,7 +729,7 @@ pub(super) fn stale_loaded_completion(
                 policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                 content_type: Some("text/html".to_owned()),
                 character_set: "UTF-8".to_owned(),
-                markup: "<!doctype html>".to_owned(),
+                content: "<!doctype html>".to_owned().into(),
                 document_network: Some(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
                     request_url: request_url.to_owned(),
                     request_method: "GET".to_owned(),

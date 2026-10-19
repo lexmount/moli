@@ -138,7 +138,7 @@ pub(crate) use self::headers::{
     HeadersGuard, filter_headers_for_guard, normalized_headers_entries,
 };
 pub(crate) use self::image::{
-    ImageElementResourceFetchStart, ScannedImagePreloadStart,
+    ImageElementResourceFetchStart, ScannedImagePreloadStart, image_response_descriptor_from_bytes,
     image_response_descriptor_from_parkable, image_response_origin_clean,
     start_image_element_resource_fetch, start_scanned_image_preload,
 };

@@ -78,6 +78,7 @@ mod module_script_continuation;
 mod modulepreload;
 mod mutation_coordinator;
 pub(crate) mod native_bridge;
+mod navigation_document;
 pub mod network;
 mod network_host;
 mod observable;
