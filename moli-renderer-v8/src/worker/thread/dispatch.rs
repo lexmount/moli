@@ -464,6 +464,9 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
 
     for rejection in pending {
         let promise = v8::Local::new(scope, &rejection.promise);
+        if promise.has_handler() {
+            continue;
+        }
         let reason = rejection
             .reason
             .as_ref()
