@@ -282,7 +282,10 @@ async fn check_in_local_set(operation: &str, case: Case, allowed: bool) {
     );
     assert_eq!(result["conversions"], usize::from(location));
     if !allowed && location {
-        assert_eq!(result["localException"], true);
+        assert_eq!(
+            result["localException"], true,
+            "{operation}/{case:?}: {result}"
+        );
     }
     if operation == "open" {
         assert_eq!(result["returnedTarget"], allowed);
