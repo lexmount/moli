@@ -652,7 +652,8 @@ impl ScriptVm {
                         trace_fields,
                         record_started,
                     );
-                    let fetch_resource_entry = if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
+                    let fetch_resource_entry = if let PendingSubresourceContinuation::Fetch(fetch) = &mut pending.continuation {
+                        if let Some(native) = pending.load.response_timing() { fetch.timing.observe_native_timing(native); }
                         let head = response.head();
                         let filter = response_filter.or_else(|| crate::network_host::network_response_filter(
                             &pending.request_origin, &head, pending.request_mode,

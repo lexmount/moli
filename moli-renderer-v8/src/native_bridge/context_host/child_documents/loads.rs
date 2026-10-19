@@ -199,6 +199,11 @@ impl JsContextHost {
         }
         let parent_character_set = self.document_character_set().to_owned();
         let task_resource_loader = resource_loader.clone();
+        let timing_origin = self
+            .owner_dispatch_scope_for_node(handle)
+            .and_then(|owner| self.window_access_origin_for_dispatch_scope(owner))
+            .and_then(|origin| url::Url::parse(&origin.serialized_origin()).ok())
+            .map(|url| moli_url::WebOrigin::from_url(&url));
         resource_loader.spawn_resource_task(async move {
             let result = async {
                 let request = configure_child_document_navigation_request(
@@ -236,6 +241,7 @@ impl JsContextHost {
                         head,
                         body,
                         &parent_character_set,
+                        timing_origin.as_ref(),
                     );
                 }
                 let response = task_resource_loader
@@ -250,6 +256,7 @@ impl JsContextHost {
                     head,
                     body,
                     &parent_character_set,
+                    timing_origin.as_ref(),
                 )
             }
             .await;
@@ -771,6 +778,7 @@ fn child_document_load_outcome_from_response(
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     parent_character_set: &str,
+    timing_origin: Option<&moli_url::WebOrigin>,
 ) -> Result<ChildDocumentLoadOutcome, String> {
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
@@ -815,6 +823,9 @@ fn child_document_load_outcome_from_response(
                 response_body: Some(response_body),
                 from_cache: head.from_cache,
                 cache_state: head.cache_state,
+
+                resource_timing_body_visible: timing_origin
+                    .is_some_and(|origin| !head.url_list().has_cross_origin_url(origin)),
             }),
         },
     )))
@@ -867,6 +878,81 @@ mod tests {
     use super::*;
 
     #[test]
+    fn child_document_resource_timing_filters_cross_origin_redirects_before_discarding_them() {
+        let home = url::Url::parse("https://example.test/child").unwrap();
+        let remote = url::Url::parse("https://other.test/child").unwrap();
+        let origin = moli_url::WebOrigin::from_url(&home);
+        for (final_url, hops, expected) in [
+            (home.clone(), vec![], true),
+            (remote.clone(), vec![], false),
+            (
+                home.clone(),
+                vec![home.clone(), remote, home.clone()],
+                false,
+            ),
+        ] {
+            let head = moli_fetch::ResponseHead {
+                final_url,
+                status: 200,
+                status_text: None,
+                headers: vec![("Content-Encoding".to_owned(), b"gzip".to_vec())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: !hops.is_empty(),
+                redirect_chain: hops
+                    .windows(2)
+                    .map(|pair| moli_fetch::RedirectInfo {
+                        source: moli_fetch::RedirectSource::Network,
+                        from_url: pair[0].clone(),
+                        to_url: pair[1].clone(),
+                        status: 302,
+                        headers: Vec::new(),
+                        network_extra_info_available: false,
+                        request_extra_info: None,
+                        response_extra_info: None,
+                        redirect_has_extra_info: false,
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    })
+                    .collect(),
+                from_cache: false,
+                cache_state: Default::default(),
+
+                negotiated_http_version: None,
+            };
+            for timing_origin in [Some(&origin), None] {
+                let outcome = child_document_load_outcome_from_response(
+                    home.as_str().to_owned(),
+                    "GET".to_owned(),
+                    Vec::new(),
+                    head.clone(),
+                    moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
+                    "UTF-8",
+                    timing_origin,
+                )
+                .unwrap();
+                let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
+                    panic!("child should load")
+                };
+                let network = document.document_network.unwrap();
+                assert_eq!(
+                    network.resource_timing_body_visible,
+                    expected && timing_origin.is_some()
+                );
+                assert_eq!(network.response_headers, head.headers);
+                assert!(
+                    serde_json::to_value(&network)
+                        .unwrap()
+                        .get("resource_timing_body_visible")
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn loaded_child_document_retains_exact_network_response_body() {
         let body_bytes = b"<!doctype html><p>child network body \xff</p>".to_vec();
         let outcome = child_document_load_outcome_from_response(
@@ -888,6 +974,7 @@ mod tests {
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
             "UTF-8",
+            None,
         )
         .expect("child document response should load");
         let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
