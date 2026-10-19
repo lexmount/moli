@@ -155,7 +155,13 @@ pub(super) async fn load_followed_location_navigation(
         response.finish().await?;
         return Ok(LoadedFollowedLocationNavigation::NoDocument);
     }
-    if response_headers_indicate_download(&response.headers) {
+    let mut download = response_headers_indicate_download(&response.headers);
+    if !download {
+        let headers = response.headers.clone();
+        let mime_type = response.sniff_navigation_mime_type(&headers).await?;
+        download = !moli_web_mime::is_supported_document_mime_type(&mime_type);
+    }
+    if download {
         let final_url = response.final_url.as_str().to_owned();
         let status = response.status;
         #[cfg(feature = "molio")]

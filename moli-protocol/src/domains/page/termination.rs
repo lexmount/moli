@@ -196,6 +196,7 @@ impl PreparedPageStopLoading {
         // original Native stop waits must not become part of this cleanup.
         let pending = take_pending_fetch_state_for_owner(conn, owner);
         let cleanup = crate::domains::fetch::prepare_page_stop_loading(conn, owner, pending);
+        conn.cancel_uncommitted_navigation_for_owner(owner);
         // A request waiting for response headers need not be in a Fetch pause
         // map. Stop that exact pending request in this finite admission turn,
         // before the Native lifecycle wait can admit a successor navigation.
