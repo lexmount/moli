@@ -324,3 +324,83 @@ async fn owner_shutdown_seals_all_page_queues_and_rejects_new_page() {
         Some("42")
     );
 }
+
+#[test]
+fn replacement_cancellation_on_another_thread_restores_idle_v8_sessions() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
+    let page = super::super::DocumentInspectorBinding::new(
+        backend.handle().new_page_handle(&mut isolate).unwrap(),
+    );
+    let target = page.devtools_target();
+    let agent = page.agent_token();
+    let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
+    target.io_ref().configure_owner_wake(wake_tx);
+    for session_id in [None, Some("second")] {
+        page.with_session_and_outbound(
+            &mut backend,
+            super::super::PageInspectorSessionTarget::Frontend(session_id),
+            |session, _, _| {
+                session.dispatch_protocol_message(v8::inspector::StringView::from(
+                    br#"{"id":1,"method":"Debugger.enable"}"#.as_slice(),
+                ));
+            },
+        );
+    }
+    let replacement_target = target.clone();
+    std::thread::spawn(move || {
+        assert!(replacement_target.begin_document_replacement(agent));
+        assert!(replacement_target.begin_document_replacement(agent));
+    })
+    .join()
+    .unwrap();
+    dispatch_inspector_io_owner_wake(
+        wake_rx
+            .try_recv()
+            .expect("replacement must wake the idle owner"),
+    );
+    let native_policy = |backend: &mut RendererInspectorIsolateBackend, session_id| {
+        page.with_session_and_outbound(
+            backend,
+            super::super::PageInspectorSessionTarget::Frontend(session_id),
+            |session, _, _| {
+                // Inspect the actual V8 flag, bypassing the clean restore snapshot.
+                let state = v8::inspector::V8InspectorSession::state(session);
+                let state: serde_json::Value =
+                    serde_json::from_slice(&v8::crdtp::cbor_to_json(&state).unwrap()).unwrap();
+                state["Debugger"]["skipAllPauses"].as_bool().unwrap()
+            },
+        )
+    };
+    for session_id in [None, Some("second")] {
+        assert!(native_policy(&mut backend, session_id));
+    }
+    let overlapping_target = target.clone();
+    std::thread::spawn(move || overlapping_target.finish_document_replacement(agent))
+        .join()
+        .unwrap();
+    assert!(
+        wake_rx.try_recv().is_err(),
+        "another preparation still owns the outgoing document's pause policy"
+    );
+    for session_id in [None, Some("second")] {
+        assert!(native_policy(&mut backend, session_id));
+    }
+    std::thread::spawn(move || target.finish_document_replacement(agent))
+        .join()
+        .unwrap();
+    dispatch_inspector_io_owner_wake(
+        wake_rx
+            .try_recv()
+            .expect("cancellation must wake the idle owner"),
+    );
+    for session_id in [None, Some("second")] {
+        assert!(
+            !native_policy(&mut backend, session_id),
+            "cancellation must restore V8 even when no JS or frontend command runs"
+        );
+    }
+}
+
+mod control_work_tests;

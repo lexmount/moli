@@ -98,7 +98,7 @@ pub(super) unsafe extern "C" fn dispatch_inspector_interrupt(
     {
         return;
     }
-    dispatch_environment_notifications(&session_executor, isolate);
+    session_executor.dispatch_control_work(isolate);
     with_scoped_inspector_microtasks(isolate, || {
         session_executor.dispatch_next_io_command_from_interrupt();
     });
@@ -170,9 +170,9 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
         isolate.enter();
     }
     let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
-    dispatch_environment_notifications(&session_executor, isolate);
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
+    session_executor.dispatch_control_work(scope);
     with_scoped_inspector_microtasks(scope, || {
         session_executor.dispatch_next_io_command_from_owner();
     });
@@ -183,31 +183,16 @@ pub(crate) fn dispatch_inspector_main_owner_wake(
 ) -> Option<RendererInspectorMainOwnerDispatch> {
     let session_executor = session_executor(wake.route_id())?;
     // Main and IO have separate owner wake channels. Do not let selection of
-    // a Main wake overtake an environment notification already in IO ingress.
+    // a Main wake overtake internal control work already in IO ingress.
     // Only enter V8 when there is concrete notification work to execute.
-    if let Some(invalidation) = session_executor
-        .environment_ingress()
-        .claim_environment_invalidation()
-    {
+    if let Some(work) = session_executor.claim_control_work() {
         let isolate = unsafe { &mut *session_executor.isolate.get() };
         let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
         unsafe { isolate.enter() };
         let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
-        invalidation.notify_isolate(isolate);
+        let scope = pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        session_executor.apply_control_work(work, scope);
     }
     session_executor.claim_next_main_command_from_owner()
-}
-
-fn dispatch_environment_notifications(
-    session_executor: &RendererInspectorSessionExecutorLocal,
-    isolate: &mut v8::Isolate,
-) {
-    // Consume one merged batch. A publication racing application retains its
-    // own wake instead of making this callback drain an unbounded producer.
-    if let Some(invalidation) = session_executor
-        .environment_ingress()
-        .claim_environment_invalidation()
-    {
-        invalidation.notify_isolate(isolate);
-    }
 }

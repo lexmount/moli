@@ -91,7 +91,7 @@ impl RendererInspectorObjectWrapper {
 
 #[must_use]
 pub(crate) struct RendererDomDebuggerScheduledPause {
-    sessions: Vec<Rc<v8::inspector::V8InspectorSession>>,
+    sessions: Vec<Rc<super::RendererInspectorSession>>,
 }
 
 impl Drop for RendererDomDebuggerScheduledPause {
@@ -115,6 +115,7 @@ impl RendererDomDebuggerPauseScheduler {
             .map(|state| state.borrow().sessions.frontend_sessions(session_keys))
             .unwrap_or_default();
         for session in &sessions {
+            session.sync_document_replacement();
             session.schedule_pause_on_next_statement(
                 v8::inspector::StringView::from(reason.as_bytes()),
                 v8::inspector::StringView::from(detail.as_bytes()),
@@ -156,11 +157,13 @@ impl RendererDomDebuggerPauseScheduler {
             let Some((session, outbound)) = route else {
                 continue;
             };
-            let _preface = outbound.stage_pause_preface(preface);
+            session.sync_document_replacement();
+            let preface = outbound.stage_pause_preface(preface);
             session.break_program(
                 v8::inspector::StringView::from(reason.as_bytes()),
                 v8::inspector::StringView::from(detail.as_bytes()),
             );
+            outbound.publish_unclaimed_pause_preface(preface);
         }
     }
 }
@@ -221,7 +224,7 @@ impl RendererDevToolsAgent {
         &self,
         backend: &mut RendererInspectorIsolateBackend,
         op: impl FnOnce(
-            &v8::inspector::V8InspectorSession,
+            &super::RendererInspectorSession,
             InspectorOutbound,
             Vec<RuntimeBindingRegistration>,
         ) -> T,
@@ -247,7 +250,7 @@ impl RendererDevToolsAgent {
         backend: &mut RendererInspectorIsolateBackend,
         session_key: DevToolsSessionKey,
         op: impl FnOnce(
-            &v8::inspector::V8InspectorSession,
+            &super::RendererInspectorSession,
             InspectorOutbound,
             Vec<RuntimeBindingRegistration>,
         ) -> T,

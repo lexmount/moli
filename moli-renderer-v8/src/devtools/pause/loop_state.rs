@@ -1,3 +1,5 @@
+use moli_page_types::RendererDevToolsAgentToken;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RendererInspectorPausePhase {
     Running,
@@ -21,7 +23,14 @@ pub(crate) enum RendererInspectorPauseLoopPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererInspectorPauseExitReason {
     Resumed,
-    DocumentReplacement,
     SessionDetached,
     TargetClosed,
+}
+
+/// Identifies one reported pause, including pauses of the same Agent after
+/// cancellation. A delayed navigation task must never retire a later pause.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct RendererInspectorPauseId {
+    pub(crate) agent: RendererDevToolsAgentToken,
+    pub(crate) generation: u64,
 }

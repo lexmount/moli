@@ -1,5 +1,5 @@
 use super::{
-    InspectorOutbound, RendererInspectorIsolateBackendHandle,
+    InspectorOutbound, RendererInspectorIsolateBackendHandle, RendererInspectorSession,
     context_registry::DocumentInspectorContextGroupId,
     v8_backend::{RendererInspectorIsolateBackend, RendererInspectorSessionExecutorRegistration},
 };
@@ -31,7 +31,7 @@ pub(super) struct RendererDevToolsAgentSessions {
 }
 
 pub(super) struct RendererDevToolsSessionDispatch {
-    session: Rc<v8::inspector::V8InspectorSession>,
+    session: Rc<RendererInspectorSession>,
     outbound: InspectorOutbound,
     runtime_bindings_to_replay: Vec<RuntimeBindingRegistration>,
 }
@@ -40,7 +40,7 @@ impl RendererDevToolsSessionDispatch {
     pub(super) fn run<T>(
         self,
         op: impl FnOnce(
-            &v8::inspector::V8InspectorSession,
+            &RendererInspectorSession,
             InspectorOutbound,
             Vec<RuntimeBindingRegistration>,
         ) -> T,
@@ -311,7 +311,7 @@ impl RendererDevToolsAgentSessions {
     pub(super) fn frontend_sessions(
         &self,
         session_keys: &[DevToolsSessionKey],
-    ) -> Vec<Rc<v8::inspector::V8InspectorSession>> {
+    ) -> Vec<Rc<RendererInspectorSession>> {
         session_keys
             .iter()
             .filter_map(|session_key| {
@@ -325,7 +325,7 @@ impl RendererDevToolsAgentSessions {
     pub(super) fn frontend_session_and_outbound(
         &self,
         session_key: &DevToolsSessionKey,
-    ) -> Option<(Rc<v8::inspector::V8InspectorSession>, InspectorOutbound)> {
+    ) -> Option<(Rc<RendererInspectorSession>, InspectorOutbound)> {
         self.frontend
             .get(session_key)
             .map(|session| (Rc::clone(&session.session), session.outbound.clone()))
@@ -346,7 +346,7 @@ impl RendererDevToolsAgentSessions {
 }
 
 struct RendererDevToolsSession {
-    session: Rc<v8::inspector::V8InspectorSession>,
+    session: Rc<RendererInspectorSession>,
     outbound: InspectorOutbound,
     replayed_runtime_bindings: Vec<RuntimeBindingRegistration>,
     _executor_registration: Option<RendererInspectorSessionExecutorRegistration>,
@@ -376,7 +376,12 @@ impl RendererDevToolsSession {
             })),
             state,
         );
-        let session = Rc::new(session);
+        let document = frontend_session_route
+            .as_ref()
+            .map(|(page_backend, agent_token, _)| {
+                (page_backend.devtools_target().pause(), *agent_token)
+            });
+        let session = Rc::new(RendererInspectorSession::new(session, document));
         let executor_registration =
             frontend_session_route.map(|(page_backend, agent_token, session_key)| {
                 page_backend.register_session_executor_route(
@@ -423,7 +428,6 @@ pub(super) fn inspector_session_key(inspector_session_id: Option<&str>) -> DevTo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inspector_session::dispatch_with_runtime_defaults;
     use crate::script_vm::inspector::context_registry::DocumentInspectorContextRegistrationId;
     use serde_json::Value;
     use std::pin::pin;
@@ -437,7 +441,9 @@ mod tests {
     fn dispatch(session: &RendererDevToolsSession, request: &str) -> Vec<Value> {
         let snapshot = session.outbound.len();
         let _response_capture = session.outbound.capture_dispatch_responses();
-        dispatch_with_runtime_defaults(&session.session, request, &session.outbound)
+        session
+            .session
+            .dispatch_with_runtime_defaults(request, &session.outbound)
             .expect("Inspector session dispatch");
         session.outbound.take_messages_after(snapshot)
     }
