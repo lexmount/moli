@@ -16,7 +16,7 @@ pub(super) fn css_supports_at_rule_condition(condition: &str) -> Option<bool> {
     let input = condition;
     let mut parser = cssparser::Parser::new(input);
     let function = parser.expect_function().ok()?.clone();
-    if function.as_ref() != "at-rule" {
+    if !function.eq_ignore_ascii_case("at-rule") {
         return None;
     }
     let result = parser.parse_nested_block(|nested| {
@@ -60,6 +60,60 @@ fn supports_at_rule_keyword(keyword: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn css_supports_font_function_names_are_ascii_case_insensitive() {
+        for function in [
+            "font-format",
+            "FONT-FORMAT",
+            "Font-Format",
+            "font-fo\\72 mat",
+        ] {
+            assert!(css_supports_condition_text(&format!(
+                "{function}(opentype)"
+            )));
+            assert!(!css_supports_condition_text(&format!(
+                "{function}(unknown)"
+            )));
+            assert!(!css_supports_condition_text(&format!(
+                "{function}('opentype')"
+            )));
+        }
+        for function in ["font-tech", "FONT-TECH", "Font-Tech", "font-te\\63 h"] {
+            assert!(css_supports_condition_text(&format!(
+                "{function}(variations)"
+            )));
+            assert!(!css_supports_condition_text(&format!(
+                "{function}(unknown)"
+            )));
+            assert!(!css_supports_condition_text(&format!(
+                "{function}(variations, palettes)"
+            )));
+        }
+        assert!(css_supports_condition_text(
+            "FONT-FORMAT(opentype) and FONT-TECH(variations)"
+        ));
+        assert!(css_supports_condition_text("not FONT-FORMAT(unknown)"));
+    }
+
+    #[test]
+    fn css_supports_at_rule_function_names_are_ascii_case_insensitive() {
+        for function in ["at-rule", "AT-RULE", "At-Rule", "at-\\72 ule"] {
+            assert!(css_supports_condition_text(&format!(
+                "{function}(@SUPPORTS)"
+            )));
+            assert!(!css_supports_condition_text(&format!(
+                "{function}(@unknown)"
+            )));
+            assert!(!css_supports_condition_text(&format!(
+                "{function}('@supports')"
+            )));
+        }
+        assert!(css_supports_condition_text(
+            "AT-RULE(@media) and (color: red)"
+        ));
+        assert!(css_supports_condition_text("not AT-RULE(@unknown)"));
+    }
 
     #[test]
     fn css_supports_selector_condition_uses_selector_parser() {
