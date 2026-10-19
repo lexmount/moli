@@ -13,16 +13,6 @@ pub enum MediaKeysRequirement {
     NotAllowed,
 }
 
-impl MediaKeysRequirement {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Required => "required",
-            Self::Optional => "optional",
-            Self::NotAllowed => "not-allowed",
-        }
-    }
-}
-
 const MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT: &str = "__moliMediaCapabilitiesSecureContext";
 const MEDIA_CAPABILITIES_WORKER_SLOT: &str = "__moliMediaCapabilitiesWorker";
 
