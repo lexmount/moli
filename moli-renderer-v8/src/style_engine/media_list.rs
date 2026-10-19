@@ -61,6 +61,22 @@ pub(crate) fn evaluate_media_query_list(
     })
 }
 
+/// Resolve a responsive-image source size using CSS syntax and initial font
+/// metrics. This needs a device, not an element style or a layout pass.
+pub(crate) fn evaluate_source_size_list(
+    sizes: &str,
+    emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
+    viewport: StyleViewport,
+) -> f64 {
+    with_stylo_media_context(|context| {
+        super::source_sizes::evaluate(
+            sizes,
+            context,
+            &media_query_device(emulated_media, viewport),
+        )
+    })
+}
+
 pub(crate) fn media_query_list_items(media_text: &str) -> Vec<String> {
     with_stylo_media_context(|context| {
         parse_stylo_media_list(context, media_text)
@@ -171,6 +187,111 @@ impl FontMetricsProvider for MediaQueryFontMetricsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_sizes_resolve_css_math_units_comments_and_escapes() {
+        let viewport = StyleViewport::new(Some(1_000.0), Some(500.0));
+        for (text, expected) in [
+            ("calc(100vw - 20px)", 980.0),
+            ("min(100px, max(20px, 5vw)), 200px", 50.0),
+            ("clamp(20px, 5vw, 100px)", 50.0),
+            ("2em", 32.0),
+            ("1in", 96.0),
+            ("10vmin", 50.0),
+            ("/**/ 1\\70 x /**/", 1.0),
+            ("calc(1px", 1.0),
+        ] {
+            assert_eq!(
+                evaluate_source_size_list(text, None, viewport),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_sizes_follow_media_conditions_and_invalid_component_boundaries() {
+        let viewport = StyleViewport::new(Some(1_000.0), Some(500.0));
+        for (text, expected) in [
+            ("(max-width: 1200px) 25vw, 80vw", 250.0),
+            ("(max-width: 800px) 25vw, 80vw", 800.0),
+            ("not (unknown-feature) 1px, 2px", 2.0),
+            ("(width: 1000px) or (unknown-feature) 1px, 2px", 1.0),
+            ("all 1px, 2px", 2.0),
+            ("(unknown-feature) 1px, 10%", 1_000.0),
+            ("1/**/px, 2px", 2.0),
+            ("((),1px", 1_000.0),
+            ("var(--size), 2px", 2.0),
+        ] {
+            assert_eq!(
+                evaluate_source_size_list(text, None, viewport),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_sizes_use_the_document_viewport_and_emulated_media_features() {
+        let viewport = StyleViewport::new(Some(1_000.0), Some(500.0))
+            .with_screen_size(Some(1_920.0), Some(1_080.0));
+        let dark = crate::protocol_types::EmulatedMediaOverrides {
+            color_scheme: Some("dark".into()),
+            ..Default::default()
+        };
+        let sizes = "(prefers-color-scheme: dark) 25vw, 80vw";
+        assert_eq!(
+            evaluate_source_size_list(sizes, Some(&dark), viewport),
+            250.0
+        );
+        assert_eq!(evaluate_source_size_list(sizes, None, viewport), 800.0);
+        assert_eq!(
+            evaluate_source_size_list("(device-width: 1920px) 1px, 2px", None, viewport),
+            1.0
+        );
+    }
+
+    #[test]
+    fn source_sizes_validate_math_before_property_clamping() {
+        let viewport = StyleViewport::new(Some(1_000.0), Some(500.0));
+        for (text, expected) in [
+            ("calc(1px / 0), 17px", 17.0),
+            ("calc(0px / 0), 17px", 17.0),
+            ("calc(-1px / 0), 17px", 17.0),
+            ("calc(0), 23px", 23.0),
+            ("min(-100px, 1px), 17px", 0.0),
+        ] {
+            assert_eq!(
+                evaluate_source_size_list(text, None, viewport),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_sizes_media_zero_math_keeps_units_and_unknown_conditions() {
+        let viewport = StyleViewport::new(Some(1_000.0), Some(500.0));
+        for (text, expected) in [
+            ("(min-width: calc(0)) 1px, 2px", 1.0),
+            ("(min-width: max(0, -1)) 1px, 2px", 1.0),
+            ("(min-width: calc(2 / 2 - 1)) 1px, 2px", 1.0),
+            ("(min-width: calc(1px - 1px)) 1px, 2px", 1.0),
+            (
+                "/*☃*/ (min-width: calc(0)) and (min-height: max(0, -1)) 1px, 2px",
+                1.0,
+            ),
+            ("(min-width: calc(1)) 1px, 2px", 2.0),
+            ("(min-width: calc(0 / 0)) 1px, 2px", 2.0),
+            ("not (unknown-feature: calc(0)) 1px, 2px", 2.0),
+        ] {
+            assert_eq!(
+                evaluate_source_size_list(text, None, viewport),
+                expected,
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn media_query_list_normalization_uses_stylo_serialization() {
