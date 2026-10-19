@@ -21,6 +21,7 @@ pub enum RasterImageFormat {
     Gif,
     WebP,
     Bmp,
+    Ico,
 }
 
 impl RasterImageFormat {
@@ -31,6 +32,7 @@ impl RasterImageFormat {
             ImageFormat::Gif => Some(Self::Gif),
             ImageFormat::WebP => Some(Self::WebP),
             ImageFormat::Bmp => Some(Self::Bmp),
+            ImageFormat::Ico => Some(Self::Ico),
             _ => None,
         }
     }
@@ -97,6 +99,8 @@ pub enum RasterDecodeError {
     Png(#[from] PngDecodeError),
     #[error("JPEG image could not be decoded: {0}")]
     Jpeg(#[from] JpegDecodeError),
+    #[error("ICO image could not be decoded: {0}")]
+    Ico(#[from] crate::IcoDecodeError),
     #[error("{format:?} image could not be decoded: {source}")]
     Image {
         format: RasterImageFormat,
@@ -123,10 +127,22 @@ pub fn probe_raster_image(bytes: &[u8]) -> Result<RasterImageMetadata, RasterDec
     let format = image::guess_format(bytes).map_err(|_| RasterDecodeError::UnknownFormat)?;
     let admitted = RasterImageFormat::from_image_format(format)
         .ok_or(RasterDecodeError::UnsupportedFormat(format))?;
-    let (width, height, color_precision) = match admitted {
-        RasterImageFormat::Png => png_metadata(bytes)?,
-        RasterImageFormat::Jpeg => jpeg_metadata(bytes)?,
-        RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp => {
+    let png_icon = if admitted == RasterImageFormat::Ico {
+        crate::ico::png_icon(bytes)?
+    } else {
+        None
+    };
+    let (width, height, color_precision) = match (admitted, png_icon) {
+        (RasterImageFormat::Png, _) => png_metadata(bytes)?,
+        (RasterImageFormat::Jpeg, _) => jpeg_metadata(bytes)?,
+        (RasterImageFormat::Ico, Some(icon)) => icon.metadata()?,
+        (
+            RasterImageFormat::Gif
+            | RasterImageFormat::WebP
+            | RasterImageFormat::Bmp
+            | RasterImageFormat::Ico,
+            _,
+        ) => {
             let mut reader = ImageReader::with_format(BufReader::new(Cursor::new(bytes)), format);
             reader.limits(decode_limits());
             let mut decoder = reader.into_decoder().map_err(RasterDecodeError::Metadata)?;
@@ -206,14 +222,27 @@ fn decode_raster(
 ) -> Result<DecodedRasterImage, RasterDecodeError> {
     check_encoded_budget(bytes)?;
     let convert_profile = matches!(conversion, ColorProfileConversion::Apply);
-    let (image, color_managed) = match metadata.format {
-        RasterImageFormat::Png => decode_png_colors(bytes, convert_profile)?,
-        RasterImageFormat::Jpeg => decode_jpeg_colors(bytes, convert_profile)?,
-        format @ (RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp) => {
+    let png_icon = if metadata.format == RasterImageFormat::Ico {
+        crate::ico::png_icon(bytes)?
+    } else {
+        None
+    };
+    let (image, color_managed) = match (metadata.format, png_icon) {
+        (RasterImageFormat::Png, _) => decode_png_colors(bytes, convert_profile)?,
+        (RasterImageFormat::Jpeg, _) => decode_jpeg_colors(bytes, convert_profile)?,
+        (RasterImageFormat::Ico, Some(icon)) => icon.decode(convert_profile)?,
+        (
+            format @ (RasterImageFormat::Gif
+            | RasterImageFormat::WebP
+            | RasterImageFormat::Bmp
+            | RasterImageFormat::Ico),
+            _,
+        ) => {
             let image_format = match format {
                 RasterImageFormat::Gif => ImageFormat::Gif,
                 RasterImageFormat::WebP => ImageFormat::WebP,
                 RasterImageFormat::Bmp => ImageFormat::Bmp,
+                RasterImageFormat::Ico => ImageFormat::Ico,
                 RasterImageFormat::Png | RasterImageFormat::Jpeg => unreachable!(),
             };
             let mut reader =
@@ -328,11 +357,10 @@ mod tests {
             probe_raster_image(b"not an image"),
             Err(RasterDecodeError::UnknownFormat)
         ));
-        // Minimal ICO signature is enough for format identification; the
-        // browser resource contract intentionally admits only its named set.
+        // Recognizing a format does not enable codecs outside the admitted set.
         assert!(matches!(
-            probe_raster_image(b"\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0"),
-            Err(RasterDecodeError::UnsupportedFormat(ImageFormat::Ico))
+            probe_raster_image(b"II\x2a\0\0\0\0\0"),
+            Err(RasterDecodeError::UnsupportedFormat(ImageFormat::Tiff))
         ));
     }
 
