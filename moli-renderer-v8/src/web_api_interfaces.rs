@@ -381,6 +381,10 @@ interfaces! {
     PerformanceServerTiming;
     Performance: EventTarget;
     PerformanceEntry;
+    LargestContentfulPaint: PerformanceEntry;
+    PerformanceEventTiming: PerformanceEntry;
+    PerformancePaintTiming: PerformanceEntry;
+    PerformanceServerTiming;
     PerformanceMark: PerformanceEntry;
     PerformanceMeasure: PerformanceEntry;
     PerformanceNavigation;

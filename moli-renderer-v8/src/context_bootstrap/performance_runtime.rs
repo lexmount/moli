@@ -5,6 +5,7 @@ mod entries;
 mod install;
 mod lazy_subobjects;
 mod marks_measures;
+mod measurement_interfaces;
 mod memory;
 mod name;
 pub(in crate::context_bootstrap) use name::PerformanceEntryName;
