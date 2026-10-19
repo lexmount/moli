@@ -718,14 +718,19 @@ impl ResourceRequestClient {
             ));
         }
 
-        let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
-            key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
-        });
+        let cache_request_headers = self
+            .resource_runtime
+            .client()
+            .cache_request_headers(&request);
+        let cache_key =
+            raw_subresource_memory_cache_key(&request, &cache_request_headers).map(|key| {
+                key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
+            });
         let lookup = cache_key.as_ref().and_then(|cache_key| {
             self.resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key, &request)
+                .lookup_raw_subresource(cache_key, &request, &cache_request_headers)
         });
         let mut network_request = request.clone();
         let cached = match lookup {
@@ -788,7 +793,7 @@ impl ResourceRequestClient {
                 self.resource_runtime
                     .memory_cache()
                     .lock()
-                    .insert_raw_subresource(cache_key, merged, expires_at);
+                    .insert_raw_subresource(cache_key, merged, expires_at, &cache_request_headers);
             }
             let completed =
                 streaming_raw_response_from_head_and_body(head, cached.clone_body_bytes())?
@@ -840,6 +845,11 @@ impl ResourceRequestClient {
         mut body_eof_observer: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> StreamingRawResponse {
         let head = response.head();
+        let cancel_handle = response.cancellation_handle();
+        let cache_request_headers = self
+            .resource_runtime
+            .client()
+            .cache_request_headers(&request);
         let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let resource_runtime = self.resource_runtime.clone();
@@ -887,9 +897,15 @@ impl ResourceRequestClient {
                 }
                 let expires_at = raw_subresource_memory_cache_expiry(&request, &materialized);
                 let mut cache = resource_runtime.memory_cache().lock();
-                cache.remove_raw_subresource(&cache_key);
                 if let Some(expires_at) = expires_at {
-                    cache.insert_raw_subresource(cache_key, materialized, expires_at);
+                    cache.insert_raw_subresource(
+                        cache_key,
+                        materialized,
+                        expires_at,
+                        &cache_request_headers,
+                    );
+                } else {
+                    cache.remove_raw_subresource(&cache_key, &cache_request_headers);
                 }
             }
 
@@ -905,7 +921,7 @@ impl ResourceRequestClient {
                 let _ = completion_tx.send(completion);
             }
         });
-        StreamingRawResponse::new_with_head(head, body_rx, FetchCancelHandle::new(), completion_rx)
+        StreamingRawResponse::new_with_head(head, body_rx, cancel_handle, completion_rx)
     }
 
     pub(crate) fn fetch_text_callback<F>(&self, request: Request, callback: F) -> Result<()>
