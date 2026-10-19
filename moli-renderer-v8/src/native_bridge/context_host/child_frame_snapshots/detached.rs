@@ -50,14 +50,14 @@ impl PageScriptHost {
                 frame_id: frame_id.clone(),
                 owner_node_id: handle,
                 url: snapshot.url.clone(),
-                markup: snapshot.markup.clone(),
+                markup: snapshot.markup().into_owned(),
                 scripting_enabled,
             });
             snapshots.extend(
                 self.detached_child_browsing_context_document_snapshots_in_markup(
                     &frame_id,
                     &snapshot.url,
-                    &snapshot.markup,
+                    &snapshot.markup(),
                     scripting_enabled,
                     0,
                     parent_scope,
@@ -150,14 +150,14 @@ impl PageScriptHost {
                     frame_id: frame_id.clone(),
                     owner_node_id: child,
                     url: snapshot.url.clone(),
-                    markup: snapshot.markup.clone(),
+                    markup: snapshot.markup().into_owned(),
                     scripting_enabled,
                 });
                 snapshots.extend(
                     self.detached_child_browsing_context_document_snapshots_in_markup(
                         &frame_id,
                         &snapshot.url,
-                        &snapshot.markup,
+                        &snapshot.markup(),
                         scripting_enabled,
                         depth + 1,
                         parent_scope,
@@ -291,7 +291,7 @@ impl PageScriptHost {
                 self.detached_child_browsing_context_frame_tree_snapshot(
                     &frame_id,
                     &snapshot.url,
-                    &snapshot.markup,
+                    &snapshot.markup(),
                     scripting_enabled,
                     depth + 1,
                     storage_scope.clone(),

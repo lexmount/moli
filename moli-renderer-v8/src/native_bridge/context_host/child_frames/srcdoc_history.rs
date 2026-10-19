@@ -29,7 +29,7 @@ impl ChildBrowsingContextEntry {
         let resource = self.srcdoc_history.get(&current_entry(seed)?.document_id)?;
         Some(ChildBrowsingContextBootstrap::Srcdoc {
             base_url: resource.snapshot.fallback_base_url.clone()?,
-            markup: resource.snapshot.markup.clone(),
+            markup: resource.snapshot.markup().into_owned(),
         })
     }
 

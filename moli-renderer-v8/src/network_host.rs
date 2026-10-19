@@ -134,7 +134,7 @@ pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
 pub(crate) use self::headers::{HeadersGuard, combined_headers_entries, filter_headers_for_guard};
 pub(crate) use self::image::{
-    ImageElementResourceFetchStart, ScannedImagePreloadStart,
+    ImageElementResourceFetchStart, ScannedImagePreloadStart, image_response_descriptor_from_bytes,
     image_response_descriptor_from_parkable, image_response_origin_clean,
     start_image_element_resource_fetch, start_scanned_image_preload,
 };

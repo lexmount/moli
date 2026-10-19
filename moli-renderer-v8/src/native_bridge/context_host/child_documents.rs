@@ -33,7 +33,6 @@ pub(crate) use loads::{
 };
 pub(in crate::native_bridge::context_host) use parser_preloads::PendingChildParserPreload;
 pub(in crate::native_bridge::context_host) use parser_store::ChildDocumentParserStore;
-pub(in crate::native_bridge::context_host) use snapshots::child_document_content_type_from_headers;
 
 fn configure_child_document_navigation_request(
     request: moli_fetch::Request,

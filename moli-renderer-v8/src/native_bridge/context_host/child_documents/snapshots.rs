@@ -1,6 +1,6 @@
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost};
-use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
+use crate::navigation_document::{decode_navigation_document_response, is_image_document_mime};
 #[cfg(test)]
 use moli_web_mime::resource_mime_essence_for_url;
 use moli_web_mime::{
@@ -54,9 +54,9 @@ impl PageScriptHost {
                 let head = response.head();
                 let content_type = child_document_content_type_from_headers(&head.headers);
                 if url.scheme() == "blob"
-                    && content_type
-                        .as_deref()
-                        .is_some_and(|mime| !is_html_document_mime(mime))
+                    && content_type.as_deref().is_some_and(|mime| {
+                        !(is_html_document_mime(mime) || is_image_document_mime(mime))
+                    })
                 {
                     return None;
                 }
@@ -72,7 +72,7 @@ impl PageScriptHost {
                     content_type.as_deref(),
                     policy_container.sandbox.forces_opaque_origin,
                 );
-                let (body, character_set) = decode_document_response(
+                let (body, character_set) = decode_navigation_document_response(
                     response.body_bytes(),
                     &head.headers,
                     content_type.as_deref(),
@@ -80,7 +80,7 @@ impl PageScriptHost {
                     fallback,
                 );
                 Some(
-                    ChildBrowsingContextSnapshot::with_character_set(
+                    ChildBrowsingContextSnapshot::with_content(
                         head.final_url,
                         body,
                         content_type,

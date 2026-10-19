@@ -31,7 +31,7 @@ impl PageScriptHost {
                 self.detached_child_browsing_context_frame_tree_snapshot(
                     "",
                     &snapshot.url,
-                    &snapshot.markup,
+                    &snapshot.markup(),
                     self.child_browsing_context_scripting_enabled(handle),
                     0,
                     parent_scope,
@@ -135,7 +135,7 @@ impl PageScriptHost {
                     self.detached_child_browsing_context_frame_tree_snapshot(
                         &identity.frame_id,
                         &snapshot.url,
-                        &snapshot.markup,
+                        &snapshot.markup(),
                         self.child_browsing_context_scripting_enabled(handle),
                         depth,
                         storage_scope.clone(),
