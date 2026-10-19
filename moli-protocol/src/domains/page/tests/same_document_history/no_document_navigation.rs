@@ -1,4 +1,8 @@
 use super::*;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+
+const NO_DOCUMENT_RESPONSE_BODY: &str =
+    "<!doctype html><script>globalThis.unexpectedResponseScript = true</script>";
 
 async fn no_document_page(status: u16, attachment: bool) -> SameDocumentPage {
     let routes = axum::Router::new().route(
@@ -14,7 +18,7 @@ async fn no_document_page(status: u16, attachment: bool) -> SameDocumentPage {
                     .unwrap();
             }
             let body = if status == 200 {
-                "<!doctype html><script>globalThis.unexpectedResponseScript = true</script>"
+                NO_DOCUMENT_RESPONSE_BODY
             } else {
                 ""
             };
@@ -356,11 +360,18 @@ async fn no_document_navigation_handles_fetch_interception() {
                         let body = page
                             .command("Fetch.getResponseBody", json!({"requestId":request_id}))
                             .await;
-                        assert!(
-                            body["body"]
-                                .as_str()
-                                .is_some_and(|body| body.contains("unexpectedResponseScript")),
-                            "{body}"
+                        assert_eq!(body["base64Encoded"], true, "{body}");
+                        let captured = BASE64_STANDARD
+                            .decode(
+                                body["body"]
+                                    .as_str()
+                                    .expect("captured body must be a string"),
+                            )
+                            .expect("captured body must be Base64");
+                        assert_eq!(
+                            captured,
+                            NO_DOCUMENT_RESPONSE_BODY.as_bytes(),
+                            "{status}/{mode}: {body}"
                         );
                     }
                     let (method, params) = match mode {
