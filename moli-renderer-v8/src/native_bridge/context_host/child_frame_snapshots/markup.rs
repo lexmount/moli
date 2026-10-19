@@ -36,8 +36,9 @@ impl JsContextHost {
                 if self.child_document_load_is_pending(handle) {
                     return None;
                 }
-                let snapshot =
-                    self.materialize_local_child_snapshot_for_navigation_url(handle, &url)?;
+                let snapshot = self
+                    .materialize_local_child_snapshot_for_navigation_url(handle, &url)
+                    .into_snapshot()?;
                 if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
                     entry.cache_snapshot_for_current_url_bootstrap(&url, &snapshot);
                 }

@@ -3,7 +3,7 @@ use super::document_slots::sync_child_document_window_slots;
 use crate::{
     context_bootstrap::{
         bind_window_performance_seed, install_navigation_entry_view_for_holder,
-        reset_window_location_history_navigation_runtime_state, set_window_origin_runtime_state,
+        reset_window_location_runtime_state, set_window_origin_runtime_state,
         sync_window_location_history_navigation_runtime_surface,
     },
     document_runtime::DomHandle,
@@ -93,11 +93,7 @@ impl JsContextHost {
             })
             .is_none_or(|href| href != visible_state.href);
         if should_reset_runtime_state {
-            let _ = reset_window_location_history_navigation_runtime_state(
-                scope,
-                wrapper,
-                &visible_state.href,
-            );
+            let _ = reset_window_location_runtime_state(scope, wrapper, &visible_state.href);
         } else {
             sync_window_location_history_navigation_runtime_surface(scope, wrapper);
         }
@@ -113,12 +109,7 @@ impl JsContextHost {
         let document = self
             .child_browsing_context_document_wrapper(scope, handle)
             .map(|document| {
-                sync_child_document_window_slots(
-                    scope,
-                    document,
-                    wrapper,
-                    visible_state.seed_is_committed,
-                );
+                sync_child_document_window_slots(scope, document, wrapper, true);
                 document.into()
             })
             .unwrap_or_else(|| v8::null(scope).into());
@@ -132,47 +123,5 @@ impl JsContextHost {
         self.child_browsing_contexts
             .get(&handle)
             .and_then(|entry| entry.visible_window_navigation_state())
-    }
-
-    pub(crate) fn sync_existing_child_browsing_context_runtime_surface_from_seed(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-    ) {
-        let Some(wrapper) = self.child_window_proxy_records.live_window(scope, handle) else {
-            return;
-        };
-        let context = wrapper
-            .get_creation_context(scope)
-            .unwrap_or_else(|| scope.get_current_context());
-        let scope = &mut v8::ContextScope::new(scope, context);
-        let Some(entry_seed) = self
-            .child_browsing_contexts
-            .get(&handle)
-            .map(|entry| entry.navigation_entry_seed())
-        else {
-            return;
-        };
-        let Some(current_entry) = entry_seed
-            .entries
-            .iter()
-            .find(|entry| entry.history_index == entry_seed.current_index)
-        else {
-            return;
-        };
-        let _ = reset_window_location_history_navigation_runtime_state(
-            scope,
-            wrapper,
-            &current_entry.url,
-        );
-        install_navigation_entry_view_for_holder(scope, wrapper, &entry_seed);
-        let performance_navigation_type = self.child_performance_navigation_type(handle);
-        let _ = bind_window_performance_seed(
-            scope,
-            wrapper,
-            &performance_navigation_type,
-            self.child_performance_time_origin(handle),
-        );
-        sync_window_location_history_navigation_runtime_surface(scope, wrapper);
     }
 }

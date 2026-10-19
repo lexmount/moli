@@ -1,5 +1,7 @@
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
-use super::{ChildDocumentCommitResult, ChildDocumentNavigationInitiator};
+use super::{
+    ChildDocumentCommitResult, ChildDocumentNavigationInitiator, LocalChildDocumentPreparation,
+};
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::{DocumentCreationKind, FrameDocumentNavigationLoadBinding},
@@ -76,7 +78,20 @@ impl JsContextHost {
         }
         self.cancel_child_meta_refresh_navigation(handle);
         let cached_snapshot =
-            self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap);
+            match self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap) {
+                LocalChildDocumentPreparation::Ready(snapshot) => Some(*snapshot),
+                LocalChildDocumentPreparation::Unavailable => None,
+                LocalChildDocumentPreparation::IgnoredNavigation => {
+                    crate::context_bootstrap::finish_joint_history_without_document_commit(
+                        scope,
+                        self,
+                        super::super::OwnerDispatchScope::Child(handle),
+                    );
+                    self.cancel_child_document_navigation_before_load(handle, navigation_load);
+                    self.sync_existing_child_browsing_context_window_state(scope, handle);
+                    return Some(ChildDocumentCommitResult::ready(None));
+                }
+            };
         let requires_async_load = cached_snapshot.is_none()
             && self.child_document_bootstrap_requires_async_load(&bootstrap);
         let owner_credentialless = self

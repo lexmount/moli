@@ -15,6 +15,7 @@ use moli_page_types::{
     reload_navigation_seed, traversal_navigation_seed_candidate,
 };
 use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
+use std::collections::HashMap;
 
 pub(super) fn initial_navigation_history_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -31,6 +32,10 @@ pub(super) fn initial_navigation_history_seed<'s>(
 pub(super) fn history_entry_from_snapshot(
     snapshot: &NavigationHistorySerializedEntry,
 ) -> HistoryEntryRef {
+    history_entry_data_from_snapshot(snapshot).into_ref()
+}
+
+fn history_entry_data_from_snapshot(snapshot: &NavigationHistorySerializedEntry) -> HistoryEntry {
     HistoryEntry {
         url: snapshot.url.clone(),
         inherited_origin: snapshot.inherited_origin.clone(),
@@ -47,13 +52,41 @@ pub(super) fn history_entry_from_snapshot(
         scroll_restoration: snapshot.scroll_restoration,
         scroll_offset: None,
     }
-    .into_ref()
 }
 
 pub(super) fn build_history_entries_from_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     seed: &NavigationHistoryEntrySeed,
+) -> (Vec<HistoryEntryRef>, u32) {
+    materialize_history_entries(scope, owner, seed, HashMap::new())
+}
+
+/// Refresh the active Document without replacing its canonical native records.
+/// An explicit snapshot restoration uses fresh records instead, even when its
+/// serialized entry identifiers match records from a previous installation.
+pub(super) fn refresh_history_entries_from_seed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    seed: &NavigationHistoryEntrySeed,
+) -> (Vec<HistoryEntryRef>, u32) {
+    let existing = window_history_for_holder(scope, owner)
+        .and_then(|history| super::history_runtime::state::history_entries(scope, history))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            let id = entry.borrow().id.clone();
+            (id, entry)
+        })
+        .collect();
+    materialize_history_entries(scope, owner, seed, existing)
+}
+
+fn materialize_history_entries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    seed: &NavigationHistoryEntrySeed,
+    existing: HashMap<String, HistoryEntryRef>,
 ) -> (Vec<HistoryEntryRef>, u32) {
     let mut snapshots: Vec<_> = seed.entries.iter().collect();
     snapshots.sort_by_key(|snapshot| snapshot.history_index);
@@ -69,16 +102,26 @@ pub(super) fn build_history_entries_from_seed<'s>(
     let entries = snapshots
         .iter()
         .map(|snapshot| {
-            let entry = history_entry_from_snapshot(snapshot);
+            let mut restored = history_entry_data_from_snapshot(snapshot);
             if current_document.is_some_and(|document| document == &snapshot.document_id) {
-                entry.borrow_mut().document_origin =
-                    super::navigation_entry::navigation_document_origin(
-                        scope,
-                        owner,
-                        &snapshot.url,
-                    );
+                restored.document_origin = super::navigation_entry::navigation_document_origin(
+                    scope,
+                    owner,
+                    &snapshot.url,
+                );
             }
-            entry
+            if let Some(entry) = existing.get(&restored.id).filter(|entry| {
+                let entry = entry.borrow();
+                entry.key == restored.key && entry.document == restored.document
+            }) {
+                // Refreshing a live Document's projection must retain its
+                // canonical wrapper, listeners, and native-only scroll state.
+                restored.scroll_offset = entry.borrow().scroll_offset;
+                *entry.borrow_mut() = restored;
+                entry.clone()
+            } else {
+                restored.into_ref()
+            }
         })
         .collect();
     (entries, current_index)
