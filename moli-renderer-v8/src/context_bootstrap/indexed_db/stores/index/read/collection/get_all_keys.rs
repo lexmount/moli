@@ -9,12 +9,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_get_all_keys_callback<
     let index = args.this();
     let Some((request, transaction, store_name, index_info)) = create_index_request(scope, index)
     else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let parsed = match parse_collection_request_args(scope, &args, "IDBIndex.getAllKeys") {

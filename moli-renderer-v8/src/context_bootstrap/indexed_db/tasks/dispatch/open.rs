@@ -1,8 +1,10 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::defer_indexed_db_aborted_open;
 
 mod abort;
 mod commit;
 mod success;
+pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) use abort::finish_aborted_upgrade_open;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -40,7 +42,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
     if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
         .unwrap_or(false)
     {
-        abort::finish_aborted_upgrade_open(scope, request);
+        defer_indexed_db_aborted_open(scope, transaction, request);
         return;
     }
 
