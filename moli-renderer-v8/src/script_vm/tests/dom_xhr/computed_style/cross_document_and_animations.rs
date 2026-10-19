@@ -1204,7 +1204,8 @@ getComputedStyle(document.querySelector('.animated')).animationName;
             ].join('|')"#,
         )
         .expect("animation events and midpoint should remain observable"),
-        "32|10px|1|0"
+        // Both keyframe rules create CSSAnimation objects and start events.
+        "64|10px|1|1"
     );
     assert_eq!(
         crate::live_stylesheet::live_stylesheet_css_text_projection_count_for_test(),
