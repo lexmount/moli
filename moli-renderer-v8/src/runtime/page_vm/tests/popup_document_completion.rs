@@ -82,7 +82,7 @@ fn loaded_popup_completion(
                 policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                 content_type: Some("text/html".to_owned()),
                 character_set: "UTF-8".to_owned(),
-                markup: markup.to_owned(),
+                content: markup.to_owned().into(),
                 document_network: None,
             },
         ))),

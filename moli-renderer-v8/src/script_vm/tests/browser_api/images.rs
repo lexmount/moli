@@ -729,6 +729,66 @@ fn image_decode_receiver_test_vm() -> crate::runtime::PageVmTaskExecutorTestHarn
 }
 
 #[test]
+fn child_image_documents_use_native_response_bytes_without_optional_image_fetching() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://image-documents.test/");
+    vm.eval(include_str!("image_document_navigation.js"))
+        .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("__imageDocumentNavigation.complete")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__imageDocumentNavigation.error || ''").unwrap(),
+        ""
+    );
+    assert_eq!(
+        vm.eval("__imageDocumentNavigation.checks.length").unwrap(),
+        "13"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__imageDocumentNavigation.checks.filter(check => !check.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn child_image_document_response_does_not_bypass_policy_for_later_src_mutations() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://image-document-csp.test/");
+    vm.eval(
+        r#"
+        const meta = document.createElement('meta');
+        meta.httpEquiv = 'Content-Security-Policy';
+        meta.content = "img-src 'none'";
+        document.head.appendChild(meta);
+        globalThis.__imageDocumentDenyImages = true;
+    "#,
+    )
+    .unwrap();
+    vm.eval(include_str!("image_document_navigation.js"))
+        .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("__imageDocumentNavigation.complete")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__imageDocumentNavigation.error || ''").unwrap(),
+        ""
+    );
+    assert_eq!(
+        vm.eval("__imageDocumentNavigation.checks.length").unwrap(),
+        "13"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__imageDocumentNavigation.checks.filter(check => !check.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
 fn image_decode_bindings_validate_receivers_and_promise_realms() {
     let mut vm = image_decode_receiver_test_vm();
     vm.eval(include_str!("image_decode_receivers.js")).unwrap();

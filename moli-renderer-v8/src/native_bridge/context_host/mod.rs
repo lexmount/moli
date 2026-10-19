@@ -106,6 +106,7 @@ mod hash_changes;
 mod host_environment;
 mod host_loads;
 mod image_decodes;
+mod image_documents;
 mod image_loads;
 mod image_resources;
 mod promise_rejection_tasks;

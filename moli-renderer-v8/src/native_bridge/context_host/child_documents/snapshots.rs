@@ -1,7 +1,7 @@
 use super::super::fixture_support::child_upstream_fixture_text;
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
-use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
+use crate::navigation_document::{decode_navigation_document_response, is_image_document_mime};
 use moli_web_mime::{
     is_html_document_mime, resource_mime_essence_for_url, response_document_content_type,
 };
@@ -59,9 +59,9 @@ impl JsContextHost {
                 let head = response.head();
                 let content_type = child_document_content_type_from_headers(&head.headers);
                 if url.scheme() == "blob"
-                    && content_type
-                        .as_deref()
-                        .is_some_and(|mime| !is_html_document_mime(mime))
+                    && content_type.as_deref().is_some_and(|mime| {
+                        !(is_html_document_mime(mime) || is_image_document_mime(mime))
+                    })
                 {
                     return None;
                 }
@@ -77,7 +77,7 @@ impl JsContextHost {
                     content_type.as_deref(),
                     policy_container.sandbox.forces_opaque_origin,
                 );
-                let (body, character_set) = decode_document_response(
+                let (body, character_set) = decode_navigation_document_response(
                     response.body_bytes(),
                     &head.headers,
                     content_type.as_deref(),
@@ -85,7 +85,7 @@ impl JsContextHost {
                     fallback,
                 );
                 Some(
-                    ChildBrowsingContextSnapshot::with_character_set(
+                    ChildBrowsingContextSnapshot::with_content(
                         head.final_url,
                         body,
                         content_type,
