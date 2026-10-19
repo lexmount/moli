@@ -99,7 +99,7 @@ async fn assert_navigation_exits_debugger_pause(body: &str, second_frontend: boo
         None
     };
     let paused = pause_in_timer(&mut socket, &session_id, 7, body).await;
-    if let Some(second_session) = second_session
+    if let Some(second_session) = second_session.as_deref()
         && !paused.iter().any(|message| {
             message["method"] == "Debugger.paused" && message["sessionId"] == second_session
         })
@@ -140,14 +140,27 @@ async fn assert_navigation_exits_debugger_pause(body: &str, second_frontend: boo
                 && message["params"]["frame"]["url"] == destination
         })
         .expect("replacement document committed");
-    // Events collected before commit can still belong to the outgoing document.
-    // Check retirement once the replacement document has committed.
+    // The outgoing document was already paused before navigation. Its only
+    // remaining pause transition is the original resume; skipped timer breaks
+    // must never produce another pair, including before commit.
     assert!(
-        !messages[commit_index..]
+        !messages
             .iter()
             .any(|message| message["method"] == "Debugger.paused"),
-        "old-document pause after navigation commit: {messages:#?}"
+        "transient old-document pause during navigation: {messages:#?}"
     );
+    for session in std::iter::once(&session_id).chain(second_session.iter()) {
+        assert_eq!(
+            messages[..commit_index]
+                .iter()
+                .filter(|message| {
+                    message["method"] == "Debugger.resumed" && message["sessionId"] == *session
+                })
+                .count(),
+            1,
+            "the original pause needs exactly one resume per frontend: {messages:#?}"
+        );
+    }
     assert_eq!(
         cdp_runtime_evaluate_string(&mut socket, &session_id, 9, "document.title").await,
         "replacement"

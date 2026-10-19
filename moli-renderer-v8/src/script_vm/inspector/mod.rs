@@ -6,6 +6,7 @@ mod document_backend;
 mod input_state;
 mod outbound;
 mod remote_objects;
+mod session;
 mod v8_backend;
 
 use self::agent::RendererDevToolsAgent;
@@ -25,6 +26,7 @@ pub(super) use self::input_state::{
 };
 pub(in crate::script_vm) use self::outbound::InspectorOutbound;
 pub(super) use self::outbound::ScriptVmInspectorCommandTurnOutputScope;
+pub(in crate::script_vm) use self::session::RendererInspectorSession;
 #[cfg(test)]
 use self::v8_backend::RendererInspectorClientUniqueIdState;
 pub(in crate::script_vm) use self::v8_backend::RendererInspectorIsolateBackend;
@@ -138,7 +140,7 @@ impl DocumentInspectorBinding {
         backend: &mut RendererInspectorIsolateBackend,
         target: PageInspectorSessionTarget<'_>,
         op: impl FnOnce(
-            &v8::inspector::V8InspectorSession,
+            &RendererInspectorSession,
             InspectorOutbound,
             Vec<RuntimeBindingRegistration>,
         ) -> T,

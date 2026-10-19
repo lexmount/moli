@@ -125,6 +125,20 @@ impl RendererDevToolsTargetHandle {
         &self.io
     }
 
+    pub(crate) fn begin_document_replacement(&self, agent: RendererDevToolsAgentToken) -> bool {
+        if !self.pause.begin_document_replacement(agent) {
+            return false;
+        }
+        self.io.notify_document_replacement();
+        true
+    }
+
+    pub(crate) fn finish_document_replacement(&self, agent: RendererDevToolsAgentToken) {
+        if self.pause.finish_document_replacement(agent) {
+            self.io.notify_document_replacement();
+        }
+    }
+
     pub(crate) fn outbound_route(
         &self,
         agent_token: RendererDevToolsAgentToken,

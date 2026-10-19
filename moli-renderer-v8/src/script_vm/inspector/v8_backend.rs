@@ -1,8 +1,8 @@
-use super::InspectorOutbound;
 use super::context_registry::{
     DocumentInspectorContextGroupId, DocumentInspectorContextRegistrationId,
     DocumentInspectorContextRegistry,
 };
+use super::{InspectorOutbound, RendererInspectorSession};
 mod interrupt;
 #[cfg(test)]
 mod page_target_tests;
@@ -56,7 +56,7 @@ struct RendererInspectorClient {
 
 #[derive(Clone)]
 struct RendererInspectorSessionRoute {
-    session: Weak<v8::inspector::V8InspectorSession>,
+    session: Weak<RendererInspectorSession>,
     outbound: InspectorOutbound,
     agent_token: RendererDevToolsAgentToken,
     session_key: DevToolsSessionKey,
@@ -67,7 +67,7 @@ pub(super) struct RendererInspectorSessionExecutorRegistration {
     context_group_id: i32,
     agent_token: RendererDevToolsAgentToken,
     session_key: DevToolsSessionKey,
-    session: Weak<v8::inspector::V8InspectorSession>,
+    session: Weak<RendererInspectorSession>,
 }
 
 struct RendererInspectorSessionExecutorLocal {
@@ -154,7 +154,7 @@ impl RendererInspectorSessionExecutorLocal {
         context_group_id: DocumentInspectorContextGroupId,
         agent_token: RendererDevToolsAgentToken,
         session_key: DevToolsSessionKey,
-        session: &Rc<v8::inspector::V8InspectorSession>,
+        session: &Rc<RendererInspectorSession>,
         outbound: InspectorOutbound,
     ) -> RendererInspectorSessionExecutorRegistration {
         let weak_session = Rc::downgrade(session);
@@ -187,59 +187,70 @@ impl RendererInspectorSessionExecutorLocal {
         let Some(pause_loop_policy) = self.target.pause_ref().enter_pause() else {
             return;
         };
+        let agent_token = self
+            .sessions
+            .borrow()
+            .iter()
+            .find(|((group, _), _)| *group == context_group_id)
+            .expect("a debugger pause must belong to a registered document session")
+            .1
+            .agent_token;
         let mut prefer_main = true;
         let exit_reason = loop {
-            let work = self.target.pause_ref().wait_for_pause_work(|| {
-                // These are actual posted owner tasks, not an environment-version
-                // check. Service them in both pause modes, before a following
-                // Inspector observation; they never execute page JavaScript.
-                if let Some(invalidation) =
-                    self.environment_ingress().claim_environment_invalidation()
-                {
-                    return Some(RendererInspectorNestedCommand::EnvironmentInvalidation(
-                        invalidation,
-                    ));
-                }
-                let command = match pause_loop_policy {
-                    crate::devtools::pause::RendererInspectorPauseLoopPolicy::IoOnly => self
-                        .target
-                        .io_ref()
-                        .claim_for_pause()
-                        .map(RendererInspectorNestedCommand::Io),
-                    crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
-                        if prefer_main =>
+            let work = self
+                .target
+                .pause_ref()
+                .wait_for_pause_work(agent_token, || {
+                    // These are actual posted owner tasks, not an environment-version
+                    // check. Service them in both pause modes, before a following
+                    // Inspector observation; they never execute page JavaScript.
+                    if let Some(invalidation) =
+                        self.environment_ingress().claim_environment_invalidation()
                     {
-                        self.target
-                            .main_ref()
-                            .claim_for_pause()
-                            .map(RendererInspectorNestedCommand::Main)
-                            .or_else(|| {
-                                self.target
-                                    .io_ref()
-                                    .claim_for_pause()
-                                    .map(RendererInspectorNestedCommand::Io)
-                            })
+                        return Some(RendererInspectorNestedCommand::EnvironmentInvalidation(
+                            invalidation,
+                        ));
                     }
-                    crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo => self
-                        .target
-                        .io_ref()
-                        .claim_for_pause()
-                        .map(RendererInspectorNestedCommand::Io)
-                        .or_else(|| {
+                    let command = match pause_loop_policy {
+                        crate::devtools::pause::RendererInspectorPauseLoopPolicy::IoOnly => self
+                            .target
+                            .io_ref()
+                            .claim_for_pause()
+                            .map(RendererInspectorNestedCommand::Io),
+                        crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                            if prefer_main =>
+                        {
                             self.target
                                 .main_ref()
                                 .claim_for_pause()
                                 .map(RendererInspectorNestedCommand::Main)
-                        }),
-                };
-                if command.is_some()
-                    && pause_loop_policy
-                        == crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
-                {
-                    prefer_main = !prefer_main;
-                }
-                command
-            });
+                                .or_else(|| {
+                                    self.target
+                                        .io_ref()
+                                        .claim_for_pause()
+                                        .map(RendererInspectorNestedCommand::Io)
+                                })
+                        }
+                        crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo => self
+                            .target
+                            .io_ref()
+                            .claim_for_pause()
+                            .map(RendererInspectorNestedCommand::Io)
+                            .or_else(|| {
+                                self.target
+                                    .main_ref()
+                                    .claim_for_pause()
+                                    .map(RendererInspectorNestedCommand::Main)
+                            }),
+                    };
+                    if command.is_some()
+                        && pause_loop_policy
+                            == crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                    {
+                        prefer_main = !prefer_main;
+                    }
+                    command
+                });
             let command = match work {
                 Ok(command) => command,
                 Err(reason) => break reason,
@@ -263,9 +274,6 @@ impl RendererInspectorSessionExecutorLocal {
         {
             // Like Chromium's UnpauseAndTerminate, unwind the paused old
             // document before preparing its replacement on the owner thread.
-            // Later pauses observe the same renderer preparation scope until
-            // it commits or is discarded. No debugger setting leaks
-            // into the replacement document's Inspector restore snapshots.
             let sessions: Vec<_> = self
                 .sessions
                 .borrow()
@@ -273,11 +281,29 @@ impl RendererInspectorSessionExecutorLocal {
                 .filter(|((group, _), _)| *group == context_group_id)
                 .filter_map(|(_, route)| route.session.upgrade())
                 .collect();
+            for session in &sessions {
+                session.sync_document_replacement();
+            }
             for session in sessions {
                 session.resume(true);
             }
         }
         self.target.pause_ref().leave_pause();
+    }
+
+    fn apply_document_replacement(&self) {
+        if !self.target.io_ref().claim_document_replacement() {
+            return;
+        }
+        let sessions: Vec<_> = self
+            .sessions
+            .borrow()
+            .values()
+            .filter_map(|route| route.session.upgrade())
+            .collect();
+        for session in sessions {
+            session.sync_document_replacement();
+        }
     }
 
     fn environment_ingress(&self) -> &RendererInspectorIoIngress {
@@ -925,7 +951,7 @@ impl RendererInspectorIsolateBackendHandle {
         context_group_id: DocumentInspectorContextGroupId,
         agent_token: RendererDevToolsAgentToken,
         session_key: DevToolsSessionKey,
-        session: &Rc<v8::inspector::V8InspectorSession>,
+        session: &Rc<RendererInspectorSession>,
         outbound: InspectorOutbound,
     ) -> RendererInspectorSessionExecutorRegistration {
         self.endpoint

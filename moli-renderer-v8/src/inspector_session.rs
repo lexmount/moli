@@ -22,16 +22,18 @@ pub(crate) trait InspectorSessionOutput {
 }
 
 /// The caller establishes its usual Inspector isolate/microtask scope.
+/// Dispatch the frontend command through its session's pause-policy wrapper.
 pub(crate) fn dispatch_with_runtime_defaults(
     session: &v8::inspector::V8InspectorSession,
     raw_json: &str,
     output: &impl InspectorSessionOutput,
+    dispatch: impl FnOnce(v8::inspector::StringView),
 ) -> Result<(), String> {
     let enabling_runtime = serde_json::from_str::<Value>(raw_json).is_ok_and(|message| {
         message.get("method").and_then(Value::as_str) == Some("Runtime.enable")
     });
     let runtime_was_disabled = enabling_runtime && !runtime_enabled(session)?;
-    session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
+    dispatch(v8::inspector::StringView::from(raw_json.as_bytes()));
 
     // V8 owns enable/restore state. Repeated or failed enables must not reset
     // explicit frontend limits. The setter runs synchronously without JS or
