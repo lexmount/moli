@@ -237,7 +237,6 @@ where
     finish_inline_positioned_layout(world, viewport);
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
-    finish_sticky_positioning(world, viewport);
     round_layout_to_css_subpixels(world, root);
     // Outside markers deliberately are not numeric children of the list item,
     // otherwise Taffy would allocate them a normal-flow row. Round each
@@ -741,103 +740,6 @@ where
             Some(content_width),
         );
     }
-}
-
-fn finish_sticky_positioning<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let sticky_boxes = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| world.boxes[id.index()].style.position() == crate::LayoutPosition::Sticky)
-        .collect::<Vec<_>>();
-    for id in sticky_boxes {
-        let layout = world.boxes[id.index()].unrounded_layout;
-        let global = unrounded_global_origin(world, id);
-        let scrollport = nearest_scrollport(world, id).unwrap_or(PaintRect::new(
-            0.0,
-            0.0,
-            viewport.css_width as f32,
-            viewport.css_height as f32,
-        ));
-        let inset = world.boxes[id.index()].style.sticky_inset();
-        let left = inset
-            .left
-            .maybe_resolve(scrollport.width, resolve_stylo_calc_value);
-        let right = inset
-            .right
-            .maybe_resolve(scrollport.width, resolve_stylo_calc_value);
-        let top = inset
-            .top
-            .maybe_resolve(scrollport.height, resolve_stylo_calc_value);
-        let bottom = inset
-            .bottom
-            .maybe_resolve(scrollport.height, resolve_stylo_calc_value);
-        let mut target_x = global.x;
-        let mut target_y = global.y;
-        if let Some(left) = left {
-            target_x = target_x.max(scrollport.x + left);
-        }
-        if let Some(right) = right {
-            target_x = target_x.min(scrollport.x + scrollport.width - right - layout.size.width);
-        }
-        if let Some(top) = top {
-            target_y = target_y.max(scrollport.y + top);
-        }
-        if let Some(bottom) = bottom {
-            target_y = target_y.min(scrollport.y + scrollport.height - bottom - layout.size.height);
-        }
-
-        if let Some(containing_block) = world.boxes[id.index()].layout_parent {
-            let containing_layout = world.boxes[containing_block.index()].unrounded_layout;
-            let containing_origin = unrounded_global_origin(world, containing_block);
-            let min_x = containing_origin.x
-                + containing_layout.border.left
-                + containing_layout.padding.left;
-            let max_x = containing_origin.x + containing_layout.size.width
-                - containing_layout.border.right
-                - containing_layout.padding.right
-                - layout.size.width;
-            let min_y =
-                containing_origin.y + containing_layout.border.top + containing_layout.padding.top;
-            let max_y = containing_origin.y + containing_layout.size.height
-                - containing_layout.border.bottom
-                - containing_layout.padding.bottom
-                - layout.size.height;
-            if min_x <= max_x {
-                target_x = target_x.clamp(min_x, max_x);
-            }
-            if min_y <= max_y {
-                target_y = target_y.clamp(min_y, max_y);
-            }
-        }
-        world.boxes[id.index()].unrounded_layout.location.x += target_x - global.x;
-        world.boxes[id.index()].unrounded_layout.location.y += target_y - global.y;
-    }
-}
-
-fn nearest_scrollport<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Option<PaintRect>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut ancestor = world.boxes[id.index()].parent;
-    while let Some(candidate) = ancestor {
-        let layout_box = &world.boxes[candidate.index()];
-        if !world.is_viewport_defining_body(candidate)
-            && layout_box.style.establishes_scroll_container()
-        {
-            let layout = layout_box.unrounded_layout;
-            let origin = unrounded_global_origin(world, candidate);
-            return Some(PaintRect::new(
-                origin.x + layout.border.left,
-                origin.y + layout.border.top,
-                (layout.size.width - layout.border.left - layout.border.right).max(0.0),
-                (layout.size.height - layout.border.top - layout.border.bottom).max(0.0),
-            ));
-        }
-        ancestor = layout_box.parent;
-    }
-    None
 }
 
 fn push_layout_diagnostic<N>(

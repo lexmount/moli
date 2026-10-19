@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
-use taffy::ResolveOrZero;
+use taffy::{MaybeResolve, ResolveOrZero};
 
 use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
@@ -626,6 +626,7 @@ where
             paint: PaintSpace::ROOT,
         });
         let mut state = vec![0_u8; self.world.boxes.len()];
+        let mut sticky_displacements = vec![LayoutPoint::ZERO; self.world.boxes.len()];
         for index in 0..self.world.boxes.len() {
             resolve_coordinate_space(
                 index,
@@ -636,7 +637,12 @@ where
                 &mut self.viewport_anchored,
                 &mut spaces,
                 &mut state,
+                &mut sticky_displacements,
             )?;
+        }
+        for (geometry, displacement) in self.boxes.iter_mut().zip(sticky_displacements) {
+            geometry.layout_origin_in_document.x += displacement.x;
+            geometry.layout_origin_in_document.y += displacement.y;
         }
         self.coordinate_spaces = spaces
             .into_iter()
@@ -1106,6 +1112,7 @@ fn resolve_coordinate_space<N>(
     viewport_anchored: &mut [bool],
     spaces: &mut [Option<ProjectedCoordinateSpace>],
     state: &mut [u8],
+    sticky_displacements: &mut [LayoutPoint],
 ) -> Result<(), LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
@@ -1139,6 +1146,7 @@ where
             viewport_anchored,
             spaces,
             state,
+            sticky_displacements,
         )?;
     }
 
@@ -1170,7 +1178,25 @@ where
             .then_some(scroll_extents[parent.index()].applied_offset)
     });
     let applied_parent_scroll = parent_scroll.unwrap_or(LayoutPoint::ZERO);
-    let location = layout_box.final_layout.location;
+    let mut location = layout_box.final_layout.location;
+    let sticky_offset = sticky_position_offset(
+        world,
+        index,
+        parent_transform_ignoring_css_transforms,
+        applied_parent_scroll,
+        viewport_scroll,
+        scroll_extents,
+        spaces,
+    );
+    location.x += sticky_offset.x;
+    location.y += sticky_offset.y;
+    let ancestor_displacement = parent_box
+        .map(|parent| sticky_displacements[parent.index()])
+        .unwrap_or(LayoutPoint::ZERO);
+    sticky_displacements[index] = LayoutPoint::new(
+        ancestor_displacement.x + sticky_offset.x,
+        ancestor_displacement.y + sticky_offset.y,
+    );
     let local_to_parent = LayoutTransform2D::translation(
         location.x - applied_parent_scroll.x,
         location.y - applied_parent_scroll.y,
@@ -1235,6 +1261,147 @@ where
     });
     state[index] = 2;
     Ok(())
+}
+
+fn sticky_position_offset<N>(
+    world: &LayoutWorld<N>,
+    index: usize,
+    parent_transform: LayoutTransform2D,
+    parent_scroll: LayoutPoint,
+    viewport_scroll: LayoutPoint,
+    scroll_extents: &[LayoutScrollExtent],
+    spaces: &[Option<ProjectedCoordinateSpace>],
+) -> LayoutPoint
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let layout_box = &world.boxes[index];
+    if layout_box.style.position() != crate::LayoutPosition::Sticky {
+        return LayoutPoint::ZERO;
+    }
+    let mut ancestor = layout_box.parent;
+    let mut scroller = world.root;
+    while let Some(id) = ancestor {
+        if scroll_extents[id.index()].is_scroll_container {
+            scroller = id;
+            break;
+        }
+        ancestor = world.boxes[id.index()].parent;
+    }
+    let document_transform = |id: LayoutBoxId| {
+        spaces[id.index() + 1]
+            .as_ref()
+            .expect("resolved sticky ancestor")
+            .layout
+            .local_to_document_ignoring_css_transforms
+    };
+    let scrollport = if scroller == world.root {
+        offset_rect(scroll_extents[scroller.index()].scrollport, viewport_scroll)
+    } else {
+        document_transform(scroller)
+            .map_rect(scroll_extents[scroller.index()].scrollport)
+            .bounding_rect()
+    };
+    let mut containing_block = layout_box.layout_parent;
+    while let Some(id) = containing_block {
+        if world.boxes[id.index()].source.is_some() {
+            break;
+        }
+        containing_block = world.boxes[id.index()].layout_parent;
+    }
+    let Some(containing_block) = containing_block else {
+        return LayoutPoint::ZERO;
+    };
+    let containing_layout = world.boxes[containing_block.index()].final_layout;
+    // Match Blink's ComputeStickyPositionConstraints: a scroll container's
+    // containing area is its flow overflow, while other containing blocks
+    // contribute their content box. Both move with the scrolled content.
+    let containing_rect = if containing_block == scroller {
+        inset_rect(
+            scroll_extents[scroller.index()].scrollable_overflow,
+            containing_layout.padding.top,
+            containing_layout.padding.right,
+            containing_layout.padding.bottom,
+            containing_layout.padding.left,
+        )
+    } else {
+        inset_rect(
+            LayoutRect::new(
+                0.0,
+                0.0,
+                containing_layout.size.width,
+                containing_layout.size.height,
+            ),
+            containing_layout.border.top + containing_layout.padding.top,
+            containing_layout.border.right + containing_layout.padding.right,
+            containing_layout.border.bottom + containing_layout.padding.bottom,
+            containing_layout.border.left + containing_layout.padding.left,
+        )
+    };
+    let containing_scroll = if containing_block == world.root {
+        LayoutPoint::ZERO
+    } else {
+        scroll_extents[containing_block.index()].applied_offset
+    };
+    let containing_rect = document_transform(containing_block)
+        .map_rect(offset_rect(
+            containing_rect,
+            LayoutPoint::new(-containing_scroll.x, -containing_scroll.y),
+        ))
+        .bounding_rect();
+    let layout = layout_box.final_layout;
+    let origin = parent_transform.map_point(LayoutPoint::new(
+        layout.location.x - parent_scroll.x,
+        layout.location.y - parent_scroll.y,
+    ));
+    let inset = layout_box.style.sticky_inset();
+    let resolve = crate::style::resolve_stylo_calc_value;
+    // Sticky offsets are a projection after scroll-range clamping. Keeping
+    // them out of numeric layout preserves flow positions and scroll extents.
+    // Ancestor coordinate spaces already include any outer sticky offset.
+    let axis_offset = |origin: f32,
+                       size: f32,
+                       start: f32,
+                       end: f32,
+                       containing_start: f32,
+                       containing_end: f32,
+                       min_inset: Option<f32>,
+                       max_inset: Option<f32>| {
+        let mut offset = 0.0;
+        if let Some(inset) = max_inset {
+            offset += (end - inset - origin - size)
+                .min(0.0)
+                .max((containing_start - origin).min(0.0));
+        }
+        if let Some(inset) = min_inset {
+            offset += (start + inset - origin)
+                .max(0.0)
+                .min((containing_end - origin - size).max(0.0));
+        }
+        offset
+    };
+    LayoutPoint::new(
+        axis_offset(
+            origin.x,
+            layout.size.width,
+            scrollport.x,
+            scrollport.right(),
+            containing_rect.x + layout.margin.left,
+            containing_rect.right() - layout.margin.right,
+            inset.left.maybe_resolve(scrollport.width, resolve),
+            inset.right.maybe_resolve(scrollport.width, resolve),
+        ),
+        axis_offset(
+            origin.y,
+            layout.size.height,
+            scrollport.y,
+            scrollport.bottom(),
+            containing_rect.y + layout.margin.top,
+            containing_rect.bottom() - layout.margin.bottom,
+            inset.top.maybe_resolve(scrollport.height, resolve),
+            inset.bottom.maybe_resolve(scrollport.height, resolve),
+        ),
+    )
 }
 
 fn finite_point(point: LayoutPoint) -> LayoutPoint {

@@ -31,6 +31,7 @@ struct Node {
     metrics: Option<ReplacedMetrics>,
     image: Option<LayoutImageResource>,
     selection: Option<LayoutTextSelection>,
+    scroll: moli_layout::LayoutPoint,
 }
 
 impl Node {
@@ -55,6 +56,7 @@ impl Node {
             metrics: None,
             image: None,
             selection: None,
+            scroll: moli_layout::LayoutPoint::ZERO,
         }
     }
 
@@ -68,6 +70,7 @@ impl Node {
             metrics: None,
             image: None,
             selection: None,
+            scroll: moli_layout::LayoutPoint::ZERO,
         }
     }
 
@@ -133,6 +136,10 @@ impl LayoutSource for Source {
 
     fn text_selection(&self, node: Self::NodeId) -> Option<LayoutTextSelection> {
         self.0[node].selection
+    }
+
+    fn scroll_offset(&self, node: Self::NodeId) -> moli_layout::LayoutPoint {
+        self.0[node].scroll
     }
 
     fn replaced_metrics(&self, node: Self::NodeId) -> Option<ReplacedMetrics> {
@@ -3068,6 +3075,109 @@ fn text_selection_and_caret_use_parley_geometry_in_the_owned_snapshot() {
             } if (rect.width - 1.5).abs() < 0.05 && rect.height > 0.0
         )
     }));
+}
+
+#[test]
+fn sticky_follows_clamped_nested_scroll_without_changing_flow_extent() {
+    let mut source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "scroll",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2, 3],
+        ),
+        Node::element(
+            "sticky",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "filler",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 400.0, 300.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT).tap_taffy(|style| {
+            style.size = Size {
+                width: Dimension::length(200.0),
+                height: Dimension::length(100.0),
+            };
+            style.overflow = Point {
+                x: Overflow::Hidden,
+                y: Overflow::Hidden,
+            };
+        }),
+    );
+    styles.primary.insert(
+        2,
+        sized(LayoutDisplay::Block, 80.0, 20.0, RED)
+            .tap_taffy(|style| {
+                style.size = Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(20.0),
+                };
+                style.inset.left = taffy::LengthPercentageAuto::length(5.0);
+                style.inset.top = taffy::LengthPercentageAuto::length(10.0);
+            })
+            .with_position(LayoutPosition::Sticky),
+    );
+    styles
+        .primary
+        .insert(3, sized(LayoutDisplay::Block, 400.0, 600.0, BLUE));
+    // Chromium's position-sticky-offset-top-left.html also checks the
+    // scroll-dependent used offset, not just a sticky box at scroll origin.
+    for (x, y, expected_scroll_x, expected_scroll_y) in [
+        (75.0, 300.0, 75.0, 300.0),
+        (9999.0, 9999.0, 200.0, 520.0),
+        (0.0, 0.0, 0.0, 0.0),
+    ] {
+        source.0[1].scroll = moli_layout::LayoutPoint::new(x, y);
+        let pass = moli_layout::build_layout_pass(
+            &source,
+            &mut styles,
+            &mut DocumentLayoutServices::default(),
+            moli_layout::LayoutPassRequest::with_paint(
+                PaintViewport::new(400, 300, 1.0),
+                moli_layout::LayoutFlushReason::Screenshot,
+            ),
+        )
+        .expect("scrolled sticky layout");
+        let scroll_box = pass
+            .tree
+            .source_output(1)
+            .expect("scroller source")
+            .principal_box
+            .expect("scroller box");
+        let extent = pass
+            .tree
+            .scroll_extent(scroll_box)
+            .expect("scroller extent");
+        assert_eq!(
+            extent.scroll_size,
+            moli_layout::LayoutSize::new(400.0, 620.0)
+        );
+        assert_eq!(
+            extent.applied_offset,
+            moli_layout::LayoutPoint::new(expected_scroll_x, expected_scroll_y)
+        );
+        assert_eq!(
+            rect(&pass.into_paint_snapshot().expect("sticky paint"), RED),
+            PaintRect::new(5.0, 10.0, 80.0, 20.0)
+        );
+    }
 }
 
 #[test]
