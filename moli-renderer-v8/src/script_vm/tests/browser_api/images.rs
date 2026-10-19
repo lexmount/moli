@@ -1,4 +1,5 @@
 use super::*;
+mod natural_dimensions;
 mod picture_types;
 mod source_sizes;
 use tokio::{
