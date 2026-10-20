@@ -502,7 +502,12 @@ impl ResourcePerformanceEntry {
             network.cache_state,
             network.preload_state.clone(),
         );
-        if !network.resource_timing_body_visible {
+        if matches!(network.status, 204 | 205) {
+            // A null-body navigation response retains its network status, but
+            // does not supply a Document representation or content metadata.
+            entry.content_type.clear();
+            entry.content_encoding.clear();
+        } else if !network.resource_timing_body_visible {
             entry.content_encoding.clear();
         }
         entry
