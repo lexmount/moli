@@ -6,6 +6,7 @@ use std::sync::{
 
 mod history_traversal;
 mod lifecycle;
+mod policy_inheritance;
 
 async fn gated_page() -> (SameDocumentPage, Arc<ResponseGate>) {
     let gate = Arc::new(ResponseGate {
