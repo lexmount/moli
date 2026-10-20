@@ -23,6 +23,14 @@ pub struct CurlDnsResolution {
     endpoint: Option<Box<CurlDnsEndpointResolution>>,
 }
 
+/// Monotonic observations of one lookup submitted to the shared resolver.
+/// This includes resolver queue/cache work, but not later curl-owner delivery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CurlDnsTiming {
+    pub started_at: Instant,
+    pub completed_at: Instant,
+}
+
 #[derive(Debug)]
 struct CurlDnsEndpointResolution {
     target: DnsTarget,
@@ -143,11 +151,13 @@ impl CurlDnsResolution {
 pub(crate) struct CurlDnsOwnerCompletion<I> {
     request_id: I,
     result: DnsLookupResult,
+    timing: CurlDnsTiming,
 }
 
 pub(crate) struct CurlDnsReady<P> {
     pub(crate) pending: P,
     pub(crate) result: DnsLookupResult,
+    pub(crate) timing: CurlDnsTiming,
 }
 
 /// Curl-owner residence for transfers parked on shared DNS resolution.
@@ -201,15 +211,28 @@ where
         );
 
         let completion_tx = self.completion_tx.clone();
+        let started_at = Instant::now();
         match DnsResolverService::shared() {
             Ok(service) => service.resolve(self.partition, target, move |result| {
-                let _ = completion_tx.send(CurlDnsOwnerCompletion { request_id, result });
+                let timing = CurlDnsTiming {
+                    started_at,
+                    completed_at: Instant::now(),
+                };
+                let _ = completion_tx.send(CurlDnsOwnerCompletion {
+                    request_id,
+                    result,
+                    timing,
+                });
                 let _ = owner_waker.wakeup();
             }),
             Err(error) => {
                 let _ = self.completion_tx.send(CurlDnsOwnerCompletion {
                     request_id,
                     result: Err(error),
+                    timing: CurlDnsTiming {
+                        started_at,
+                        completed_at: Instant::now(),
+                    },
                 });
                 let _ = owner_waker.wakeup();
             }
@@ -224,6 +247,7 @@ where
         Some(CurlDnsReady {
             pending,
             result: completion.result,
+            timing: completion.timing,
         })
     }
 
@@ -299,6 +323,14 @@ mod tests {
 
     impl Handler for TestHandler {}
 
+    fn test_timing() -> CurlDnsTiming {
+        let now = Instant::now();
+        CurlDnsTiming {
+            started_at: now,
+            completed_at: now,
+        }
+    }
+
     fn test_result() -> DnsLookupResult {
         Ok(Arc::from([IpAddr::from([127, 0, 0, 1])]))
     }
@@ -354,6 +386,7 @@ mod tests {
             .claim(CurlDnsOwnerCompletion {
                 request_id,
                 result: test_result(),
+                timing: test_timing(),
             })
             .expect("exact pending request should be claimed");
         assert_eq!(ready.pending, "pending");
@@ -362,10 +395,31 @@ mod tests {
                 .claim(CurlDnsOwnerCompletion {
                     request_id,
                     result: test_result(),
+                    timing: test_timing(),
                 })
                 .is_none(),
             "late duplicate completion must not recover retired work"
         );
+    }
+
+    #[test]
+    fn delayed_claim_preserves_the_resolver_completion_clock() {
+        let mut residence = CurlDnsOwnerResidence::<u64, _>::default();
+        residence.waiting.insert(7, "pending");
+        let completed_at = Instant::now();
+        let timing = CurlDnsTiming {
+            started_at: completed_at - std::time::Duration::from_millis(8),
+            completed_at,
+        };
+        let ready = residence
+            .claim(CurlDnsOwnerCompletion {
+                request_id: 7,
+                result: test_result(),
+                timing,
+            })
+            .expect("the exact lookup should complete");
+        assert_eq!(ready.timing, timing);
+        assert!(ready.timing.completed_at <= Instant::now());
     }
 
     #[test]
@@ -385,6 +439,7 @@ mod tests {
                 .claim(CurlDnsOwnerCompletion {
                     request_id,
                     result: test_result(),
+                    timing: test_timing(),
                 })
                 .is_none(),
             "a resolver completion must not recover a timed-out transfer"
@@ -402,6 +457,7 @@ mod tests {
             .send(CurlDnsOwnerCompletion {
                 request_id: stale_id,
                 result: test_result(),
+                timing: test_timing(),
             })
             .expect("stale completion should enter the test queue");
         residence
@@ -409,6 +465,7 @@ mod tests {
             .send(CurlDnsOwnerCompletion {
                 request_id: ready_id,
                 result: test_result(),
+                timing: test_timing(),
             })
             .expect("ready completion should enter the test queue");
 
