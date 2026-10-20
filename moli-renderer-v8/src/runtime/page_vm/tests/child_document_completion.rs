@@ -249,6 +249,73 @@ async fn null_body_child_navigation_reports_network_without_replacing_document()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn required_csp_header_retains_the_admitted_attribute_across_owner_refreshes() {
+    run_page_vm_async_test(async move {
+        for refresh in ["name", "window"] {
+            let (base_url, server) = spawn_path_response_http_server(vec![(
+                "/csp-snapshot",
+                "HTTP/1.1 204 No Content\r\nAllow-CSP-From: *",
+                String::new(),
+                Duration::ZERO,
+            )])
+            .await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+                .expect("loader");
+            let (mut page_vm, mut queue, mut wake_rx) =
+                owner_attached_page_vm(&loader, Url::parse(&format!("{base_url}/page.html"))?);
+            let child_url = format!("{base_url}/csp-snapshot");
+            page_vm.vm_mut().eval(&format!(
+                r#"
+                globalThis.__cspFrame = document.createElement('iframe');
+                __cspFrame.id = 'request-csp-frame';
+                __cspFrame.csp = "script-src 'unsafe-inline'; policy-before-source";
+                __cspFrame.src = {child_url:?};
+                document.body.appendChild(__cspFrame);
+                __cspFrame.csp = "script-src 'unsafe-inline'; policy-after-source";
+                if ({refresh:?} === 'name') __cspFrame.name = 'refreshed-owner-name';
+                else void __cspFrame.contentWindow;
+            "#
+            ))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm,
+                ChildFrameSemanticTurnKind::NavigationCommit,
+                "attribute policy snapshot request start",
+            )
+            .await;
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, "CSP snapshot fetch").await;
+            page_vm
+                .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                .expect("snapshot response should apply to its exact navigation");
+            let network = page_vm.take_completed_child_document_networks();
+            assert_eq!(network.len(), 1);
+            let requirement: Vec<_> = network[0]
+                .snapshot
+                .request_headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("Sec-Required-CSP"))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(
+                requirement,
+                ["script-src 'unsafe-inline'; policy-before-source"]
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval("__cspFrame.csp")?,
+                "script-src 'unsafe-inline'; policy-after-source",
+                "capturing request policy must not change DOM reflection"
+            );
+            assert!(!queue.has_ready_completion());
+            server
+                .await
+                .expect("CSP snapshot response server should finish");
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("CSP navigation target snapshot test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn child_document_response_frame_ancestors_gates_commit() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![
