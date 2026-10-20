@@ -162,7 +162,7 @@ impl JsContextHost {
         let Some(owner) = self.current_lightweight_popup_document_owner(popup_id) else {
             return;
         };
-        let entry_document = self.document_open_entry_document(scope);
+        let entry_document = Self::document_open_entry_document(scope);
         Self::dispatch_document_open_descendant_frame_unload_lifecycle(
             scope,
             host_ptr,
@@ -172,7 +172,7 @@ impl JsContextHost {
             return;
         }
         let url = entry_document
-            .map(|entry| self.document_open_replacement_url(document_handle, entry))
+            .and_then(|entry| self.document_open_replacement_url(scope, document_handle, entry))
             .unwrap_or_else(|| self.document_url_for_handle(document_handle));
         let Some(task) = self.start_lightweight_popup_navigation_attempt(
             popup_id,
