@@ -283,9 +283,13 @@ impl FrameDocumentLocalWindowTransition {
 pub(crate) enum DocumentCreationKind {
     InitialEmpty,
     Navigation,
+    /// An inert, opaque-origin Document committed after a response was blocked.
+    Error,
     Srcdoc,
     JavascriptUrl,
-    DocumentOpen { is_initial_empty: bool },
+    DocumentOpen {
+        is_initial_empty: bool,
+    },
 }
 
 impl DocumentCreationKind {

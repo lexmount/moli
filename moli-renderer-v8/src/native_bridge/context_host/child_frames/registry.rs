@@ -468,7 +468,10 @@ impl PageScriptHost {
                         .as_ref()
                         .and_then(|entry| entry.pending_attribute_navigation.clone())
                 } else {
-                    Some(self.snapshot_child_navigation_target(handle))
+                    let target_url =
+                        Self::child_browsing_context_bootstrap_url(&attribute_bootstrap)
+                            .unwrap_or_else(|| self.document_url_for_child_context(handle));
+                    Some(self.snapshot_child_navigation_target(handle, &target_url))
                 };
                 let pending_attribute_permissions_policy =
                     pending_attribute_bootstrap_commit.then(|| {
@@ -562,6 +565,8 @@ impl PageScriptHost {
                         .unwrap_or_default(),
                     content_security_policy_self_url: refresh_policy_source
                         .and_then(|policy| policy.content_security_policy_self_url.clone()),
+                    required_content_security_policy: refresh_policy_source
+                        .and_then(|policy| policy.required_content_security_policy.clone()),
                     permissions_policy: if is_new {
                         // The synchronous initial about:blank Document is
                         // already subject to the iframe's container policy.
@@ -643,9 +648,9 @@ impl PageScriptHost {
                         navigation_entry_seed,
                         committed_navigation_entry_seed,
                         cached_snapshot,
-                        srcdoc_history: existing
+                        local_history: existing
                             .as_ref()
-                            .map(|entry| entry.srcdoc_history.clone())
+                            .map(|entry| entry.local_history.clone())
                             .unwrap_or_default(),
                         document_policy_container,
                         can_navigate_top_without_user_gesture: existing
