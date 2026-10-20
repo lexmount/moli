@@ -28,6 +28,14 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 const WINDOW_NAMED_PROPERTIES_READY_SLOT: &str = "__moliWindowNamedPropertiesReady";
 const WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT: &str = "__moliWindowNamedPropertiesReflectSet";
 
+pub(in crate::context_bootstrap) fn is_window_named_properties_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, object, WINDOW_NAMED_PROPERTIES_READY_SLOT)
+        .is_some_and(|value| value.is_true())
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowEarlyTemplateMethodsDeclaration {
