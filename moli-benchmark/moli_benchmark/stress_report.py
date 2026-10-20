@@ -424,6 +424,11 @@ def write_stress_report(
     """Create an offline interactive report and return its compact summary."""
     if result_path.resolve() == output_path.resolve():
         raise ValueError("report output must not overwrite the input result")
+    summary_path = output_path.parent / "summary.json"
+    if summary_path.resolve() == result_path.resolve():
+        raise ValueError("summary output must not overwrite the input result")
+    if summary_path.resolve() == output_path.resolve():
+        raise ValueError("summary output must not collide with the HTML report")
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     summary, report = build_report(payload, d3_path.read_text(encoding="utf-8"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -432,7 +437,7 @@ def write_stress_report(
         quote=True,
     )
     report = report.replace("__RESULT_HREF__", result_href)
-    (output_path.parent / "summary.json").write_text(
+    summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     output_path.write_text(report, encoding="utf-8")

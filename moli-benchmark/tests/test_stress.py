@@ -204,6 +204,23 @@ class StressTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no periodic resource samples"):
                 write_stress_report(result_path, root / "report.html")
 
+    def test_report_rejects_summary_artifact_collisions_before_writing(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            binary = root / "moli"
+            binary.write_bytes(b"moli")
+            payload = json.dumps(stress_payload(binary))
+            for input_name, output_name in (("summary.json", "report.html"), ("result.json", "summary.json")):
+                with self.subTest(input_name=input_name, output_name=output_name):
+                    result_path = root / input_name
+                    output_path = root / output_name
+                    result_path.write_text(payload, encoding="utf-8")
+                    output_path.write_text("existing output", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "summary.*overwrite|summary.*collide"):
+                        write_stress_report(result_path, output_path)
+                    self.assertEqual(result_path.read_text(encoding="utf-8"), payload)
+                    self.assertEqual(output_path.read_text(encoding="utf-8"), "existing output")
+
     def test_report_refuses_to_overwrite_its_input(self) -> None:
         with TemporaryDirectory() as temp_dir:
             result_path = Path(temp_dir) / "result.json"
