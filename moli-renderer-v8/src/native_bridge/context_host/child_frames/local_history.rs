@@ -6,11 +6,12 @@ use crate::document_runtime::DocumentSandboxPolicy;
 use std::sync::Arc;
 use url::Url;
 
-/// The resource belongs to a historical Document, not to its owner element's
-/// current srcdoc attribute. Same-document entries share the original source,
+/// A local-scheme resource belongs to its historical Document. It cannot be
+/// reconstructed from a mutable owner attribute or a possibly revoked blob URL.
+/// Same-document entries share the original source,
 /// fallback base URL and policy, while each entry retains its own URL/state.
 #[derive(Debug)]
-pub(super) struct SrcdocHistoryResource {
+pub(super) struct LocalHistoryResource {
     snapshot: ChildBrowsingContextSnapshot,
     origin: WindowAccessOrigin,
 }
@@ -22,26 +23,35 @@ fn current_entry(seed: &NavigationHistoryEntrySeed) -> Option<&NavigationHistory
 }
 
 impl ChildBrowsingContextEntry {
-    pub(in crate::native_bridge::context_host) fn srcdoc_history_bootstrap(
+    pub(in crate::native_bridge::context_host) fn local_history_bootstrap(
         &self,
         seed: &NavigationHistoryEntrySeed,
     ) -> Option<ChildBrowsingContextBootstrap> {
-        let resource = self.srcdoc_history.get(&current_entry(seed)?.document_id)?;
-        Some(ChildBrowsingContextBootstrap::Srcdoc {
-            base_url: resource.snapshot.fallback_base_url.clone()?,
-            markup: resource.snapshot.markup().into_owned(),
-        })
+        let entry = current_entry(seed)?;
+        let resource = self.local_history.get(&entry.document_id)?;
+        if resource.snapshot.url.scheme() == "about" && resource.snapshot.url.path() == "srcdoc" {
+            Some(ChildBrowsingContextBootstrap::Srcdoc {
+                base_url: resource.snapshot.fallback_base_url.clone()?,
+                markup: resource.snapshot.markup().into_owned(),
+            })
+        } else {
+            Some(ChildBrowsingContextBootstrap::Url(
+                Url::parse(&entry.url).ok()?,
+            ))
+        }
     }
 
-    pub(in crate::native_bridge::context_host) fn pending_srcdoc_history_snapshot(
+    pub(in crate::native_bridge::context_host) fn pending_local_history_snapshot(
         &self,
+        bootstrap: &ChildBrowsingContextBootstrap,
     ) -> Option<ChildBrowsingContextSnapshot> {
+        let target =
+            super::super::JsContextHost::child_browsing_context_navigation_entry_url(bootstrap)?;
+        if !is_local_history_url(&target) {
+            return None;
+        }
         let entry = current_entry(&self.navigation_entry_seed)?;
-        let mut snapshot = self
-            .srcdoc_history
-            .get(&entry.document_id)?
-            .snapshot
-            .clone();
+        let mut snapshot = self.local_history.get(&entry.document_id)?.snapshot.clone();
         snapshot.url = Url::parse(&entry.url).ok()?;
         // The iframe's current sandbox attribute is applied at commit. Only
         // CSP restrictions belong to the historical policy container; keeping
@@ -54,49 +64,48 @@ impl ChildBrowsingContextEntry {
         Some(snapshot)
     }
 
-    pub(in crate::native_bridge::context_host) fn current_srcdoc_history_origin(
+    pub(in crate::native_bridge::context_host) fn current_local_history_origin(
         &self,
     ) -> Option<&WindowAccessOrigin> {
-        if !matches!(
-            self.live_bootstrap,
-            ChildBrowsingContextBootstrap::Srcdoc { .. }
-        ) {
+        if !self.live_bootstrap.security_origin_inherited() {
             return None;
         }
         let entry = current_entry(&self.committed_navigation_entry_seed)?;
-        Some(&self.srcdoc_history.get(&entry.document_id)?.origin)
+        Some(&self.local_history.get(&entry.document_id)?.origin)
     }
 
-    pub(in crate::native_bridge::context_host) fn remember_srcdoc_history_resource(
+    pub(in crate::native_bridge::context_host) fn remember_local_history_resource(
         &mut self,
         snapshot: &ChildBrowsingContextSnapshot,
         origin: WindowAccessOrigin,
     ) {
-        if !matches!(
-            self.live_bootstrap,
-            ChildBrowsingContextBootstrap::Srcdoc { .. }
-        ) {
+        if !is_local_history_url(&snapshot.url) {
             return;
         }
         let Some(entry) = current_entry(&self.committed_navigation_entry_seed) else {
             return;
         };
-        self.srcdoc_history
+        self.local_history
             .entry(entry.document_id.clone())
             .or_insert_with(|| {
-                Arc::new(SrcdocHistoryResource {
+                Arc::new(LocalHistoryResource {
                     snapshot: snapshot.clone(),
                     origin,
                 })
             });
     }
 
-    pub(super) fn prune_srcdoc_history(&mut self) {
-        self.srcdoc_history.retain(|document_id, _| {
+    pub(super) fn prune_local_history(&mut self) {
+        self.local_history.retain(|document_id, _| {
             self.committed_navigation_entry_seed
                 .entries
                 .iter()
                 .any(|entry| &entry.document_id == document_id)
         });
     }
+}
+
+fn is_local_history_url(url: &Url) -> bool {
+    matches!(url.scheme(), "blob" | "data")
+        || (url.scheme() == "about" && matches!(url.path(), "blank" | "srcdoc"))
 }

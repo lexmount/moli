@@ -28,12 +28,12 @@ use url::Url;
 
 mod classic_scripts;
 mod discovery;
+mod local_history;
 mod lookup;
 mod module_scripts;
 mod nested_history;
 mod registry;
 mod request_scope;
-mod srcdoc_history;
 mod stylesheets;
 mod target_snapshot;
 pub(in crate::native_bridge::context_host) use target_snapshot::ChildNavigationTargetSnapshot;
@@ -75,8 +75,7 @@ pub(super) struct ChildBrowsingContextEntry {
     navigation_entry_seed: NavigationHistoryEntrySeed,
     committed_navigation_entry_seed: NavigationHistoryEntrySeed,
     cached_snapshot: Option<ChildBrowsingContextSnapshot>,
-    srcdoc_history:
-        HashMap<NavigationHistoryDocumentId, Arc<srcdoc_history::SrcdocHistoryResource>>,
+    local_history: HashMap<NavigationHistoryDocumentId, Arc<local_history::LocalHistoryResource>>,
     document_policy_container: ChildDocumentPolicyContainer,
     // Captured at Document commit; changing sandbox or document.domain must
     // not grant a descendant permission to navigate the top without activation.
@@ -432,6 +431,9 @@ impl ChildBrowsingContextEntry {
         credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
     ) {
         self.document_policy_container
+            .required_content_security_policy =
+            policy_container.required_content_security_policy.clone();
+        self.document_policy_container
             .content_security_policy_self_url =
             policy_container.content_security_policy_self_url.clone();
         self.document_policy_container.referrer_policy = policy_container.referrer_policy.clone();
@@ -471,6 +473,11 @@ impl ChildBrowsingContextEntry {
         &mut self,
         snapshot: &ChildBrowsingContextSnapshot,
     ) {
+        self.document_policy_container
+            .required_content_security_policy = snapshot
+            .policy_container
+            .required_content_security_policy
+            .clone();
         self.document_policy_container
             .content_security_policy_self_url = snapshot
             .policy_container
@@ -732,7 +739,7 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn commit_current_navigation_entry_seed(&mut self) {
         self.committed_navigation_entry_seed = self.navigation_entry_seed.clone();
-        self.prune_srcdoc_history();
+        self.prune_local_history();
     }
 
     pub(super) fn restore_navigation_entry_seed_from_committed(&mut self) {
@@ -858,7 +865,7 @@ impl ChildBrowsingContextEntry {
         }
         if same_document_update {
             self.committed_navigation_entry_seed = entry_seed;
-            self.prune_srcdoc_history();
+            self.prune_local_history();
             if !self.pending_attribute_bootstrap_commit() {
                 self.pending_live_navigation_reflects_window_state = false;
             }

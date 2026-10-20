@@ -46,7 +46,7 @@ impl JsContextHost {
                 self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
             return Some(ChildDocumentCommitResult::ready(None));
         }
-        let creation_kind = child_document_creation_kind_for_bootstrap(&bootstrap);
+        let mut creation_kind = child_document_creation_kind_for_bootstrap(&bootstrap);
         if let Some(request_url) = child_document_frame_csp_request_url(&bootstrap) {
             if let Some(violation) =
                 self.frame_navigation_csp_report_only_violation(handle, request_url)
@@ -86,7 +86,29 @@ impl JsContextHost {
         self.cancel_child_meta_refresh_navigation(handle);
         let cached_snapshot =
             match self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap) {
-                LocalChildDocumentPreparation::Ready(snapshot) => Some(*snapshot),
+                LocalChildDocumentPreparation::Ready(snapshot) => {
+                    let mut snapshot = *snapshot;
+                    if !target_snapshot.apply_response_policy(
+                        &mut snapshot.policy_container,
+                        &snapshot.url,
+                        &[],
+                    ) {
+                        let policy = crate::document_runtime::DocumentPolicyContainer {
+                            required_content_security_policy: snapshot
+                                .policy_container
+                                .required_content_security_policy,
+                            ..Default::default()
+                        };
+                        snapshot = ChildBrowsingContextSnapshot::html(
+                            snapshot.url,
+                            "<!DOCTYPE html><html><head></head><body></body></html>".to_owned(),
+                        )
+                        .with_policy_container(policy);
+                        creation_kind = DocumentCreationKind::Error;
+                    }
+                    Some(snapshot)
+                }
+                LocalChildDocumentPreparation::Historical(snapshot) => Some(*snapshot),
                 LocalChildDocumentPreparation::Unavailable => None,
                 LocalChildDocumentPreparation::IgnoredNavigation => {
                     crate::context_bootstrap::finish_joint_history_without_document_commit(

@@ -67,7 +67,7 @@ impl JsContextHost {
                     ChildBrowsingContextBootstrap::Request(request),
                     None,
                     ChildDocumentNavigationInitiator::BrowsingContext,
-                    self.snapshot_child_navigation_target(handle),
+                    self.snapshot_child_navigation_target(handle, &url),
                 ),
                 false,
                 None,
@@ -206,7 +206,7 @@ impl JsContextHost {
         let bootstrap = self
             .child_browsing_contexts
             .get(&handle)
-            .and_then(|entry| entry.srcdoc_history_bootstrap(&entry_seed))
+            .and_then(|entry| entry.local_history_bootstrap(&entry_seed))
             .unwrap_or_else(|| ChildBrowsingContextBootstrap::Url(url.clone()));
         self.reject_replaced_service_worker_child_client_navigation(
             handle,
@@ -222,7 +222,7 @@ impl JsContextHost {
                     bootstrap,
                     initiator_url,
                     ChildDocumentNavigationInitiator::BrowsingContext,
-                    self.snapshot_child_navigation_target(handle),
+                    self.snapshot_child_navigation_target(handle, &url),
                 ),
                 false,
                 None,

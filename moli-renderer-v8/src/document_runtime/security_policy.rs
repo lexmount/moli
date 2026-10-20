@@ -447,6 +447,45 @@ impl DocumentPolicyContainer {
         }
     }
 
+    pub(crate) fn apply_required_content_security_policy(
+        &mut self,
+        required: &crate::content_security_policy::IframeCspAttribute,
+        request_origin: &str,
+        final_url: &Url,
+        headers: &[(String, Vec<u8>)],
+    ) -> bool {
+        use crate::content_security_policy::RequiredCspResponse;
+        let disposition = required.response_disposition(
+            request_origin,
+            final_url,
+            headers,
+            &self.response_content_security_policies,
+        );
+        self.required_content_security_policy = Some(required.clone());
+        if disposition == RequiredCspResponse::Blocked {
+            return false;
+        }
+        if let RequiredCspResponse::Enforce(self_url) = disposition {
+            self.document_content_security_policies
+                .push(required.as_str().to_owned());
+            self.response_content_security_policies
+                .push(required.as_str().to_owned());
+            self.content_security_policy_self_url
+                .get_or_insert(self_url);
+            self.sandbox = self.sandbox.with_response_content_security_policy(
+                DocumentSandboxPolicy::from_response_content_security_policies(
+                    &self.response_content_security_policies,
+                ),
+            );
+            if self.sandbox.forces_opaque_origin {
+                self.permissions_policy = self
+                    .permissions_policy
+                    .for_document_origin(&url::Origin::new_opaque());
+            }
+        }
+        true
+    }
+
     pub(crate) fn navigation_response_frame_ancestors_check(
         &self,
         protected_url: &Url,
@@ -479,6 +518,7 @@ impl DocumentPolicyContainer {
     }
 
     pub(crate) fn clear_content_security_policy_for_bypass(&mut self) {
+        self.required_content_security_policy = None;
         self.document_content_security_policies.clear();
         self.response_content_security_policies.clear();
         self.response_content_security_report_only_policies.clear();
@@ -1289,7 +1329,18 @@ pub(crate) fn set_response_content_security_report_only_policies(
                 Default::default(),
             );
         }
-        DocumentConnectPolicySnapshot {
+        self.installed_document_request_policy_snapshot(document_handle, policy)
+    }
+
+    // Snapshot the installed policies and account for meta delivery even when
+    // bypass is enabled. Callers decide whether their request bypasses CSP;
+    // the runtime switch does not erase an existing Document's policy.
+    fn installed_document_request_policy_snapshot(
+        &self,
+        document_handle: Option<DomHandle>,
+        policy: &DocumentPolicyContainer,
+    ) -> DocumentRequestPolicySnapshot {
+        DocumentRequestPolicySnapshot {
             resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
             preload_metadata: None,
             policy_self_url: policy
@@ -1374,32 +1425,13 @@ pub(crate) fn set_response_content_security_report_only_policies(
         request_url: &Url,
         kind: DocumentSubresourceCspKind,
     ) -> DocumentContentSecurityPolicyCheck {
-        let policies = self.document_content_security_policies_for_optional_document(
-            document_handle,
-            &policy_container.response_content_security_policies,
-            &policy_container.content_security_reporting_endpoints,
-        );
-        let enforced_violations = document_url_policy_violations_from_document_policies(
-            policies,
-            document_url,
-            request_url,
-            kind.resource_kind(),
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            ContentSecurityPolicyDisposition::Enforce,
-        );
-        let report_only_violations = document_url_policy_violations(
-            &policy_container.response_content_security_report_only_policies,
-            &policy_container.content_security_reporting_endpoints,
-            document_url,
-            request_url,
-            kind.resource_kind(),
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            ContentSecurityPolicyDisposition::Report,
-        );
-        DocumentContentSecurityPolicyCheck {
-            report_only_violations,
-            enforced_violations,
-        }
+        self.installed_document_request_policy_snapshot(document_handle, policy_container)
+            .for_resource_kind(kind.resource_kind())
+            .check_url(
+                document_url,
+                request_url,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+            )
     }
 
     #[cfg(test)]
@@ -3072,6 +3104,64 @@ mod tests {
         for violation in &blocked[2..] {
             assert_eq!(violation.original_policy, policy_text);
             assert!(violation.report_uri_endpoints.is_empty());
+        }
+    }
+
+    #[test]
+    fn local_subresource_checks_keep_policy_origin_separate_from_report_document() {
+        let runtime = runtime_for_html("<!doctype html>");
+        let document_url = Url::parse("data:text/html,local-document").unwrap();
+        let mut policy = DocumentPolicyContainer::from_navigation_response_headers(
+            &[
+                (
+                    "Content-Security-Policy".to_owned(),
+                    b"default-src 'self'".to_vec(),
+                ),
+                (
+                    "Content-Security-Policy-Report-Only".to_owned(),
+                    b"default-src 'none'".to_vec(),
+                ),
+            ],
+            &document_url,
+        );
+        policy.content_security_policy_self_url =
+            Some(Url::parse("https://embedder.test/").unwrap());
+        for kind in [
+            DocumentSubresourceCspKind::Image,
+            DocumentSubresourceCspKind::Manifest,
+            DocumentSubresourceCspKind::Media,
+        ] {
+            for (url, blocked) in [
+                ("https://embedder.test/resource", false),
+                ("https://other.test/resource", true),
+            ] {
+                let (reported, enforced) = runtime
+                    .document_subresource_csp_check_for_document(
+                        None,
+                        &document_url,
+                        &policy,
+                        &Url::parse(url).unwrap(),
+                        kind,
+                    )
+                    .into_violations();
+                assert_eq!(
+                    reported.len(),
+                    1,
+                    "report-only policy must remain independent of enforcement"
+                );
+                assert_eq!(
+                    enforced.len(),
+                    usize::from(blocked),
+                    "'self' must use the retained policy origin"
+                );
+                for violation in reported.iter().chain(&enforced) {
+                    assert_eq!(
+                        violation.document_uri, "data",
+                        "reports identify the protected Document, not the policy origin"
+                    );
+                    assert_eq!(violation.source_file, "data");
+                }
+            }
         }
     }
 

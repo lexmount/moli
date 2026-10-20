@@ -3,7 +3,7 @@
 //! policy value. Source-list interpretation remains the CSP parser's job.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IframeCspAttribute(String);
+pub struct IframeCspAttribute(crate::ContentSecurityPolicy);
 
 impl IframeCspAttribute {
     pub fn parse(value: &str) -> Option<Self> {
@@ -36,11 +36,15 @@ impl IframeCspAttribute {
                 return None;
             }
         }
-        Some(Self(value.to_owned()))
+        Some(Self(value.into()))
+    }
+
+    pub(crate) fn policy(&self) -> &crate::ContentSecurityPolicy {
+        &self.0
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 }
 
