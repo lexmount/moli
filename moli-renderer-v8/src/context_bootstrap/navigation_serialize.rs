@@ -226,6 +226,9 @@ fn serialize_navigation_activation_seed<'s>(
         .ok()
         .map(|value| value.to_rust_string_lossy(scope));
     Some(NavigationActivationSeed {
+        source_document: moli_page_types::NavigationSourceDocument::from_initial_empty(
+            activation.source_was_initial,
+        ),
         entry,
         from,
         navigation_type,

@@ -243,6 +243,15 @@ pub(super) fn navigation_can_update_current_entry<'s>(
     navigation_document_is_live(scope, owner) && !navigation_has_disabled_entries(scope, navigation)
 }
 
+pub(super) fn navigation_source_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> moli_page_types::NavigationSourceDocument {
+    moli_page_types::NavigationSourceDocument::from_initial_empty(
+        navigation_document_is_initial_empty(scope, owner),
+    )
+}
+
 pub(super) fn navigation_document_is_initial_empty<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,

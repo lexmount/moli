@@ -1421,6 +1421,7 @@ pub(crate) fn history_entry_seed_for_cross_document_location<'s>(
         current_navigation_index,
         resolved,
         mutation,
+        super::navigation_window::navigation_source_document(scope, owner),
     );
     super::session_history::capture_for_navigation(scope, owner, &mut seed);
     Some(seed)

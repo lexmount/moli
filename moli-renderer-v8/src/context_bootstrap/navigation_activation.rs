@@ -20,6 +20,7 @@ pub(super) const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
 const ACTIVATION_ENTRY: &str = "__lmNavigationActivationEntry";
 const ACTIVATION_FROM: &str = "__lmNavigationActivationFrom";
 const ACTIVATION_TYPE: &str = "__lmNavigationActivationType";
+const ACTIVATION_SOURCE_INITIAL: &str = "__lmNavigationActivationSourceInitial";
 const TRANSITION_FROM: &str = "__lmNavigationTransitionFrom";
 const TRANSITION_TO: &str = "__lmNavigationTransitionTo";
 const TRANSITION_TYPE: &str = "__lmNavigationTransitionType";
@@ -35,6 +36,8 @@ pub(super) struct NavigationActivationObjectDeclaration<'s> {
     pub(super) from: v8::Local<'s, v8::Value>,
     #[webapi(slot = ACTIVATION_TYPE)]
     pub(super) navigation_type: v8::Local<'s, v8::Value>,
+    #[webapi(slot = ACTIVATION_SOURCE_INITIAL)]
+    pub(super) source_was_initial: bool,
 }
 
 impl<'s> NavigationActivationObjectDeclaration<'s> {
@@ -46,6 +49,8 @@ impl<'s> NavigationActivationObjectDeclaration<'s> {
             entry: get_private_object(scope, object, ACTIVATION_ENTRY)?,
             from: get_private_value(scope, object, ACTIVATION_FROM)?,
             navigation_type: get_private_value(scope, object, ACTIVATION_TYPE)?,
+            source_was_initial: get_private_value(scope, object, ACTIVATION_SOURCE_INITIAL)?
+                .boolean_value(scope),
         })
     }
 }
@@ -218,9 +223,16 @@ pub(super) fn create_navigation_activation_object<'s>(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let entry = navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry);
+    let destination_origin =
+        native::entry(scope, current_entry).map(|entry| entry.borrow().document_origin.clone());
     let from = activation
         .from
         .as_ref()
+        .filter(|snapshot| {
+            activation.source_document == moli_page_types::NavigationSourceDocument::NonInitial
+                && snapshot.document_origin != "null"
+                && destination_origin.as_deref() == Some(snapshot.document_origin.as_str())
+        })
         .map(|snapshot| navigation_entry_object_from_snapshot(scope, current_entry, snapshot))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
@@ -236,10 +248,15 @@ pub(super) fn create_navigation_activation_object<'s>(
     } else {
         from
     };
-    NavigationActivationObjectDeclaration::new(entry, from, navigation_type)
-        .bind(scope)
-        .expect("NavigationActivation declaration should bind")
-        .into()
+    NavigationActivationObjectDeclaration::new(
+        entry,
+        from,
+        navigation_type,
+        activation.source_document == moli_page_types::NavigationSourceDocument::InitialEmpty,
+    )
+    .bind(scope)
+    .expect("NavigationActivation declaration should bind")
+    .into()
 }
 
 pub(super) fn install_navigation_activation_runtime_state<'s>(

@@ -104,6 +104,9 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                     &history_entry_snapshots,
                 );
                 let reload_activation = NavigationActivationSeed {
+                    source_document: super::super::navigation_window::navigation_source_document(
+                        scope, owner,
+                    ),
                     entry: current_entry_snapshot.clone(),
                     from: Some(current_entry_snapshot),
                     navigation_type: Some("reload".to_owned()),

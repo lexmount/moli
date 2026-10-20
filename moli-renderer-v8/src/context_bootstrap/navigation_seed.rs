@@ -177,7 +177,11 @@ pub(super) fn history_entry_seed_for_reload<'s>(
     let history = window_history_for_holder(scope, owner)?;
     let entries = serialize_history_entries(scope, history);
     let current_index = history_index(scope, history);
-    let mut seed = reload_navigation_seed(entries, current_index)?;
+    let mut seed = reload_navigation_seed(
+        entries,
+        current_index,
+        super::navigation_window::navigation_source_document(scope, owner),
+    )?;
     super::session_history::capture_for_navigation(scope, owner, &mut seed);
     Some(seed)
 }
@@ -196,7 +200,12 @@ pub(super) fn history_entry_seed_for_traversal<'s>(
         current_index,
         &mut entries,
     );
-    let mut candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
+    let mut candidate = traversal_navigation_seed_candidate(
+        entries,
+        current_index,
+        target_index,
+        super::navigation_window::navigation_source_document(scope, owner),
+    )?;
 
     // The candidate already compares Document identities. Distinct Documents
     // can have identical URLs, including URLs that differ only in fragment.

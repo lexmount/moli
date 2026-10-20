@@ -45,14 +45,16 @@ impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn apply_child_browsing_context_navigation_to_entry_seed(
         seed: &mut NavigationHistoryEntrySeed,
         url: &Url,
+        source: moli_page_types::NavigationSourceDocument,
     ) {
-        apply_child_navigation_to_seed(seed, url);
+        apply_child_navigation_to_seed(seed, url, source);
     }
 
     pub(in crate::native_bridge::context_host) fn replace_child_browsing_context_navigation_in_entry_seed(
         seed: &mut NavigationHistoryEntrySeed,
         url: &Url,
+        source: moli_page_types::NavigationSourceDocument,
     ) {
-        replace_child_navigation_in_seed(seed, url);
+        replace_child_navigation_in_seed(seed, url, source);
     }
 }
