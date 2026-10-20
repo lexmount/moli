@@ -933,9 +933,17 @@ fn source_list_activates_strict_dynamic(sources: &[&str]) -> bool {
 }
 
 fn csp_nonce_source_value(source: &str) -> Option<&str> {
-    source
-        .strip_prefix("'nonce-")
-        .and_then(|value| value.strip_suffix('\''))
+    if !source.get(..7)?.eq_ignore_ascii_case("'nonce-") {
+        return None;
+    }
+    let value = source.get(7..)?.strip_suffix('\'')?;
+    let digits = value.trim_end_matches('=');
+    (!digits.is_empty()
+        && value.len() - digits.len() <= 2
+        && digits
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_')))
+    .then_some(value)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
