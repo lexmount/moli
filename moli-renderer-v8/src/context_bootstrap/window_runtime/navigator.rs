@@ -20,7 +20,7 @@ use crate::context_bootstrap::storage_buckets::{
 };
 use crate::document_runtime::DomHandle;
 use crate::util::{get_private_value, set_private_value};
-use crate::webidl;
+use crate::webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize};
 
 mod bucket_maintenance;
 mod cache_add;
@@ -197,13 +197,12 @@ struct MidiPermissionDescriptorMembers {
     sysex: bool,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigatorUaBrandEntryDeclaration {
-    #[webapi(data_property, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "NavigatorUABrandVersion", snapshot)]
+struct NavigatorUaBrandVersion {
+    #[webidl(required)]
     brand: String,
-
-    #[webapi(data_property, enumerable)]
+    #[webidl(required)]
     version: String,
 }
 
@@ -212,64 +211,37 @@ struct NavigatorUaBrandEntryDeclaration {
 struct NavigatorUaDataObjectDeclaration {
     #[webapi(slot = NAVIGATOR_UA_DATA_USER_AGENT_SLOT)]
     user_agent: String,
+}
 
-    #[webapi(data_property, enumerable)]
-    brands: Vec<NavigatorUaBrandEntryDeclaration>,
-
-    #[webapi(data_property, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "UALowEntropyJSON", snapshot)]
+struct NavigatorUaDataLowEntropy {
+    #[webidl(required, sequence, converter = "dictionary")]
+    brands: Vec<NavigatorUaBrandVersion>,
+    #[webidl(required)]
     mobile: bool,
-
-    #[webapi(data_property, enumerable)]
+    #[webidl(required)]
     platform: String,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigatorUaDataSnapshotDeclaration {
-    #[webapi(data_property, enumerable)]
-    brands: Vec<NavigatorUaBrandEntryDeclaration>,
-
-    #[webapi(data_property, enumerable)]
-    mobile: bool,
-
-    #[webapi(data_property, enumerable)]
-    platform: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigatorUaDataHighEntropySnapshotDeclaration {
-    #[webapi(data_property, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "UADataValues", snapshot)]
+struct NavigatorUaDataHighEntropy {
     architecture: Option<String>,
-
-    #[webapi(data_property, enumerable)]
     bitness: Option<String>,
-
-    #[webapi(data_property, enumerable)]
-    brands: Vec<NavigatorUaBrandEntryDeclaration>,
-
-    #[webapi(data_property = "formFactors", enumerable)]
+    #[webidl(required, sequence, converter = "dictionary")]
+    brands: Vec<NavigatorUaBrandVersion>,
+    #[webidl(sequence)]
     form_factors: Option<Vec<String>>,
-
-    #[webapi(data_property, enumerable)]
-    full_version_list: Option<Vec<NavigatorUaBrandEntryDeclaration>>,
-
-    #[webapi(data_property, enumerable)]
+    #[webidl(sequence, converter = "dictionary")]
+    full_version_list: Option<Vec<NavigatorUaBrandVersion>>,
+    #[webidl(required)]
     mobile: bool,
-
-    #[webapi(data_property, enumerable)]
     model: Option<String>,
-
-    #[webapi(data_property, enumerable)]
+    #[webidl(required)]
     platform: String,
-
-    #[webapi(data_property, enumerable)]
     platform_version: Option<String>,
-
-    #[webapi(data_property, enumerable)]
     ua_full_version: Option<String>,
-
-    #[webapi(data_property, enumerable)]
     wow64: Option<bool>,
 }
 
@@ -3281,6 +3253,56 @@ fn strings_to_array<'s>(
     v8::Array::new_with_elements(scope, &elements)
 }
 
+pub(in crate::context_bootstrap) fn navigator_ua_data_brands_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated NavigatorUAData receiver");
+    let context = receiver.get_creation_context(scope).expect("UAData realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let identity = navigator_ua_data_identity(scope, args.this());
+    // The FrozenArray value belongs to the receiver, even when its getter
+    // comes from another realm. Keep the immutable profile as its source.
+    let values = build_ua_brand_records(identity.brands())
+        .iter()
+        .map(|brand| {
+            brand
+                .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
+                .expect("UA brand dictionary snapshot")
+                .into()
+        })
+        .collect::<Vec<_>>();
+    let array = v8::Array::new_with_elements(scope, &values);
+    assert_eq!(
+        array.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+        Some(true)
+    );
+    rv.set(array.into());
+}
+
+pub(in crate::context_bootstrap) fn navigator_ua_data_mobile_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set_bool(navigator_ua_data_identity(scope, args.this()).mobile());
+}
+
+pub(in crate::context_bootstrap) fn navigator_ua_data_platform_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let identity = navigator_ua_data_identity(scope, args.this());
+    rv.set(
+        v8_string(scope, identity.platform())
+            .expect("UA platform string")
+            .into(),
+    );
+}
+
 pub(in crate::context_bootstrap) fn navigator_ua_data_to_json_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -3338,15 +3360,9 @@ pub(in crate::context_bootstrap) fn build_navigator_ua_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     identity: &BrowserIdentityProfile,
 ) -> v8::Local<'s, v8::Object> {
-    let brands = build_ua_brand_records(identity.brands());
-    let object = NavigatorUaDataObjectDeclaration::new(
-        identity.user_agent().to_owned(),
-        brands,
-        identity.mobile(),
-        identity.platform().to_owned(),
-    )
-    .bind(scope)
-    .expect("NavigatorUAData declaration should bind");
+    let object = NavigatorUaDataObjectDeclaration::new(identity.user_agent().to_owned())
+        .bind(scope)
+        .expect("NavigatorUAData declaration should bind");
     set_navigator_identity_profile(scope, object, identity);
     object
 }
@@ -3359,36 +3375,40 @@ fn build_navigator_ua_data_snapshot<'s>(
     let brands = build_ua_brand_records(identity.brands());
     if let Some(requested) = requested {
         let requested_key = |key: &str| requested.contains(key);
-        return NavigatorUaDataHighEntropySnapshotDeclaration::new(
-            requested_key("architecture").then(|| identity.architecture().to_owned()),
-            requested_key("bitness").then(|| identity.bitness().to_owned()),
+        return NavigatorUaDataHighEntropy {
+            architecture: requested_key("architecture").then(|| identity.architecture().to_owned()),
+            bitness: requested_key("bitness").then(|| identity.bitness().to_owned()),
             brands,
-            requested_key("formFactors").then(|| identity.form_factors().to_vec()),
-            requested_key("fullVersionList")
+            form_factors: requested_key("formFactors").then(|| identity.form_factors().to_vec()),
+            full_version_list: requested_key("fullVersionList")
                 .then(|| build_ua_brand_records(identity.full_version_list())),
-            identity.mobile(),
-            requested_key("model").then(|| identity.model().to_owned()),
-            identity.platform().to_owned(),
-            requested_key("platformVersion").then(|| identity.platform_version().to_owned()),
-            requested_key("uaFullVersion").then(|| identity.full_version().to_owned()),
-            requested_key("wow64").then(|| identity.wow64()),
-        )
-        .bind(scope)
-        .expect("NavigatorUAData high entropy snapshot declaration should bind");
+            mobile: identity.mobile(),
+            model: requested_key("model").then(|| identity.model().to_owned()),
+            platform: identity.platform().to_owned(),
+            platform_version: requested_key("platformVersion")
+                .then(|| identity.platform_version().to_owned()),
+            ua_full_version: requested_key("uaFullVersion")
+                .then(|| identity.full_version().to_owned()),
+            wow64: requested_key("wow64").then(|| identity.wow64()),
+        }
+        .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
+        .expect("NavigatorUAData high entropy dictionary snapshot");
     }
-    NavigatorUaDataSnapshotDeclaration::new(
+    NavigatorUaDataLowEntropy {
         brands,
-        identity.mobile(),
-        identity.platform().to_owned(),
-    )
-    .bind(scope)
-    .expect("NavigatorUAData snapshot declaration should bind")
+        mobile: identity.mobile(),
+        platform: identity.platform().to_owned(),
+    }
+    .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
+    .expect("NavigatorUAData low entropy dictionary snapshot")
 }
 
 fn navigator_ua_data_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> BrowserIdentityProfile {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)
+        .expect("validated NavigatorUAData receiver");
     if let Some(identity) = navigator_identity_profile(scope, object) {
         return identity;
     }
@@ -3403,11 +3423,12 @@ fn navigator_ua_data_identity<'s>(
 
 fn build_ua_brand_records(
     brands: &[moli_browser_profile::BrowserBrandVersion],
-) -> Vec<NavigatorUaBrandEntryDeclaration> {
+) -> Vec<NavigatorUaBrandVersion> {
     brands
         .iter()
-        .map(|entry| {
-            NavigatorUaBrandEntryDeclaration::new(entry.brand.clone(), entry.version.clone())
+        .map(|entry| NavigatorUaBrandVersion {
+            brand: entry.brand.clone(),
+            version: entry.version.clone(),
         })
         .collect()
 }

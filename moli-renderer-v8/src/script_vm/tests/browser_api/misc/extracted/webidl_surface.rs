@@ -742,7 +742,7 @@ fn navigator_declared_objects_keep_brand_and_enumerable_members() {
 
     assert_eq!(
         result,
-        r#"{"ua":"true|[object NavigatorUAData]|brands,mobile,platform|true|brand,version","json":"[object Object]|brands,mobile,platform|true|brand,version","highEntropy":"[object Object]|brands,mobile,platform|architecture,brands,formFactors,fullVersionList,mobile,platform,uaFullVersion|Not:A-Brand:99.0.0.0,Google Chrome:145.0.0.0,Chromium:145.0.0.0|x86|145.0.0.0|Desktop|false|false","storage":"true|[object StorageEstimate]|quota,usage,usageDetails|1073741824|0|[object Object]|"}"#
+        r#"{"ua":"true|[object NavigatorUAData]||true|brand,version","json":"[object Object]|brands,mobile,platform|true|brand,version","highEntropy":"[object Object]|brands,mobile,platform|architecture,brands,formFactors,fullVersionList,mobile,platform,uaFullVersion|Not:A-Brand:99.0.0.0,Google Chrome:145.0.0.0,Chromium:145.0.0.0|x86|145.0.0.0|Desktop|false|false","storage":"true|[object StorageEstimate]|quota,usage,usageDetails|1073741824|0|[object Object]|"}"#
     );
 }
 #[test]
@@ -1059,7 +1059,7 @@ fn navigator_runtime_subobject_prototype_methods_are_declared_operations() {
 
     assert_eq!(
         result,
-        r#"{"descriptors":["query:function:query:1:1:true:true:true","toJSON:function:toJSON:0:0:true:true:true","getHighEntropyValues:function:getHighEntropyValues:1:1:true:true:true","persisted:function:persisted:0:0:true:true:true","persist:function:persist:0:0:true:true:true","estimate:function:estimate:0:0:true:true:true","getDirectory:function:getDirectory:0:0:true:true:true"],"own":"false:false:false:false:false:false:false","enumerable":"query|toJSON,getHighEntropyValues|persisted,persist,estimate,getDirectory","permissionsIllegal":"TypeError","uaIllegal":"toJSON:TypeError|high:TypeError","permission":"true:geolocation:prompt","ua":"brands,mobile,platform:architecture,brands,mobile,platform:x86:false:false","storage":"true:1073741824:0"}"#
+        r#"{"descriptors":["query:function:query:1:1:true:true:true","toJSON:function:toJSON:0:0:true:true:true","getHighEntropyValues:function:getHighEntropyValues:1:1:true:true:true","persisted:function:persisted:0:0:true:true:true","persist:function:persist:0:0:true:true:true","estimate:function:estimate:0:0:true:true:true","getDirectory:function:getDirectory:0:0:true:true:true"],"own":"false:false:false:false:false:false:false","enumerable":"query|brands,mobile,platform,toJSON,getHighEntropyValues|persisted,persist,estimate,getDirectory","permissionsIllegal":"TypeError","uaIllegal":"toJSON:TypeError|high:TypeError","permission":"true:geolocation:prompt","ua":"brands,mobile,platform:architecture,brands,mobile,platform:x86:false:false","storage":"true:1073741824:0"}"#
     );
 }
 #[test]
@@ -1994,4 +1994,37 @@ fn trusted_type_policy_interface_shares_methods_and_rejects_missing_callbacks() 
         result,
         r#"{"htmlOnlyKeys":"","fullKeys":"","ownMethods":[false,false,false],"prototypeMethods":["createHTML:true:true:true:function:createHTML:1","createScript:true:true:true:function:createScript:1","createScriptURL:true:true:true:function:createScriptURL:1"],"name":["html-only","full","function",true,true,true,false],"brands":[true,true,true,true],"missingCallbackErrors":["TypeError","TypeError"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"]}"#
     );
+}
+
+#[test]
+fn navigator_ua_data_uses_readonly_attributes_and_independent_dictionary_snapshots() {
+    let mut vm = new_storage_html_test_vm("https://navigator-ua-data-snapshots.test/");
+    let fixture = include_str!("../../../../../../tests/fixtures/navigator-ua-data-snapshots.js");
+    vm.eval(&format!(
+        "({fixture}).then(value => globalThis.__uaDataSnapshots = value)"
+    ))
+    .expect("UAData snapshot fixture evaluates");
+    let result = vm
+        .eval("JSON.stringify(globalThis.__uaDataSnapshots)")
+        .expect("UAData snapshot fixture settles");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("snapshot fixture result");
+    assert_eq!(result["total"], 34, "{result}");
+    for check in result["checks"].as_array().expect("named snapshot checks") {
+        assert_eq!(check["pass"], true, "{check}");
+    }
+    let cross_realm = vm
+        .eval(&format!(
+            "JSON.stringify({})",
+            include_str!("../../../../../../tests/fixtures/navigator-ua-data-cross-realm.js")
+        ))
+        .expect("cross-realm UAData fixture evaluates");
+    let cross_realm: serde_json::Value =
+        serde_json::from_str(&cross_realm).expect("cross-realm snapshot result");
+    assert_eq!(cross_realm["total"], 9, "{cross_realm}");
+    for check in cross_realm["checks"]
+        .as_array()
+        .expect("cross-realm snapshot checks")
+    {
+        assert_eq!(check["pass"], true, "{check}");
+    }
 }
