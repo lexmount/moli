@@ -2294,6 +2294,90 @@ fn document_open_and_later_close_publish_admission_from_the_close_action() {
 }
 
 #[test]
+fn foreign_replacement_keeps_a_resident_bootstrapped_for_its_target_document() {
+    run_page_vm_local_runtime_async_test(
+        "page-vm-foreign-replacement-after-bootstrap",
+        || async move {
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            local_executor
+                .run(async move {
+                    let before_open = page_vm.document_replacement_lifecycle_action_snapshot();
+                    page_vm
+                        .vm_mut()
+                        .eval("document.open(); document.write('<main>replacement</main>')")?;
+                    // A synchronous auxiliary Page can receive this foreign open
+                    // before its owner installs the initial lifecycle resident.
+                    page_vm
+                        .document_lifecycle
+                        .publish_foreign_document_replacement_action(before_open, true);
+                    let replacement = page_vm.document_lifecycle.identity();
+                    let mut pending = None;
+                    let started = Instant::now();
+                    page_vm
+                        .begin_post_parse_lifecycle_on_named_owner_lane(
+                            &mut pending,
+                            Vec::new(),
+                            PageVmInitStage::Load,
+                            started,
+                        )
+                        .await?;
+                    assert_eq!(pending.as_ref().unwrap().document, replacement);
+                    let open_action = page_vm
+                        .document_lifecycle
+                        .take_foreign_document_replacement_action()
+                        .unwrap();
+                    assert!(
+                        page_vm
+                            .reconcile_document_replacement_lifecycle_after_owner_action(
+                                open_action,
+                                &mut pending,
+                            )
+                            .await?
+                            .is_none()
+                    );
+                    assert_eq!(pending.as_ref().unwrap().document, replacement);
+                    assert_eq!(pending.as_ref().unwrap().started, started);
+                    assert!(
+                        page_vm.has_blocked_document_replacement_lifecycle_admission(replacement)
+                    );
+                    pending.as_mut().unwrap().owner_turn_is_runnable = false;
+
+                    let before_close = page_vm.document_replacement_lifecycle_action_snapshot();
+                    page_vm.vm_mut().eval("document.close()")?;
+                    page_vm
+                        .document_lifecycle
+                        .publish_foreign_document_replacement_action(before_close, false);
+                    let close_action = page_vm
+                        .document_lifecycle
+                        .take_foreign_document_replacement_action()
+                        .unwrap();
+                    let outcome = page_vm
+                        .reconcile_document_replacement_lifecycle_after_owner_action(
+                            close_action,
+                            &mut pending,
+                        )
+                        .await?
+                        .expect("the exact close action must resume its existing resident");
+                    assert!(matches!(
+                        outcome.readiness,
+                        DocumentLifecycleTurnReadiness::Runnable { .. }
+                    ));
+                    assert_eq!(pending.as_ref().unwrap().document, replacement);
+                    assert_eq!(pending.as_ref().unwrap().started, started);
+                    assert!(pending.as_ref().unwrap().owner_turn_is_runnable);
+                    assert!(
+                        !page_vm.has_blocked_document_replacement_lifecycle_admission(replacement)
+                    );
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .expect("a foreign open and close must preserve the bootstrapped resident");
+        },
+    );
+}
+
+#[test]
 fn later_admission_only_snapshot_cannot_consume_an_older_replacement() {
     let mut page_vm = test_page_vm();
     let _ = page_vm.take_page_creation_artifacts();
