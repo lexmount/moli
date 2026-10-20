@@ -2190,6 +2190,7 @@ mod cross_origin_named_children;
 mod declarative_receivers;
 mod frame_owner_origin_access;
 mod hyperlink_null_url_protocol;
+mod iframe_reinsertion;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;

@@ -14,6 +14,8 @@ mod interceptors;
 mod surface;
 mod values;
 
+pub(super) use values::window_alias_value;
+
 use super::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT;
 
 const WINDOW_FRAME_ELEMENT_SLOT: &str = "__moliWindowFrameElement";

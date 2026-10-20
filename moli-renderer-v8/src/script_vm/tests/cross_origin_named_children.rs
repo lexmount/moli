@@ -25,7 +25,7 @@ async fn cross_origin_named_children_use_the_parent_origin_and_first_document_tr
     const OBSERVER: &str = "observer.named-children.test";
     const FOREIGN: &str = "foreign.named-children.test";
     let server = StaticHttpServer::spawn_with_responder(
-        6,
+        7,
         "Content-Type: text/html; charset=utf-8\r\n",
         |_, _| {
             "<!doctype html><body><script>\
@@ -143,6 +143,7 @@ async fn cross_origin_named_children_use_the_parent_origin_and_first_document_tr
 
     // Reordering must select the first name in the current document tree,
     // rather than preserving insertion order or skipping a cross-origin first.
+    vm.eval("loaded.delete('/duplicate')").unwrap();
     vm.eval("document.body.appendChild(document.getElementById('duplicate-first'))")
         .unwrap();
     assert_eq!(
@@ -152,6 +153,14 @@ async fn cross_origin_named_children_use_the_parent_origin_and_first_document_tr
     );
     vm.eval("document.getElementById('duplicate-second').remove()")
         .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(loaded.has('/duplicate'))",
+        "true",
+        "reinserted duplicate must commit its new cross-origin document",
+    )
+    .await;
     assert_eq!(
         vm.eval_in_child_default_context(observer, "JSON.stringify(namedAccess('duplicate'))")
             .unwrap(),
@@ -221,5 +230,5 @@ async fn cross_origin_named_children_use_the_parent_origin_and_first_document_tr
             .unwrap(),
         "true"
     );
-    assert_eq!(server.finish().await.len(), 6);
+    assert_eq!(server.finish().await.len(), 7);
 }

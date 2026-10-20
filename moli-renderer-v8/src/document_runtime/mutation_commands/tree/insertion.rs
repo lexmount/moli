@@ -146,6 +146,13 @@ impl DocumentRuntime {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         let mutation_started = cpu_profile_enabled.then(std::time::Instant::now);
+        if effects.did_change() {
+            self.discard_child_contexts_before_reinsertion_followups(
+                scope,
+                host_ptr,
+                &insertion_plan,
+            );
+        }
         let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
             scope,
             host_ptr,
@@ -388,6 +395,13 @@ impl DocumentRuntime {
         }
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+        }
+        if effects.did_change() && !dispatch_atomic_move_callbacks {
+            self.discard_child_contexts_before_reinsertion_followups(
+                scope,
+                host_ptr,
+                &insertion_plan,
+            );
         }
         let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
             scope,

@@ -562,8 +562,8 @@ fn legacy_unforgeable_window_slot_value<'s>(
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> v8::Local<'s, v8::Value> {
-    object_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into())
+    super::window_accessors::window_alias_value(scope, receiver, slot)
+        .unwrap_or_else(|| v8::undefined(scope).into())
 }
 
 fn document_fullscreen_enabled_getter<'s>(

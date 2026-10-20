@@ -212,6 +212,13 @@ impl DocumentRuntime {
                 next_sibling,
             );
         }
+        if effects.did_change() {
+            self.discard_child_contexts_before_reinsertion_followups(
+                scope,
+                host_ptr,
+                &insertion_plan,
+            );
+        }
         let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
             scope,
             host_ptr,
