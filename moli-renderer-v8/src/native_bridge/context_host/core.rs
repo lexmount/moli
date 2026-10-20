@@ -696,18 +696,51 @@ impl JsContextHost {
             .map(RendererDocumentLifecycleJournalHandle::identity)
     }
 
+    pub(super) fn foreign_document_replacement_action_snapshot(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<crate::runtime::DocumentReplacementLifecycleActionSnapshot> {
+        let lifecycle = self.root_document_lifecycle.as_ref()?;
+        let entry_context = scope.get_entered_or_microtask_context();
+        let entry_host = crate::util::context_host_ptr_from_context_slot(entry_context)?;
+        if std::ptr::eq(entry_host, self) {
+            return None;
+        }
+        Some(
+            lifecycle.document_replacement_action_snapshot(
+                self.document_replacement_parser_is_blocked(),
+            ),
+        )
+    }
+
+    pub(super) fn publish_foreign_document_replacement_action(
+        &self,
+        before: Option<crate::runtime::DocumentReplacementLifecycleActionSnapshot>,
+    ) {
+        if let Some(before) = before
+            && let Some(lifecycle) = &self.root_document_lifecycle
+        {
+            lifecycle.publish_foreign_document_replacement_action(
+                before,
+                self.document_replacement_parser_is_blocked(),
+            );
+        }
+    }
+
     pub(crate) fn open_root_document(scope: &mut v8::PinScope<'_, '_>, host_ptr: *mut Self) {
-        let (owner, descendant_count_before, document) = {
+        let (owner, descendant_count_before, document, foreign_action) = {
             let host = unsafe { &*host_ptr };
             (
                 host.current_main_document_task_owner(),
                 host.child_browsing_contexts.len(),
                 host.document_handle(),
+                host.foreign_document_replacement_action_snapshot(scope),
             )
         };
         Self::drop_child_browsing_context_subtree_with_window_realm(scope, host_ptr, document);
         if unsafe { &*host_ptr }.current_main_document_task_owner() == owner {
             unsafe { &mut *host_ptr }.commit_root_document_open(scope, descendant_count_before);
+            unsafe { &*host_ptr }.publish_foreign_document_replacement_action(foreign_action);
         }
     }
 

@@ -827,6 +827,13 @@ pub(super) fn select_page_scheduler_turn(
         document_lifecycle_owner_turn_is_runnable,
         has_ready_main_parser_script_continuation,
     );
+    if entry
+        .page_vm()
+        .document_lifecycle
+        .has_foreign_document_replacement_action()
+    {
+        document_lifecycle = DocumentLifecycleClassReadiness::ReadyReplacementAction;
+    }
     let has_lifecycle_dom_task = task_sources.has_queued_document_lifecycle_dom_task(|owner| {
         entry
             .page_vm()
@@ -835,7 +842,8 @@ pub(super) fn select_page_scheduler_turn(
     if has_lifecycle_dom_task
         && !matches!(
             document_lifecycle,
-            DocumentLifecycleClassReadiness::RunnableContinuation
+            DocumentLifecycleClassReadiness::ReadyReplacementAction
+                | DocumentLifecycleClassReadiness::RunnableContinuation
                 | DocumentLifecycleClassReadiness::ReadyMainParserScriptContinuation
         )
     {
@@ -972,15 +980,27 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
     .await
 }
 
-/// Execute at most one action from the exact-Document lifecycle resident.
-/// A missing resident is an idle stale-wake outcome; this helper never binds
-/// a page wake to whichever Document happens to be current.
+/// Execute one retained foreign replacement action or one exact-Document
+/// lifecycle continuation. A wake alone cannot install a new resident.
 pub(in crate::runtime) async fn advance_document_lifecycle_one_page_turn_via_local_task(
     local_executor: JsLocalExecutor,
     entry: LivePageEntry,
 ) -> (LivePageEntry, Result<DocumentLifecycleTurnOutcome>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
+            if let Some(snapshot) = entry
+                .page_vm()
+                .document_lifecycle
+                .take_foreign_document_replacement_action()
+            {
+                let (page_vm, pending) = entry.page_vm_and_document_lifecycle_turn_mut();
+                return Ok(page_vm
+                    .reconcile_document_replacement_lifecycle_after_owner_action(snapshot, pending)
+                    .await?
+                    .unwrap_or_else(|| {
+                        DocumentLifecycleTurnOutcome::idle(DocumentLifecycleTurnAction::None)
+                    }));
+            }
             let Some(document) = entry.pending_document_lifecycle_identity() else {
                 return Ok(DocumentLifecycleTurnOutcome::idle(
                     DocumentLifecycleTurnAction::None,
