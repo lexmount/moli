@@ -1,7 +1,7 @@
 //! Network-facing WebIDL options. Request and cache owners use the converted values.
 use moli_webidl as webidl;
 
-#[derive(Debug, Default, webidl::WebIdlDictionary)]
+#[derive(Debug, webidl::WebIdlDictionary)]
 #[webidl(prefix = "CacheQueryOptions")]
 pub struct CacheQueryOptions {
     #[webidl(default = false)]
