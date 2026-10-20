@@ -105,11 +105,7 @@ pub(super) fn create_navigation_activation_object<'s>(
                 activated_origin_url,
             )
     });
-    let entry = if from.is_none() && activation.navigation_type.as_deref() == Some("replace") {
-        current_entry
-    } else {
-        navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry)
-    };
+    let entry = navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry);
     let from = from
         .map(|snapshot| navigation_entry_object_from_snapshot(scope, current_entry, snapshot))
         .map(v8::Local::<v8::Value>::from)

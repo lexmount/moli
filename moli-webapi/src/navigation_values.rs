@@ -38,13 +38,26 @@ const TRANSITION_FINISHED: &str = "__lmNavigationTransitionFinished";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::NavigationActivation, require_prototype)]
-struct NavigationActivationObjectDeclaration<'s> {
+pub struct NavigationActivationObjectDeclaration<'s> {
     #[webapi(slot = ACTIVATION_ENTRY)]
-    entry: v8::Local<'s, v8::Object>,
+    pub entry: v8::Local<'s, v8::Object>,
     #[webapi(slot = ACTIVATION_FROM)]
-    from: v8::Local<'s, v8::Value>,
+    pub from: v8::Local<'s, v8::Value>,
     #[webapi(slot = ACTIVATION_TYPE)]
-    navigation_type: v8::Local<'s, v8::Value>,
+    pub navigation_type: v8::Local<'s, v8::Value>,
+}
+
+impl<'s> NavigationActivationObjectDeclaration<'s> {
+    pub fn from_private_state(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        Some(Self {
+            entry: get_private_object(scope, object, ACTIVATION_ENTRY)?,
+            from: get_private_value(scope, object, ACTIVATION_FROM)?,
+            navigation_type: get_private_value(scope, object, ACTIVATION_TYPE)?,
+        })
+    }
 }
 
 // These are associated platform-object fields, not an author dictionary.
