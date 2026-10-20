@@ -15,6 +15,7 @@ use crate::{
 };
 use conversion::{Args, Text};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiValue};
+use webidl::{DictionarySnapshot, WebIdlDictionarySerialize};
 
 const ID: &str = "__moliPaymentRequestId";
 const SHIPPING_OPTION: &str = "__moliPaymentRequestShippingOption";
@@ -31,11 +32,11 @@ struct RequestSlots<'s> {
     #[webapi(slot = SHIPPING_TYPE)]
     shipping_type: v8::Local<'s, v8::Value>,
     #[webapi(slot = "__moliPaymentRequestDetails")]
-    details: v8::Local<'s, v8::Object>,
+    details: DictionarySnapshot<'s, conversion::Details<'s>>,
     #[webapi(slot = "__moliPaymentRequestOptions")]
-    options: v8::Local<'s, v8::Object>,
+    options: DictionarySnapshot<'s, conversion::Options>,
     #[webapi(slot = "__moliPaymentRequestMethods")]
-    methods: v8::Local<'s, v8::Array>,
+    methods: Vec<DictionarySnapshot<'s, conversion::MethodData<'s>>>,
     #[webapi(slot = "__moliPaymentRequestMethodData")]
     method_data: v8::Local<'s, v8::Value>,
     #[webapi(slot = "__moliPaymentRequestModifierData")]
@@ -196,17 +197,19 @@ pub(super) fn constructor<'s>(
         .id
         .clone()
         .expect("assigned payment identifier");
-    let details = parsed.details.into_snapshot(scope);
+    let details = parsed
+        .details
+        .to_snapshot(scope)
+        .expect("converted PaymentDetailsInit");
     let options = parsed
         .options
-        .bind(scope)
+        .to_snapshot(scope)
         .expect("converted PaymentOptions");
     let methods = parsed
         .method_data
         .into_iter()
-        .map(|method| method.bind(scope).expect("converted payment method").into())
+        .map(|method| method.to_snapshot(scope).expect("converted payment method"))
         .collect::<Vec<_>>();
-    let methods = v8::Array::new_with_elements(scope, &methods);
     let method_data = method_data
         .to_v8_value(scope)
         .expect("serialized payment method data");
