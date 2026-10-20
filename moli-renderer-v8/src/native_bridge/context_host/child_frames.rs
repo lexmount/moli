@@ -38,6 +38,8 @@ mod registry;
 mod request_scope;
 mod srcdoc_history;
 mod stylesheets;
+mod target_snapshot;
+pub(in crate::native_bridge::context_host) use target_snapshot::ChildNavigationTargetSnapshot;
 
 pub(in crate::native_bridge::context_host) use classic_scripts::ChildParserClassicScriptCandidate;
 pub(in crate::native_bridge::context_host) use classic_scripts::PendingChildExternalClassicDocumentScriptLoad;
@@ -68,7 +70,7 @@ pub(super) struct ChildBrowsingContextEntry {
     // navigation machinery. Keep them separate from an admitted document load,
     // which can still complete after the fragment change.
     same_document_attribute_bootstrap: Option<ChildBrowsingContextBootstrap>,
-    pending_attribute_bootstrap_commit: bool,
+    pending_attribute_navigation: Option<ChildNavigationTargetSnapshot>,
     pending_live_navigation: Option<PendingChildFrameNavigation>,
     // Snapshot at navigation admission. The target's origin is checked again
     // when queued javascript: code is about to execute.
@@ -104,6 +106,7 @@ pub(super) struct PendingChildFrameNavigation {
     pub(super) bootstrap: ChildBrowsingContextBootstrap,
     pub(super) initiator_url: Option<Url>,
     pub(super) initiator: ChildDocumentNavigationInitiator,
+    pub(super) target_snapshot: ChildNavigationTargetSnapshot,
 }
 
 impl PendingChildFrameNavigation {
@@ -111,11 +114,13 @@ impl PendingChildFrameNavigation {
         bootstrap: ChildBrowsingContextBootstrap,
         initiator_url: Option<Url>,
         initiator: ChildDocumentNavigationInitiator,
+        target_snapshot: ChildNavigationTargetSnapshot,
     ) -> Self {
         Self {
             bootstrap,
             initiator_url,
             initiator,
+            target_snapshot,
         }
     }
 }
@@ -142,8 +147,14 @@ impl ChildPerformanceTimeOrigin {
 pub(crate) struct ChildBrowsingContextNavigationSeedSnapshot {
     pub(crate) navigation_entry_seed: NavigationHistoryEntrySeed,
     pub(crate) committed_navigation_entry_seed: NavigationHistoryEntrySeed,
-    pub(crate) pending_attribute_bootstrap_commit: bool,
+    pending_attribute_navigation: Option<ChildNavigationTargetSnapshot>,
     pub(crate) pending_live_navigation_reflects_window_state: bool,
+}
+
+impl ChildBrowsingContextNavigationSeedSnapshot {
+    pub(crate) fn pending_attribute_bootstrap_commit(&self) -> bool {
+        self.pending_attribute_navigation.is_some()
+    }
 }
 
 pub(in crate::native_bridge::context_host) struct ChildBrowsingContextVisibleNavigationState {
@@ -231,7 +242,11 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn pending_attribute_bootstrap_commit(&self) -> bool {
-        self.pending_attribute_bootstrap_commit
+        self.pending_attribute_navigation.is_some()
+    }
+
+    pub(super) fn pending_attribute_navigation(&self) -> Option<&ChildNavigationTargetSnapshot> {
+        self.pending_attribute_navigation.as_ref()
     }
 
     pub(super) fn pending_attribute_bootstrap_commit_for_refresh(
@@ -252,7 +267,7 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn clear_pending_attribute_bootstrap_commit(&mut self) {
-        self.pending_attribute_bootstrap_commit = false;
+        self.pending_attribute_navigation = None;
     }
 
     pub(super) fn replace_attribute_bootstrap(&mut self, bootstrap: ChildBrowsingContextBootstrap) {
@@ -267,7 +282,7 @@ impl ChildBrowsingContextEntry {
             return child_navigation_current_url_as_url(&self.committed_navigation_entry_seed)
                 .or_else(|| child_document_url_for_bootstrap(&self.live_bootstrap));
         }
-        if self.pending_attribute_bootstrap_commit || self.has_pending_window_state() {
+        if self.pending_attribute_bootstrap_commit() || self.has_pending_window_state() {
             return child_document_url_for_bootstrap(&self.live_bootstrap);
         }
         if let Some(url) =
@@ -730,7 +745,7 @@ impl ChildBrowsingContextEntry {
         ChildBrowsingContextNavigationSeedSnapshot {
             navigation_entry_seed: self.navigation_entry_seed.clone(),
             committed_navigation_entry_seed: self.committed_navigation_entry_seed.clone(),
-            pending_attribute_bootstrap_commit: self.pending_attribute_bootstrap_commit,
+            pending_attribute_navigation: self.pending_attribute_navigation.clone(),
             pending_live_navigation_reflects_window_state: self
                 .pending_live_navigation_reflects_window_state,
         }
@@ -742,7 +757,7 @@ impl ChildBrowsingContextEntry {
     ) {
         self.navigation_entry_seed = snapshot.navigation_entry_seed;
         self.committed_navigation_entry_seed = snapshot.committed_navigation_entry_seed;
-        self.pending_attribute_bootstrap_commit = snapshot.pending_attribute_bootstrap_commit;
+        self.pending_attribute_navigation = snapshot.pending_attribute_navigation;
         self.pending_live_navigation_reflects_window_state =
             snapshot.pending_live_navigation_reflects_window_state;
     }
@@ -756,7 +771,7 @@ impl ChildBrowsingContextEntry {
         let next_current_document_id = child_navigation_current_document_id(&entry_seed);
         let same_document_update = committed_current_document_id.is_none()
             || committed_current_document_id == next_current_document_id
-            || self.pending_attribute_bootstrap_commit;
+            || self.pending_attribute_bootstrap_commit();
         let updates_outgoing_document = same_document_update
             && entry_seed.session_history.commit == moli_page_types::SessionHistoryCommit::Attach
             && self
@@ -796,7 +811,7 @@ impl ChildBrowsingContextEntry {
         if same_document_update {
             self.committed_navigation_entry_seed = entry_seed;
             self.prune_srcdoc_history();
-            if !self.pending_attribute_bootstrap_commit {
+            if !self.pending_attribute_bootstrap_commit() {
                 self.pending_live_navigation_reflects_window_state = false;
             }
         }
@@ -997,7 +1012,7 @@ impl ChildBrowsingContextEntry {
         let waits_initial = self.attribute_navigation_waits_for_initial_about_blank();
         let current_url = child_navigation_current_url(&self.navigation_entry_seed);
         let committed_url = child_navigation_current_url(&self.committed_navigation_entry_seed);
-        let pending_attribute_navigation = self.pending_attribute_bootstrap_commit
+        let pending_attribute_navigation = self.pending_attribute_bootstrap_commit()
             && (waits_initial || current_url != committed_url);
         pending_attribute_navigation
             || self.has_pending_window_state()
@@ -1014,7 +1029,7 @@ impl ChildBrowsingContextEntry {
         }
         match &self.attribute_bootstrap {
             ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript" => {
-                self.pending_attribute_bootstrap_commit
+                self.pending_attribute_bootstrap_commit()
             }
             ChildBrowsingContextBootstrap::Url(url) => url.as_str() != "about:blank",
             ChildBrowsingContextBootstrap::Request(_) => true,
@@ -1025,7 +1040,7 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn has_uncommitted_navigation_seed(&self) -> bool {
         self.has_pending_live_navigation()
-            || self.pending_attribute_bootstrap_commit
+            || self.pending_attribute_bootstrap_commit()
             || child_navigation_current_url(&self.navigation_entry_seed)
                 != child_navigation_current_url(&self.committed_navigation_entry_seed)
     }
@@ -1067,7 +1082,7 @@ impl ChildBrowsingContextEntry {
     pub(super) fn pending_document_navigation_owner_is_current(&self, load_id: u64) -> bool {
         self.pending_document_load_matches(load_id)
             && !self.has_pending_live_navigation()
-            && !self.pending_attribute_bootstrap_commit
+            && !self.pending_attribute_bootstrap_commit()
     }
 
     pub(super) fn set_pending_navigation(
@@ -1076,7 +1091,7 @@ impl ChildBrowsingContextEntry {
         reflects_window_state: bool,
         javascript_initiator_origin: Option<WindowAccessOrigin>,
     ) {
-        self.pending_attribute_bootstrap_commit = false;
+        self.pending_attribute_navigation = None;
         self.pending_live_navigation = Some(navigation);
         self.pending_live_navigation_reflects_window_state = reflects_window_state;
         self.pending_javascript_initiator_origin = javascript_initiator_origin;
@@ -1084,14 +1099,14 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn clear_pending_navigation(&mut self) {
         self.pending_download_policy = None;
-        self.pending_attribute_bootstrap_commit = false;
+        self.pending_attribute_navigation = None;
         self.pending_live_navigation = None;
         self.pending_javascript_initiator_origin = None;
         self.pending_live_navigation_reflects_window_state = false;
     }
 
     pub(super) fn has_pending_javascript_url_navigation(&self) -> bool {
-        (self.pending_attribute_bootstrap_commit
+        (self.pending_attribute_bootstrap_commit()
             && matches!(
                 self.attribute_bootstrap,
                 ChildBrowsingContextBootstrap::Url(ref url) if url.scheme() == "javascript"
