@@ -525,6 +525,68 @@ async fn shared_worker_error_commits_child_navigation_before_document_script_rea
 }
 
 #[tokio::test]
+async fn blob_worker_keeps_its_creator_policy_source_across_document_open() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://document-open-blob-policy.test/page.html").unwrap(),
+            );
+        let local_executor = page_vm.local_executor.clone();
+        local_executor
+            .run(async move {
+                page_vm
+                    .vm_mut()
+                    .document_runtime
+                    .dom_host_mut()
+                    .reset_html_document_shell();
+                page_vm.vm_mut().eval(
+                    r#"
+                    globalThis.__documentOpenWorkerResult = null;
+                    const meta = document.createElement('meta');
+                    meta.setAttribute('http-equiv', 'Content-Security-Policy');
+                    meta.setAttribute('content', "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:");
+                    document.head.appendChild(meta);
+                    const workerUrl = URL.createObjectURL(new Blob([
+                        'try { eval("0"); postMessage("allowed"); } catch (error) { postMessage(error.name); }'
+                    ], {type: 'text/javascript'}));
+                    document.open(); document.close();
+                    const added = document.createElement('meta');
+                    added.setAttribute('http-equiv', 'Content-Security-Policy');
+                    added.setAttribute('content', "script-src 'self' 'unsafe-inline' blob:");
+                    document.head.appendChild(added);
+                    const worker = new Worker(workerUrl);
+                    worker.onmessage = event => {
+                        globalThis.__documentOpenWorkerResult = event.data;
+                        worker.terminate(); URL.revokeObjectURL(workerUrl);
+                    };
+                    worker.onerror = event => {
+                        event.preventDefault();
+                        globalThis.__documentOpenWorkerResult = 'worker-error:' + event.message;
+                        worker.terminate(); URL.revokeObjectURL(workerUrl);
+                    };
+                    "#,
+                )?;
+                drive_websocket_until_done(
+                    &mut page_vm,
+                    "String(globalThis.__documentOpenWorkerResult !== null)",
+                    "blob worker must observe the same Document's later meta policy",
+                )
+                .await?;
+                assert_eq!(
+                    page_vm.vm_mut().eval("globalThis.__documentOpenWorkerResult")?,
+                    "EvalError",
+                );
+                anyhow::Ok(())
+            })
+            .await
+            .expect("document-open blob worker CSP regression must finish on its owner lane");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn blob_worker_created_in_data_iframe_inherits_opaque_broadcast_channel_owner_key() {
     run_page_vm_async_test(async move {
         let document_url =

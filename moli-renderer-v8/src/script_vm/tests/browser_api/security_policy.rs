@@ -5,6 +5,49 @@ mod inline_tasks;
 mod parser_positions;
 
 #[test]
+fn document_open_keeps_policy_and_processes_meta_in_the_new_stream() {
+    for owner in ["window", "frame.contentWindow", "popup"] {
+        let mut vm = new_storage_test_vm("https://document-open-policy.test/");
+        vm.document_runtime
+            .dom_host_mut()
+            .reset_html_document_shell();
+        assert_eq!(
+            vm.eval(&format!(
+                r#"(() => {{
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    const popup = open();
+                    const owner = {owner};
+                    const doc = owner.document;
+                    const meta = doc.createElement('meta');
+                    meta.setAttribute('http-equiv', 'Content-Security-Policy');
+                    meta.setAttribute('content', "script-src 'self' 'unsafe-inline' 'unsafe-eval'");
+                    doc.head.appendChild(meta);
+                    const evaluate = () => {{
+                        try {{ return owner.eval('40 + 2'); }}
+                        catch (error) {{ return error.name + ':' + (error instanceof owner.EvalError); }}
+                    }};
+                    const before = evaluate();
+                    doc.open(); doc.close();
+                    const after = evaluate();
+                    meta.setAttribute('content', "script-src 'self' 'unsafe-inline'");
+                    doc.head.appendChild(meta);
+                    const tightened = evaluate();
+                    doc.open(); doc.close();
+                    const retained = evaluate();
+                    const sameDocument = doc === owner.document;
+                    popup.close(); frame.remove();
+                    return JSON.stringify([before, after, tightened, retained, sameDocument]);
+                }})()"#
+            ))
+            .unwrap(),
+            r#"[42,42,"EvalError:true","EvalError:true",true]"#,
+            "{owner}: document.open must retain installed CSP while processing reinserted meta in the new stream",
+        );
+    }
+}
+
+#[test]
 fn inline_script_and_handler_csp_accept_base64url_hashes() {
     for hash in [
         "sha256-1u5siURgPyHwZ-QAD8UUU8_PSFeCLQfQgff1wmWe30c=",
