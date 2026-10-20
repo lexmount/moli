@@ -113,6 +113,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                 transfer_id,
                 easy: Some(job.easy),
                 context: job.context,
+                dns_timing: None,
                 result: Err(anyhow!("curl multi runtime is shutting down")),
             });
             return;
@@ -145,23 +146,31 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         self.closed = true;
         while let Some(pending) = self.pending.pop_front() {
             let CurlPendingJob {
-                transfer_id, job, ..
+                transfer_id,
+                job,
+                dns_timing,
+                ..
             } = pending;
             self.send_completion(CurlMultiCompletion {
                 transfer_id,
                 easy: Some(job.easy),
                 context: job.context,
+                dns_timing,
                 result: Err(anyhow!("curl multi runtime is shutting down")),
             });
         }
         for pending in self.dns.drain() {
             let CurlPendingJob {
-                transfer_id, job, ..
+                transfer_id,
+                job,
+                dns_timing,
+                ..
             } = pending;
             let _ = self.completion_tx.send(CurlMultiCompletion {
                 transfer_id,
                 easy: Some(job.easy),
                 context: job.context,
+                dns_timing,
                 result: Err(anyhow!(
                     "curl multi runtime DNS request cancelled during shutdown"
                 )),
@@ -173,6 +182,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                 transfer_id,
                 easy,
                 context: active.context,
+                dns_timing: active.dns_timing,
                 result: Err(anyhow!(
                     "curl multi runtime request cancelled during shutdown"
                 )),
@@ -227,14 +237,19 @@ impl<H: Handler, C> HttpRegistry<H, C> {
 
     fn handle_dns_completion(&mut self, ready: CurlDnsReady<CurlPendingJob<H, C>>) {
         let mut pending = ready.pending;
+        pending.dns_timing = Some(ready.timing);
         if self.closed {
             let CurlPendingJob {
-                transfer_id, job, ..
+                transfer_id,
+                job,
+                dns_timing,
+                ..
             } = pending;
             self.send_completion(CurlMultiCompletion {
                 transfer_id,
                 easy: Some(job.easy),
                 context: job.context,
+                dns_timing,
                 result: Err(anyhow!("curl multi runtime is shutting down")),
             });
             return;
@@ -251,12 +266,16 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                     .install(&mut pending.job.easy, addresses.as_ref())
                 {
                     let CurlPendingJob {
-                        transfer_id, job, ..
+                        transfer_id,
+                        job,
+                        dns_timing,
+                        ..
                     } = pending;
                     self.send_completion(CurlMultiCompletion {
                         transfer_id,
                         easy: Some(job.easy),
                         context: job.context,
+                        dns_timing,
                         result: Err(error),
                     });
                     return;
@@ -268,12 +287,16 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                 // outside the Multi. Do not requeue it: that would let curl
                 // resolve or connect independently of the failed shared lookup.
                 let CurlPendingJob {
-                    transfer_id, job, ..
+                    transfer_id,
+                    job,
+                    dns_timing,
+                    ..
                 } = pending;
                 self.send_completion(CurlMultiCompletion {
                     transfer_id,
                     easy: Some(job.easy),
                     context: job.context,
+                    dns_timing,
                     result: Err(anyhow!(error.to_string())),
                 });
             }
@@ -286,6 +309,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
             return;
         }
         let transfer_id = pending.transfer_id;
+        let dns_timing = pending.dns_timing;
         let queued_for = pending.enqueued_at.elapsed();
         let mut job = pending.job;
         let label = job.label.clone();
@@ -295,6 +319,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                     transfer_id,
                     easy: Some(job.easy),
                     context: job.context,
+                    dns_timing,
                     result: Err(curl_runtime_timeout_error("while waiting to start")),
                 });
                 return;
@@ -304,6 +329,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                     transfer_id,
                     easy: Some(job.easy),
                     context: job.context,
+                    dns_timing,
                     result: Err(error).context("failed to apply remaining curl request deadline"),
                 });
                 return;
@@ -351,6 +377,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                     CurlActiveTransfer {
                         handle,
                         context: job.context,
+                        dns_timing,
                         origin: job.origin,
                         priority: job.priority,
                         label,
@@ -364,6 +391,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                 transfer_id,
                 easy: None,
                 context: job.context,
+                dns_timing,
                 result: Err(error),
             }),
         }
@@ -381,12 +409,16 @@ impl<H: Handler, C> HttpRegistry<H, C> {
 
     fn complete_timed_out_job(&self, pending: CurlPendingJob<H, C>, stage: &'static str) {
         let CurlPendingJob {
-            transfer_id, job, ..
+            transfer_id,
+            job,
+            dns_timing,
+            ..
         } = pending;
         self.send_completion(CurlMultiCompletion {
             transfer_id,
             easy: Some(job.easy),
             context: job.context,
+            dns_timing,
             result: Err(curl_runtime_timeout_error(stage)),
         });
     }
@@ -405,6 +437,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                     transfer_id,
                     easy: None,
                     context: active.context,
+                    dns_timing: active.dns_timing,
                     result: Err(anyhow!(
                         "failed to remove curl easy handle for {}: {error}",
                         active.label
@@ -479,6 +512,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
             transfer_id,
             easy,
             context: active.context,
+            dns_timing: active.dns_timing,
             result,
         });
     }
@@ -542,6 +576,50 @@ mod tests {
 
     fn test_transfer_id(sequence: usize) -> CurlTransferId {
         CurlTransferId::from_token(sequence).expect("test transfer ID is non-zero")
+    }
+
+    #[test]
+    fn dns_observations_survive_queue_retirement_and_active_completion() {
+        let completed_at = Instant::now();
+        let timing = crate::CurlDnsTiming {
+            started_at: completed_at - Duration::from_millis(2),
+            completed_at,
+        };
+        for terminal in [
+            "pending-shutdown",
+            "pending-timeout",
+            "active-complete",
+            "active-shutdown",
+        ] {
+            let (completion_tx, completed) = crossbeam_channel::unbounded();
+            let mut registry = HttpRegistry::new(CurlMultiRuntimeConfig::default(), completion_tx);
+            let mut multi = Multi::new();
+            let id = test_transfer_id(1);
+            let mut job = test_job(terminal, 1, None);
+            if terminal == "pending-timeout" {
+                job.deadline = Some(Instant::now());
+            }
+            registry.admit(id, job);
+            registry.pending.front_mut().unwrap().dns_timing = Some(timing);
+            match terminal {
+                "pending-shutdown" => registry.shutdown(&mut multi),
+                "pending-timeout" => registry.expire_waiting_jobs(),
+                "active-complete" => {
+                    registry.advance(&mut multi);
+                    registry.complete(&mut multi, vec![(id, Ok(()))]);
+                }
+                _ => {
+                    registry.advance(&mut multi);
+                    registry.shutdown(&mut multi);
+                }
+            }
+            let completion = completed.try_recv().expect("the exact transfer completes");
+            assert_eq!(completion.transfer_id, id);
+            assert_eq!(completion.context, terminal);
+            assert_eq!(completion.dns_timing, Some(timing));
+            assert_eq!(completion.result.is_ok(), terminal == "active-complete");
+            registry.shutdown(&mut multi);
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@ pub(crate) mod registry;
 mod scheduling;
 
 use crate::{
-    CurlDnsResolution, CurlTransferId,
+    CurlDnsResolution, CurlDnsTiming, CurlTransferId,
     runtime::{CurlRuntimeCommand, identity::next_transfer_id},
 };
 use anyhow::{Result, anyhow};
@@ -73,6 +73,8 @@ pub struct CurlMultiCompletion<H: Handler, C> {
     pub easy: Option<Easy2<H>>,
     pub context: C,
     pub result: Result<()>,
+    /// Shared DNS observations for this exact transfer, if it performed a lookup.
+    pub dns_timing: Option<CurlDnsTiming>,
 }
 
 impl<H: Handler, C> fmt::Debug for CurlMultiCompletion<H, C> {
@@ -80,6 +82,7 @@ impl<H: Handler, C> fmt::Debug for CurlMultiCompletion<H, C> {
         f.debug_struct("CurlMultiCompletion")
             .field("transfer_id", &self.transfer_id)
             .field("has_easy", &self.easy.is_some())
+            .field("dns_timing", &self.dns_timing)
             .field("result", &self.result.as_ref().map(|_| ()))
             .finish_non_exhaustive()
     }

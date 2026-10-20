@@ -41,6 +41,11 @@ pub struct StreamingHtmlResponse {
 }
 
 impl StreamingHtmlResponse {
+    /// Native observations from this response's selected transport attempt.
+    pub fn response_timing(&self) -> crate::FetchResponseTiming {
+        self.cancel_handle.response_timing()
+    }
+
     pub fn new(
         final_url: Url,
         status: u16,

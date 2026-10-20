@@ -9,6 +9,8 @@ use std::{
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::{FetchConnectionTiming, FetchCurlTiming};
+
 const RESPONSE_PENDING: u8 = 0;
 const RESPONSE_COMMITTED: u8 = 1;
 const RESPONSE_CANCELLED: u8 = 2;
@@ -35,11 +37,47 @@ pub struct FetchResponseBodySizes {
 
 impl ResponseProgress {
     pub(crate) fn mark_request_started(&self) {
+        let now = Instant::now();
+        let mut timing = self.inner.timing.lock();
+        timing.request_started_at.get_or_insert(now);
+        timing
+            .connection_timing
+            .get_or_insert_with(Default::default)
+            .request_prepared_at = Some(now);
+    }
+
+    pub(crate) fn mark_tls_context_started(&self) {
+        let now = Instant::now();
         self.inner
             .timing
             .lock()
-            .request_started_at
-            .get_or_insert_with(Instant::now);
+            .connection_timing
+            .get_or_insert_with(Default::default)
+            .tls_context_started_at = Some(now);
+    }
+
+    pub(crate) fn record_connection_timing(
+        &self,
+        dns: Option<moli_curl::CurlDnsTiming>,
+        curl: Option<FetchCurlTiming>,
+    ) {
+        if dns.is_none() && curl.is_none() {
+            return;
+        }
+        let mut timing = self.inner.timing.lock();
+        let connection = timing
+            .connection_timing
+            .get_or_insert_with(Default::default);
+        connection.shared_dns = dns;
+        connection.curl = curl;
+    }
+
+    pub(crate) fn curl_timing(&self) -> Option<FetchCurlTiming> {
+        self.inner
+            .timing
+            .lock()
+            .connection_timing
+            .and_then(|connection| connection.curl)
     }
 
     pub(crate) fn mark_interim_response_started(&self) {
@@ -143,6 +181,7 @@ pub struct FetchResponseTiming {
     body_bytes_received: bool,
     response_started_at: Option<Instant>,
     response_end_at: Option<Instant>,
+    connection_timing: Option<FetchConnectionTiming>,
 }
 
 impl FetchResponseTiming {
@@ -165,6 +204,13 @@ impl FetchResponseTiming {
     }
     pub fn response_end_at(self) -> Option<Instant> {
         self.response_end_at
+    }
+
+    /// Observations from the selected transfer only. Callback timestamps may
+    /// precede final statistics; streaming consumers await `finish()` for the
+    /// terminal result before relying on the completed curl statistics.
+    pub fn connection_timing(self) -> Option<FetchConnectionTiming> {
+        self.connection_timing
     }
 }
 
@@ -332,7 +378,87 @@ impl FetchCancelHandle {
 #[cfg(test)]
 mod tests {
     use super::{FetchCancelHandle, FetchResponseBodySizes};
-    use std::time::Instant;
+    use crate::FetchCurlTiming;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn connection_observations_cannot_follow_response_selection_or_reset() {
+        let selected = FetchCancelHandle::new();
+        let first = selected.response_progress();
+        let completed_at = Instant::now();
+        let dns = moli_curl::CurlDnsTiming {
+            started_at: completed_at - Duration::from_millis(1),
+            completed_at,
+        };
+        first.mark_tls_context_started();
+        first.mark_request_started();
+        let curl = FetchCurlTiming {
+            name_lookup: Some(Duration::from_micros(17)),
+            connect: Some(Duration::from_micros(213)),
+            pretransfer: Some(Duration::from_micros(817)),
+            total: Some(Duration::from_micros(1421)),
+            new_connections: Some(1),
+            ..Default::default()
+        };
+        first.record_connection_timing(Some(dns), Some(curl));
+        let observed = selected.response_timing().connection_timing().unwrap();
+        assert_eq!(observed.shared_dns, Some(dns));
+        assert_eq!(observed.curl, Some(curl));
+        assert!(observed.tls_context_started_at.is_some());
+        assert!(observed.request_prepared_at.is_some());
+
+        let second = selected.begin_response_progress();
+        assert!(selected.response_timing().connection_timing().is_none());
+        first.mark_request_started();
+        first.record_connection_timing(Some(dns), Some(curl));
+        assert!(selected.response_timing().connection_timing().is_none());
+
+        let tee = FetchCancelHandle::new();
+        tee.adopt_response_progress(&selected);
+        second.record_connection_timing(None, Some(curl));
+        assert_eq!(
+            tee.response_timing().connection_timing(),
+            selected.response_timing().connection_timing()
+        );
+        assert!(
+            tee.response_timing()
+                .connection_timing()
+                .unwrap()
+                .shared_dns
+                .is_none()
+        );
+        assert_eq!(
+            first
+                .inner
+                .timing
+                .lock()
+                .connection_timing
+                .unwrap()
+                .shared_dns,
+            Some(dns)
+        );
+    }
+
+    #[test]
+    fn later_preparation_keeps_the_first_request_boundary() {
+        let handle = FetchCancelHandle::new();
+        let progress = handle.response_progress();
+        progress.mark_request_started();
+        let first = handle.response_timing().request_started_at().unwrap();
+        let second_before = Instant::now();
+        progress.mark_request_started();
+        let timing = handle.response_timing();
+        assert_eq!(timing.request_started_at(), Some(first));
+        assert!(
+            timing
+                .connection_timing()
+                .unwrap()
+                .request_prepared_at
+                .unwrap()
+                >= second_before
+        );
+        assert!(timing.connection_timing().unwrap().curl.is_none());
+    }
 
     #[test]
     fn response_completion_commit_is_shared_and_resettable() {

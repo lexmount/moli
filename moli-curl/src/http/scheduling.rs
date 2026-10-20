@@ -10,6 +10,7 @@ use std::{
 use curl::{easy::Handler, multi::Easy2Handle};
 
 use super::{CurlMultiJob, CurlOriginKey, CurlTransferId};
+use crate::CurlDnsTiming;
 
 pub(super) struct CurlActiveTransfer<H: Handler, C> {
     pub(super) handle: Easy2Handle<H>,
@@ -19,12 +20,14 @@ pub(super) struct CurlActiveTransfer<H: Handler, C> {
     pub(super) label: String,
     pub(super) started_at: Instant,
     pub(super) queued_for: Duration,
+    pub(super) dns_timing: Option<CurlDnsTiming>,
 }
 
 pub(super) struct CurlPendingJob<H: Handler, C> {
     pub(super) transfer_id: CurlTransferId,
     pub(super) job: CurlMultiJob<H, C>,
     pub(super) enqueued_at: Instant,
+    pub(super) dns_timing: Option<CurlDnsTiming>,
 }
 
 impl<H: Handler, C> CurlPendingJob<H, C> {
@@ -61,6 +64,7 @@ pub(super) fn enqueue_pending_job<H: Handler, C>(
             transfer_id,
             job,
             enqueued_at: Instant::now(),
+            dns_timing: None,
         },
     );
 }
@@ -303,6 +307,7 @@ mod tests {
             label: "active".to_owned(),
             started_at: Instant::now(),
             queued_for: Duration::ZERO,
+            dns_timing: None,
         };
         let active = HashMap::from([(test_transfer_id(1), active)]);
         let cap = NonZeroUsize::new(1);

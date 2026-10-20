@@ -108,8 +108,15 @@ async fn html_response_timing_finishes_without_consumer_polling() -> Result<()> 
         assert!(headers.response_end_at().is_none());
         release_body.send(())?;
         // Keep the consumer's executor occupied while native threads finish.
+        // Body completion can commit before curl publishes terminal statistics.
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !cancel.response_completion_is_committed() {
+        while !cancel.response_completion_is_committed()
+            || cancel
+                .response_timing()
+                .connection_timing()
+                .and_then(|connection| connection.curl)
+                .is_none()
+        {
             anyhow::ensure!(
                 Instant::now() < deadline,
                 "HTML transfer did not record completion"
@@ -117,6 +124,7 @@ async fn html_response_timing_finishes_without_consumer_polling() -> Result<()> 
             thread::sleep(Duration::from_millis(1));
         }
         let native = cancel.response_timing();
+        assert!(native.connection_timing().unwrap().curl.is_some());
         assert!(native.body_bytes_received());
         assert!(native.response_started_at().unwrap() <= native.response_end_at().unwrap());
         assert!(cancel.response_completion_is_committed());

@@ -2,6 +2,7 @@ mod cache_request_controls;
 mod cache_request_directives;
 mod cache_vary_encoding;
 mod compression_dictionary;
+mod connection_timing;
 mod cookie_context;
 mod cookie_store;
 mod fetch_metadata;
