@@ -117,6 +117,21 @@ fn pdf_collections_preserve_named_items_iteration_and_plugin_backreferences() {
       check(!Object.keys(plugins).includes(plugin.name), 'named item non-enumerable');
       check(plugins.item(100) === null && mimeTypes.namedItem('missing') === null, 'missing values');
       fails('TypeError', () => PluginArray.prototype.item.call({}, 0));
+      const receiver = Object.create(plugins), sentinel = {};
+      let setterCalls = 0;
+      Object.defineProperty(PluginArray.prototype, 'authorSetter', {
+        configurable: true,
+        set(value) {
+          check(this === receiver && value === 7, 'forwarded setter receiver and value');
+          setterCalls++;
+          throw sentinel;
+        }
+      });
+      try {
+        try { Reflect.set(plugins, 'authorSetter', 7, receiver); throw Error('setter did not throw'); }
+        catch (error) { check(error === sentinel, 'original setter exception'); }
+        check(setterCalls === 1, 'setter called exactly once');
+      } finally { delete PluginArray.prototype.authorSetter; }
     "#,
     );
 }
