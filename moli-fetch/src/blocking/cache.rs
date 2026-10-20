@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(next, Some(current.join("/next")?));
         let automatic = request
             .clone()
-            .with_redirect_mode(crate::RequestRedirectMode::Follow);
+            .with_redirect_handling(crate::RequestRedirectHandling::Follow);
         let error = next_followed_redirect_url_from_parts(
             &automatic,
             &current,

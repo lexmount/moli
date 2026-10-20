@@ -273,7 +273,7 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<Response>> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+        if request.auth_requires_buffered_transport() {
             return self
                 .resource_runtime
                 .client()
@@ -649,12 +649,10 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+        if request.auth_requires_buffered_transport() {
             // Challenge-response schemes still need libcurl's buffered auth
             // retry behavior until the streaming collector models
-            // intermediate authentication challenges explicitly. Manual
-            // redirect callers need the intermediate 3xx response before raw
-            // streaming starts.
+            // intermediate authentication challenges explicitly.
             return self
                 .resource_runtime
                 .client()
@@ -915,12 +913,11 @@ impl ResourceRequestClient {
         cancel_handle: Option<FetchCancelHandle>,
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+        if request.auth_requires_buffered_transport() {
             // Digest auth retries are still completed inside libcurl on the
             // buffered path. Keep auth requests there until the streaming
             // collector can distinguish intermediate auth challenges from
-            // final responses. Manual redirect callers also need buffered
-            // access to intermediate 3xx responses.
+            // final responses.
             return match cancel_handle {
                 Some(cancel_handle) => {
                     self.resource_runtime

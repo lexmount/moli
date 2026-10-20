@@ -260,12 +260,11 @@ async fn manual_redirects_keep_the_current_response_and_referrer() -> Result<()>
         })
         .with_single_hop();
     let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
-    // Manual responses use the buffered or raw API. Raw streaming intentionally
-    // returns only the redirect head so its owner need not wait for the body.
-    for (transport, body) in [(Transport::Buffered, "redirect"), (Transport::Raw, "")] {
+    // Both APIs return the redirect head without waiting for its discarded body.
+    for transport in [Transport::Buffered, Transport::Raw] {
         let response = transport.fetch(&client, request.clone()).await?;
         assert_eq!(response.status, 302, "{transport:?}");
-        assert_eq!(response.body_text(), body, "{transport:?}");
+        assert!(response.body_text().is_empty(), "{transport:?}");
         assert_eq!(response.final_url, request.url, "{transport:?}");
         assert!(!response.redirected, "{transport:?}");
         assert!(response.redirect_chain.is_empty(), "{transport:?}");

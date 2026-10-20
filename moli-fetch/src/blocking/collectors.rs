@@ -129,7 +129,9 @@ pub(crate) fn log_request_completion(
 pub(crate) struct ResponseCollector {
     body: Vec<u8>,
     headers: Vec<(String, Vec<u8>)>,
+    status: u16,
     status_text: Option<String>,
+    header_terminated: bool,
     max_response_size: Option<usize>,
     response_too_large: bool,
     cancel_handle: Option<FetchCancelHandle>,
@@ -157,7 +159,9 @@ impl ResponseCollector {
         }
         self.body.clear();
         self.headers.clear();
+        self.status = 0;
         self.status_text = None;
+        self.header_terminated = false;
         self.max_response_size = max_response_size;
         self.response_too_large = false;
     }
@@ -172,6 +176,10 @@ impl ResponseCollector {
 
     pub(crate) fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    pub(crate) fn header_terminated(&self) -> bool {
+        self.header_terminated
     }
 }
 
@@ -909,23 +917,21 @@ impl RawStreamingResponseCollector {
             self.client_hint_restart_requested = true;
             return false;
         }
-        let declared_body_length = identity_encoded_content_length(&self.headers);
-        self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
-        if declared_body_length == Some(0) {
-            self.response_progress.commit();
-        }
-        self.maybe_create_cache_body_writer();
         let is_redirect_response =
             next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
                 .ok()
                 .flatten()
                 .is_some();
-        self.maybe_emit_start(is_redirect_response);
-        if self.started && (response_body_ends_at_headers(self.status) || is_redirect_response) {
-            // Manual redirects expose their head with an empty body. Stop the
-            // transport here so neither streaming nor buffered callers wait
-            // for bytes that this API discards.
-            self.finish_streaming_body();
+        let declared_body_length = identity_encoded_content_length(&self.headers);
+        self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
+        self.maybe_create_cache_body_writer();
+        self.maybe_emit_start(is_redirect_response, declared_body_length == Some(0));
+        if response_body_ends_at_headers(self.status) || is_redirect_response {
+            // Retire this transfer at headers. Follow keeps its channels for
+            // the final response; caller-owned redirects expose an empty body.
+            if self.started {
+                self.finish_streaming_body();
+            }
             self.header_terminated = true;
             return false;
         }
@@ -951,7 +957,7 @@ impl RawStreamingResponseCollector {
         }
     }
 
-    fn maybe_emit_start(&mut self, is_redirect_response: bool) {
+    fn maybe_emit_start(&mut self, is_redirect_response: bool, body_complete: bool) {
         if self.started || self.response_too_large {
             return;
         }
@@ -963,6 +969,9 @@ impl RawStreamingResponseCollector {
         }
         if self.defer_not_modified_start && self.status == 304 {
             return;
+        }
+        if body_complete {
+            self.response_progress.commit();
         }
         self.started = true;
         if let Some(start_tx) = self.start_tx.take() {
@@ -1070,12 +1079,30 @@ impl Handler for ResponseCollector {
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
+            if is_interim_response_status(self.status) {
+                return true;
+            }
+            let is_redirect = matches!(self.status, 301 | 302 | 303 | 307 | 308)
+                && self.headers.iter().any(|(name, _)| name == "location");
+            if is_redirect {
+                // Redirect owners consume only the head. Leave other statuses
+                // to libcurl: even a bodyless 2xx can be an auth probe before
+                // libcurl resends the actual upload.
+                self.header_terminated = true;
+                return false;
+            }
+            self.response_too_large = self.max_response_size.is_some_and(|limit| {
+                identity_encoded_content_length(&self.headers).is_some_and(|length| length > limit)
+            });
             return !self.response_too_large;
         }
 
         if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
+            self.status = parsed.status;
             self.status_text = Some(parsed.status_text);
+            self.header_terminated = false;
+            self.response_too_large = false;
             self.body.clear();
             if let Some(progress) = &self.response_progress {
                 if is_interim_response_status(parsed.status) {
@@ -1091,20 +1118,6 @@ impl Handler for ResponseCollector {
             return true;
         };
         name.make_ascii_lowercase();
-
-        if name == "content-length"
-            && self
-                .max_response_size
-                .zip(
-                    std::str::from_utf8(&value)
-                        .ok()
-                        .and_then(|value| value.parse::<usize>().ok()),
-                )
-                .is_some_and(|(limit, content_length)| content_length > limit)
-        {
-            self.response_too_large = true;
-            return false;
-        }
 
         self.headers.push((name, value));
         true
@@ -1252,21 +1265,18 @@ impl Handler for RawStreamingResponseCollector {
         };
         name.make_ascii_lowercase();
 
-        if name == "content-length"
-            && self
-                .max_response_size
-                .zip(
-                    std::str::from_utf8(&value)
-                        .ok()
-                        .and_then(|value| value.parse::<usize>().ok()),
-                )
-                .is_some_and(|(limit, content_length)| content_length > limit)
-        {
-            self.response_too_large = true;
-            return false;
-        }
-
         self.headers.push((name, value));
+        // Keep size errors available at EOF, but allow later Location and
+        // encoding fields to show that the declared bytes will not be retained.
+        self.response_too_large = self.max_response_size.is_some_and(|limit| {
+            identity_encoded_content_length(&self.headers).is_some_and(|length| length > limit)
+        }) && !response_body_ends_at_headers(self.status)
+            && !self.current_url.as_ref().is_some_and(|url| {
+                next_redirect_url_from_parts(url, self.status, &self.headers, 0)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            });
         true
     }
 
@@ -1406,6 +1416,43 @@ mod tests {
             );
             assert_eq!(cancel.cancel_if_response_pending(), !committed);
         }
+    }
+
+    #[test]
+    fn raw_followed_redirect_keeps_completion_pending_and_final_channels_open() {
+        let cancel = FetchCancelHandle::new();
+        let (start_tx, mut start_rx) = oneshot::channel();
+        let (body_tx, mut body_rx) = mpsc::unbounded_channel();
+        let mut collector = RawStreamingResponseCollector::new(
+            new_shared_browser_cookie_store(),
+            start_tx,
+            body_tx,
+            cancel.clone(),
+        );
+        collector.begin_request(
+            None,
+            Url::parse("https://example.test/start").unwrap(),
+            NetworkCookieRequestContext::top_level_navigation("GET"),
+            None,
+            true,
+            Vec::new(),
+            cancel.response_progress(),
+        );
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"Location: /final\r\n"));
+        assert!(collector.header(b"Content-Length: 0\r\n"));
+        assert!(!collector.header(b"\r\n"));
+        assert!(!collector.started());
+        assert!(matches!(
+            start_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            body_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(!cancel.response_completion_is_committed());
+        assert!(cancel.cancel_if_response_pending());
     }
 
     #[test]
