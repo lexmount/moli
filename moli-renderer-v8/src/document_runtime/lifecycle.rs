@@ -326,13 +326,7 @@ impl DocumentRuntime {
         self.clear_classic_defer_timer_schedule_ranges();
         self.pending_parser_blocking_work = None;
         self.root_document_parser = None;
-        self.delivered_meta_content_security_policies
-            .get_mut()
-            .clear();
-        self.local_worker_policy_sources.get_mut().clear();
-        self.processed_meta_content_security_policy_handles
-            .get_mut()
-            .clear();
+        self.reset_meta_content_security_policy_processing_for_document(self.document_handle());
         self.document_input_stream_opened = true;
         self.set_document_ready_state(DocumentReadyState::Loading);
     }

@@ -66,7 +66,10 @@ fn policy_owner_dispatch_scope(scope: &mut v8::PinScope<'_, '_>) -> OwnerDispatc
     if let Some(popup_id) = active_lightweight_popup_id(scope) {
         return OwnerDispatchScope::LightweightPopup(popup_id);
     }
-    OwnerDispatchScope::Top
+    // A borrowed popup intrinsic enters its realm without an ambient popup
+    // task marker. Its Document still owns code generation and Trusted Types.
+    let global = scope.get_current_context().global(scope);
+    policy_owner_dispatch_scope_for_global(scope, global)
 }
 
 fn policy_owner_dispatch_scope_for_global<'s>(

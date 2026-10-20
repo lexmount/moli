@@ -196,6 +196,7 @@ impl JsContextHost {
             // The input stream changes, but the same Document retains its
             // autofocus processed flag. Retire only its old candidates.
             host.clear_autofocus_candidates(document_handle);
+            host.reset_meta_content_security_policy_processing_for_document(document_handle);
             host.set_lightweight_popup_same_document_url(scope, popup_id, url.clone());
             host.dom_host_mut()
                 .set_html_quirks_mode_for_parser_document(
