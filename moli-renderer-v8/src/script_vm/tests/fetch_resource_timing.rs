@@ -196,7 +196,10 @@ async fn handle_timing_request(
         .decode(PNG)
         .unwrap();
     let mut mime = "image/png";
-    if url.path() == "/release" {
+    if url.path() == "/frame-document" {
+        body = b"<!doctype html><title>frame timing</title>".to_vec();
+        mime = "text/html";
+    } else if url.path() == "/release" {
         gate.notify_one();
         body = b"ok".to_vec();
         mime = "text/plain";
@@ -297,6 +300,15 @@ async fn window_requests_report_resource_timing_for_success_and_network_errors()
     run_resource_timing_fixture(
         include_str!("../../../tests/fixtures/window-request-resource-timing.js"),
         38,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn iframe_attribute_navigation_retains_resource_timing_provenance() {
+    run_resource_timing_fixture(
+        include_str!("../../../tests/fixtures/iframe-attribute-resource-timing.js"),
+        58,
     )
     .await;
 }
