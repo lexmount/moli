@@ -1,4 +1,7 @@
-use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
+use super::super::{
+    ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost,
+    child_frames::PendingChildFrameNavigation,
+};
 use super::{
     ChildDocumentCommitResult, ChildDocumentNavigationInitiator, LocalChildDocumentPreparation,
 };
@@ -13,11 +16,15 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
-        bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: FrameDocumentNavigationLoadBinding,
-        initiator: ChildDocumentNavigationInitiator,
-        initiator_url: Option<Url>,
+        navigation: PendingChildFrameNavigation,
     ) -> Option<ChildDocumentCommitResult> {
+        let PendingChildFrameNavigation {
+            bootstrap,
+            initiator,
+            initiator_url,
+            target_snapshot,
+        } = navigation;
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
         }
@@ -109,10 +116,13 @@ impl JsContextHost {
             if self
                 .start_child_document_load(
                     handle,
-                    bootstrap.clone(),
                     navigation_load,
-                    initiator,
-                    initiator_url,
+                    PendingChildFrameNavigation::new(
+                        bootstrap.clone(),
+                        initiator_url,
+                        initiator,
+                        target_snapshot,
+                    ),
                 )
                 .is_some()
             {

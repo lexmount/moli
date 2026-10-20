@@ -5,6 +5,7 @@
 mod checks;
 mod integrity;
 mod inheritance;
+mod iframe_attribute;
 mod policy;
 mod reporting;
 mod types;
@@ -19,3 +20,5 @@ pub use reporting::*;
 pub use types::*;
 
 pub use inheritance::{ContentSecurityPolicySource, InheritedContentSecurityPolicy};
+
+pub use iframe_attribute::IframeCspAttribute;

@@ -459,6 +459,15 @@ impl JsContextHost {
                         attribute_bootstrap_changed,
                         initial_about_blank_document_is_complete,
                     );
+                let pending_attribute_navigation = if !pending_attribute_bootstrap_commit {
+                    None
+                } else if !is_new && !attribute_bootstrap_changed {
+                    existing
+                        .as_ref()
+                        .and_then(|entry| entry.pending_attribute_navigation.clone())
+                } else {
+                    Some(self.snapshot_child_navigation_target(handle))
+                };
                 let pending_attribute_permissions_policy =
                     pending_attribute_bootstrap_commit.then(|| {
                         self.child_browsing_context_permissions_policy_for_navigation(
@@ -613,7 +622,7 @@ impl JsContextHost {
                         attribute_bootstrap,
                         ignored_attribute_bootstrap,
                         same_document_attribute_bootstrap,
-                        pending_attribute_bootstrap_commit,
+                        pending_attribute_navigation,
                         pending_javascript_initiator_origin,
                         pending_live_navigation: existing.as_ref().and_then(|entry| {
                             entry.pending_live_navigation_for_refresh(attribute_bootstrap_changed)

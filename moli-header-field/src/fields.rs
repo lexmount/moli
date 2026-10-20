@@ -88,6 +88,12 @@ impl HeaderFields {
         self.0.extend(headers);
     }
 
+    /// Remove every field with this name, including differently cased duplicates.
+    pub fn remove_all(&mut self, name: &str) {
+        self.0
+            .retain(|(field_name, _)| !field_name.eq_ignore_ascii_case(name));
+    }
+
     pub fn from_bytes(headers: Vec<(String, Vec<u8>)>) -> Self {
         Self(headers)
     }

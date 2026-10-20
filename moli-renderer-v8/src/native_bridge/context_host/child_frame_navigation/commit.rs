@@ -273,6 +273,7 @@ impl JsContextHost {
                     ChildBrowsingContextBootstrap::Url(url.clone()),
                     initiator_url,
                     navigation_initiator,
+                    self.snapshot_child_navigation_target(handle),
                 ),
                 true,
                 initiator,
@@ -304,6 +305,10 @@ impl JsContextHost {
             return None;
         }
         let attribute_bootstrap = entry_snapshot.attribute_bootstrap().clone();
+        let target_snapshot = entry_snapshot
+            .pending_attribute_navigation()
+            .cloned()
+            .expect("an admitted attribute navigation retains its target snapshot");
         let url = Self::child_browsing_context_navigation_entry_url(&attribute_bootstrap)?;
         let is_attribute_about_blank_noop = matches!(
             attribute_bootstrap,
@@ -359,6 +364,7 @@ impl JsContextHost {
                     ChildBrowsingContextBootstrap::Url(url.clone()),
                     None,
                     ChildDocumentNavigationInitiator::FrameOwnerElement,
+                    target_snapshot,
                 ),
                 true,
                 entry_snapshot.pending_javascript_initiator_origin(),
@@ -386,10 +392,13 @@ impl JsContextHost {
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
             scope,
             handle,
-            attribute_bootstrap,
             navigation_load,
-            ChildDocumentNavigationInitiator::FrameOwnerElement,
-            None,
+            PendingChildFrameNavigation::new(
+                attribute_bootstrap,
+                None,
+                ChildDocumentNavigationInitiator::FrameOwnerElement,
+                target_snapshot,
+            ),
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result
@@ -437,10 +446,13 @@ impl JsContextHost {
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
             scope,
             handle,
-            pending_bootstrap,
             navigation_load,
-            initiator,
-            initiator_url,
+            PendingChildFrameNavigation::new(
+                pending_bootstrap,
+                initiator_url,
+                initiator,
+                pending.target_snapshot,
+            ),
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result
