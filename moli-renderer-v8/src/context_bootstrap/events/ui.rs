@@ -81,15 +81,6 @@ pub(super) struct CompositionEventInit<'s> {
     data: webidl::DomString16,
 }
 
-impl Default for CompositionEventInit<'_> {
-    fn default() -> Self {
-        Self {
-            ui: UiEventInit::default(),
-            data: webidl::DomString16(Vec::new()),
-        }
-    }
-}
-
 impl CompositionEventInit<'_> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
         self.ui.event_flags()
@@ -109,33 +100,14 @@ pub(super) fn parse_ui_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<UiEventInit<'s>> {
-    parse_ui_dictionary(scope, args, "UIEvent")
+    super::parse_event_dictionary(scope, args, "UIEvent")
 }
 
 pub(super) fn parse_composition_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<CompositionEventInit<'s>> {
-    parse_ui_dictionary(scope, args, "CompositionEvent")
-}
-
-pub(super) fn parse_ui_dictionary<'s, T: Default + webidl::WebIdlDictionary<'s>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    constructor: &'static str,
-) -> Option<T> {
-    let parsed = webidl::dictionary_arg(args, 1, webidl::Context::argument(constructor, 2))
-        .and_then(|object| match object {
-            Some(object) => webidl::parse_dictionary_object(scope, object),
-            None => Ok(T::default()),
-        });
-    match parsed {
-        Ok(init) => Some(init),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
+    super::parse_event_dictionary(scope, args, "CompositionEvent")
 }
 
 #[derive(WebApiObject)]
