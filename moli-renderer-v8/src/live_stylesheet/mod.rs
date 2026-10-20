@@ -1096,6 +1096,7 @@ struct FontFaceRuleIdentity {
 #[derive(Debug, Default)]
 pub(crate) struct LiveStylesheetDerivedState {
     serialized_css_text_cache: Mutex<Option<(u64, StdArc<str>)>>,
+    keyframe_index_cache: Mutex<Option<(u64, StdArc<StylesheetKeyframeIndex>)>>,
     dependency_summary_cache: Mutex<
         Option<(
             (u64, u64),
@@ -1105,6 +1106,26 @@ pub(crate) struct LiveStylesheetDerivedState {
 }
 
 impl LiveStylesheetDerivedState {
+    pub(crate) fn keyframe_index(
+        &self,
+        contents_revision: u64,
+        stylesheet: &Stylesheet,
+    ) -> StdArc<StylesheetKeyframeIndex> {
+        let mut cache = self.keyframe_index_cache.lock();
+        if let Some((cached_revision, index)) = cache.as_ref()
+            && *cached_revision == contents_revision
+        {
+            return StdArc::clone(index);
+        }
+        let index = StdArc::new(StylesheetKeyframeIndex::new(stylesheet));
+        *cache = Some((contents_revision, StdArc::clone(&index)));
+        index
+    }
+
+    fn clear_keyframe_index(&self) {
+        self.keyframe_index_cache.lock().take();
+    }
+
     pub(crate) fn serialized_css_text(
         &self,
         contents_revision: u64,
@@ -1935,8 +1956,14 @@ impl LiveStylesheet {
 }
 
 mod import_graph;
+mod keyframes;
 mod mutation;
 mod registry;
+pub(crate) use keyframes::{KEYFRAME_NESTING_DEPTH_LIMIT, StylesheetKeyframeIndex};
+#[cfg(test)]
+pub(crate) use keyframes::{
+    keyframe_index_metrics_for_test, reset_keyframe_index_metrics_for_test,
+};
 pub(crate) use registry::LiveStylesheetRegistry;
 #[cfg(test)]
 mod tests;
