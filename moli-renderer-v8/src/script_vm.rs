@@ -2130,12 +2130,18 @@ impl ScriptVmPageRealmBootstrap {
             stylesheet_task_sender,
             main_parser_continuation_sender,
         ));
-        if initial_environment.is_some() {
-            document_runtime.set_initial_document_policy_container(initial_policy);
-        }
         document_runtime.set_author_styles_disabled(author_styles_disabled);
         document_runtime
             .set_bypass_content_security_policy(document_settings.bypass_content_security_policy);
+        if initial_environment.is_some() {
+            // Every initial Document, including a synchronously staged related
+            // Page, installs its inherited meta policies before entering JS.
+            document_runtime.initialize_inherited_meta_content_security_policies(
+                document_handle,
+                &initial_policy.inherited_meta_content_security_policies,
+            );
+            document_runtime.set_initial_document_policy_container(initial_policy);
+        }
         let (page_context_cancel_tx, page_context_cancel_rx) =
             renderer_page_context_cancel_channel();
 
@@ -2570,14 +2576,6 @@ impl ScriptVmDefaultWorldBootstrap {
             bootstrap
                 .document_runtime
                 .set_main_navigation_policy_container(state.policy_container().clone());
-            bootstrap
-                .document_runtime
-                .initialize_inherited_meta_content_security_policies(
-                    bootstrap.document_runtime.document_handle(),
-                    &state
-                        .policy_container()
-                        .inherited_meta_content_security_policies,
-                );
         }
         bootstrap
             .context_host

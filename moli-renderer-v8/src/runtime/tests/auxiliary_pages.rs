@@ -4,6 +4,69 @@ mod split30_registry_native_owner;
 use super::*;
 use crate::RendererPopupActivationSource;
 
+#[tokio::test]
+async fn related_initial_documents_install_their_own_copied_meta_policy() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let (tx, mut rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse("https://source.test/creator").unwrap(),
+        "<!doctype html><body></body>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    rx.drain();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"
+            const before = open('about:blank', 'before');
+            const policy = document.createElement('meta');
+            policy.setAttribute('http-equiv', 'Content-Security-Policy');
+            policy.setAttribute('content', "script-src 'self' 'unsafe-inline'");
+            document.head.appendChild(policy);
+            const initial = open('about:blank', 'initial');
+            const transient = open('/pending', 'transient');
+            transient.stop();
+            function evaluateIn(target) {
+                try { return target.eval('40 + 2') === 42 ? 'allowed' : 'unexpected'; }
+                catch (error) { return error.name + ':' + (error instanceof target.EvalError); }
+            }
+            const result = [evaluateIn(before), evaluateIn(initial), evaluateIn(transient),
+                initial.document.readyState, transient.document.URL];
+            before.close(); initial.close(); transient.close();
+            JSON.stringify(result);
+        "#
+            .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::Value::String(
+            serde_json::json!([
+                "allowed",
+                "EvalError:true",
+                "EvalError:true",
+                "complete",
+                "about:blank"
+            ])
+            .to_string()
+        )),
+        "new related Documents inherit the delivered policy, while an earlier Document keeps its own copy and errors use the callee realm",
+    );
+    let publications = rx.drain();
+    assert_eq!(popup_activations_for_page(&publications, &page).len(), 3);
+    drop(publications);
+    page.close_async().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn popup_request_context_keeps_the_accepted_source_url_and_referrer_policy() {
     let runtime = JsRuntime::initialize();
