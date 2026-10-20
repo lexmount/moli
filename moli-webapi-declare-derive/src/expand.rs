@@ -1457,26 +1457,22 @@ fn expand_function_builder(
                 )
             })?;
     });
-    let attach_data = data.map(|_| quote!(.data(__webapi_callback_data)));
-    if receiver_access_check {
-        return quote! {{
-            #convert_data
-            let template = ::moli_webapi_declare::v8::FunctionTemplate::builder(#callback)
-                .length(#length)
-                #attach_data
-                .constructor_behavior(::moli_webapi_declare::v8::ConstructorBehavior::Throw)
-                .build(scope);
-            template.set_accept_any_receiver(false);
-            template.get_function(scope)
-        }};
-    }
+    let data = if data.is_some() {
+        quote!(::std::option::Option::Some(__webapi_callback_data))
+    } else {
+        quote!(::std::option::Option::None)
+    };
     quote! {{
         #convert_data
-        ::moli_webapi_declare::v8::Function::builder(#callback)
-            .length(#length)
-            #attach_data
-            .constructor_behavior(::moli_webapi_declare::v8::ConstructorBehavior::Throw)
-            .build(scope)
+        ::moli_webapi_declare::__private::build_object_function(
+            scope,
+            ::moli_webapi_declare::v8::MapFnTo::<
+                ::moli_webapi_declare::v8::FunctionCallback,
+            >::map_fn_to(#callback),
+            #length,
+            #data,
+            #receiver_access_check,
+        )
     }}
 }
 

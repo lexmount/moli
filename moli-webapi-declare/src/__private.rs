@@ -87,3 +87,36 @@ pub fn install_function_template_accessor<'s>(
     let setter = setter.map(|setter| build_function_template_member(scope, setter));
     target.set_accessor_property(property_key, Some(getter), setter, attributes);
 }
+
+/// Creates a declared object method or accessor without repeating V8 builder
+/// code at every installation site. Callback data remains the original value.
+#[doc(hidden)]
+#[inline(never)]
+pub fn build_object_function<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    callback: v8::FunctionCallback,
+    length: i32,
+    data: Option<v8::Local<'s, v8::Value>>,
+    receiver_access_check: bool,
+) -> Option<v8::Local<'s, v8::Function>> {
+    if receiver_access_check {
+        return build_function_template_member(
+            scope,
+            FunctionTemplateMember {
+                callback,
+                length,
+                data,
+                class_name: None,
+                receiver_access_check,
+            },
+        )
+        .get_function(scope);
+    }
+    let builder = v8::Function::builder_raw(callback)
+        .length(length)
+        .constructor_behavior(v8::ConstructorBehavior::Throw);
+    match data {
+        Some(data) => builder.data(data).build(scope),
+        None => builder.build(scope),
+    }
+}
