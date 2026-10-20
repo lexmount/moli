@@ -3162,6 +3162,8 @@ struct GenericCallbacks<T: CallbackMarker> {
     call: (),
     #[webapi(method, callback = Self::call)]
     no_data: (),
+    #[webapi(accessor_property, getter = Self::call)]
+    value: (),
     marker: std::marker::PhantomData<T>,
 }
 
@@ -3219,7 +3221,7 @@ fn generic_callbacks_keep_data_and_return_values_across_nested_v8_entries() {
             r#"
         (() => {
             const template = GenericCallbacks.prototype;
-            if (template.call() !== 10 || object.call() !== 12 || template.noData() !== 7) return false;
+            if (template.call() !== 10 || object.call() !== 12 || template.noData() !== 7 || template.value !== 7) return false;
             if (template.call(n => object.call(m => n + m)) !== 22) return false;
             const error = {};
             try { object.call(() => { throw error; }); return false; }
@@ -3238,7 +3240,7 @@ struct MethodOrder {
     first: (),
     #[webapi(method, callback = sample_now_callback, length = 2, dont_delete)]
     second: (),
-    #[webapi(accessor_property, getter = sample_now_callback)]
+    #[webapi(accessor_property, getter = sample_now_callback, setter = sample_accessor_setter)]
     middle: (),
     #[webapi(method, callback = sample_data_callback, data = "payload")]
     data: (),
@@ -3266,11 +3268,16 @@ fn template_method_runs_preserve_order_descriptors_and_callback_data() {
             if (names.join(',') !== 'first,second,middle,data,last') return false;
             const first = Object.getOwnPropertyDescriptor(p, 'first');
             const second = Object.getOwnPropertyDescriptor(p, 'second');
+            const middle = Object.getOwnPropertyDescriptor(p, 'middle');
+            p.middle = 13;
             return !first.writable && first.configurable && first.enumerable
                 && second.writable && !second.configurable && second.enumerable
                 && p.first.name === 'first' && p.first.length === 0
                 && p.second.name === 'second' && p.second.length === 2
-                && p.middle === 7 && p.data() === 'payload' && p.last() === 7;
+                && middle.get.name === 'get middle' && middle.get.length === 0
+                && middle.set.name === 'set middle' && middle.set.length === 1
+                && p.middle === 7 && p.writtenValue === 13 && p.setterPayload === 'undefined'
+                && p.data() === 'payload' && p.last() === 7;
         })()
     "#
         )

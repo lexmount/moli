@@ -168,3 +168,55 @@ pub fn install_function_template_methods<'s>(
         );
     }
 }
+
+/// Static metadata for a string-named accessor without callback data.
+/// Mappings preserve constant tables while using V8's original call-time path.
+#[doc(hidden)]
+pub struct FunctionTemplateAccessor {
+    pub name: &'static str,
+    pub getter: fn() -> v8::FunctionCallback,
+    pub setter: Option<fn() -> v8::FunctionCallback>,
+    pub enumerable: bool,
+    pub readonly: bool,
+    pub dont_delete: bool,
+    pub getter_receiver_access_check: bool,
+    pub setter_receiver_access_check: bool,
+}
+
+/// Installs a run of accessors while preserving getter/setter function names.
+#[doc(hidden)]
+#[inline(never)]
+pub fn install_function_template_accessors<'s>(
+    scope: &v8::PinScope<'s, '_, ()>,
+    target: v8::Local<'s, v8::ObjectTemplate>,
+    accessors: &[FunctionTemplateAccessor],
+) {
+    for accessor in accessors {
+        let key = v8str(scope, accessor.name);
+        let mut attributes = v8::PropertyAttribute::NONE;
+        if !accessor.enumerable {
+            attributes = attributes | v8::PropertyAttribute::DONT_ENUM;
+        }
+        if accessor.readonly {
+            attributes = attributes | v8::PropertyAttribute::READ_ONLY;
+        }
+        if accessor.dont_delete {
+            attributes = attributes | v8::PropertyAttribute::DONT_DELETE;
+        }
+        let getter = FunctionTemplateMember {
+            callback: (accessor.getter)(),
+            length: 0,
+            data: None,
+            class_name: v8::String::new(scope, &format!("get {}", accessor.name)),
+            receiver_access_check: accessor.getter_receiver_access_check,
+        };
+        let setter = accessor.setter.map(|mapping| FunctionTemplateMember {
+            callback: mapping(),
+            length: 1,
+            data: None,
+            class_name: v8::String::new(scope, &format!("set {}", accessor.name)),
+            receiver_access_check: accessor.setter_receiver_access_check,
+        });
+        install_function_template_accessor(scope, target, key.into(), getter, setter, attributes);
+    }
+}

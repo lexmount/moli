@@ -552,6 +552,70 @@ fn static_template_method(
     }))
 }
 
+fn flush_template_accessors(
+    output: &mut Vec<proc_macro2::TokenStream>,
+    accessors: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if !accessors.is_empty() {
+        let accessors = std::mem::take(accessors);
+        output.push(quote! {
+            ::moli_webapi_declare::__private::install_function_template_accessors(
+                scope, prototype, const { &[#(#accessors),*] },
+            );
+        });
+    }
+}
+
+fn static_template_accessor(
+    field: &Field,
+    attrs: &FieldAttrs,
+    callback_mappings: &mut CallbackMappings,
+) -> Result<Option<proc_macro2::TokenStream>, Error> {
+    if !matches!(attrs.kind, FieldKind::AccessorProperty)
+        || attrs.data.is_some()
+        || attrs.setter_data.is_some()
+        || attrs.symbol.is_some()
+        || attrs.getter_value.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(name) = webapi_field_name_literal(attrs.name.as_ref()) else {
+        return Ok(None);
+    };
+    let getter = attrs.getter.as_ref().ok_or_else(|| {
+        Error::new(
+            field.span(),
+            "`accessor_property` field requires #[webapi(getter = path)]",
+        )
+    })?;
+    let getter = callback_mappings.map(expand_callback(getter, attrs, false));
+    let setter = match attrs.setter.as_ref() {
+        Some(setter) => {
+            let setter = callback_mappings.map(expand_callback(setter, attrs, true));
+            quote!(::std::option::Option::Some(#setter))
+        }
+        None => quote!(::std::option::Option::None),
+    };
+    let enumerable = attrs.enumerable;
+    let readonly = attrs.readonly;
+    let dont_delete = attrs.dont_delete;
+    let receiver = attrs.receiver_access_check.unwrap_or_default();
+    let getter_receiver = receiver.checks_getter();
+    let setter_receiver = receiver.checks_setter();
+    Ok(Some(quote! {
+        ::moli_webapi_declare::__private::FunctionTemplateAccessor {
+            name: #name,
+            getter: #getter,
+            setter: #setter,
+            enumerable: #enumerable,
+            readonly: #readonly,
+            dont_delete: #dont_delete,
+            getter_receiver_access_check: #getter_receiver,
+            setter_receiver_access_check: #setter_receiver,
+        }
+    }))
+}
+
 fn expand_function_template_fields(
     fields: &[DeclaredField],
     template_name: &proc_macro2::TokenStream,
@@ -565,13 +629,22 @@ fn expand_function_template_fields(
         .iter()
         .any(|field| matches!(field.attrs.kind, FieldKind::Alias(_)));
     let mut methods = Vec::new();
+    let mut accessors = Vec::new();
     for (index, DeclaredField { field, attrs }) in fields.iter().enumerate() {
         if can_batch && let Some(method) = static_template_method(field, attrs, callback_mappings)?
         {
+            flush_template_accessors(&mut prototype_methods, &mut accessors);
             methods.push(method);
             continue;
         }
         flush_template_methods(&mut prototype_methods, &mut methods);
+        if can_batch
+            && let Some(accessor) = static_template_accessor(field, attrs, callback_mappings)?
+        {
+            accessors.push(accessor);
+            continue;
+        }
+        flush_template_accessors(&mut prototype_methods, &mut accessors);
         if matches!(attrs.kind, FieldKind::Constant) {
             template_methods.push(expand_function_template_constant_field(
                 field,
@@ -646,6 +719,7 @@ fn expand_function_template_fields(
         }
     }
     flush_template_methods(&mut prototype_methods, &mut methods);
+    flush_template_accessors(&mut prototype_methods, &mut accessors);
     Ok(FunctionTemplateFieldExpansions {
         template_methods,
         prototype_methods,
@@ -2187,7 +2261,7 @@ mod tests {
         let tokens = expand_webapi_function_template(input)
             .expect("template accessors should expand")
             .to_string();
-        assert!(tokens.contains("String :: new (scope , \"get value\")"));
+        assert!(tokens.contains("FunctionTemplateAccessor"));
         assert!(tokens.contains("String :: new (scope , \"get named\")"));
         assert!(tokens.contains("String :: new (scope , \"set named\")"));
         assert!(tokens.contains("install_function_template_accessor"));
