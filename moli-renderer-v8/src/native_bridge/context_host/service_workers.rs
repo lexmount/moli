@@ -1288,6 +1288,14 @@ impl JsContextHost {
         &mut self,
         handle: crate::document_runtime::DomHandle,
     ) -> Option<ServiceWorkerClientId> {
+        if self
+            .frame_owner_store
+            .current_child_document_creation_kind(handle)
+            == Some(crate::frame_owner_model::DocumentCreationKind::Error)
+        {
+            self.unregister_service_worker_child_client(handle);
+            return None;
+        }
         let document_url = self.child_browsing_context_current_url(handle)?;
         let storage_key = service_worker_first_party_storage_key(&document_url);
         let document_owner = self
@@ -1369,6 +1377,14 @@ impl JsContextHost {
         &mut self,
         handle: crate::document_runtime::DomHandle,
     ) {
+        if self
+            .frame_owner_store
+            .current_child_document_creation_kind(handle)
+            == Some(crate::frame_owner_model::DocumentCreationKind::Error)
+        {
+            self.unregister_service_worker_child_client(handle);
+            return;
+        }
         let old_client_id = {
             let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                 return;

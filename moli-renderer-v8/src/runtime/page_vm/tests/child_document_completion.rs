@@ -400,6 +400,93 @@ async fn child_document_response_frame_ancestors_gates_commit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn required_csp_rejection_commits_an_opaque_document_without_rewriting_network_facts() {
+    run_page_vm_async_test(async move {
+        for (status, status_line) in [
+            (200, "HTTP/1.1 200 OK\r\nTiming-Allow-Origin: *"),
+            (204, "HTTP/1.1 204 No Content\r\nTiming-Allow-Origin: *"),
+            (205, "HTTP/1.1 205 Reset Content\r\nTiming-Allow-Origin: *"),
+        ] {
+            let body = "<!doctype html><script>parent.__rejectedBodyRan = true</script>";
+            let (base_url, server) = spawn_path_response_http_server(vec![
+                ("/reject", status_line, body.to_owned(), Duration::ZERO),
+                ("/accepted", "HTTP/1.1 200 OK", "<!doctype html><p id='accepted'>accepted</p>".to_owned(), Duration::ZERO),
+            ]).await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+                &loader, Url::parse(&format!("{base_url}/page.html"))?,
+            );
+            let rejected_url = format!("{base_url}/reject");
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__rejectedBodyRan = false;
+                globalThis.__blockedLoads = 0;
+                globalThis.__policyFrame = document.createElement('iframe');
+                __policyFrame.id = 'required-policy-frame';
+                __policyFrame.csp = "default-src 'none'";
+                __policyFrame.onload = () => {{ __blockedLoads++; }};
+                __policyFrame.src = {rejected_url:?};
+                document.body.appendChild(__policyFrame);
+                globalThis.__policyProxy = __policyFrame.contentWindow;
+            "#))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::NavigationCommit, "required policy rejection start",
+            ).await;
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, "required policy response").await;
+            page_vm.apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                .expect("the blocked response must still apply to its current owner");
+            run_child_interactive_domcontentloaded_then_host_load_for_wait(&mut page_vm, "blocked error Document load").await;
+            assert_eq!(page_vm.vm_mut().eval(r#"(() => {
+                if (__policyFrame.contentDocument !== null || __policyFrame.contentWindow !== __policyProxy || __rejectedBodyRan || __blockedLoads !== 1) return false;
+                try { void __policyProxy.location.href; } catch (e) { return e.name === 'SecurityError'; }
+                return false;
+            })()"#)?, "true", "an inert opaque error Document must replace the child while retaining WindowProxy identity and dispatching load");
+            assert!(page_vm.take_completed_child_document_networks().is_empty(),
+                "the committed error Document carries its response in the navigation projection, not the historical-only network queue");
+            let navigations = page_vm.take_completed_child_frame_navigation_loads();
+            assert_eq!(navigations.len(), 1);
+            assert!(navigations[0].security_origin_opaque);
+            let network = navigations[0].document_network.as_ref().expect("blocked navigation must retain its real response");
+            assert_eq!(network.status, status);
+            assert_eq!(network.request_url, rejected_url);
+            assert!(network.resource_timing_allowed && network.resource_timing_body_visible);
+            assert!(network.resource_timing_response.is_some());
+            let expected_body = if status == 200 { body.as_bytes() } else { b"" };
+            assert_eq!(network.response_body.as_ref().unwrap().try_bytes()?.as_ref(), expected_body);
+            let entries: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval(
+                &format!("JSON.stringify(performance.getEntriesByName({rejected_url:?}, 'resource').map(e => e.toJSON()))"),
+            )?)?;
+            let entries = entries.as_array().unwrap();
+            assert_eq!(entries.len(), 1);
+            let entry = &entries[0];
+            for name in ["responseStatus", "requestStart", "responseStart", "transferSize", "encodedBodySize", "decodedBodySize"] {
+                assert_eq!(entry[name], 0, "blocked Document {name} must be hidden even with same-origin/TAO permission");
+            }
+            assert_eq!(entry["nextHopProtocol"], "");
+            assert!(entry["responseEnd"].as_f64().unwrap() >= entry["fetchStart"].as_f64().unwrap());
+            let accepted_url = format!("{base_url}/accepted");
+            page_vm.vm_mut().eval(&format!("__policyFrame.removeAttribute('csp'); __policyFrame.src = {accepted_url:?};"))?;
+            let retired_navigation = page_vm.run_child_navigation_commit_body_for_test()?
+                .expect("the superseded navigation retains its exact stale-discard turn");
+            assert!(matches!(retired_navigation.action.target_effect,
+                crate::page_task_queue::PageChildNavigationCommitTargetEffect::DiscardedStaleOwner { current_owner: Some(_) }));
+            let replacement_navigation = page_vm.run_child_navigation_commit_body_for_test()?
+                .expect("the replacement navigation retains its own current-owner turn");
+            assert!(matches!(replacement_navigation.action.target_effect,
+                crate::page_task_queue::PageChildNavigationCommitTargetEffect::AppliedToCurrentOwner));
+            let handle = page_vm.vm().element_handle_by_id_for_test("required-policy-frame").unwrap();
+            assert!(page_vm.vm().current_child_document_navigation_fetch_target(handle).is_some(),
+                "navigation from HTTP {status} error Document must start a real request");
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, &format!("response after HTTP {status} error Document")).await;
+            page_vm.apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?.expect("replacement response");
+            run_child_interactive_domcontentloaded_then_host_load_for_wait(&mut page_vm, "accepted replacement Document load").await;
+            assert_eq!(page_vm.vm_mut().eval("String(__policyFrame.contentWindow === __policyProxy && __policyProxy.document.getElementById('accepted').textContent === 'accepted' && __blockedLoads === 2)")?, "true", "a later accepted navigation must restore its own tuple origin, not inherit the error Document's opaque origin");
+            server.await.expect("policy response server should finish");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("required CSP blocked Document lifecycle test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_request() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&dns_failure_fetch_config())

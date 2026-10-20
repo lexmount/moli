@@ -1717,9 +1717,47 @@ pub(super) struct LoadedChildDocument {
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
+    /// Preserve the physical response, but commit only an inert error Document.
+    BlockedResponse(Box<LoadedChildDocument>),
     /// The response completed without replacing the active Document. Its
     /// network facts still belong to the original navigation request.
     IgnoredNavigation(Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>),
+}
+
+impl ChildDocumentLoadOutcome {
+    pub(super) fn blocked_response(
+        final_url: Url,
+        document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
+        required_content_security_policy: Option<
+            crate::content_security_policy::IframeCspAttribute,
+        >,
+    ) -> Self {
+        Self::BlockedResponse(Box::new(LoadedChildDocument {
+            final_url,
+            policy_container: DocumentPolicyContainer {
+                required_content_security_policy,
+                ..Default::default()
+            },
+            content_type: Some("text/html".to_owned()),
+            character_set: "UTF-8".to_owned(),
+            content: "<!DOCTYPE html><html><head></head><body></body></html>"
+                .to_owned()
+                .into(),
+            response_links: Default::default(),
+            document_network,
+        }))
+    }
+
+    pub(super) fn from_prepared_document(
+        document: LoadedChildDocument,
+        creation_kind: crate::frame_owner_model::DocumentCreationKind,
+    ) -> Self {
+        if creation_kind == crate::frame_owner_model::DocumentCreationKind::Error {
+            Self::BlockedResponse(Box::new(document))
+        } else {
+            Self::Loaded(Box::new(document))
+        }
+    }
 }
 
 /// Immutable frame/protocol attribution captured before a child-document
@@ -1798,7 +1836,10 @@ impl ChildDocumentLoadCompletion {
         &self,
     ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
         match &self.result {
-            Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
+            Ok(
+                ChildDocumentLoadOutcome::Loaded(loaded)
+                | ChildDocumentLoadOutcome::BlockedResponse(loaded),
+            ) => loaded.document_network.as_ref(),
             Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
             Err(_) => None,
         }

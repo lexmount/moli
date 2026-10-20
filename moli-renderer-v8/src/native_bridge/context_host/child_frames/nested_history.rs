@@ -49,7 +49,7 @@ enum ChildHistoryKey {
 #[derive(Clone, Debug)]
 pub(super) struct ChildHistoryRecord {
     seed: NavigationHistoryEntrySeed,
-    resources: HashMap<NavigationHistoryDocumentId, Arc<srcdoc_history::SrcdocHistoryResource>>,
+    resources: HashMap<NavigationHistoryDocumentId, Arc<local_history::LocalHistoryResource>>,
     positions: NavigableHistory,
 }
 
@@ -246,7 +246,7 @@ impl JsContextHost {
             &record.positions.entries,
         );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.srcdoc_history = record.resources;
+            entry.local_history = record.resources;
             entry.restored_history_positions = Some(record.positions);
             entry.restoring_history = true;
         }
@@ -311,7 +311,7 @@ impl JsContextHost {
         }
         let record = ChildHistoryRecord {
             seed,
-            resources: entry.srcdoc_history.clone(),
+            resources: entry.local_history.clone(),
             positions,
         };
         store.records.lock().insert(identity, record);
