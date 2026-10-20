@@ -671,8 +671,7 @@ impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn set_child_browsing_context_pending_navigation(
         &mut self,
         handle: DomHandle,
-        bootstrap: ChildBrowsingContextBootstrap,
-        initiator_url: Option<Url>,
+        pending_navigation: PendingChildFrameNavigation,
         reflects_window_state: bool,
         initiator: Option<super::super::OwnerDispatchScope>,
     ) -> Option<crate::frame_owner_model::FrameDocumentNavigationLoadBinding> {
@@ -681,13 +680,15 @@ impl JsContextHost {
         };
         self.cancel_planned_form_navigation_for_url(
             super::super::OwnerDispatchScope::Child(handle),
-            Self::child_browsing_context_bootstrap_url(&bootstrap).as_ref(),
+            Self::child_browsing_context_bootstrap_url(&pending_navigation.bootstrap).as_ref(),
         );
         self.abort_child_document_parser_for_navigation(handle);
         let ancestor_origins_referrer_policy =
             self.child_ancestor_origins_referrer_policy_from_owner_attribute(handle);
-        let permissions_policy =
-            self.child_browsing_context_permissions_policy_for_navigation(handle, &bootstrap);
+        let permissions_policy = self.child_browsing_context_permissions_policy_for_navigation(
+            handle,
+            &pending_navigation.bootstrap,
+        );
         let Some(navigation) = self.replace_child_navigation_load(handle) else {
             tracing::warn!(
                 ?handle,
@@ -695,7 +696,7 @@ impl JsContextHost {
             );
             return None;
         };
-        let javascript_initiator_origin = match &bootstrap {
+        let javascript_initiator_origin = match &pending_navigation.bootstrap {
             ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript" => {
                 initiator.and_then(|source| self.window_access_origin_for_dispatch_scope(source))
             }
@@ -705,8 +706,7 @@ impl JsContextHost {
         entry.set_document_permissions_policy(permissions_policy);
         entry.set_ancestor_origins_referrer_policy_snapshot(ancestor_origins_referrer_policy);
         entry.set_pending_navigation(
-            bootstrap,
-            initiator_url,
+            pending_navigation,
             reflects_window_state,
             javascript_initiator_origin,
         );

@@ -12,5 +12,5 @@ pub(super) use self::iframe::{
 };
 pub(in crate::native_bridge) use self::iframe::{
     iframe_uses_detached_content_cache, live_frame_owner_content_window_for_handle,
-    update_iframe_snapshot_navigation,
+    update_iframe_snapshot_navigation, update_iframe_snapshot_navigation_utf16,
 };

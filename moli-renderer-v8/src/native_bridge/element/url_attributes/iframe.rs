@@ -3,7 +3,7 @@ use crate::util::get_private_value;
 use url::Url;
 
 use super::super::super::JsContextHost;
-use super::super::set_reflected_attribute;
+use super::super::set_reflected_attribute_utf16;
 use super::helpers::resolve_url_like_attribute;
 
 const CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT: &str = "__lmChildDocumentContextHandle";
@@ -14,10 +14,24 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     handle: DomHandle,
     value: &str,
 ) {
+    update_iframe_snapshot_navigation_utf16(
+        scope,
+        runtime_ptr,
+        handle,
+        value.encode_utf16().collect(),
+    );
+}
+
+pub(in crate::native_bridge) fn update_iframe_snapshot_navigation_utf16(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    units: Vec<u16>,
+) {
     let runtime = unsafe { &mut *runtime_ptr };
     let previous_seed_snapshot = runtime.child_browsing_context_navigation_seed_snapshot(handle);
     let previous_attribute_url = runtime.child_frame_attribute_bootstrap_url(handle);
-    set_reflected_attribute(scope, runtime_ptr, handle, "src", value);
+    set_reflected_attribute_utf16(scope, runtime_ptr, handle, "src", units);
     let runtime = unsafe { &mut *runtime_ptr };
     if !runtime.child_browsing_context_is_live(handle)
         || !runtime.dom_host().is_html_element_named(handle, "iframe")
@@ -59,7 +73,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
         let replace_current = Url::parse(&navigation_target).ok().is_none_or(|url| {
             runtime.child_frame_attribute_navigation_replaces_current_entry(handle, &url)
         });
-        if runtime.queue_child_browsing_context_navigation_from_existing_seed(
+        if runtime.queue_child_browsing_context_attribute_navigation_from_existing_seed(
             handle,
             &navigation_target,
             replace_current,
@@ -69,7 +83,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
         }
     }
 
-    if runtime.queue_child_browsing_context_navigation_from_existing_seed(
+    if runtime.queue_child_browsing_context_attribute_navigation_from_existing_seed(
         handle,
         &navigation_target,
         true,

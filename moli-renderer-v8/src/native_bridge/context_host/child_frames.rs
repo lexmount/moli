@@ -4,7 +4,8 @@ use super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, ChildFrameAttachmentSnapshot,
     JsContextHost, NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
-    child_documents::CompletedFrameOwnerResourceTiming, window_security_tokens::WindowAccessOrigin,
+    child_documents::{ChildDocumentNavigationInitiator, CompletedFrameOwnerResourceTiming},
+    window_security_tokens::WindowAccessOrigin,
 };
 use crate::{
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
@@ -63,8 +64,7 @@ pub(super) struct ChildBrowsingContextEntry {
     // which can still complete after the fragment change.
     same_document_attribute_bootstrap: Option<ChildBrowsingContextBootstrap>,
     pending_attribute_bootstrap_commit: bool,
-    pending_live_navigation: Option<ChildBrowsingContextBootstrap>,
-    pending_live_navigation_initiator_url: Option<Url>,
+    pending_live_navigation: Option<PendingChildFrameNavigation>,
     // Snapshot at navigation admission. The target's origin is checked again
     // when queued javascript: code is about to execute.
     pending_javascript_initiator_origin: Option<WindowAccessOrigin>,
@@ -91,6 +91,29 @@ pub(super) struct ChildBrowsingContextEntry {
     service_worker_client_id: Option<ServiceWorkerClientId>,
     pending_service_worker_client_id: Option<ServiceWorkerClientId>,
     pending_service_worker_client_navigation: Option<ServiceWorkerClientNavigateContinuation>,
+}
+
+/// Provenance belongs to the queued navigation, including when an attribute
+/// setter reuses the history machinery for an already loaded child Document.
+#[derive(Debug, Clone)]
+pub(super) struct PendingChildFrameNavigation {
+    pub(super) bootstrap: ChildBrowsingContextBootstrap,
+    pub(super) initiator_url: Option<Url>,
+    pub(super) initiator: ChildDocumentNavigationInitiator,
+}
+
+impl PendingChildFrameNavigation {
+    pub(super) fn new(
+        bootstrap: ChildBrowsingContextBootstrap,
+        initiator_url: Option<Url>,
+        initiator: ChildDocumentNavigationInitiator,
+    ) -> Self {
+        Self {
+            bootstrap,
+            initiator_url,
+            initiator,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1000,7 +1023,6 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn clear_pending_form_submission_navigation(&mut self) {
         self.pending_live_navigation = None;
-        self.pending_live_navigation_initiator_url = None;
         self.pending_javascript_initiator_origin = None;
     }
 
@@ -1050,33 +1072,26 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn pending_live_navigation(&self) -> Option<ChildBrowsingContextBootstrap> {
+        self.pending_live_navigation
+            .as_ref()
+            .map(|navigation| navigation.bootstrap.clone())
+    }
+
+    pub(super) fn pending_navigation(&self) -> Option<PendingChildFrameNavigation> {
         self.pending_live_navigation.clone()
     }
 
     pub(super) fn pending_live_navigation_for_refresh(
         &self,
         attribute_bootstrap_changed: bool,
-    ) -> Option<ChildBrowsingContextBootstrap> {
+    ) -> Option<PendingChildFrameNavigation> {
         (!attribute_bootstrap_changed)
-            .then_some(self.pending_live_navigation())
+            .then_some(self.pending_navigation())
             .flatten()
-    }
-
-    pub(super) fn pending_live_navigation_initiator_url(&self) -> Option<Url> {
-        self.pending_live_navigation_initiator_url.clone()
     }
 
     pub(super) fn pending_javascript_initiator_origin(&self) -> Option<WindowAccessOrigin> {
         self.pending_javascript_initiator_origin.clone()
-    }
-
-    pub(super) fn pending_live_navigation_initiator_url_for_refresh(
-        &self,
-        attribute_bootstrap_changed: bool,
-    ) -> Option<Url> {
-        (!attribute_bootstrap_changed)
-            .then_some(self.pending_live_navigation_initiator_url())
-            .flatten()
     }
 
     pub(super) fn pending_live_navigation_reflects_window_state(&self) -> bool {
@@ -1098,14 +1113,12 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn set_pending_navigation(
         &mut self,
-        bootstrap: ChildBrowsingContextBootstrap,
-        initiator_url: Option<Url>,
+        navigation: PendingChildFrameNavigation,
         reflects_window_state: bool,
         javascript_initiator_origin: Option<WindowAccessOrigin>,
     ) {
         self.pending_attribute_bootstrap_commit = false;
-        self.pending_live_navigation = Some(bootstrap);
-        self.pending_live_navigation_initiator_url = initiator_url;
+        self.pending_live_navigation = Some(navigation);
         self.pending_live_navigation_reflects_window_state = reflects_window_state;
         self.pending_javascript_initiator_origin = javascript_initiator_origin;
     }
@@ -1113,7 +1126,6 @@ impl ChildBrowsingContextEntry {
     pub(super) fn clear_pending_navigation(&mut self) {
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = None;
-        self.pending_live_navigation_initiator_url = None;
         self.pending_javascript_initiator_origin = None;
         self.pending_live_navigation_reflects_window_state = false;
     }
@@ -1124,10 +1136,9 @@ impl ChildBrowsingContextEntry {
                 self.attribute_bootstrap,
                 ChildBrowsingContextBootstrap::Url(ref url) if url.scheme() == "javascript"
             ))
-            || matches!(
-                self.pending_live_navigation,
-                Some(ChildBrowsingContextBootstrap::Url(ref url)) if url.scheme() == "javascript"
-            )
+            || self.pending_live_navigation.as_ref().is_some_and(|navigation| {
+                matches!(navigation.bootstrap, ChildBrowsingContextBootstrap::Url(ref url) if url.scheme() == "javascript")
+            })
     }
 
     pub(super) fn service_worker_client_id(&self) -> Option<ServiceWorkerClientId> {
