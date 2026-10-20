@@ -118,6 +118,7 @@ struct ssl_connect_data {
   struct cf_call_data call_data;    /* data handle used in current call */
   struct Curl_ssl_session *session; /* TLS session in use or NULL */
   struct curltime handshake_done;   /* time when handshake finished */
+  curl_off_t moli_handshake_start;
   struct {
     char *alpn;                     /* ALPN value or NULL */
   } negotiated;

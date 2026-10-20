@@ -52,6 +52,7 @@
 #endif
 
 #include "curlx/timeval.h"
+#include <curl/moli_timing.h>
 
 #include "api.h"
 #include "cookie.h"
@@ -257,6 +258,9 @@ struct ip_quadruple {
  * unique for an entire connection.
  */
 struct connectdata {
+  /* Moli observations belong to the selected physical connection, including
+   * when concurrent HTTP/2 streams did not create that connection themselves. */
+  struct curl_moli_connection_timing moli_timing;
   curl_off_t connection_id; /* Contains a unique number to make it easier to
                                track the connections in the log output */
 
@@ -430,6 +434,8 @@ struct pgrs_dir {
 };
 
 struct Progress {
+  /* Copy before request dispatch: the connection may be gone at completion. */
+  struct curl_moli_connection_timing moli_connection;
   struct curltime now; /* current time of processing */
   struct curltime start; /* when transfer was initialized, set once */
 
@@ -910,6 +916,10 @@ struct UserDefined {
   uint32_t upload_buffer_size; /* size of upload buffer to use, keep it >=
                                   CURL_MAX_WRITE_SIZE */
   void *private_data; /* application-private data */
+  curl_moli_clock_callback moli_clock;
+  curl_off_t moli_dns_start;
+  curl_off_t moli_dns_end;
+  bool moli_has_dns;
 #ifndef CURL_DISABLE_HTTP
   struct curl_slist *http200aliases; /* linked list of aliases for http200 */
 #endif

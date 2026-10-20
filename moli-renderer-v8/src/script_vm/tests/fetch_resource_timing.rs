@@ -171,11 +171,22 @@ async fn handle_timing_request(
         return;
     }
     let key = get("key").to_owned();
+    let is_preflight = request.starts_with("OPTIONS ");
     let gate = {
         let mut state = state.lock();
         state.seen.insert(key.clone());
+        if is_preflight {
+            state.seen.insert(format!("OPTIONS:{key}"));
+        }
         state.gates.entry(key).or_default().clone()
     };
+    if is_preflight {
+        if get("preflight-gate") == "1" {
+            gate.notified().await;
+        }
+        let _ = socket.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: x-timing\r\nConnection: close\r\n\r\n").await;
+        return;
+    }
     if url.path() == "/fail" {
         return;
     }
@@ -259,6 +270,15 @@ async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
     run_resource_timing_fixture(
         include_str!("../../../tests/fixtures/fetch-resource-timing.js"),
         36,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+async fn resource_connection_phases_survive_lazy_realms_and_native_json() {
+    run_resource_timing_fixture(
+        include_str!("../../../tests/fixtures/resource-timing-connection-phases.js"),
+        38,
     )
     .await;
 }

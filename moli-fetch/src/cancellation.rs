@@ -36,14 +36,21 @@ pub struct FetchResponseBodySizes {
 }
 
 impl ResponseProgress {
-    pub(crate) fn mark_request_started(&self) {
+    pub(crate) fn mark_fetch_started(&self, start: Instant) {
+        self.inner.timing.lock().fetch_started_at = Some(start);
+    }
+
+    pub(crate) fn mark_request_started(&self, connection: Option<moli_curl::CurlConnectionTiming>) {
         let now = Instant::now();
         let mut timing = self.inner.timing.lock();
         timing.request_started_at.get_or_insert(now);
-        timing
+        let observed = timing
             .connection_timing
-            .get_or_insert_with(Default::default)
-            .request_prepared_at = Some(now);
+            .get_or_insert_with(Default::default);
+        observed.request_prepared_at = Some(now);
+        if connection.is_some() {
+            observed.connection = connection;
+        }
     }
 
     pub(crate) fn mark_tls_context_started(&self) {
@@ -60,8 +67,9 @@ impl ResponseProgress {
         &self,
         dns: Option<moli_curl::CurlDnsTiming>,
         curl: Option<FetchCurlTiming>,
+        selected_connection: Option<moli_curl::CurlConnectionTiming>,
     ) {
-        if dns.is_none() && curl.is_none() {
+        if dns.is_none() && curl.is_none() && selected_connection.is_none() {
             return;
         }
         let mut timing = self.inner.timing.lock();
@@ -70,6 +78,7 @@ impl ResponseProgress {
             .get_or_insert_with(Default::default);
         connection.shared_dns = dns;
         connection.curl = curl;
+        connection.connection = selected_connection.or(connection.connection);
     }
 
     pub(crate) fn curl_timing(&self) -> Option<FetchCurlTiming> {
@@ -175,6 +184,7 @@ impl ResponseProgress {
 /// Native response boundaries shared with observers of the selected transfer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FetchResponseTiming {
+    fetch_started_at: Option<Instant>,
     body_sizes: Option<FetchResponseBodySizes>,
     request_started_at: Option<Instant>,
     first_interim_response_started_at: Option<Instant>,
@@ -185,6 +195,12 @@ pub struct FetchResponseTiming {
 }
 
 impl FetchResponseTiming {
+    /// Start of the selected HTTP hop, retained through transparent transport
+    /// retries. This is not a libcurl attempt's start or a preflight's clock.
+    pub fn fetch_started_at(self) -> Option<Instant> {
+        self.fetch_started_at
+    }
+
     pub fn body_sizes(self) -> Option<FetchResponseBodySizes> {
         self.body_sizes
     }
@@ -225,6 +241,7 @@ impl CachedResponseBodyTiming {
 #[derive(Debug, Default)]
 struct FetchLifecycleState {
     cancellation: CancellationToken,
+    fetch_hop_started_at: Option<Instant>,
     // This lock protects selection, while the selected token arbitrates
     // transport completion and consumer cancellation without taking the lock.
     response_progress: Mutex<ResponseProgress>,
@@ -241,7 +258,7 @@ pub struct FetchCancelHandle {
 impl FetchCancelHandle {
     #[cfg(test)]
     fn mark_request_started(&self) {
-        self.response_progress().mark_request_started();
+        self.response_progress().mark_request_started(None);
     }
 
     #[cfg(test)]
@@ -296,6 +313,23 @@ impl FetchCancelHandle {
                 ..FetchLifecycleState::default()
             }),
         }
+    }
+
+    /// Authority for one logical HTTP hop, created before its preflight. The
+    /// preflight keeps independent response progress; transparent retries of
+    /// the actual request retain this clock.
+    pub fn child_for_fetch_hop(&self) -> Self {
+        Self {
+            state: Arc::new(FetchLifecycleState {
+                cancellation: self.state.cancellation.child_token(),
+                fetch_hop_started_at: Some(Instant::now()),
+                ..FetchLifecycleState::default()
+            }),
+        }
+    }
+
+    pub(crate) fn fetch_hop_started_at(&self) -> Option<Instant> {
+        self.state.fetch_hop_started_at
     }
 
     /// Selects the accepted final response's transport progress. This shares
@@ -391,7 +425,7 @@ mod tests {
             completed_at,
         };
         first.mark_tls_context_started();
-        first.mark_request_started();
+        first.mark_request_started(None);
         let curl = FetchCurlTiming {
             name_lookup: Some(Duration::from_micros(17)),
             connect: Some(Duration::from_micros(213)),
@@ -400,7 +434,7 @@ mod tests {
             new_connections: Some(1),
             ..Default::default()
         };
-        first.record_connection_timing(Some(dns), Some(curl));
+        first.record_connection_timing(Some(dns), Some(curl), None);
         let observed = selected.response_timing().connection_timing().unwrap();
         assert_eq!(observed.shared_dns, Some(dns));
         assert_eq!(observed.curl, Some(curl));
@@ -409,13 +443,13 @@ mod tests {
 
         let second = selected.begin_response_progress();
         assert!(selected.response_timing().connection_timing().is_none());
-        first.mark_request_started();
-        first.record_connection_timing(Some(dns), Some(curl));
+        first.mark_request_started(None);
+        first.record_connection_timing(Some(dns), Some(curl), None);
         assert!(selected.response_timing().connection_timing().is_none());
 
         let tee = FetchCancelHandle::new();
         tee.adopt_response_progress(&selected);
-        second.record_connection_timing(None, Some(curl));
+        second.record_connection_timing(None, Some(curl), None);
         assert_eq!(
             tee.response_timing().connection_timing(),
             selected.response_timing().connection_timing()
@@ -443,10 +477,10 @@ mod tests {
     fn later_preparation_keeps_the_first_request_boundary() {
         let handle = FetchCancelHandle::new();
         let progress = handle.response_progress();
-        progress.mark_request_started();
+        progress.mark_request_started(None);
         let first = handle.response_timing().request_started_at().unwrap();
         let second_before = Instant::now();
-        progress.mark_request_started();
+        progress.mark_request_started(None);
         let timing = handle.response_timing();
         assert_eq!(timing.request_started_at(), Some(first));
         assert!(

@@ -506,6 +506,20 @@ impl StreamingRawResponse {
         (head, ResponseBody::StreamingBytes(Box::new(self)))
     }
 
+    /// Retire an unused head without waiting for an unfinished body. If native
+    /// IO already completed, acknowledge its terminal before Drop can cancel
+    /// the handle and unnecessarily destroy a reusable connection. Cached
+    /// representations have no remaining wire transfer to acknowledge.
+    pub async fn discard_unused(mut self) {
+        if self.cache_state == crate::ResponseCacheState::None
+            && self.cancel_handle.response_completion_is_committed()
+        {
+            // A later body/protocol error does not change the already observed
+            // head. Consumers requiring body validation must use finish().
+            let _ = self.finish().await;
+        }
+    }
+
     /// Drains the streamed body and materializes the compatibility raw
     /// response.
     ///

@@ -69,6 +69,8 @@ async fn html_redirect_timing_belongs_to_the_final_transfer() -> Result<()> {
     assert!(response.next_chunk().await.is_none());
     response.finish().await?;
     let timing = cancel.response_timing();
+    assert!(timing.fetch_started_at().unwrap() >= redirect_finished_after);
+    assert!(timing.fetch_started_at().unwrap() <= timing.request_started_at().unwrap());
     assert!(timing.request_started_at().unwrap() >= redirect_finished_after);
     assert!(timing.response_started_at().unwrap() >= redirect_finished_after);
     assert!(timing.first_interim_response_started_at().is_none());
@@ -106,6 +108,8 @@ async fn html_response_timing_finishes_without_consumer_polling() -> Result<()> 
         let headers = cancel.response_timing();
         assert!(headers.response_started_at().is_some());
         assert!(headers.response_end_at().is_none());
+        assert!(headers.connection_timing().unwrap().connection.is_some());
+        assert!(headers.connection_timing().unwrap().curl.is_none());
         release_body.send(())?;
         // Keep the consumer's executor occupied while native threads finish.
         // Body completion can commit before curl publishes terminal statistics.
