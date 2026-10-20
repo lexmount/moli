@@ -316,11 +316,36 @@ fn resource_timing_content_type(headers: &[(String, Vec<u8>)]) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ResourceConnectionTiming {
+    domain_lookup_start: f64,
+    domain_lookup_end: f64,
+    connect_start: f64,
+    connect_end: f64,
+    secure_connection_start: Option<f64>,
+}
+
+impl ResourceConnectionTiming {
+    fn at(start: f64, secure: bool) -> Self {
+        Self {
+            domain_lookup_start: start,
+            domain_lookup_end: start,
+            connect_start: start,
+            connect_end: start,
+            secure_connection_start: secure.then_some(start),
+        }
+    }
+}
+
 pub(crate) struct ResourcePerformanceEntry {
     preload_state: moli_fetch::ResponsePreloadState,
     name: String,
     initiator_type: String,
     start_unix_millis: Option<f64>,
+    fetch_start_unix_millis: Option<f64>,
+    redirect_start_unix_millis: Option<f64>,
+    redirect_end_unix_millis: Option<f64>,
+    connection_timing: Option<ResourceConnectionTiming>,
     end_unix_millis: Option<f64>,
     response_start_unix_millis: Option<f64>,
     request_start_unix_millis: Option<f64>,
@@ -405,24 +430,6 @@ impl ResourcePerformanceEntry {
         )
     }
 
-    pub(crate) fn from_fetch_response(
-        name: impl Into<String>,
-        initiator_type: &'static str,
-        start_unix_millis: Option<f64>,
-        response: &moli_fetch::Response,
-    ) -> Self {
-        Self::from_response_parts(
-            name,
-            initiator_type,
-            start_unix_millis,
-            response.status,
-            &response.headers,
-            response.body_bytes().len() as f64,
-            response.cache_state,
-            response.preload_state.clone(),
-        )
-    }
-
     fn from_response_parts(
         name: impl Into<String>,
         initiator_type: &'static str,
@@ -446,6 +453,10 @@ impl ResourcePerformanceEntry {
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             start_unix_millis,
+            fetch_start_unix_millis: None,
+            redirect_start_unix_millis: None,
+            redirect_end_unix_millis: None,
+            connection_timing: None,
             end_unix_millis: None,
             response_start_unix_millis: None,
             request_start_unix_millis: None,
@@ -515,6 +526,10 @@ impl ResourcePerformanceEntry {
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             start_unix_millis,
+            fetch_start_unix_millis: None,
+            redirect_start_unix_millis: None,
+            redirect_end_unix_millis: None,
+            connection_timing: None,
             end_unix_millis: None,
             response_start_unix_millis: None,
             request_start_unix_millis: None,
@@ -593,11 +608,34 @@ fn append_resource_performance_entry<'s>(
         &entry.content_encoding,
     );
     if let Some(end_time) = end_time {
+        let fetch_start = entry.fetch_start_unix_millis.map_or(start_time, |start| {
+            moli_time::coarsened_dom_time_millis(start - time_origin).clamp(start_time, end_time)
+        });
+        for (slot, value) in [
+            (
+                PERFORMANCE_RESOURCE_REDIRECT_START_SLOT,
+                entry.redirect_start_unix_millis,
+            ),
+            (
+                PERFORMANCE_RESOURCE_REDIRECT_END_SLOT,
+                entry.redirect_end_unix_millis,
+            ),
+        ] {
+            if let Some(value) = value {
+                set_performance_entry_slot_number(
+                    scope,
+                    resource,
+                    slot,
+                    moli_time::coarsened_dom_time_millis(value - time_origin)
+                        .clamp(start_time, fetch_start),
+                );
+            }
+        }
         set_performance_entry_slot_number(
             scope,
             resource,
             PERFORMANCE_RESOURCE_FETCH_START_SLOT,
-            start_time,
+            fetch_start,
         );
         set_performance_entry_slot_number(
             scope,
@@ -607,7 +645,7 @@ fn append_resource_performance_entry<'s>(
         );
         if let Some(response_start) = entry.response_start_unix_millis {
             let response_start = moli_time::coarsened_dom_time_millis(response_start - time_origin)
-                .clamp(start_time, end_time);
+                .clamp(fetch_start, end_time);
             set_performance_entry_slot_number(
                 scope,
                 resource,
@@ -616,6 +654,32 @@ fn append_resource_performance_entry<'s>(
             );
         }
         for (slot, value) in [
+            (
+                PERFORMANCE_RESOURCE_DOMAIN_LOOKUP_START_SLOT,
+                entry
+                    .connection_timing
+                    .map(|timing| timing.domain_lookup_start),
+            ),
+            (
+                PERFORMANCE_RESOURCE_DOMAIN_LOOKUP_END_SLOT,
+                entry
+                    .connection_timing
+                    .map(|timing| timing.domain_lookup_end),
+            ),
+            (
+                PERFORMANCE_RESOURCE_CONNECT_START_SLOT,
+                entry.connection_timing.map(|timing| timing.connect_start),
+            ),
+            (
+                PERFORMANCE_RESOURCE_CONNECT_END_SLOT,
+                entry.connection_timing.map(|timing| timing.connect_end),
+            ),
+            (
+                PERFORMANCE_RESOURCE_SECURE_CONNECTION_START_SLOT,
+                entry
+                    .connection_timing
+                    .and_then(|timing| timing.secure_connection_start),
+            ),
             (
                 PERFORMANCE_RESOURCE_REQUEST_START_SLOT,
                 entry.request_start_unix_millis,
@@ -635,7 +699,7 @@ fn append_resource_performance_entry<'s>(
                     resource,
                     slot,
                     moli_time::coarsened_dom_time_millis(value - time_origin)
-                        .clamp(start_time, end_time),
+                        .clamp(fetch_start, end_time),
                 );
             }
         }

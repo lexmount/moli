@@ -209,8 +209,7 @@ impl JsContextHost {
         let timing_origin = self
             .owner_dispatch_scope_for_node(handle)
             .and_then(|owner| self.window_access_origin_for_dispatch_scope(owner))
-            .and_then(|origin| url::Url::parse(&origin.serialized_origin()).ok())
-            .map(|url| moli_url::WebOrigin::from_url(&url));
+            .map(|origin| moli_url::WebOrigin::from_serialized(&origin.serialized_origin()));
         resource_loader.spawn_resource_task(async move {
             let result = async {
                 let request = configure_child_document_navigation_request(
@@ -247,12 +246,15 @@ impl JsContextHost {
                         request_headers,
                         head,
                         body,
-                        timing_origin.as_ref(),
+                        ChildDocumentTiming {
+                            origin: timing_origin.as_ref(),
+                            response: Default::default(),
+                        },
                         &encoding_context,
                     );
                 }
-                let response = task_resource_loader
-                    .fetch_raw(request)
+                let (response, native_timing) = task_resource_loader
+                    .fetch_raw_with_timing(request)
                     .await
                     .map_err(|error| error.to_string())?;
                 let (head, body) = response.into_body();
@@ -262,7 +264,10 @@ impl JsContextHost {
                     request_headers,
                     head,
                     body,
-                    timing_origin.as_ref(),
+                    ChildDocumentTiming {
+                        origin: timing_origin.as_ref(),
+                        response: native_timing,
+                    },
                     &encoding_context,
                 )
             }
@@ -865,13 +870,18 @@ impl JsContextHost {
     }
 }
 
+struct ChildDocumentTiming<'a> {
+    origin: Option<&'a moli_url::WebOrigin>,
+    response: moli_fetch::FetchResponseTiming,
+}
+
 fn child_document_load_outcome_from_response(
     request_url: String,
     request_method: String,
     request_headers: Vec<(String, String)>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
-    timing_origin: Option<&moli_url::WebOrigin>,
+    timing: ChildDocumentTiming<'_>,
     encoding_context: &super::encoding::ChildDocumentEncodingContext,
 ) -> Result<ChildDocumentLoadOutcome, String> {
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
@@ -929,8 +939,23 @@ fn child_document_load_outcome_from_response(
                 from_cache: head.from_cache,
                 cache_state: head.cache_state,
                 preload_state: head.preload_state.clone(),
-                resource_timing_body_visible: timing_origin
+                resource_timing_body_visible: timing
+                    .origin
                     .is_some_and(|origin| !head.url_list().has_cross_origin_url(origin)),
+                resource_timing_response: timing
+                    .response
+                    .fetch_started_at()
+                    .map(|_| Box::new(timing.response)),
+                resource_timing_allowed: timing.origin.is_some_and(|origin| {
+                    crate::context_bootstrap::FetchResourceTiming::timing_allowed(origin, &head)
+                }),
+                resource_timing_redirected: head
+                    .redirect_chain
+                    .iter()
+                    .any(|redirect| redirect.source != moli_fetch::RedirectSource::Internal),
+                resource_timing_protocol: head
+                    .negotiated_http_version
+                    .filter(|_| head.cache_state != moli_fetch::ResponseCacheState::Local),
             }),
         },
     )))
@@ -1034,7 +1059,10 @@ mod tests {
                     Vec::new(),
                     head.clone(),
                     moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
-                    timing_origin,
+                    ChildDocumentTiming {
+                        origin: timing_origin,
+                        response: Default::default(),
+                    },
                     &super::super::encoding::ChildDocumentEncodingContext::default(),
                 )
                 .unwrap();
@@ -1079,7 +1107,10 @@ mod tests {
                 negotiated_http_version: None,
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
-            None,
+            ChildDocumentTiming {
+                origin: None,
+                response: Default::default(),
+            },
             &super::super::encoding::ChildDocumentEncodingContext::default(),
         )
         .expect("child document response should load");

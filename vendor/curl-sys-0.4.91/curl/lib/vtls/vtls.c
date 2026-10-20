@@ -39,6 +39,7 @@
  */
 
 #include "curl_setup.h"
+#include "moli_timing.h"
 
 #include "urldata.h"
 #include "cfilters.h"
@@ -994,12 +995,22 @@ static CURLcode ssl_cf_connect(struct Curl_cfilter *cf,
     connssl->prefs_checked = TRUE;
   }
 
+  if(!connssl->moli_handshake_start)
+    connssl->moli_handshake_start = Curl_moli_now(data);
   result = connssl->ssl_impl->do_connect(cf, data, done);
 
   if(!result && *done) {
     cf->connected = TRUE;
     if(connssl->state == ssl_connection_complete) {
       connssl->handshake_done = *Curl_pgrs_now(data);
+      cf->conn->moli_timing.connect_end = Curl_moli_now(data);
+      if(!Curl_ssl_cf_is_proxy(cf))
+        cf->conn->moli_timing.secure_start = connssl->moli_handshake_start;
+      /* A deferred (0-RTT) handshake may finish after request dispatch. */
+      if(cf->conn->moli_timing.connect_start &&
+         data->progress.moli_connection.connect_start ==
+         cf->conn->moli_timing.connect_start)
+        data->progress.moli_connection = cf->conn->moli_timing;
     }
     if(Curl_tls_keylog_enabled()) {
       infof(data, "SSLKEYLOGFILE set, all TLS secrets are logged to '%s'",

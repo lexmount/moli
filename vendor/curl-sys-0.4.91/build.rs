@@ -90,6 +90,7 @@ fn main() {
 
     for header in [
         "curl.h",
+        "moli_timing.h",
         "curlver.h",
         "easy.h",
         "options.h",
@@ -213,6 +214,7 @@ fn main() {
         .file("curl/lib/ftp.c")
         .file("curl/lib/getenv.c")
         .file("curl/lib/getinfo.c")
+        .file("curl/lib/moli_timing.c")
         .file("curl/lib/gopher.c")
         .file("curl/lib/hash.c")
         .file("curl/lib/headers.c")

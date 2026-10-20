@@ -915,7 +915,11 @@ impl RawStreamingResponseCollector {
         }
         let declared_body_length = identity_encoded_content_length(&self.headers);
         self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
-        if declared_body_length == Some(0) {
+        // 204/304 have no wire body, independently of a representation length
+        // carried by 304. A zero-length redirect can also complete normally.
+        let body_complete_at_headers =
+            declared_body_length == Some(0) || matches!(self.status, 204 | 304);
+        if body_complete_at_headers {
             self.response_progress.commit();
         }
         self.maybe_create_cache_body_writer();
@@ -926,12 +930,14 @@ impl RawStreamingResponseCollector {
                 .is_some();
         self.maybe_emit_start(is_redirect_response);
         if self.started && (response_body_ends_at_headers(self.status) || is_redirect_response) {
-            // Manual redirects expose their head with an empty body. Stop the
-            // transport here so neither streaming nor buffered callers wait
-            // for bytes that this API discards.
             self.finish_streaming_body();
-            self.header_terminated = true;
-            return false;
+            // Preserve naturally complete connections. Only abort redirects
+            // with an unfinished body, or a protocol switch, instead of
+            // waiting for bytes that the head-only API discards.
+            if !body_complete_at_headers || self.status == 101 {
+                self.header_terminated = true;
+                return false;
+            }
         }
         true
     }

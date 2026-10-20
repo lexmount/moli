@@ -45,6 +45,7 @@ void Curl_initinfo(struct Curl_easy *data)
 
   memset(&pro->delta, 0, sizeof(pro->delta));
   memset(&pro->total, 0, sizeof(pro->total));
+  memset(&pro->moli_connection, 0, sizeof(pro->moli_connection));
   pro->startransfer_added = FALSE;
 
   info->httpcode = 0;
