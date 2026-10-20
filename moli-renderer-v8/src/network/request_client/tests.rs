@@ -1750,3 +1750,5 @@ async fn loader_opt_in_network_policy_enforces_blocked_and_offline() -> Result<(
     server.await?;
     Ok(())
 }
+
+mod script_cors_explicit_origin;

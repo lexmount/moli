@@ -314,7 +314,10 @@ impl ResourceRequestClient {
                 );
             }
             let result = self
-                .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+                .fetch_script_text_stream_with_cancel_after_policy(
+                    request,
+                    FetchCancelHandle::new(),
+                )
                 .await;
             if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
                 let status = result.as_ref().ok().map(|response| response.status);
@@ -415,7 +418,7 @@ impl ResourceRequestClient {
         }
         let cache_request = request.clone();
         let result = self
-            .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+            .fetch_script_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
             .await
             .map_err(|error| format!("{error:#}"));
         if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
@@ -642,6 +645,22 @@ impl ResourceRequestClient {
             load.finish(result);
         }
         Ok(())
+    }
+
+    async fn fetch_script_text_stream_with_cancel_after_policy(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<Response> {
+        if request.request_mode == moli_fetch::RequestMode::Cors
+            && request.request_origin().is_some()
+        {
+            return crate::network_host::fetch_cors_script_text(self, request, cancel_handle)
+                .await
+                .map_err(anyhow::Error::msg);
+        }
+        self.fetch_text_stream_with_cancel_after_policy(request, cancel_handle)
+            .await
     }
 
     async fn fetch_text_stream_with_cancel_after_policy(
