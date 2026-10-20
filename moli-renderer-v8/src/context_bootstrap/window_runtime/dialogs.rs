@@ -310,6 +310,7 @@ pub(crate) fn window_open_callback<'s>(
         } else {
             creator_policy_container.referrer_policy.clone()
         },
+        creator_policy_container.clone(),
     );
     creator_policy_container.document_referrer = if parsed_features.suppresses_referrer() {
         String::new()

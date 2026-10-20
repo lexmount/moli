@@ -319,6 +319,12 @@ impl JsContextHost {
         browser_navigation_kind: BrowserNavigationRequestKind,
         about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
+        let navigation_initiator =
+            if browser_navigation_kind == BrowserNavigationRequestKind::Navigate {
+                self.navigation_initiator_for_owner(OwnerDispatchScope::Top)
+            } else {
+                None
+            };
         self.cancel_planned_form_navigation_for_url(OwnerDispatchScope::Top, Some(&url));
         self.clear_pending_top_level_navigation();
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();
@@ -337,7 +343,7 @@ impl JsContextHost {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
-                navigation_initiator: None,
+                navigation_initiator,
                 initial_document_environment: None,
                 entry_seed,
                 about_document_state,
