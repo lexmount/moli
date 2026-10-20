@@ -54,6 +54,7 @@ pub(crate) struct RequestTransferMetrics {
 pub(crate) fn transfer_metrics_from_easy<H: Handler>(
     easy: &Easy2<H>,
     headers: &[(String, Vec<u8>)],
+    timing: Option<crate::FetchCurlTiming>,
 ) -> RequestTransferMetrics {
     let content_encoding =
         response_header_value(headers, "content-encoding").map(std::borrow::Cow::into_owned);
@@ -66,12 +67,13 @@ pub(crate) fn transfer_metrics_from_easy<H: Handler>(
         .map(|size| size.max(0.0) as u64)
         .zip(easy.header_size().ok())
         .map(|(download_size, header_size)| download_size.saturating_add(header_size));
-    let namelookup_ms = easy.namelookup_time().ok().map(duration_to_ms);
-    let connect_ms = easy.connect_time().ok().map(duration_to_ms);
-    let appconnect_ms = easy.appconnect_time().ok().map(duration_to_ms);
-    let pretransfer_ms = easy.pretransfer_time().ok().map(duration_to_ms);
+    let timing = timing.unwrap_or_default();
+    let namelookup_ms = timing.name_lookup.map(duration_to_ms);
+    let connect_ms = timing.connect.map(duration_to_ms);
+    let appconnect_ms = timing.app_connect.map(duration_to_ms);
+    let pretransfer_ms = timing.pretransfer.map(duration_to_ms);
     let starttransfer_ms = easy.starttransfer_time().ok().map(duration_to_ms);
-    let total_ms = easy.total_time().ok().map(duration_to_ms);
+    let total_ms = timing.total.map(duration_to_ms);
 
     RequestTransferMetrics {
         content_encoding,
