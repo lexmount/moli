@@ -385,6 +385,29 @@ fn navigate_element_popup_target(
     true
 }
 
+/// Capture active-Document authority before formdata can replace the source.
+/// Only resolve existing targets here; creating a new context belongs to the
+/// later navigable selection, after the entry list has been constructed.
+pub(in crate::native_bridge) fn form_blocks_ancestor_navigation(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    form: DomHandle,
+    target_name: Option<&str>,
+    action: &str,
+) -> bool {
+    let Some(source) = (unsafe { &*runtime_ptr }).owner_dispatch_scope_for_node(form) else {
+        return false;
+    };
+    let Some(ExistingHyperlinkTarget::Local(target)) =
+        existing_hyperlink_target(scope, runtime_ptr, source, form, target_name)
+    else {
+        return false;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    url::Url::parse(action)
+        .is_ok_and(|destination| runtime.blocks_ancestor_navigation(source, target, &destination))
+}
+
 /// Choose the navigable synchronously. The form's DOM task starts navigation later.
 pub(in crate::native_bridge) fn choose_form_navigation_target(
     scope: &mut v8::PinScope<'_, '_>,

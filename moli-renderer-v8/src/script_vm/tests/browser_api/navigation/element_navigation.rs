@@ -355,8 +355,8 @@ fn hyperlink_top_navigation_checks_source_document_sandbox_across_realms() {
     }
 }
 
-#[test]
-fn form_top_navigation_checks_active_source_document_sandbox_across_realms() {
+#[tokio::test]
+async fn form_top_navigation_checks_active_source_document_sandbox_across_realms() {
     for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
         for method in ["get", "post"] {
             for api in ["submit", "requestSubmit", "click"] {
@@ -376,25 +376,29 @@ fn form_top_navigation_checks_active_source_document_sandbox_across_realms() {
                                  source_is_child={source_is_child} initially_allowed={initially_allowed} \
                                  mutation={mutation}"
                             );
-                            let mut vm = new_parsed_test_vm(
+                            let loader = static_http_loader([]);
+                            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
                                 "https://form-navigation-sandbox.test/source",
-                                "<!doctype html><body></body>",
+                                &loader,
                             );
+                            let sandbox = if initially_allowed {
+                                "allow-scripts allow-same-origin allow-forms allow-top-navigation"
+                            } else {
+                                "allow-scripts allow-same-origin allow-forms"
+                            };
+                            load_form_navigation_frames_with_sandbox(
+                                &mut vm,
+                                &loader,
+                                depth,
+                                Some(sandbox),
+                            )
+                            .await;
                             vm.eval(&format!(
                                 r#"
                                 (() => {{
                                     const log = [];
-                                    let childDocument = document;
-                                    const frames = [];
-                                    for (let i = 0; i < {depth}; ++i) {{
-                                        const frame = childDocument.createElement('iframe');
-                                        frame.sandbox = 'allow-scripts allow-same-origin allow-forms' +
-                                            ({initially_allowed} ? ' allow-top-navigation' : '');
-                                        frame.srcdoc = '<body></body>';
-                                        childDocument.body.appendChild(frame);
-                                        frames.push(frame);
-                                        childDocument = frame.contentDocument;
-                                    }}
+                                    const childDocument = formNavigationSource;
+                                    const frames = formNavigationFrames;
                                     for (const frame of frames) {{
                                         if ({mutation:?} === 'remove') frame.removeAttribute('sandbox');
                                         if ({mutation:?} === 'tighten') frame.sandbox = 'allow-scripts allow-same-origin allow-forms';
@@ -442,12 +446,25 @@ fn form_top_navigation_checks_active_source_document_sandbox_across_realms() {
                             ))
                             .expect(&description);
                             let allowed = !source_is_child || initially_allowed;
+                            // Inspect the produced request before task-end reconciliation
+                            // consumes it; blocked submissions must not queue a body.
+                            assert_eq!(
+                                vm.run_one_dom_manipulation_body_for_test(
+                                    crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                                )
+                                .await
+                                .expect(&description),
+                                allowed,
+                                "{description}"
+                            );
                             let expected_url = if method == "get" {
                                 "https://form-navigation-sandbox.test/submitted?value=b"
                             } else {
                                 "https://form-navigation-sandbox.test/submitted"
                             };
-                            let committed = allowed && intercept && method == "get";
+                            // Same-origin POST submissions can also be intercepted;
+                            // sandbox admission is independent of the request method.
+                            let committed = allowed && intercept;
                             let expected_log = if committed {
                                 vec!["navigate", "intercept"]
                             } else if allowed {
@@ -495,29 +512,40 @@ fn form_top_navigation_checks_active_source_document_sandbox_across_realms() {
     }
 }
 
-#[test]
-fn sandboxed_form_parent_navigation_does_not_change_ancestor_seed() {
+#[tokio::test]
+async fn sandboxed_form_parent_navigation_does_not_change_ancestor_seed() {
     for method in ["get", "post"] {
         for api in ["submit", "requestSubmit", "click"] {
             for use_child_realm in [true, false] {
                 let description =
                     format!("method={method} api={api} child_realm={use_child_realm}");
-                let mut vm = new_parsed_test_vm(
+                let loader = static_http_loader([]);
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
                     "https://form-navigation-sandbox.test/source",
-                    "<!doctype html><body></body>",
+                    &loader,
                 );
-                let result = vm
-                    .eval(&format!(
-                        r#"(() => {{
-                        const outer = document.createElement('iframe');
-                        outer.srcdoc = '<body>parent</body>';
-                        document.body.appendChild(outer);
+                load_form_navigation_frames(&mut vm, &loader, 1).await;
+                vm.eval(
+                    r#"const outer = formNavigationFrames[0];
+                        outer.contentDocument.body.textContent = 'parent';
                         const parentWindow = outer.contentWindow;
                         const parentDocument = outer.contentDocument;
                         const inner = parentDocument.createElement('iframe');
                         inner.sandbox = 'allow-scripts allow-same-origin allow-forms';
                         inner.srcdoc = '<body>child</body>';
-                        parentDocument.body.appendChild(inner);
+                        parentDocument.body.appendChild(inner);"#,
+                )
+                .expect(&description);
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm, &loader,
+                    "String(inner.contentDocument.URL === 'about:srcdoc' && inner.contentDocument.readyState === 'complete')",
+                    "true", &description,
+                ).await;
+                vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+                    .await
+                    .unwrap();
+                vm.eval(&format!(
+                    r#"(() => {{
                         const source = inner.contentDocument;
                         const form = source.createElement('form');
                         form.method = {method:?};
@@ -535,14 +563,23 @@ fn sandboxed_form_parent_navigation_does_not_change_ancestor_seed() {
                         const realm = {use_child_realm} ? source.defaultView : window;
                         if ({api:?} === 'click') realm.HTMLElement.prototype.click.call(button);
                         else realm.HTMLFormElement.prototype[{api:?}].call(form);
-                        return JSON.stringify([
+                        globalThis.formParentSnapshot = () => JSON.stringify([
                             events, parentWindow.location.href === before,
                             parentWindow.navigation.currentEntry === entry,
                             parentWindow.document === parentDocument
                         ]);
                     }})()"#,
-                    ))
-                    .expect(&description);
+                ))
+                .expect(&description);
+                assert!(
+                    !vm.run_one_dom_manipulation_body_for_test(
+                        crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                    )
+                    .await
+                    .expect(&description),
+                    "{description}"
+                );
+                let result = vm.eval("formParentSnapshot()").expect(&description);
                 assert_eq!(result, "[[],true,true,true]", "{description}");
                 assert!(
                     vm.take_pending_location_navigation_with_seed().is_none(),
@@ -553,17 +590,18 @@ fn sandboxed_form_parent_navigation_does_not_change_ancestor_seed() {
     }
 }
 
-#[test]
-fn opaque_sandbox_forms_cannot_navigate_top_or_parent() {
+#[tokio::test]
+async fn opaque_sandbox_forms_cannot_navigate_top_or_parent() {
     for sandbox in ["allow-scripts", "allow-scripts allow-forms"] {
         for method in ["get", "post"] {
             for target in ["_TOP", "_parent"] {
                 for api in ["submit", "requestSubmit", "click"] {
                     let description =
                         format!("sandbox={sandbox} method={method} target={target} api={api}");
-                    let mut vm = new_parsed_test_vm(
+                    let loader = static_http_loader([]);
+                    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
                         "https://form-navigation-sandbox.test/source",
-                        "<!doctype html><body></body>",
+                        &loader,
                     );
                     vm.eval(&format!(
                         r#"globalThis.formNavigationEvents = [];
@@ -571,13 +609,25 @@ fn opaque_sandbox_forms_cannot_navigate_top_or_parent() {
                             formNavigationEvents.push('navigate');
                             event.preventDefault();
                         }};
+                        globalThis.formOpaqueLoaded = false;
                         const frame = document.createElement('iframe');
+                        frame.onload = () => {{ formOpaqueLoaded = true; }};
                         frame.sandbox = {sandbox:?};
                         frame.srcdoc = '<body>opaque child</body>';
                         document.body.appendChild(frame);"#,
                     ))
                     .expect(&description);
-                    vm.drain_pending_child_frame_work_for_test();
+                    advance_page_task_executor_until_eval_equals(
+                        &mut vm,
+                        &loader,
+                        "String(formOpaqueLoaded)",
+                        "true",
+                        &description,
+                    )
+                    .await;
+                    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+                        .await
+                        .unwrap();
                     assert_eq!(
                         vm.eval("frame.contentDocument === null")
                             .expect(&description),
@@ -602,6 +652,14 @@ fn opaque_sandbox_forms_cannot_navigate_top_or_parent() {
                             else form[{api:?}]();
                         }})()"#,
                     )).expect(&description);
+                    assert!(
+                        !vm.run_one_dom_manipulation_body_for_test(
+                            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                        )
+                        .await
+                        .expect(&description),
+                        "{description}"
+                    );
                     assert_eq!(
                         vm.eval("JSON.stringify([formNavigationEvents, location.href])")
                             .expect(&description),
@@ -623,17 +681,30 @@ async fn load_form_navigation_frames(
     loader: &ResourceRequestClient,
     depth: usize,
 ) {
+    load_form_navigation_frames_with_sandbox(vm, loader, depth, None).await;
+}
+
+async fn load_form_navigation_frames_with_sandbox(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    depth: usize,
+    sandbox: Option<&str>,
+) {
+    let sandbox_assignment = sandbox
+        .map(|value| format!("formNavigationFrame.sandbox = {value:?};"))
+        .unwrap_or_default();
     vm.eval("globalThis.formNavigationSource = document; globalThis.formNavigationFrames = [];")
         .unwrap();
     for _ in 0..depth {
-        vm.eval(
+        vm.eval(&format!(
             r#"
             globalThis.formNavigationFrame = formNavigationSource.createElement('iframe');
+            {sandbox_assignment}
             formNavigationFrame.srcdoc = '<body></body>';
             formNavigationSource.body.appendChild(formNavigationFrame);
             formNavigationFrames.push(formNavigationFrame);
         "#,
-        )
+        ))
         .unwrap();
         advance_page_task_executor_until_eval_equals(
             vm,
