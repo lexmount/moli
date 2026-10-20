@@ -404,6 +404,20 @@ impl PageScriptHost {
         Some(policy)
     }
 
+    pub(crate) fn navigation_initiator_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<crate::runtime::RendererNavigationInitiator> {
+        let policy = self.document_policy_container_for_inheritance(owner)?;
+        let loader = self.document_resource_loader_for_dispatch_scope(owner)?;
+        Some(crate::runtime::RendererNavigationInitiator::new(
+            self.document_referrer_source_url_for_dispatch_scope(owner)?,
+            loader.fetch_context().request_origin(),
+            policy.referrer_policy.clone(),
+            policy,
+        ))
+    }
+
     pub(crate) fn capture_about_document_state(
         &self,
         owner: OwnerDispatchScope,

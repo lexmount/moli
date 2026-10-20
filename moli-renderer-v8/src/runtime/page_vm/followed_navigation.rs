@@ -1242,6 +1242,7 @@ impl PageVm {
                 bootstrap
                     .as_ref()
                     .and_then(|bootstrap| bootstrap.initial_document_environment.as_ref()),
+                None,
                 self.document_settings.bypass_content_security_policy,
             )?;
             if let Some(bootstrap) = bootstrap {
@@ -1362,6 +1363,10 @@ impl PageVm {
             &request.final_url,
             &request.response_headers,
             bootstrap.initial_document_environment.as_ref(),
+            request
+                .main_document_commit
+                .as_ref()
+                .and_then(|commit| commit.navigation_policy.as_ref()),
             request.document_settings.bypass_content_security_policy,
         )?;
         let runtime_hooks =
@@ -1397,16 +1402,16 @@ impl PageVm {
         final_url: &Url,
         headers: &[(String, Vec<u8>)],
         inherited: Option<&crate::script_vm::ScriptVmInitialDocumentEnvironment>,
+        navigation_policy: Option<&crate::runtime::RendererNavigationPolicy>,
         bypass_content_security_policy: bool,
     ) -> Result<PageVmSourceDocumentCommit> {
-        let policy = inherited
-            .map(|environment| environment.policy_container.clone())
-            .unwrap_or_else(|| {
-                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
-                    headers, final_url,
-                )
-                .with_content_security_policy_bypass(bypass_content_security_policy)
-            });
+        let policy = crate::document_runtime::DocumentPolicyContainer::for_navigation_response(
+            headers,
+            final_url,
+            inherited.map(|environment| &environment.policy_container),
+            navigation_policy,
+        )
+        .with_content_security_policy_bypass(bypass_content_security_policy);
         let origin = inherited
             .map(|environment| environment.origin().to_owned())
             .unwrap_or_else(|| moli_url::origin_ascii_serialization(final_url));

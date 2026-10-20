@@ -305,7 +305,7 @@ pub use runtime::{
     RendererLifecycleTerminationStamp, RendererMainDocumentCommit, RendererMainDocumentResource,
     RendererMarkdownOptions, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
     RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics,
-    RendererNavigationHistory, RendererNavigationHistoryRequest, RendererNavigationInitiator, RendererOutputCursor, RendererOutputFence,
+    RendererNavigationHistory, RendererNavigationHistoryRequest, RendererNavigationInitiator, RendererNavigationPolicy, RendererOutputCursor, RendererOutputFence,
     RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
