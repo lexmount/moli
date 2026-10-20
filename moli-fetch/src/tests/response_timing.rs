@@ -240,7 +240,13 @@ async fn raw_response_timing_is_native_even_when_the_consumer_does_not_poll() ->
     // Intentionally keep this Tokio thread occupied: the curl semantic owner
     // must capture completion without the response consumer being polled.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while cancel.response_timing().response_end_at().is_none() {
+    while cancel.response_timing().response_end_at().is_none()
+        || cancel
+            .response_timing()
+            .connection_timing()
+            .and_then(|connection| connection.curl)
+            .is_none()
+    {
         assert!(
             Instant::now() < deadline,
             "native transfer did not complete"
@@ -248,6 +254,7 @@ async fn raw_response_timing_is_native_even_when_the_consumer_does_not_poll() ->
         thread::sleep(Duration::from_millis(1));
     }
     let native = cancel.response_timing();
+    assert!(native.connection_timing().unwrap().curl.is_some());
     let observed_at = Instant::now();
     assert_eq!(native.response_started_at(), headers.response_started_at());
     assert!(native.response_end_at().unwrap() >= native.response_started_at().unwrap());
@@ -311,12 +318,38 @@ async fn native_request_timing_is_transfer_scoped_on_multiplexed_http2() -> Resu
     };
     tokio::time::timeout(Duration::from_secs(5), requests).await??;
     let after = Instant::now();
+    let mut new_connections = 0;
+    let mut tls_observations = 0;
     for cancel in [buffered_cancel, raw_cancel] {
         let timing = cancel.response_timing();
         assert!(timing.request_started_at().unwrap() >= before);
         assert!(timing.request_started_at().unwrap() <= timing.response_started_at().unwrap());
         assert!(timing.response_started_at().unwrap() <= timing.response_end_at().unwrap());
         assert!(timing.response_end_at().unwrap() <= after);
+        let connection = timing
+            .connection_timing()
+            .context("HTTP/2 connection timing")?;
+        let prepared = connection
+            .request_prepared_at
+            .context("HTTP/2 preparation")?;
+        assert!(before <= prepared && prepared <= after);
+        assert!(
+            connection.shared_dns.is_none(),
+            "the fixture uses an IP literal"
+        );
+        let curl = connection.curl.context("HTTP/2 transfer statistics")?;
+        new_connections += curl.new_connections.context("new connections statistic")?;
+        if let Some(tls_started) = connection.tls_context_started_at {
+            tls_observations += 1;
+            assert!(before <= tls_started && tls_started <= prepared);
+        }
+    }
+    assert_eq!(new_connections, 1);
+    if curl::Version::get()
+        .ssl_version()
+        .is_some_and(|version| version.starts_with("OpenSSL/"))
+    {
+        assert_eq!(tls_observations, 1);
     }
     // The barrier withholds all responses until both streams have arrived.
     // A single connection therefore proves concurrent multiplexing, not just
@@ -377,6 +410,7 @@ async fn native_request_timing_waits_for_the_proxy_tunnel() -> Result<()> {
         Ok::<_, anyhow::Error>(released_at)
     };
     let (response, released_at) = tokio::join!(fetch, release);
+    let released_at = released_at?;
     let mut response = response?;
     assert_eq!(
         response.negotiated_http_version,
@@ -389,8 +423,29 @@ async fn native_request_timing_waits_for_the_proxy_tunnel() -> Result<()> {
     response.finish().await?;
     assert_eq!(body, b"tunneled");
     let timing = cancel.response_timing();
-    assert!(timing.request_started_at().unwrap() >= released_at?);
+    assert!(timing.request_started_at().unwrap() >= released_at);
     assert!(timing.request_started_at().unwrap() <= timing.response_started_at().unwrap());
+    let connection = timing
+        .connection_timing()
+        .context("tunnel connection timing")?;
+    let prepared = connection
+        .request_prepared_at
+        .context("tunnel request preparation")?;
+    if let Some(tls_started) = connection.tls_context_started_at {
+        assert!(released_at <= tls_started && tls_started <= prepared);
+    } else if curl::Version::get()
+        .ssl_version()
+        .is_some_and(|version| version.starts_with("OpenSSL/"))
+    {
+        panic!("OpenSSL should observe TLS setup after the proxy tunnel is established");
+    }
+    assert!(
+        connection
+            .curl
+            .context("tunnel curl statistics")?
+            .app_connect
+            .is_some()
+    );
     drop(response);
     drop(client);
     proxy.join().unwrap()?;

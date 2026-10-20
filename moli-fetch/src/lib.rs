@@ -11,6 +11,7 @@ mod client;
 mod client_hints;
 mod compression_dictionary;
 mod config;
+mod connection_timing;
 mod content_coding;
 mod content_decoding;
 mod cors;
@@ -46,6 +47,7 @@ pub use cancellation::{FetchCancelHandle, FetchResponseBodySizes, FetchResponseT
 pub use client::{FetchClient, FetchClientHandle};
 pub use compression_dictionary::cache_vary_header_names;
 pub use config::FetchConfig;
+pub use connection_timing::{FetchConnectionTiming, FetchCurlTiming};
 pub use content_coding::resource_timing_content_encoding;
 pub use cors::validate_cors_response_for_origin;
 pub use error::{
