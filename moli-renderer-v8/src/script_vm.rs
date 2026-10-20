@@ -2100,7 +2100,16 @@ impl ScriptVmPageRealmBootstrap {
         let initial_policy = initial_environment
             .as_ref()
             .map(|environment| environment.policy_container.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                crate::document_runtime::DocumentPolicyContainer::for_navigation_response(
+                    &[],
+                    &document_url,
+                    None,
+                    main_document_commit
+                        .as_ref()
+                        .and_then(|commit| commit.navigation_policy.as_ref()),
+                )
+            });
         let mut frame_owner_store = FrameOwnerStore::default();
         frame_owner_store.ensure_main_frame(
             document_handle,
@@ -2131,17 +2140,10 @@ impl ScriptVmPageRealmBootstrap {
             main_parser_continuation_sender,
         ));
         document_runtime.set_author_styles_disabled(author_styles_disabled);
-        document_runtime
-            .set_bypass_content_security_policy(document_settings.bypass_content_security_policy);
-        if initial_environment.is_some() {
-            // Every initial Document, including a synchronously staged related
-            // Page, installs its inherited meta policies before entering JS.
-            document_runtime.initialize_inherited_meta_content_security_policies(
-                document_handle,
-                &initial_policy.inherited_meta_content_security_policies,
-            );
-            document_runtime.set_initial_document_policy_container(initial_policy);
-        }
+        document_runtime.initialize_new_document_policy(
+            initial_policy,
+            document_settings.bypass_content_security_policy,
+        );
         let (page_context_cancel_tx, page_context_cancel_rx) =
             renderer_page_context_cancel_channel();
 

@@ -956,6 +956,10 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 {
                     return false;
                 }
+                let initiator = navigation
+                    .source_document
+                    .and_then(|document| runtime.owner_dispatch_scope_for_node(document))
+                    .and_then(|owner| runtime.navigation_initiator_for_owner(owner));
                 runtime.record_pending_location_navigation_request(
                     request.url,
                     request.method,
@@ -965,6 +969,9 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                     moli_fetch::BrowserNavigationRequestKind::Navigate,
                     None,
                 );
+                if let Some(initiator) = initiator {
+                    runtime.set_pending_location_navigation_source(initiator, None);
+                }
                 crate::context_bootstrap::web_mcp::bind_root_navigation(runtime, navigation.form);
                 true
             }

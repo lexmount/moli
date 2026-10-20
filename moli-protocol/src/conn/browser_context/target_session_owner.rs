@@ -3899,6 +3899,7 @@ mod tests {
             security_origin: "https://nav.example".to_owned(),
             secure_context_type: "Secure".to_owned(),
             document_referrer: None,
+            navigation_policy: None,
             timestamp: 0.0,
             session_history_position: None,
             browsing_context_group: None,

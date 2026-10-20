@@ -295,6 +295,7 @@ pub use runtime::{
     RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
     RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererNavigationInitiator, RendererNavigationHistory, RendererNavigationHistoryRequest,
+    RendererNavigationPolicy,
     RendererOutputCursor, RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem,
     RendererOutputPublication, RendererOutputPublicationOrdering, RendererOutputRecord,
     RendererOutputResidenceIdentity, RendererOutputStreamCloseReason, RendererOutputStreamControl,

@@ -24,6 +24,7 @@ impl JsContextHost {
             initiator,
             initiator_url,
             target_snapshot,
+            source_policy,
         } = navigation;
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
@@ -88,6 +89,10 @@ impl JsContextHost {
             match self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap) {
                 LocalChildDocumentPreparation::Ready(snapshot) => {
                     let mut snapshot = *snapshot;
+                    if let Some(policy) = &source_policy {
+                        policy.apply_to(&mut snapshot.policy_container, &snapshot.url);
+                    }
+                    snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
                     if !target_snapshot.apply_response_policy(
                         &mut snapshot.policy_container,
                         &snapshot.url,
@@ -144,7 +149,8 @@ impl JsContextHost {
                         initiator_url,
                         initiator,
                         target_snapshot,
-                    ),
+                    )
+                    .with_source_policy(source_policy),
                 )
                 .is_some()
             {

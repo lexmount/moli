@@ -261,6 +261,7 @@ async fn selected_navigation_referrer_precedes_parser_and_document_start_scripts
                         security_origin: "https://destination.test".to_owned(),
                         secure_context_type: "Secure".to_owned(),
                         document_referrer: Some(referrer.to_owned()),
+                        navigation_policy: None,
                         timestamp: 0.0,
                         session_history_position: None,
                         browsing_context_group: None,

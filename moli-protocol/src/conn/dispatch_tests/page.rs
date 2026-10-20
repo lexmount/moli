@@ -384,6 +384,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         security_origin: "null".to_owned(),
         secure_context_type: "InsecureScheme".to_owned(),
         document_referrer: None,
+        navigation_policy: None,
         timestamp: 0.0,
         session_history_position: None,
         browsing_context_group: None,

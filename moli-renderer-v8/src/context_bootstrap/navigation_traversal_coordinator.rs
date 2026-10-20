@@ -583,6 +583,7 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
             participant.url.as_str(),
             participant.seed.clone(),
             None,
+            None,
         ) {
             for queued in &cross_document {
                 host.cancel_joint_child_history_navigation(queued.handle, step);

@@ -1199,19 +1199,21 @@ impl PageVm {
         let navigation_handoff = environment
             .page_runtime_task_source()
             .next_top_level_navigation_handoff();
-        let policy = bootstrap
-            .initial_document_environment
-            .as_ref()
-            .map(|environment| environment.policy_container.clone())
-            .unwrap_or_else(|| {
-                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
-                    &request.response_headers,
-                    &request.final_url,
-                )
-                .with_content_security_policy_bypass(
-                    request.document_settings.bypass_content_security_policy,
-                )
-            });
+        let policy = crate::document_runtime::DocumentPolicyContainer::for_navigation_response(
+            &request.response_headers,
+            &request.final_url,
+            bootstrap
+                .initial_document_environment
+                .as_ref()
+                .map(|environment| &environment.policy_container),
+            request
+                .main_document_commit
+                .as_ref()
+                .and_then(|commit| commit.navigation_policy.as_ref()),
+        )
+        .with_content_security_policy_bypass(
+            request.document_settings.bypass_content_security_policy,
+        );
         let origin = bootstrap
             .initial_document_environment
             .as_ref()

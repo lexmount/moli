@@ -173,6 +173,10 @@ impl RendererMainDocumentCommitSeed {
                 .navigation_initiator
                 .as_ref()
                 .map(|initiator| initiator.document_referrer(final_url)),
+            navigation_policy: self
+                .navigation_initiator
+                .as_ref()
+                .and_then(|initiator| initiator.document_policy(final_url)),
             timestamp: self.timestamp,
             session_history_position: None,
             browsing_context_group: self
