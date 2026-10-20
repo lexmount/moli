@@ -2,7 +2,7 @@ use crate::{
     util::{throw_type_error, v8_string},
     webidl,
 };
-use moli_webapi_declare::{WebApiObject, WebApiValue};
+use moli_webapi_declare::WebApiValue;
 use std::collections::HashSet;
 
 #[derive(Clone)]
@@ -36,6 +36,10 @@ impl<'s> WebApiValue<'s> for Text {
     }
 }
 
+impl webidl::WebIdlSnapshotValue for Text {
+    const SNAPSHOT_KIND: webidl::SnapshotKind = webidl::SnapshotKind::Scalar;
+}
+
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "PaymentShippingType", rename_all = "kebab-case")]
 pub(super) enum ShippingType {
@@ -55,98 +59,74 @@ impl<'s> WebApiValue<'s> for ShippingType {
     }
 }
 
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentMethodData")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentMethodData", snapshot)]
 pub(super) struct MethodData<'s> {
     #[webidl(converter = "raw")]
-    #[webapi(data_property)]
     pub(super) data: Option<v8::Local<'s, v8::Object>>,
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     pub(super) supported_methods: Text,
 }
 
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentCurrencyAmount")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentCurrencyAmount", snapshot)]
 pub(super) struct Amount {
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     currency: Text,
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     value: Text,
 }
 
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentItem")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentItem", snapshot)]
 pub(super) struct Item {
     #[webidl(required, dictionary)]
-    #[webapi(data_property)]
     amount: Amount,
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     label: Text,
     #[webidl(default = false)]
-    #[webapi(data_property)]
     pending: bool,
 }
 
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentShippingOption")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentShippingOption", snapshot)]
 pub(super) struct ShippingOption {
     #[webidl(required, dictionary)]
-    #[webapi(data_property)]
     amount: Amount,
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     id: Text,
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     label: Text,
     #[webidl(default = false)]
-    #[webapi(data_property)]
     selected: bool,
 }
 
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentDetailsModifier")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentDetailsModifier", snapshot)]
 pub(super) struct Modifier<'s> {
     #[webidl(sequence, converter = "dictionary")]
-    #[webapi(data_property)]
     additional_display_items: Option<Vec<Item>>,
     #[webidl(converter = "raw")]
-    #[webapi(data_property)]
     data: Option<v8::Local<'s, v8::Object>>,
     #[webidl(required, converter = "raw")]
-    #[webapi(data_property)]
     supported_methods: Text,
     #[webidl(dictionary)]
-    #[webapi(data_property)]
     total: Option<Item>,
 }
 
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentDetailsBase")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentDetailsBase", snapshot)]
 pub(super) struct DetailsBase<'s> {
     #[webidl(sequence, converter = "dictionary")]
-    #[webapi(data_property)]
     display_items: Option<Vec<Item>>,
     #[webidl(sequence, converter = "dictionary")]
-    #[webapi(data_property)]
     modifiers: Option<Vec<Modifier<'s>>>,
     #[webidl(sequence, converter = "dictionary")]
-    #[webapi(data_property)]
     shipping_options: Option<Vec<ShippingOption>>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PaymentDetailsInit")]
+#[webidl(prefix = "PaymentDetailsInit", snapshot)]
 pub(super) struct Details<'s> {
     #[webidl(inherit)]
     base: DetailsBase<'s>,
@@ -156,55 +136,20 @@ pub(super) struct Details<'s> {
     total: Item,
 }
 
-impl<'s> Details<'s> {
-    pub(super) fn into_snapshot(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-    ) -> v8::Local<'s, v8::Object> {
-        let object = self.base.bind(scope).expect("converted PaymentDetailsBase");
-        let id = self
-            .id
-            .expect("assigned payment id")
-            .to_v8_value(scope)
-            .expect("payment id");
-        let total = self.total.bind(scope).expect("converted payment total");
-        assert_eq!(
-            object.create_data_property(scope, crate::util::v8str(scope, "id").into(), id),
-            Some(true)
-        );
-        assert_eq!(
-            object.create_data_property(
-                scope,
-                crate::util::v8str(scope, "total").into(),
-                total.into()
-            ),
-            Some(true)
-        );
-        object
-    }
-}
-
-#[derive(webidl::WebIdlDictionary, WebApiObject)]
-#[webidl(prefix = "PaymentOptions")]
-#[webapi(plain, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentOptions", snapshot)]
 pub(super) struct Options {
     #[webidl(default = false)]
-    #[webapi(data_property)]
     request_billing_address: bool,
     #[webidl(default = false)]
-    #[webapi(data_property)]
     request_payer_email: bool,
     #[webidl(default = false)]
-    #[webapi(data_property)]
     request_payer_name: bool,
     #[webidl(default = false)]
-    #[webapi(data_property)]
     request_payer_phone: bool,
     #[webidl(default = false)]
-    #[webapi(data_property)]
     pub(super) request_shipping: bool,
     #[webidl(converter = "enum", default = ShippingType::Shipping)]
-    #[webapi(data_property)]
     pub(super) shipping_type: ShippingType,
 }
 
