@@ -2,7 +2,8 @@
 
 use crate::{
     util::{get_private_value, throw_type_error, v8str},
-    web_api_interfaces, webidl,
+    web_api_interfaces,
+    webidl::{self, WebIdlDictionarySerialize},
 };
 use moli_webapi_declare::{
     WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
@@ -27,18 +28,6 @@ pub(super) enum VideoColorPrimaries {
     Smpte432,
 }
 
-impl VideoColorPrimaries {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Bt709 => "bt709",
-            Self::Bt470Bg => "bt470bg",
-            Self::Smpte170M => "smpte170m",
-            Self::Bt2020 => "bt2020",
-            Self::Smpte432 => "smpte432",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, webidl::WebIdlEnum)]
 pub(super) enum VideoTransferCharacteristics {
     #[webidl(token = "bt709")]
@@ -50,19 +39,6 @@ pub(super) enum VideoTransferCharacteristics {
     Linear,
     Pq,
     Hlg,
-}
-
-impl VideoTransferCharacteristics {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Bt709 => "bt709",
-            Self::Smpte170M => "smpte170m",
-            Self::Iec61966_2_1 => "iec61966-2-1",
-            Self::Linear => "linear",
-            Self::Pq => "pq",
-            Self::Hlg => "hlg",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, webidl::WebIdlEnum)]
@@ -78,18 +54,6 @@ pub(super) enum VideoMatrixCoefficients {
     Bt2020Ncl,
 }
 
-impl VideoMatrixCoefficients {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Rgb => "rgb",
-            Self::Bt709 => "bt709",
-            Self::Bt470Bg => "bt470bg",
-            Self::Smpte170M => "smpte170m",
-            Self::Bt2020Ncl => "bt2020-ncl",
-        }
-    }
-}
-
 // WebIDL reads dictionary members in lexicographic order.
 #[derive(
     Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, webidl::WebIdlDictionary,
@@ -97,62 +61,37 @@ impl VideoMatrixCoefficients {
 #[webidl(prefix = "VideoColorSpaceInit", snapshot)]
 pub(super) struct VideoColorSpaceInit {
     #[webidl(nullable, converter = "boolean")]
-    #[webidl(snapshot_order = 3)]
+    #[webidl(snapshot_order = 3, snapshot_slot = FULL_RANGE_SLOT)]
     pub(super) full_range: Option<bool>,
     #[webidl(nullable, converter = "enum")]
-    #[webidl(snapshot_order = 2)]
+    #[webidl(snapshot_order = 2, snapshot_slot = MATRIX_SLOT)]
     pub(super) matrix: Option<VideoMatrixCoefficients>,
     #[webidl(nullable, converter = "enum")]
-    #[webidl(snapshot_order = 0)]
+    #[webidl(snapshot_order = 0, snapshot_slot = PRIMARIES_SLOT)]
     pub(super) primaries: Option<VideoColorPrimaries>,
     #[webidl(nullable, converter = "enum")]
-    #[webidl(snapshot_order = 1)]
+    #[webidl(snapshot_order = 1, snapshot_slot = TRANSFER_SLOT)]
     pub(super) transfer: Option<VideoTransferCharacteristics>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "VideoColorSpace")]
 struct VideoColorSpaceConstructorArgs {
-    #[webidl(with = parse_init)]
+    #[webidl(dictionary)]
     init: VideoColorSpaceInit,
-}
-
-fn parse_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<VideoColorSpaceInit, webidl::WebIdlError> {
-    let context = webidl::Context::argument("VideoColorSpace", (index + 1) as usize);
-    let Some(object) = webidl::dictionary_arg(args, index, context)? else {
-        // A nullish dictionary is empty; do not consult Object.prototype.
-        return Ok(VideoColorSpaceInit::default());
-    };
-    webidl::parse_dictionary_object(scope, object)
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::VideoColorSpace, require_prototype)]
-struct VideoColorSpaceObjectDeclaration<'s> {
-    #[webapi(slot = PRIMARIES_SLOT)]
-    primaries: v8::Local<'s, v8::Value>,
-    #[webapi(slot = TRANSFER_SLOT)]
-    transfer: v8::Local<'s, v8::Value>,
-    #[webapi(slot = MATRIX_SLOT)]
-    matrix: v8::Local<'s, v8::Value>,
-    #[webapi(slot = FULL_RANGE_SLOT)]
-    full_range: v8::Local<'s, v8::Value>,
-}
+struct VideoColorSpaceObjectDeclaration {}
 
+// Keep toJSON's property order independent of codec configuration snapshots.
 #[derive(WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, data_properties, enumerable)]
 struct VideoColorSpaceJsonDeclaration<'s> {
-    #[webapi(data_property, enumerable)]
     full_range: v8::Local<'s, v8::Value>,
-    #[webapi(data_property, enumerable)]
     matrix: v8::Local<'s, v8::Value>,
-    #[webapi(data_property, enumerable)]
     primaries: v8::Local<'s, v8::Value>,
-    #[webapi(data_property, enumerable)]
     transfer: v8::Local<'s, v8::Value>,
 }
 
@@ -196,8 +135,7 @@ pub(in crate::context_bootstrap) fn video_color_space_constructor_callback<'s>(
     }
     parsed
         .init
-        .declaration(scope)
-        .initialize(scope, args.this())
+        .initialize_snapshot(scope, args.this())
         .expect("VideoColorSpace slots initialize");
     rv.set(args.this().into());
 }
@@ -244,37 +182,13 @@ impl VideoColorSpaceInit {
         }
     }
 
-    fn declaration<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-    ) -> VideoColorSpaceObjectDeclaration<'s> {
-        let primaries = nullable_string(scope, self.primaries.map(VideoColorPrimaries::label));
-        let transfer = nullable_string(
-            scope,
-            self.transfer.map(VideoTransferCharacteristics::label),
-        );
-        let matrix = nullable_string(scope, self.matrix.map(VideoMatrixCoefficients::label));
-        let full_range = self
-            .full_range
-            .map(|v| v8::Boolean::new(scope, v).into())
-            .unwrap_or_else(|| v8::null(scope).into());
-        VideoColorSpaceObjectDeclaration::new(primaries, transfer, matrix, full_range)
-    }
-
     pub(super) fn build<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
-        self.declaration(scope)
+        let object = VideoColorSpaceObjectDeclaration::new()
             .bind(scope)
-            .expect("native VideoColorSpace")
-    }
-}
-
-fn nullable_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<&'static str>,
-) -> v8::Local<'s, v8::Value> {
-    match value {
-        Some(value) => v8str(scope, value).into(),
-        None => v8::null(scope).into(),
+            .expect("native VideoColorSpace");
+        self.initialize_snapshot(scope, object)
+            .expect("VideoColorSpace slots initialize");
+        object
     }
 }
 
