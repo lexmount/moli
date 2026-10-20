@@ -198,8 +198,9 @@ pub use inspector_state::{
 };
 pub use navigation_history::{
     NavigationActivationSeed, NavigationHistoryEntryId, NavigationHistoryEntrySeed,
-    NavigationHistoryMutation, NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate,
-    SessionHistoryUpdateKind, apply_child_browsing_context_javascript_url_navigation_to_entry_seed,
+    NavigationHistoryMutation, NavigationHistorySerializedEntry, NavigationSourceDocument,
+    NavigationTraversalSeedCandidate, SessionHistoryUpdateKind,
+    apply_child_browsing_context_javascript_url_navigation_to_entry_seed,
     apply_child_browsing_context_navigation_to_entry_seed,
     child_browsing_context_single_entry_seed, cross_document_navigation_seed,
     initial_navigation_history_seed, reload_navigation_seed,

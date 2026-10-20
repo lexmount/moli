@@ -42,6 +42,9 @@ impl JsContextHost {
                 index,
                 &request.url,
                 mutation,
+                moli_page_types::NavigationSourceDocument::from_initial_empty(
+                    self.child_current_document_is_initial_empty(handle),
+                ),
             )
         });
         if request.method == "GET" {
@@ -101,11 +104,14 @@ impl JsContextHost {
             "The navigation was canceled.".to_owned(),
         );
         let replace_initial_empty_document = self.child_current_document_is_initial_empty(handle);
+        let source = moli_page_types::NavigationSourceDocument::from_initial_empty(
+            replace_initial_empty_document,
+        );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             if replace_initial_empty_document {
-                entry.replace_navigation_in_entry_seed(&url);
+                entry.replace_navigation_in_entry_seed(&url, source);
             } else {
-                entry.apply_navigation_to_entry_seed(&url);
+                entry.apply_navigation_to_entry_seed(&url, source);
             }
         }
         self.sync_existing_child_browsing_context_window_state(scope, handle);
@@ -166,8 +172,11 @@ impl JsContextHost {
             handle,
             "The navigation was canceled.".to_owned(),
         );
+        let source = moli_page_types::NavigationSourceDocument::from_initial_empty(
+            self.child_current_document_is_initial_empty(handle),
+        );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
+            entry.apply_queued_navigation_to_entry_seed(&url, replace_current, source);
         }
         self.queue_child_browsing_context_navigation_to_url_with_initiator(
             handle,

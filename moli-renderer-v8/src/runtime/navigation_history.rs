@@ -206,6 +206,7 @@ impl RendererNavigationHistory {
             current.index,
             url,
             mutation,
+            moli_page_types::NavigationSourceDocument::NonInitial,
         );
         Some(self.request(seed))
     }
@@ -215,6 +216,7 @@ impl RendererNavigationHistory {
         Some(self.request(reload_navigation_seed(
             source.entries.clone(),
             source.current_index,
+            moli_page_types::NavigationSourceDocument::NonInitial,
         )?))
     }
 
@@ -257,6 +259,7 @@ impl RendererNavigationHistory {
             source.entries.clone(),
             source.current_index,
             target_index,
+            moli_page_types::NavigationSourceDocument::NonInitial,
         )?;
         candidate.seed.session_history.target_step = step;
         Some(self.request(candidate.seed))
@@ -279,11 +282,14 @@ impl RendererNavigationHistory {
         let source_index = self.snapshot().map(|source| source.current_index);
         let about_document_state = current_entry(&seed)
             .and_then(|entry| self.about_documents.lock().get(&entry.document_id).cloned());
+        let initial_empty_source = seed.activation.as_ref().is_some_and(|activation| {
+            activation.source_document == moli_page_types::NavigationSourceDocument::InitialEmpty
+        });
         RendererNavigationHistoryRequest {
             source: self.clone(),
             requested: Arc::new(seed),
             source_index,
-            initial_empty_source: false,
+            initial_empty_source,
             selected_step: self.selected_step.lock().clone(),
             about_document_state,
         }
@@ -374,6 +380,7 @@ impl RendererNavigationHistoryRequest {
         if self.initial_empty_source
             && let Some(activation) = &mut seed.activation
         {
+            activation.source_document = moli_page_types::NavigationSourceDocument::InitialEmpty;
             activation.from = None;
         }
         seed
@@ -415,6 +422,9 @@ impl RendererNavigationHistoryRequest {
                     current.index,
                     final_url,
                     mutation,
+                    moli_page_types::NavigationSourceDocument::from_initial_empty(
+                        self.initial_empty_source,
+                    ),
                 );
                 let entry = seed
                     .entries
@@ -430,8 +440,14 @@ impl RendererNavigationHistoryRequest {
                 entry.navigation_state = requested.navigation_state.clone();
                 seed
             }
-            Some("reload") => reload_navigation_seed(source.entries.clone(), source.current_index)
-                .ok_or_else(|| anyhow!("missing reload history entry"))?,
+            Some("reload") => reload_navigation_seed(
+                source.entries.clone(),
+                source.current_index,
+                moli_page_types::NavigationSourceDocument::from_initial_empty(
+                    self.initial_empty_source,
+                ),
+            )
+            .ok_or_else(|| anyhow!("missing reload history entry"))?,
             Some("traverse") => {
                 let target = source
                     .entries
@@ -442,6 +458,9 @@ impl RendererNavigationHistoryRequest {
                     source.entries.clone(),
                     source.current_index,
                     target.history_index,
+                    moli_page_types::NavigationSourceDocument::from_initial_empty(
+                        self.initial_empty_source,
+                    ),
                 )
                 .ok_or_else(|| {
                     anyhow!("history traversal destination no longer requires a new Document")
