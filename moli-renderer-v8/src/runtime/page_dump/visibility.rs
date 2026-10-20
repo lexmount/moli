@@ -122,10 +122,15 @@ impl<'a> MarkdownDom<'a> {
                 NodeKind::Element("input" | "textarea")
             ) && let Some(element) = dom.node(node).and_then(|node| node.as_element())
             {
-                attribute_overrides
-                    .entry(node)
-                    .or_insert_with(HashMap::new)
-                    .insert("value".to_owned(), element.input_value());
+                // A clean textarea gets its default from child text, not the
+                // control-state slot (which is initially empty). Once dirty,
+                // even an empty live value is authoritative.
+                if element.is_html_input() || element.input_value_dirty() {
+                    attribute_overrides
+                        .entry(node)
+                        .or_insert_with(HashMap::new)
+                        .insert("value".to_owned(), element.input_value());
+                }
                 if matches!(Dom::node_kind(dom, node), NodeKind::Element("input"))
                     && element.checked()
                 {

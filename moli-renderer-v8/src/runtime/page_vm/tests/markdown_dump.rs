@@ -385,8 +385,11 @@ async fn markdown_live_textarea_and_hidden_content_survive_dump_options() {
         page.vm_mut().eval(r#"
             document.head.innerHTML = '<style>.hidden{display:none}</style>';
             document.body.innerHTML = '<textarea value="Nonstandard attribute">Old default</textarea><p class="hidden">Private hidden copy</p><p>Published text</p>';
-            document.querySelector('textarea').value = 'Live text';
         "#).unwrap();
+        let initial = page.render_page_dump(options(false));
+        assert!(initial.contains("Old default"), "{initial}");
+        assert!(!initial.contains("Nonstandard attribute"), "{initial}");
+        page.vm_mut().eval("document.querySelector('textarea').value = 'Live text'").unwrap();
         for with_frames in [false, true] {
             for with_base in [false, true] {
                 for strip_css in [false, true] {
