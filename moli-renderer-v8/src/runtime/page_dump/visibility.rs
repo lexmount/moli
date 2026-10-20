@@ -393,6 +393,13 @@ impl Dom for MarkdownDom<'_> {
             .or_else(|| Dom::attribute(self.dom, node, name))
     }
 
+    fn control_value(&self, node: Self::NodeId) -> Option<&str> {
+        self.attribute_overrides
+            .get(&node)
+            .and_then(|attributes| attributes.get("value"))
+            .map(String::as_str)
+    }
+
     fn has_block_layout(&self, node: Self::NodeId) -> bool {
         self.blocks.contains(&node)
     }

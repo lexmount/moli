@@ -24,6 +24,10 @@ Implement `Dom` with a copyable node ID and four borrowed queries:
 - `first_child` and `next_sibling`: ordered traversal of a stable, acyclic tree.
 - `attribute`: decoded attribute value, borrowed from the DOM.
 
+Browser adapters can provide `control_value` for the current textarea value,
+including an empty string after a user clears it. Without that optional query,
+textarea child text is used; a nonstandard `value` attribute does not override it.
+
 The converter does not need parent pointers, mutable access, serialization, or
 an allocation for each node. The caller chooses the root; its siblings are not
 visited. `Other` nodes and their subtrees are ignored. Unknown elements expose
