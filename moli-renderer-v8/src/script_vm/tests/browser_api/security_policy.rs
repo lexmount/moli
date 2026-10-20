@@ -6,7 +6,7 @@ mod parser_positions;
 
 #[test]
 fn document_open_keeps_policy_and_processes_meta_in_the_new_stream() {
-    for owner in ["window", "frame.contentWindow"] {
+    for owner in ["window", "frame.contentWindow", "popup"] {
         let mut vm = new_storage_test_vm("https://document-open-policy.test/");
         vm.document_runtime
             .dom_host_mut()
@@ -1600,4 +1600,40 @@ fn repeated_eval_violations_report_once_per_location_but_dispatch_every_event() 
         6
     );
     assert_eq!(vm.eval("violations").unwrap(), "6");
+}
+
+#[test]
+fn inline_script_and_handler_csp_accept_base64url_hashes() {
+    for hash in [
+        "sha256-1u5siURgPyHwZ-QAD8UUU8_PSFeCLQfQgff1wmWe30c=",
+        "sha384-dfgfWBTXEJmr8n1u3heMCmQspfZzXztxsa6b_uRqupCtR1-hV5y1NIRIuk1GgyfX",
+        "sha512-yuIija81LFQ7iw1A1DtvkYIsDvqIgpOAzeloywzVVvfCZdYs43Z-Dh0lhILbiEstq4O56dtDfie_iALMCVjEMA==",
+    ] {
+        for unsafe_hashes in [false, true] {
+            let mut vm = new_storage_test_vm("https://inline-hash-csp.test/");
+            vm.document_runtime
+                .dom_host_mut()
+                .reset_html_document_shell();
+            let policy = format!(
+                "script-src '{hash}' {}",
+                if unsafe_hashes { "'unsafe-hashes'" } else { "" }
+            );
+            vm.set_response_content_security_policies(&[policy]);
+            let result = vm
+                .eval(&format!(
+                    "JSON.stringify({})",
+                    include_str!("../../../../tests/fixtures/csp-inline-hash.js")
+                ))
+                .unwrap();
+            assert_eq!(
+                result,
+                if unsafe_hashes {
+                    "[1,2,2,2]"
+                } else {
+                    "[1,1,1,1]"
+                },
+                "{hash}"
+            );
+        }
+    }
 }

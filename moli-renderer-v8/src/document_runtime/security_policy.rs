@@ -2650,6 +2650,18 @@ impl DocumentRuntime {
             .unwrap_or_default()
     }
 
+    pub(crate) fn reset_meta_content_security_policy_processing_for_document(
+        &self,
+        document: DomHandle,
+    ) {
+        // document.open() replaces the input stream of this same Document.
+        // Its installed policies and live blob/worker policy source survive;
+        // meta elements inserted into the new stream are processed again.
+        self.processed_meta_content_security_policy_handles
+            .borrow_mut()
+            .retain(|(owner, _)| *owner != document);
+    }
+
     pub(crate) fn initialize_inherited_meta_content_security_policies(
         &self,
         document_handle: DomHandle,
@@ -2668,18 +2680,6 @@ impl DocumentRuntime {
             previous.is_none(),
             "new Document already has delivered meta policies"
         );
-    }
-
-    pub(crate) fn reset_meta_content_security_policy_processing_for_document(
-        &self,
-        document: DomHandle,
-    ) {
-        // document.open() replaces the input stream of this same Document.
-        // Its installed policies and live blob/worker policy source survive;
-        // meta elements inserted into the new stream are processed again.
-        self.processed_meta_content_security_policy_handles
-            .borrow_mut()
-            .retain(|(owner, _)| *owner != document);
     }
 
     pub(crate) fn process_connected_meta_content_security_policies(&self, roots: &[DomHandle]) {
@@ -4184,11 +4184,11 @@ mod tests {
             "#,
         );
         assert!(runtime.requires_trusted_types_for_script());
-
         let document = runtime.document_handle();
         runtime.open_document();
         assert_eq!(runtime.document_handle(), document);
 
+        assert_eq!(runtime.document_handle(), document);
         assert!(
             runtime.requires_trusted_types_for_script(),
             "opening the same Document must retain its installed policies"
