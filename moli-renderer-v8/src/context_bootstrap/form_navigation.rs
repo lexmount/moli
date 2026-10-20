@@ -39,6 +39,7 @@ impl FormNavigationHistory {
                 navigation_index,
                 destination,
                 mutation,
+                super::navigation_window::navigation_source_document(scope, owner),
             ))
         });
         Self {

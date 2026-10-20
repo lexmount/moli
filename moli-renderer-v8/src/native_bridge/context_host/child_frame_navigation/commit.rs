@@ -334,11 +334,14 @@ impl JsContextHost {
                 .dom_host()
                 .node(handle)
                 .is_some_and(|node| node.flags().parser_created());
+        let source = moli_page_types::NavigationSourceDocument::from_initial_empty(
+            self.child_current_document_is_initial_empty(handle),
+        );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             if is_attribute_about_blank_noop {
                 entry.clear_navigation_activation();
             } else if is_javascript_attribute_target {
-                entry.apply_javascript_url_navigation_to_entry_seed();
+                entry.apply_javascript_url_navigation_to_entry_seed(source);
             } else if is_initial_about_blank_commit {
                 entry.apply_initial_attribute_target_navigation_entry(&url);
             } else if is_initial_attribute_target_seed {
@@ -347,7 +350,7 @@ impl JsContextHost {
                 attribute_bootstrap,
                 ChildBrowsingContextBootstrap::Srcdoc { .. }
             ) {
-                entry.replace_navigation_in_entry_seed(&url);
+                entry.replace_navigation_in_entry_seed(&url, source);
             }
         }
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {

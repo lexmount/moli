@@ -67,6 +67,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
             current_navigation_index,
             next_url,
             mutation,
+            super::navigation_window::navigation_source_document(scope, owner),
         );
         super::session_history::capture_for_navigation(scope, owner, &mut entry_seed);
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -118,6 +119,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
             current_navigation_index,
             next_url,
             mutation,
+            super::navigation_window::navigation_source_document(scope, owner),
         );
         let result = navigation_signal
             .map(|(navigation, signal)| {
@@ -150,6 +152,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         current_navigation_index,
         next_url,
         mutation,
+        super::navigation_window::navigation_source_document(scope, owner),
     );
     let host = unsafe { &mut *host_ptr };
     let policy = host

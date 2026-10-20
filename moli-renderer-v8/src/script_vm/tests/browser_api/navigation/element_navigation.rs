@@ -2176,6 +2176,57 @@ __hyperlink.click();
 }
 
 #[tokio::test]
+async fn navigation_activation_sources_follow_document_lifecycle_and_origin() {
+    let script = include_str!("../../../../../tests/fixtures/navigation-activation-source.js");
+    for (mode, requests) in [
+        ("initial-assign", 1),
+        ("initial-replace", 1),
+        ("initial-navigate", 1),
+        ("initial-src", 1),
+        ("initial-form", 1),
+        ("initial-fragment-assign", 1),
+        ("noninitial-blank-assign", 1),
+        ("noninitial-blank-replace", 1),
+        ("noninitial-blank-fragment-assign", 1),
+        ("opened-initial-assign", 1),
+        ("srcdoc-assign", 1),
+        ("http-assign", 2),
+        ("http-reload", 2),
+        ("noninitial-blank-to-blank", 0),
+        ("srcdoc-to-blank", 0),
+        ("cross-origin-source", 2),
+        ("traverse-middle-origin", 4),
+        ("cross-origin-to-blank", 1),
+        ("opaque-source", 2),
+    ] {
+        let server = StaticHttpServer::spawn(requests).await;
+        let base = server.base_url().origin().ascii_serialization();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/parent"), &loader);
+        vm.eval(&format!("{script}\nglobalThis.activationSourceResult='pending';navigationActivationSource({base:?},{mode:?}).then(value=>activationSourceResult=value,error=>activationSourceResult=String(error));")).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(activationSourceResult !== 'pending')",
+            "true",
+            mode,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(activationSourceResult)").unwrap())
+                .unwrap();
+        let checks = result["checks"]
+            .as_array()
+            .expect("activation source fixture checks");
+        let failed: Vec<_> = checks.iter().filter(|row| row["pass"] != true).collect();
+        assert!(failed.is_empty(), "{mode}: {result}");
+        assert_eq!(result["passed"], result["total"]);
+        assert_eq!(server.finish_targets().await.len(), requests, "{mode}");
+    }
+}
+
+#[tokio::test]
 async fn navigation_transition_and_activation_use_private_readonly_state() {
     let script = include_str!("../../../../../tests/fixtures/navigation-transition-state.js");
     for target in ["top", "child"] {

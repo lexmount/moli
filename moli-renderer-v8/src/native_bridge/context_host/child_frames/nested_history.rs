@@ -208,6 +208,7 @@ impl JsContextHost {
         // historical view without replaying an older load's traversal admission.
         record.seed.session_history = Default::default();
         record.seed.activation = Some(NavigationActivationSeed {
+            source_document: moli_page_types::NavigationSourceDocument::NonInitial,
             entry: target,
             from: None,
             navigation_type: Some("traverse".to_owned()),

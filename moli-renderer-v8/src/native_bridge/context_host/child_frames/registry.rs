@@ -285,7 +285,12 @@ impl JsContextHost {
                     {
                         if attribute_pushes_history {
                             Self::apply_child_browsing_context_navigation_to_entry_seed(
-                                &mut seed, &url,
+                                &mut seed,
+                                &url,
+                                moli_page_types::NavigationSourceDocument::from_initial_empty(
+                                    existing.is_none()
+                                        || self.child_current_document_is_initial_empty(handle),
+                                ),
                             );
                         } else {
                             // Srcdoc inherits its creator's origin. URL-origin
@@ -304,7 +309,12 @@ impl JsContextHost {
                                 })
                                 .flatten();
                             Self::replace_child_browsing_context_navigation_in_entry_seed(
-                                &mut seed, &url,
+                                &mut seed,
+                                &url,
+                                moli_page_types::NavigationSourceDocument::from_initial_empty(
+                                    existing.is_none()
+                                        || self.child_current_document_is_initial_empty(handle),
+                                ),
                             );
                             if let Some(key) = replacement_key {
                                 if let Some(entry) = seed

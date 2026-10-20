@@ -44,9 +44,19 @@ pub(crate) fn capture_inherited_history_for_browser_commit(
             .any(|entry| entry.history_index == target && entry.url == url.as_str())
     {
         if current == target {
-            moli_page_types::reload_navigation_seed(entries, current)?
+            moli_page_types::reload_navigation_seed(
+                entries,
+                current,
+                super::navigation_window::navigation_source_document(scope, owner),
+            )?
         } else {
-            moli_page_types::traversal_navigation_seed_candidate(entries, current, target)?.seed
+            moli_page_types::traversal_navigation_seed_candidate(
+                entries,
+                current,
+                target,
+                super::navigation_window::navigation_source_document(scope, owner),
+            )?
+            .seed
         }
     } else {
         let mutation = if target == current && position.length() == entries.len() {
@@ -66,6 +76,7 @@ pub(crate) fn capture_inherited_history_for_browser_commit(
             navigation_index,
             url,
             mutation,
+            super::navigation_window::navigation_source_document(scope, owner),
         )
     };
     super::session_history::capture_for_navigation(scope, owner, &mut seed);

@@ -431,6 +431,14 @@ impl JsContextHost {
         // A preserved initial LocalWindow may already have a history surface
         // without running realm bootstrap again. Commit its Document seed here;
         // subsequent view refreshes must never replay this history transition.
+        let origin = self
+            .child_window_access_origin(handle)
+            .map(|origin| origin.serialized_origin())
+            .unwrap_or_else(|| "null".to_owned());
+        self.child_browsing_contexts
+            .get_mut(&handle)
+            .expect("committed child owner must retain its browsing context")
+            .record_committed_document_origin(&origin);
         if let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
             && let Some(entry) = self.child_browsing_contexts.get(&handle)
         {

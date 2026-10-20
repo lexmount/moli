@@ -752,6 +752,30 @@ impl ChildBrowsingContextEntry {
         self.prune_local_history();
     }
 
+    pub(super) fn record_committed_document_origin(&mut self, origin: &str) {
+        let Some(document) =
+            child_navigation_current_document_id(&self.committed_navigation_entry_seed)
+                .map(str::to_owned)
+        else {
+            return;
+        };
+        for seed in [
+            &mut self.navigation_entry_seed,
+            &mut self.committed_navigation_entry_seed,
+        ] {
+            for entry in &mut seed.entries {
+                if entry.document_id.as_str() == document {
+                    entry.document_origin = origin.to_owned();
+                }
+            }
+            if let Some(activation) = &mut seed.activation
+                && activation.entry.document_id.as_str() == document
+            {
+                activation.entry.document_origin = origin.to_owned();
+            }
+        }
+    }
+
     pub(super) fn restore_navigation_entry_seed_from_committed(&mut self) {
         self.navigation_entry_seed = self.committed_navigation_entry_seed.clone();
     }
@@ -887,29 +911,41 @@ impl ChildBrowsingContextEntry {
         self.navigation_entry_seed = entry_seed;
     }
 
-    pub(super) fn apply_navigation_to_entry_seed(&mut self, url: &Url) {
-        apply_child_navigation_to_seed(&mut self.navigation_entry_seed, url);
+    pub(super) fn apply_navigation_to_entry_seed(
+        &mut self,
+        url: &Url,
+        source: moli_page_types::NavigationSourceDocument,
+    ) {
+        apply_child_navigation_to_seed(&mut self.navigation_entry_seed, url, source);
     }
 
-    pub(super) fn replace_navigation_in_entry_seed(&mut self, url: &Url) {
-        replace_child_navigation_in_seed(&mut self.navigation_entry_seed, url);
+    pub(super) fn replace_navigation_in_entry_seed(
+        &mut self,
+        url: &Url,
+        source: moli_page_types::NavigationSourceDocument,
+    ) {
+        replace_child_navigation_in_seed(&mut self.navigation_entry_seed, url, source);
     }
 
-    pub(super) fn apply_javascript_url_navigation_to_entry_seed(&mut self) {
-        apply_child_javascript_url_navigation_to_seed(&mut self.navigation_entry_seed);
+    pub(super) fn apply_javascript_url_navigation_to_entry_seed(
+        &mut self,
+        source: moli_page_types::NavigationSourceDocument,
+    ) {
+        apply_child_javascript_url_navigation_to_seed(&mut self.navigation_entry_seed, source);
     }
 
     pub(super) fn apply_queued_navigation_to_entry_seed(
         &mut self,
         url: &Url,
         replace_current: bool,
+        source: moli_page_types::NavigationSourceDocument,
     ) {
         if url.scheme() == "javascript" {
-            self.apply_javascript_url_navigation_to_entry_seed();
+            self.apply_javascript_url_navigation_to_entry_seed(source);
         } else if replace_current {
-            self.replace_navigation_in_entry_seed(url);
+            self.replace_navigation_in_entry_seed(url, source);
         } else {
-            self.apply_navigation_to_entry_seed(url);
+            self.apply_navigation_to_entry_seed(url, source);
         }
     }
 
@@ -959,6 +995,7 @@ impl ChildBrowsingContextEntry {
             .get(1)
             .cloned()
             .map(|activation_entry| NavigationActivationSeed {
+                source_document: moli_page_types::NavigationSourceDocument::InitialEmpty,
                 entry: activation_entry,
                 from: None,
                 navigation_type: Some("replace".to_owned()),
