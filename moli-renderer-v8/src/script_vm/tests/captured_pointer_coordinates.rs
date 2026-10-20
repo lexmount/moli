@@ -64,6 +64,17 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    vm.eval("frame.style.left='200px';frame.style.top='100px';'moved'")
+        .unwrap();
+    // Layout-affecting iframe attributes invalidate the published frame
+    // viewport. The next input initializes a new snapshot before dispatch;
+    // capture must project through that same snapshot without another pass.
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        builds + 1,
+        "OnDemand input must rebuild an invalidated iframe snapshot exactly once"
+    );
     vm.publish_layout_for_test().unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
@@ -71,7 +82,7 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 0);
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
-        r#"[["pointerdown","captured",30,30],["pointermove","captured",-80,-40],["pointermove","captured",-80,-40],["pointerup","captured",-80,-40],["pointermove","outside",20,20]]"#
+        r#"[["pointerdown","captured",30,30],["pointermove","captured",-80,-40],["pointermove","captured",-180,-80],["pointermove","captured",-180,-80],["pointerup","captured",-180,-80],["pointermove","outside",20,20]]"#
     );
     assert_eq!(
         vm.eval("JSON.stringify(transitions)").unwrap(),
