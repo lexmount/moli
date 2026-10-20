@@ -12,6 +12,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod metadata;
 use metadata::{AudioMetadata, VideoMetadata};
+use webidl::WebIdlDictionarySnapshot;
 
 const DATA: &str = "__moliRtcEncodedFrameData";
 const METADATA: &str = "__moliRtcEncodedFrameMetadata";
@@ -32,13 +33,16 @@ impl FrameKind {
     }
 
     fn members(self) -> impl Iterator<Item = &'static str> {
-        metadata::BASE_MEMBERS
-            .iter()
-            .chain(match self {
-                Self::Audio => metadata::AUDIO_MEMBERS,
-                Self::Video => metadata::VIDEO_MEMBERS,
-            })
-            .copied()
+        let schema = match self {
+            Self::Audio => &AudioMetadata::SNAPSHOT_SCHEMA,
+            Self::Video => &VideoMetadata::SNAPSHOT_SCHEMA,
+        };
+        schema
+            .inherited
+            .into_iter()
+            .flat_map(|base| base.members)
+            .chain(schema.members)
+            .map(|member| member.name)
     }
 }
 
