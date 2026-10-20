@@ -1529,6 +1529,9 @@ impl PageVmRuntimeHooks {
         );
         self.document_lifecycle = Some(journal.clone());
         self.document_lifecycle_install = PageVmDocumentLifecycleInstall::ReuseOrCreateInitial;
+        if let Some(owner_wake) = self.owner_wake() {
+            journal.bind_owner_wake(owner_wake);
+        }
         Ok((journal, identity))
     }
 

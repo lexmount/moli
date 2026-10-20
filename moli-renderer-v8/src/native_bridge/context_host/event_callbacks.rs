@@ -1,4 +1,5 @@
 use super::{PageScriptHost, WindowExecutionContextIdentity, WindowExecutionContextOwner};
+use crate::common_runtime::{CommonRuntimeBinding, RuntimeExecutionContext};
 use crate::event_type::EventTypeKey;
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
@@ -27,6 +28,7 @@ pub(crate) struct PreparedEventCallback {
     kind: EventCallbackKind,
     resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+    relevant_host: *mut PageScriptHost,
 }
 
 pub(crate) struct WindowErrorReportingScope {
@@ -44,6 +46,35 @@ impl Drop for WindowErrorReportingScope {
 }
 
 impl PreparedEventCallback {
+    pub(crate) fn invocation<'s, 'a>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Value>,
+        arguments: &'a [v8::Local<'s, v8::Value>],
+        current_event: Option<v8::Local<'s, v8::Object>>,
+    ) -> crate::callback_invocation::CallbackInvocation<'s, 'a> {
+        let invocation = crate::callback_invocation::CallbackInvocation::new(
+            self.callback(scope),
+            receiver,
+            self.relevant_context(scope),
+            self.incumbent_context(scope),
+            self.is_callable(),
+            "handleEvent",
+            arguments,
+            current_event,
+        );
+        let invocation = if let Some(initiator) = self.resource_initiator() {
+            invocation.with_resource_initiator(initiator.clone())
+        } else {
+            invocation
+        };
+        if self.kind == EventCallbackKind::Handler {
+            invocation.with_legacy_event_handler()
+        } else {
+            invocation
+        }
+    }
+
     pub(crate) fn callback<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -73,6 +104,10 @@ impl PreparedEventCallback {
 
     pub(crate) fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
         self.relevant_identity
+    }
+
+    pub(crate) fn relevant_host(&self) -> *mut PageScriptHost {
+        self.relevant_host
     }
 
     pub(crate) fn is_callable(&self) -> bool {
@@ -112,6 +147,31 @@ impl EventCallbackRegistry {
 }
 
 impl PageScriptHost {
+    fn event_callback_host_for_context(
+        &self,
+        context: v8::Local<'_, v8::Context>,
+    ) -> Option<*mut Self> {
+        // Bare V8 test contexts have no renderer binding. An installed but
+        // disconnected binding, however, must never fall back to this target.
+        if context.get_slot::<CommonRuntimeBinding>().is_none() {
+            return Some(std::ptr::from_ref(self).cast_mut());
+        }
+        match CommonRuntimeBinding::from_context(context)?.1 {
+            RuntimeExecutionContext::Window(host) => Some(host),
+            RuntimeExecutionContext::Worker => None,
+        }
+    }
+
+    fn event_callback_identity_for_context(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<'_, v8::Context>,
+    ) -> Option<WindowExecutionContextIdentity> {
+        let host_ptr = self.event_callback_host_for_context(context)?;
+        let host = unsafe { &*host_ptr };
+        host.window_execution_context_identity_for_v8_context(scope, context)
+    }
+
     pub(crate) fn enter_window_error_reporting_scope(
         &mut self,
         owner: WindowExecutionContextOwner,
@@ -372,12 +432,20 @@ impl PageScriptHost {
         kind: EventCallbackKind,
     ) -> EventCallbackId {
         let relevant_context = callback.relevant_context(scope);
-        let relevant_identity =
-            self.window_execution_context_identity_for_v8_context(scope, relevant_context);
+        // A stored non-callable handler has no invocation realm. Its value
+        // remains on the target when the object's creation realm retires.
+        let has_callback_realm =
+            kind != EventCallbackKind::Handler || callback.callable_at_conversion();
+        let registration_identity = has_callback_realm
+            .then(|| self.window_execution_context_identity_for_v8_context(scope, relevant_context))
+            .flatten();
+        let relevant_identity = has_callback_realm
+            .then(|| self.event_callback_identity_for_context(scope, relevant_context))
+            .flatten();
         #[cfg(test)]
         let incumbent_identity = {
             let incumbent_context = callback.incumbent_context(scope);
-            self.window_execution_context_identity_for_v8_context(scope, incumbent_context)
+            self.event_callback_identity_for_context(scope, incumbent_context)
         };
         let id = self.event_callbacks.allocate_id();
         let previous = self.event_callbacks.records.insert(
@@ -387,7 +455,7 @@ impl PageScriptHost {
                 kind,
                 resource_initiator: None,
                 relevant_identity,
-                registration_identity: relevant_identity,
+                registration_identity,
                 #[cfg(test)]
                 incumbent_identity,
             },
@@ -489,13 +557,19 @@ impl PageScriptHost {
         {
             return None;
         }
+        let relevant_context = record.callback.relevant_context(scope);
+        let relevant_host = self.event_callback_host_for_context(relevant_context)?;
+        if record.relevant_identity.is_some_and(|identity| {
+            !unsafe { &*relevant_host }.window_execution_context_identity_is_current(identity)
+        }) {
+            return None;
+        }
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
             kind: record.kind,
             resource_initiator: record.resource_initiator.clone(),
-            relevant_identity: record
-                .relevant_identity
-                .filter(|identity| self.window_execution_context_identity_is_current(*identity)),
+            relevant_identity: record.relevant_identity,
+            relevant_host,
         })
     }
 

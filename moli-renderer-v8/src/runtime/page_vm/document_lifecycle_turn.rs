@@ -12,19 +12,16 @@ use anyhow::Result;
 use crate::PageVmInitStage;
 use crate::local_executor::is_on_named_owner_execution_lane_for;
 use crate::page_task_queue::PostParsePageOwnedWork;
-use crate::runtime::{RendererDocumentLifecycleIdentity, RendererDocumentLifecycleWaitOutcome};
+use crate::runtime::{
+    DocumentReplacementLifecycleActionSnapshot, RendererDocumentLifecycleIdentity,
+    RendererDocumentLifecycleWaitOutcome,
+};
 use crate::script_vm::PostParseLifecycleAdvance;
 
 use super::super::document_lifecycle_turn::{
     DocumentLifecycleTurnAction, DocumentLifecycleTurnOutcome, PendingDocumentLifecycleTurn,
 };
 use super::{PageVm, renderer_document_lifecycle_milestone_for_stage};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::runtime) struct DocumentReplacementLifecycleActionSnapshot {
-    pending_admission: Option<crate::runtime::RendererDocumentLifecycleDriveAdmission>,
-    ready_admission: Option<crate::runtime::RendererDocumentLifecycleDriveAdmission>,
-}
 
 impl PageVm {
     pub(in crate::runtime) fn ready_document_replacement_lifecycle_admission(
@@ -43,12 +40,12 @@ impl PageVm {
     pub(in crate::runtime) fn document_replacement_lifecycle_action_snapshot(
         &self,
     ) -> DocumentReplacementLifecycleActionSnapshot {
-        DocumentReplacementLifecycleActionSnapshot {
-            pending_admission: self
-                .document_lifecycle
-                .pending_document_replacement_drive_admission(),
-            ready_admission: self.ready_document_replacement_lifecycle_admission(),
-        }
+        self.document_lifecycle
+            .document_replacement_action_snapshot(
+                self.vm()
+                    .document_runtime
+                    .document_replacement_parser_is_blocked(),
+            )
     }
 
     pub(in crate::runtime) fn has_blocked_document_replacement_lifecycle_admission(
