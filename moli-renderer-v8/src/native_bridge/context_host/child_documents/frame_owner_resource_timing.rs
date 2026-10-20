@@ -1,6 +1,8 @@
 use super::super::{OwnerDispatchScope, PageScriptHost, WindowExecutionContextOwner};
 use crate::{
-    context_bootstrap::{ResourcePerformanceEntry, record_resource_performance_entry},
+    context_bootstrap::{
+        FetchResourceTiming, ResourcePerformanceEntry, record_resource_performance_entry,
+    },
     document_runtime::DomHandle,
     frame_owner_model::{
         FrameDocumentDescendantLoadParent, FrameDocumentLoadDeliveryAction, FrameDocumentTaskOwner,
@@ -22,6 +24,7 @@ pub(in crate::native_bridge::context_host) struct PendingFrameOwnerResourceTimin
     request_url: String,
     initiator_type: &'static str,
     start_unix_millis_bits: u64,
+    started_at: std::time::Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,12 +78,22 @@ impl CompletedFrameOwnerResourceTiming {
     }
 
     fn performance_entry(&self) -> ResourcePerformanceEntry {
-        ResourcePerformanceEntry::from_child_frame_document_network(
+        let mut entry = ResourcePerformanceEntry::from_child_frame_document_network(
             self.timing.request_url.clone(),
             self.timing.initiator_type,
             Some(self.timing.start_unix_millis()),
             &self.network,
-        )
+        );
+        let timing = FetchResourceTiming::from_start(
+            self.timing.initiator_type,
+            self.timing.started_at,
+            self.timing.start_unix_millis(),
+        );
+        if let Some(native) = self.network.resource_timing_response.as_deref() {
+            timing.observe_native_timing(*native);
+        }
+        timing.apply_child_document_timing(&mut entry, &self.network);
+        entry
     }
 }
 
@@ -105,6 +118,7 @@ impl PageScriptHost {
             request_url: target_url.as_str().to_owned(),
             initiator_type,
             start_unix_millis_bits: moli_time::unix_epoch_millis().to_bits(),
+            started_at: std::time::Instant::now(),
         })
     }
 

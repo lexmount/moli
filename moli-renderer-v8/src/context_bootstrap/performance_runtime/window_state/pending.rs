@@ -1,5 +1,7 @@
 use crate::{
-    context_bootstrap::performance_runtime::ResourcePerformanceEntry,
+    context_bootstrap::performance_runtime::{
+        ResourceConnectionTiming, ResourcePerformanceEntry,
+    },
     util::{array_push_value, get_private_value, set_private_value, v8_string},
 };
 use moli_webapi::performance::event_counts::EVENT_COUNTS_TRACKED_TYPES;
@@ -60,7 +62,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
 ) {
     let global = scope.get_current_context().global(scope);
     let entries = ensure_private_array(scope, global, WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT, 0);
-    let record = v8::Array::new(scope, 18);
+    let record = v8::Array::new(scope, 26);
     let Some(name) = v8_string(scope, &entry.name) else {
         return;
     };
@@ -123,6 +125,39 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
             .request_start_unix_millis
             .map(|value| v8::Number::new(scope, value).into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .fetch_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.domain_lookup_start).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.domain_lookup_end).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.connect_start).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.connect_end).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .and_then(|value| value.secure_connection_start)
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .redirect_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .redirect_end_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
     ];
     for (index, value) in fields.into_iter().enumerate() {
         let _ = record.set_index(scope, index as u32, value);
@@ -148,6 +183,35 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                 preload_state: Default::default(),
                 name: array_string(scope, record, 0)?,
                 initiator_type: array_string(scope, record, 1)?,
+                redirect_start_unix_millis: record
+                    .get_index(scope, 24)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                redirect_end_unix_millis: record
+                    .get_index(scope, 25)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                fetch_start_unix_millis: record
+                    .get_index(scope, 18)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                connection_timing: if record
+                    .get_index(scope, 19)
+                    .is_some_and(|value| !value.is_undefined())
+                {
+                    Some(ResourceConnectionTiming {
+                        domain_lookup_start: array_number(scope, record, 19)?,
+                        domain_lookup_end: array_number(scope, record, 20)?,
+                        connect_start: array_number(scope, record, 21)?,
+                        connect_end: array_number(scope, record, 22)?,
+                        secure_connection_start: record
+                            .get_index(scope, 23)
+                            .filter(|value| !value.is_undefined())
+                            .and_then(|value| value.number_value(scope)),
+                    })
+                } else {
+                    None
+                },
                 start_unix_millis: record
                     .get_index(scope, 2)
                     .filter(|value| !value.is_undefined())
@@ -311,6 +375,16 @@ mod tests {
         entry.next_hop_protocol = "h2".to_owned();
         entry.delivery_type = "cache".to_owned();
         entry.content_encoding = "gzip".to_owned();
+        entry.fetch_start_unix_millis = Some(1000.25);
+        entry.redirect_start_unix_millis = Some(999.0);
+        entry.redirect_end_unix_millis = Some(1000.25);
+        entry.connection_timing = Some(ResourceConnectionTiming {
+            domain_lookup_start: 1000.3,
+            domain_lookup_end: 1000.35,
+            connect_start: 1000.4,
+            connect_end: 1000.45,
+            secure_connection_start: Some(1000.42),
+        });
         entry.request_start_unix_millis = Some(1000.5);
         entry.first_interim_response_start_unix_millis = Some(1001.0);
         entry.final_response_headers_start_unix_millis = Some(1002.0);
@@ -325,6 +399,22 @@ mod tests {
         assert_eq!(entries[0].delivery_type, "cache");
         assert_eq!(entries[0].content_encoding, "gzip");
         assert_eq!(entries[0].request_start_unix_millis, Some(1000.5));
+        assert_eq!(entries[0].fetch_start_unix_millis, Some(1000.25));
+        assert_eq!(entries[0].redirect_start_unix_millis, Some(999.0));
+        assert_eq!(entries[0].redirect_end_unix_millis, Some(1000.25));
+        let connection = entries[0]
+            .connection_timing
+            .expect("retained connection timing");
+        assert_eq!(
+            (
+                connection.domain_lookup_start,
+                connection.domain_lookup_end,
+                connection.connect_start,
+                connection.connect_end,
+                connection.secure_connection_start
+            ),
+            (1000.3, 1000.35, 1000.4, 1000.45, Some(1000.42)),
+        );
         assert_eq!(
             entries[0].first_interim_response_start_unix_millis,
             Some(1001.0)

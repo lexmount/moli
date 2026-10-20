@@ -2156,6 +2156,9 @@ static CURLMcode multistate_do(struct Curl_easy *data,
 {
   CURLMcode mresult = CURLM_OK;
   CURLcode result = CURLE_OK;
+  /* Snapshot the selected connection while it is attached. Closed sockets
+   * and later pool eviction cannot erase this transfer's native observations. */
+  data->progress.moli_connection = data->conn->moli_timing;
   if(data->set.fprereq) {
     struct Curl_mapi_guard guard;
     int prereq_rc;
