@@ -88,12 +88,16 @@ impl RendererCreateStreamingRawPageRequest {
         let about_document_state = navigation_history
             .as_ref()
             .and_then(|request| request.about_document_state(&final_url));
+        let history_policy_container = navigation_history
+            .as_ref()
+            .and_then(|request| request.history_policy_container(&final_url));
         let document_policy_container = DocumentPolicyContainer::for_navigation_response(
             &response_headers,
             &final_url,
             about_document_state
                 .as_ref()
                 .map(|state| state.policy_container()),
+            history_policy_container.as_ref(),
             main_document_commit
                 .as_ref()
                 .and_then(|commit| commit.navigation_policy.as_ref()),
@@ -114,6 +118,7 @@ impl RendererCreateStreamingRawPageRequest {
             navigator_identity,
             document_policy_container,
             about_document_state,
+            history_policy_container,
             document_default_language,
             document_last_modified,
             document_settings,
