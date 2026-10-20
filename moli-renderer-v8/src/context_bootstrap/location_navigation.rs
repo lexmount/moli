@@ -1143,12 +1143,7 @@ fn capture_location_navigation_source<'s>(
     let initiator_url = host
         .document_referrer_source_url_for_dispatch_scope(dispatch)
         .unwrap_or_else(|| host.document_url().clone());
-    let mut policy = match dispatch {
-        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
-            host.child_browsing_context_policy_container_snapshot(handle)?
-        }
-        _ => host.document_policy_container().clone(),
-    };
+    let mut policy = host.document_policy_container_for_inheritance(dispatch)?;
     policy.referrer_policy =
         current_document_referrer_policy(scope, source).or(policy.referrer_policy);
     let initiator = crate::runtime::RendererNavigationInitiator::new(
