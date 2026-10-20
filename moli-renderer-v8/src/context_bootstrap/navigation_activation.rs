@@ -28,13 +28,26 @@ const TRANSITION_FINISHED: &str = "__lmNavigationTransitionFinished";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::NavigationActivation, require_prototype)]
-struct NavigationActivationObjectDeclaration<'s> {
+pub(super) struct NavigationActivationObjectDeclaration<'s> {
     #[webapi(slot = ACTIVATION_ENTRY)]
-    entry: v8::Local<'s, v8::Object>,
+    pub(super) entry: v8::Local<'s, v8::Object>,
     #[webapi(slot = ACTIVATION_FROM)]
-    from: v8::Local<'s, v8::Value>,
+    pub(super) from: v8::Local<'s, v8::Value>,
     #[webapi(slot = ACTIVATION_TYPE)]
-    navigation_type: v8::Local<'s, v8::Value>,
+    pub(super) navigation_type: v8::Local<'s, v8::Value>,
+}
+
+impl<'s> NavigationActivationObjectDeclaration<'s> {
+    pub(super) fn from_private_state(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        Some(Self {
+            entry: get_private_object(scope, object, ACTIVATION_ENTRY)?,
+            from: get_private_value(scope, object, ACTIVATION_FROM)?,
+            navigation_type: get_private_value(scope, object, ACTIVATION_TYPE)?,
+        })
+    }
 }
 
 // These are associated platform-object fields, not an author dictionary.
@@ -194,17 +207,6 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     entry_wrappers::for_window(scope, owner, history_entry_from_snapshot(snapshot))
 }
 
-fn navigation_activation_entry_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    current_entry: v8::Local<'s, v8::Object>,
-    activation: &NavigationActivationSeed,
-) -> v8::Local<'s, v8::Object> {
-    if activation.from.is_none() && activation.navigation_type.as_deref() == Some("replace") {
-        return current_entry;
-    }
-    navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry)
-}
-
 pub(super) fn create_navigation_activation_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Context>,
@@ -215,7 +217,7 @@ pub(super) fn create_navigation_activation_object<'s>(
         return v8::null(scope).into();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let entry = navigation_activation_entry_object(scope, current_entry, activation);
+    let entry = navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry);
     let from = activation
         .from
         .as_ref()
