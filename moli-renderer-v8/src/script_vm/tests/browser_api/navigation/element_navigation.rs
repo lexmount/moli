@@ -2174,3 +2174,37 @@ __hyperlink.click();
         r#"[{"label":"anchor-noopener","hasOpener":false,"referrer":"https://example.com/page.html"},{"label":"anchor-opener","hasOpener":true,"referrer":"https://example.com/page.html"},{"label":"area-noreferrer","hasOpener":false,"referrer":""},{"label":"area-opener","hasOpener":true,"referrer":"https://example.com/page.html"}]"#
     );
 }
+
+#[tokio::test]
+async fn navigation_transition_and_activation_use_private_readonly_state() {
+    let script = include_str!("../../../../../tests/fixtures/navigation-transition-state.js");
+    for target in ["top", "child"] {
+        let server = StaticHttpServer::spawn(1).await;
+        let base = server.base_url().origin().ascii_serialization();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/parent"), &loader);
+        vm.eval(&format!(
+            "{script}\nglobalThis.transitionStateResult='pending';navigationTransitionState({base:?},{target:?}).then(value=>transitionStateResult=value,error=>transitionStateResult=String(error));"
+        )).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(transitionStateResult !== 'pending')",
+            "true",
+            target,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(transitionStateResult)").unwrap())
+                .unwrap();
+        let checks = result["checks"].as_array().expect("fixture checks");
+        let failures = checks
+            .iter()
+            .filter(|row| row["pass"] != true)
+            .collect::<Vec<_>>();
+        assert!(failures.is_empty(), "{target}: {failures:?}");
+        assert_eq!(result["total"], 145);
+        assert_eq!(server.finish_targets().await.len(), 1);
+    }
+}

@@ -10,54 +10,105 @@ use super::navigation_window::{runtime_window_owner, window_history_for_holder};
 use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::{NavigationActivationSeed, NavigationHistorySerializedEntry};
-use crate::util::{get_private_value, set_private_value};
+use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 
 pub(super) const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionResolver";
 
+const ACTIVATION_ENTRY: &str = "__lmNavigationActivationEntry";
+const ACTIVATION_FROM: &str = "__lmNavigationActivationFrom";
+const ACTIVATION_TYPE: &str = "__lmNavigationActivationType";
+const TRANSITION_FROM: &str = "__lmNavigationTransitionFrom";
+const TRANSITION_TO: &str = "__lmNavigationTransitionTo";
+const TRANSITION_TYPE: &str = "__lmNavigationTransitionType";
+const TRANSITION_COMMITTED: &str = "__lmNavigationTransitionCommitted";
+const TRANSITION_FINISHED: &str = "__lmNavigationTransitionFinished";
+
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::NavigationActivation,
-    own_to_string_tag = "NavigationActivation",
-    readonly_to_string_tag
-)]
-struct NavigationActivationObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    entry: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "navigationType")]
-    navigation_type: v8::Local<'scope, v8::Value>,
+#[webapi(interface = web_api_interfaces::NavigationActivation, require_prototype)]
+struct NavigationActivationObjectDeclaration<'s> {
+    #[webapi(slot = ACTIVATION_ENTRY)]
+    entry: v8::Local<'s, v8::Object>,
+    #[webapi(slot = ACTIVATION_FROM)]
+    from: v8::Local<'s, v8::Value>,
+    #[webapi(slot = ACTIVATION_TYPE)]
+    navigation_type: v8::Local<'s, v8::Value>,
 }
 
+// These are associated platform-object fields, not an author dictionary.
+// World views keep their own projected handles and share settlement authority
+// only through the canonical transition retained by Navigation.
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::NavigationTransition,
-    own_to_string_tag = "NavigationTransition",
-    readonly_to_string_tag
-)]
-struct NavigationTransitionObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property)]
-    to: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "navigationType")]
-    navigation_type: &'static str,
-
-    #[webapi(data_property)]
-    committed: v8::Local<'scope, v8::Promise>,
-
+#[webapi(interface = web_api_interfaces::NavigationTransition, require_prototype)]
+pub(super) struct NavigationTransitionObjectDeclaration<'s> {
+    #[webapi(slot = TRANSITION_FROM)]
+    pub(super) from: v8::Local<'s, v8::Object>,
+    #[webapi(slot = TRANSITION_TO)]
+    pub(super) to: v8::Local<'s, v8::Value>,
+    #[webapi(slot = TRANSITION_TYPE)]
+    navigation_type: v8::Local<'s, v8::Value>,
+    #[webapi(slot = TRANSITION_COMMITTED)]
+    pub(super) committed: v8::Local<'s, v8::Promise>,
     #[webapi(slot = NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT)]
-    committed_resolver: v8::Local<'scope, v8::PromiseResolver>,
+    committed_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
+    #[webapi(slot = TRANSITION_FINISHED)]
+    pub(super) finished: v8::Local<'s, v8::Promise>,
+}
 
-    #[webapi(data_property)]
-    finished: v8::Local<'scope, v8::Promise>,
+impl<'s> NavigationTransitionObjectDeclaration<'s> {
+    pub(super) fn from_private_state(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        Some(Self {
+            from: get_private_object(scope, object, TRANSITION_FROM)?,
+            to: get_private_value(scope, object, TRANSITION_TO)?,
+            navigation_type: get_private_value(scope, object, TRANSITION_TYPE)?,
+            committed: get_private_value(scope, object, TRANSITION_COMMITTED)
+                .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())?,
+            committed_resolver: None,
+            finished: get_private_value(scope, object, TRANSITION_FINISHED)
+                .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())?,
+        })
+    }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationActivation, enumerable, receiver)]
+struct NavigationActivationPrototypeDeclaration {
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, ACTIVATION_FROM))]
+    from: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, ACTIVATION_ENTRY))]
+    entry: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, ACTIVATION_TYPE))]
+    navigation_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationTransition, enumerable, receiver)]
+struct NavigationTransitionPrototypeDeclaration {
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_TYPE))]
+    navigation_type: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_FROM))]
+    from: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_TO))]
+    to: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_COMMITTED), returns_promise)]
+    committed: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_FINISHED), returns_promise)]
+    finished: (),
+}
+
+fn associated_field_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let object = web_api_object_target(scope, args.this()).expect("validated navigation receiver");
+    let slot = args.data().to_rust_string_lossy(scope);
+    rv.set(get_private_value(scope, object, &slot).expect("navigation associated field"));
 }
 
 #[derive(WebApiObject)]
@@ -81,14 +132,20 @@ pub(super) fn install_navigation_activation_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
-    if interface_name != "NavigationTransition" {
-        return;
+    let prototype = template.prototype_template(scope);
+    match interface_name {
+        "NavigationActivation" => {
+            NavigationActivationPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "NavigationTransition" => {
+            NavigationTransitionPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        _ => {}
     }
-    template.prototype_template(scope).set_with_attr(
-        v8str(scope, "committed").into(),
-        v8::undefined(scope).into(),
-        v8::PropertyAttribute::DONT_ENUM,
-    );
 }
 
 pub(super) fn current_entry_matches_activation_snapshot<'s>(
@@ -228,9 +285,9 @@ pub(super) fn install_navigation_transition<'s>(
         to: to
             .map(v8::Local::<v8::Value>::from)
             .unwrap_or_else(|| v8::null(scope).into()),
-        navigation_type,
+        navigation_type: v8str(scope, navigation_type).into(),
         committed,
-        committed_resolver,
+        committed_resolver: Some(committed_resolver),
         finished,
     }
     .bind(scope)
@@ -373,7 +430,7 @@ pub(super) fn navigation_transition_matches_resolver<'s>(
     resolver: v8::Local<'s, v8::PromiseResolver>,
 ) -> bool {
     let current_finished = navigation_transition_object(scope, navigation)
-        .and_then(|transition| transition.get(scope, v8str(scope, "finished").into()));
+        .and_then(|transition| get_private_value(scope, transition, TRANSITION_FINISHED));
     current_finished
         .is_some_and(|finished| finished.strict_equals(resolver.get_promise(scope).into()))
 }
@@ -462,6 +519,17 @@ mod tests {
         for (owner, caller) in [(first, second), (second, first)] {
             let (navigation, from) = {
                 let scope = &mut v8::ContextScope::new(scope, owner);
+                let template = NavigationTransitionPrototypeDeclaration::build(scope);
+                let constructor = template.get_function(scope).unwrap();
+                let global = owner.global(scope);
+                assert_eq!(
+                    global.create_data_property(
+                        scope,
+                        v8str(scope, "NavigationTransition").into(),
+                        constructor.into()
+                    ),
+                    Some(true)
+                );
                 (v8::Object::new(scope), v8::Object::new(scope))
             };
             let scope = &mut v8::ContextScope::new(scope, caller);
