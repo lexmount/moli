@@ -340,6 +340,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -469,6 +471,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -608,6 +612,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -782,6 +788,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -1106,6 +1114,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -1276,6 +1286,8 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,

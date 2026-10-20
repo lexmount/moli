@@ -644,6 +644,8 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
         local_executor,
         &loader,
         &PageVmEnvConfig {
+            history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
@@ -939,6 +941,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -1121,6 +1125,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
@@ -1727,6 +1733,8 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
             local_executor,
             &loader,
             &PageVmEnvConfig {
+                history_policy_container: None,
+
                 window_identity: Default::default(),
                 root_frame_id: None,
                 main_document_commit: None,

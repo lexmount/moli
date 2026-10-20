@@ -1651,6 +1651,7 @@ fn child_document_load_outcome_from_response(
         &head.headers,
         &navigation_url,
         None,
+        None,
         request.source_policy.as_ref(),
     );
     // 204/205 cannot start downloads. Required CSP is still enforced below.

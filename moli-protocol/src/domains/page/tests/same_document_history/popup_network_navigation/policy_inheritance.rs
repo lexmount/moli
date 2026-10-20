@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn blob_history_restores_creation_policy_without_later_creator_or_target_meta() {
+    const SCRIPT: &str = include_str!("../../../../../../tests/fixtures/blob-history-policy.js");
+    const AWAY: &str = "<!doctype html><script>addEventListener('load',()=>opener.postMessage({awayReady:true},'*'));addEventListener('message',e=>{if(e.data==='back')history.back();});</script>";
+    run_history_test(async {
+        for kind in ["img", "tt"] {
+            for mode in ["none", "early", "late", "target-only"] {
+                for cross in [false, true] {
+                    let routes = axum::Router::new()
+                        .route("/csp-history-away", axum::routing::get(|| async { axum::response::Html(AWAY) }))
+                        .route("/csp-history-image.png", axum::routing::get(|| async {
+                            let image = base64::Engine::decode(&base64::engine::general_purpose::STANDARD,
+                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==").unwrap();
+                            ([(axum::http::header::CONTENT_TYPE, "image/png")], image)
+                        }));
+                    let mut page = SameDocumentPage::with_routes(routes).await;
+                    let script = format!("{SCRIPT}\nblobHistoryPolicy(location.origin,{kind:?},{mode:?},{cross})");
+                    let result = page.evaluate(&script).await;
+                    let blocked = if kind == "img" { "blocked" } else { "TypeError:true" };
+                    assert_eq!(result, json!({
+                        "kind":kind,"mode":mode,"cross":cross,
+                        "first":if mode=="early" {blocked} else {"allowed"},
+                        "second":if mode=="early" {blocked} else {"allowed"},
+                        "targetCheck":if mode=="target-only" {json!(blocked)} else {serde_json::Value::Null},
+                        "creatorCheck":if matches!(mode,"early"|"late") {blocked} else {"allowed"},
+                        "recreated":true,
+                    }), "{kind}/{mode}/cross={cross}");
+                }
+            }
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn popup_location_navigation_captures_delivered_meta_policies() {
     run_history_test(async {
         for late_policy in [false, true] {

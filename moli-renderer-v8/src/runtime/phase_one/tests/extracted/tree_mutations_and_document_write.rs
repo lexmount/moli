@@ -1129,6 +1129,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+history_policy_container: None,
+
             window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,

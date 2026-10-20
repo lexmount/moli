@@ -323,6 +323,7 @@ impl PageScriptHost {
             navigation_bootstrap_entry: None,
             navigation_history_source: None,
             about_document_state,
+            history_policy_container: None,
             reserved_service_worker_client_id: None,
         };
         let mut dom_host = crate::dom::native::DomHost::from_dom(
