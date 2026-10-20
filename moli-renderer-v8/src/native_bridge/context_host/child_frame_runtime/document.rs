@@ -721,6 +721,7 @@ impl JsContextHost {
                     // document.open() reuses this Document and its mutable origin.
                     entry.clear_script_execution_state();
                 }
+                host.reset_meta_content_security_policy_processing_for_document(document_handle);
                 host.request_child_frame_realm_materialization(child_handle);
                 host.install_empty_child_classic_script_runner_for_current_document(
                     child_handle,
