@@ -946,6 +946,7 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
@@ -1046,6 +1047,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 moli_fetch::ResponseBody::materialized_bytes(
@@ -1073,6 +1075,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 moli_fetch::ResponseBody::materialized_bytes(b"plain text".to_vec()),
@@ -2058,6 +2061,7 @@ __streamingXhr.send();
         redirected: false,
         redirect_chain: Vec::new(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     };
 
@@ -2232,6 +2236,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 negotiated_http_version: None,
                             }],
                             from_cache: true,
+                            cache_state: moli_fetch::ResponseCacheState::Local,
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -2509,6 +2514,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                             redirected: false,
                             redirect_chain: Vec::new(),
                             from_cache: false,
+                            cache_state: Default::default(),
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -2609,6 +2615,7 @@ fn install_streaming_fetch_response_fixture(
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     body_source_id,
@@ -2669,6 +2676,7 @@ fn install_streaming_fetch_response_fixture(
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
@@ -2779,6 +2787,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                             redirected: false,
                             redirect_chain: Vec::new(),
                             from_cache: false,
+                            cache_state: Default::default(),
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -3414,6 +3423,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
@@ -3672,6 +3682,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 if streaming {
@@ -3943,6 +3954,7 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 if streaming {

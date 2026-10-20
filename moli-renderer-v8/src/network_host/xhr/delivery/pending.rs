@@ -143,6 +143,7 @@ fn xhr_complete_callback(
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 pending_body_value,

@@ -2870,6 +2870,7 @@ dependencies = [
  "moli-web-mime",
  "parking_lot",
  "rcgen",
+ "serde",
  "strum",
  "tokio",
  "tokio-rustls",

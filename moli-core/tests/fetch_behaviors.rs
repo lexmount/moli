@@ -2169,3 +2169,6 @@ async fn carries_and_replaces_cookies_across_multi_hop_redirect_chain() -> Resul
     server.shutdown().await;
     Ok(())
 }
+
+#[path = "fetch_behaviors/cache_timing.rs"]
+mod cache_timing;

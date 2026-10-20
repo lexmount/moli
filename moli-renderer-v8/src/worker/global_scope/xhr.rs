@@ -1040,6 +1040,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         response_headers: response_head.headers.clone(),
                         response_body,
                         response_from_cache: response_head.from_cache,
+                        response_cache_state: response_head.cache_state,
                     })
                 } else {
                     None
@@ -1075,6 +1076,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         response_headers: response_head.headers.clone(),
                         response_body: response_body.clone(),
                         from_cache: response_head.from_cache,
+                        cache_state: response_head.cache_state,
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         head: response_head,
