@@ -1,4 +1,6 @@
-use super::navigation_activation::navigation_activation_value;
+use super::navigation_activation::{
+    NavigationActivationObjectDeclaration, navigation_activation_value,
+};
 use super::navigation_entry::{
     history_index, navigation_current_entry, navigation_entry_document_id,
     navigation_entry_referrer_policy_value,
@@ -213,16 +215,16 @@ fn serialize_navigation_activation_seed<'s>(
     let history_entries = serialize_history_entries(scope, history);
     let activation = navigation_activation_value(scope, navigation)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let entry = get_own_static_property(scope, activation, "entry")
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .map(|entry| serialize_navigation_entry_object(scope, entry, &history_entries))?;
-    let from = get_own_static_property(scope, activation, "from")
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    // Capture associated state even if an author shadows or deletes the public
+    // attributes. History synchronization must never run author getters.
+    let activation = NavigationActivationObjectDeclaration::from_private_state(scope, activation)?;
+    let entry = serialize_navigation_entry_object(scope, activation.entry, &history_entries);
+    let from = v8::Local::<v8::Object>::try_from(activation.from)
+        .ok()
         .map(|entry| serialize_navigation_entry_object(scope, entry, &history_entries));
-    let navigation_type = get_own_static_property(scope, activation, "navigationType")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty() && value != "null");
+    let navigation_type = v8::Local::<v8::String>::try_from(activation.navigation_type)
+        .ok()
+        .map(|value| value.to_rust_string_lossy(scope));
     Some(NavigationActivationSeed {
         entry,
         from,
