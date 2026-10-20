@@ -61,7 +61,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation_utf16(
     }
     let initiator = runtime.owner_dispatch_scope_for_node(handle);
     if let Some(previous_seed_snapshot) = previous_seed_snapshot
-        && !previous_seed_snapshot.pending_attribute_bootstrap_commit
+        && !previous_seed_snapshot.pending_attribute_bootstrap_commit()
     {
         runtime.restore_child_browsing_context_navigation_seed_snapshot(
             handle,

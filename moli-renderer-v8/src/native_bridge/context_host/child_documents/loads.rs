@@ -1,4 +1,7 @@
-use super::super::{ChildBrowsingContextBootstrap, OwnerDispatchScope, PageScriptHost};
+use super::super::{
+    ChildBrowsingContextBootstrap, OwnerDispatchScope, PageScriptHost,
+    child_frames::PendingChildFrameNavigation,
+};
 use super::{
     ChildDocumentNavigationInitiator, PendingChildDocumentNavigation,
     configure_child_document_navigation_request,
@@ -122,11 +125,15 @@ impl PageScriptHost {
     pub(in crate::native_bridge::context_host::child_documents) fn start_child_document_load(
         &mut self,
         handle: DomHandle,
-        bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
-        initiator: ChildDocumentNavigationInitiator,
-        initiator_url: Option<url::Url>,
+        navigation: PendingChildFrameNavigation,
     ) -> Option<u64> {
+        let PendingChildFrameNavigation {
+            bootstrap,
+            initiator,
+            initiator_url,
+            target_snapshot,
+        } = navigation;
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_owner = navigation_load.owner();
         let initiating_loader = self.document_resource_loader_for_owner(initiating_owner)?;
@@ -243,13 +250,14 @@ impl PageScriptHost {
             redirect: None,
             request: child_document_load_request(bootstrap)
                 .map(|request| {
-                    configure_child_document_navigation_request(
-                        request,
-                        &initiator_url,
-                        &browser_context,
-                    )
-                    .with_page_network_policy()
-                    .with_network_partition_key(network_partition_key)
+                    target_snapshot
+                        .configure_request(configure_child_document_navigation_request(
+                            request,
+                            &initiator_url,
+                            &browser_context,
+                        ))
+                        .with_page_network_policy()
+                        .with_network_partition_key(network_partition_key)
                 })
                 .map(|request| {
                     crate::network::navigation::NavigationInterception::new(
