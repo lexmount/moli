@@ -3,6 +3,66 @@ use std::sync::Arc;
 use super::{RendererDocumentLifecycleIdentity, RendererWindowDocumentSource};
 use crate::SharedWebStorageStore;
 
+/// An immutable navigation policy, without source Window or origin authority.
+/// Frame sandbox, permissions and storage state belong to the destination.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RendererNavigationPolicy(Arc<NavigationPolicyData>);
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct NavigationPolicyData {
+    referrer_policy: Option<String>,
+    embedder_policy: crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
+    document_content_security_policies: Vec<String>,
+    csp: crate::content_security_policy::InheritedContentSecurityPolicy,
+}
+
+impl RendererNavigationPolicy {
+    pub(crate) fn capture(policy: &crate::document_runtime::DocumentPolicyContainer) -> Self {
+        Self(Arc::new(NavigationPolicyData {
+            referrer_policy: policy.referrer_policy.clone(),
+            embedder_policy: policy.cross_origin_embedder_policy,
+            document_content_security_policies: policy.document_content_security_policies.clone(),
+            csp: crate::content_security_policy::InheritedContentSecurityPolicy {
+                self_url: policy.content_security_policy_self_url.clone(),
+                header_policies: policy.response_content_security_policies.clone(),
+                meta_policies: policy.inherited_meta_content_security_policies.clone(),
+                report_only_policies: policy
+                    .response_content_security_report_only_policies
+                    .clone(),
+                reporting_endpoints: policy.content_security_reporting_endpoints.clone(),
+            },
+        }))
+    }
+
+    pub(crate) fn apply_to(
+        &self,
+        policy: &mut crate::document_runtime::DocumentPolicyContainer,
+        url: &url::Url,
+    ) {
+        if !Self::applies_to(url) {
+            return;
+        }
+        policy.referrer_policy = self.0.referrer_policy.clone();
+        policy.cross_origin_embedder_policy = self.0.embedder_policy;
+        policy.document_content_security_policies =
+            self.0.document_content_security_policies.clone();
+        policy.response_content_security_policies = self.0.csp.header_policies.clone();
+        policy.inherited_meta_content_security_policies = self.0.csp.meta_policies.clone();
+        policy.response_content_security_report_only_policies =
+            self.0.csp.report_only_policies.clone();
+        policy.content_security_policy_self_url = self.0.csp.self_url.clone();
+        policy.content_security_reporting_endpoints = self.0.csp.reporting_endpoints.clone();
+        policy.sandbox =
+            crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
+                &self.0.csp.header_policies,
+            );
+    }
+
+    fn applies_to(url: &url::Url) -> bool {
+        moli_url::is_about_blank(url) || matches!(url.scheme(), "blob" | "data")
+    }
+}
+
 /// Request context frozen in the initiating Document, before target selection
 /// or an Inspector startup pause can change the source's URL or policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +75,7 @@ struct RendererNavigationInitiatorData {
     url: url::Url,
     origin: String,
     referrer_policy: String,
+    policy: RendererNavigationPolicy,
 }
 
 impl RendererNavigationInitiator {
@@ -22,7 +83,13 @@ impl RendererNavigationInitiator {
         url: url::Url,
         origin: moli_url::WebOrigin,
         referrer_policy: Option<String>,
+        policy: crate::document_runtime::DocumentPolicyContainer,
     ) -> Self {
+        let origin = if policy.sandbox.forces_opaque_origin {
+            moli_url::WebOrigin::Opaque
+        } else {
+            origin
+        };
         Self {
             data: Arc::new(RendererNavigationInitiatorData {
                 url,
@@ -33,6 +100,7 @@ impl RendererNavigationInitiator {
                         .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned())
                 },
                 origin: origin.ascii_serialization().to_owned(),
+                policy: RendererNavigationPolicy::capture(&policy),
             }),
         }
     }
@@ -43,6 +111,10 @@ impl RendererNavigationInitiator {
 
     pub fn origin(&self) -> moli_url::WebOrigin {
         moli_url::WebOrigin::from_serialized(&self.data.origin)
+    }
+
+    pub fn document_policy(&self, destination: &url::Url) -> Option<RendererNavigationPolicy> {
+        RendererNavigationPolicy::applies_to(destination).then(|| self.data.policy.clone())
     }
 
     pub fn request_metadata(&self) -> moli_fetch::SubresourceRequestMetadata {

@@ -389,6 +389,7 @@ pub use self::page_surface::{
     RendererLayoutMetrics, RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics,
     RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
     RendererMoliRuntimeMemoryDiagnostics, RendererNavigationInitiator, RendererPageCommand,
+    RendererNavigationPolicy,
     RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
     RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,

@@ -232,6 +232,7 @@ fn navigate_element_popup_target(
                 .map(str::to_owned)
                 .or_else(|| creator.policy_container.referrer_policy.clone())
         },
+        creator.policy_container.clone(),
     );
     creator.policy_container.document_referrer = navigation_initiator
         .document_referrer(&url::Url::parse(resolved_url).expect("resolved hyperlink URL"));
@@ -728,6 +729,9 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         return false;
     };
     let initiator_url = runtime.document_url_for_handle(document);
+    let Some(policy) = runtime.document_policy_container_for_inheritance(source) else {
+        return false;
+    };
     let initiator = crate::runtime::RendererNavigationInitiator::new(
         runtime
             .document_referrer_source_url_for_dispatch_scope(source)
@@ -743,12 +747,9 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         } else {
             element_popup_referrer_policy(runtime, source_handle)
                 .map(str::to_owned)
-                .or_else(|| {
-                    runtime
-                        .document_policy_container_for_inheritance(source)
-                        .and_then(|policy| policy.referrer_policy)
-                })
+                .or_else(|| policy.referrer_policy.clone())
         },
+        policy,
     );
     let Some(source_element) =
         runtime

@@ -399,6 +399,22 @@ impl DocumentRequestPolicySnapshot {
 }
 
 impl DocumentPolicyContainer {
+    pub(crate) fn for_navigation_response(
+        headers: &[(String, Vec<u8>)],
+        final_url: &Url,
+        history: Option<&Self>,
+        initiator: Option<&crate::runtime::RendererNavigationPolicy>,
+    ) -> Self {
+        if let Some(history) = history {
+            return history.clone();
+        }
+        let mut policy = Self::from_navigation_response_headers(headers, final_url);
+        if let Some(initiator) = initiator {
+            initiator.apply_to(&mut policy, final_url);
+        }
+        policy
+    }
+
     pub(crate) fn from_navigation_response_headers(
         headers: &[(String, Vec<u8>)],
         final_url: &Url,
@@ -1070,6 +1086,21 @@ impl DocumentRuntime {
         policy: DocumentPolicyContainer,
     ) {
         self.policy_container = policy;
+    }
+
+    /// Install inherited delivery state exactly once for a newly allocated
+    /// Document, independently of whether its Window is new or reused.
+    pub(crate) fn initialize_new_document_policy(
+        &mut self,
+        policy: DocumentPolicyContainer,
+        bypass: bool,
+    ) {
+        self.set_bypass_content_security_policy(bypass);
+        self.initialize_inherited_meta_content_security_policies(
+            self.document_handle(),
+            &policy.inherited_meta_content_security_policies,
+        );
+        self.set_initial_document_policy_container(policy);
     }
 
     pub(crate) fn set_main_navigation_policy_container(
