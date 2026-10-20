@@ -1,6 +1,7 @@
 use super::super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextNavigationRequest,
-    NavigationHistoryEntrySeed, PageScriptHost,
+    NavigationHistoryEntrySeed, PageScriptHost, child_documents::ChildDocumentNavigationInitiator,
+    child_frames::PendingChildFrameNavigation,
 };
 use crate::document_runtime::DomHandle;
 use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
@@ -65,8 +66,11 @@ impl PageScriptHost {
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
-                ChildBrowsingContextBootstrap::Request(request),
-                None,
+                PendingChildFrameNavigation::new(
+                    ChildBrowsingContextBootstrap::Request(request),
+                    None,
+                    ChildDocumentNavigationInitiator::BrowsingContext(None),
+                ),
                 false,
                 None,
             )
@@ -123,6 +127,40 @@ impl PageScriptHost {
         initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
+        let queued = self.queue_child_browsing_context_navigation_from_existing_seed_with_initiator(
+            handle,
+            resolved_url,
+            replace_current,
+            initiator,
+            ChildDocumentNavigationInitiator::BrowsingContext(None),
+        );
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
+    }
+
+    pub(crate) fn queue_child_browsing_context_attribute_navigation_from_existing_seed(
+        &mut self,
+        handle: DomHandle,
+        resolved_url: &str,
+        replace_current: bool,
+        initiator: Option<super::super::OwnerDispatchScope>,
+    ) -> bool {
+        self.queue_child_browsing_context_navigation_from_existing_seed_with_initiator(
+            handle,
+            resolved_url,
+            replace_current,
+            initiator,
+            ChildDocumentNavigationInitiator::FrameOwnerElement,
+        )
+    }
+
+    fn queue_child_browsing_context_navigation_from_existing_seed_with_initiator(
+        &mut self,
+        handle: DomHandle,
+        resolved_url: &str,
+        replace_current: bool,
+        initiator: Option<super::super::OwnerDispatchScope>,
+        navigation_initiator: ChildDocumentNavigationInitiator,
+    ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -136,8 +174,13 @@ impl PageScriptHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
         }
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, None, initiator);
-        self.remember_child_navigation_download_policy(handle, download_policy, queued)
+        self.queue_child_browsing_context_navigation_to_url_with_initiator(
+            handle,
+            &url,
+            None,
+            initiator,
+            navigation_initiator,
+        )
     }
 
     pub(crate) fn queue_child_browsing_context_navigation_without_seed_update(
@@ -189,8 +232,11 @@ impl PageScriptHost {
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
-                bootstrap,
-                initiator_url,
+                PendingChildFrameNavigation::new(
+                    bootstrap,
+                    initiator_url,
+                    ChildDocumentNavigationInitiator::BrowsingContext(None),
+                ),
                 false,
                 None,
             )
