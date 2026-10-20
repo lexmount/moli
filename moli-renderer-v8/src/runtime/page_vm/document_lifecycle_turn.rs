@@ -135,7 +135,15 @@ impl PageVm {
         let ready_admission =
             self.take_document_replacement_lifecycle_admission_after_action(snapshot)?;
 
-        if let Some(replacement) = replacement_admission {
+        if let Some(replacement) = replacement_admission
+            && pending_document_lifecycle_turn
+                .as_ref()
+                .is_none_or(|pending| pending.document != replacement.to)
+        {
+            // A synchronous auxiliary Page can be opened before its owner
+            // starts. Bootstrap then installs the target Document's resident
+            // before this retained action is consumed. Only retire a source
+            // resident here; preserve an already installed exact target.
             if let Some(stale) = pending_document_lifecycle_turn.take() {
                 anyhow::ensure!(
                     stale.document == replacement.from,
@@ -173,11 +181,16 @@ impl PageVm {
         if self.has_pending_runtime_command_lifecycle() {
             self.bind_pending_runtime_command_lifecycle_observer(document)?;
         }
-        if pending_document_lifecycle_turn
-            .as_ref()
-            .is_some_and(|pending| pending.document == document)
+        if let Some(pending) = pending_document_lifecycle_turn.as_mut()
+            && pending.document == document
         {
-            return Ok(None);
+            // The exact close action makes a previously open stream ready.
+            // Resume the existing resident instead of replacing its driver.
+            pending.owner_turn_is_runnable = true;
+            return Ok(Some(DocumentLifecycleTurnOutcome::runnable(
+                DocumentLifecycleTurnAction::None,
+                document,
+            )));
         }
         if let Some(stale) = pending_document_lifecycle_turn.take() {
             anyhow::ensure!(
