@@ -6,9 +6,8 @@ pub use moli_v8_util::{global_constructor_prototype, v8_string, v8str};
 /// Complete description of one function installed by
 /// `WebApiFunctionTemplate`.
 ///
-/// The derive maps each Rust callback to V8's raw callback type at the call
-/// site. Keeping that raw pointer in this short-lived value lets the shared
-/// installers avoid monomorphization without adding a callback trampoline or
+/// The derive maps each Rust callback using V8's native adapter at installation
+/// time. The shared installers need neither a call-time trampoline nor extra
 /// persistent callback data.
 #[doc(hidden)]
 #[derive(Clone, Copy)]
@@ -118,5 +117,54 @@ pub fn build_object_function<'s>(
     match data {
         Some(data) => builder.data(data).build(scope),
         None => builder.build(scope),
+    }
+}
+
+/// Static metadata for a string-named template method without callback data.
+/// The callback mapping runs only during installation, not JavaScript calls.
+#[doc(hidden)]
+pub struct FunctionTemplateMethod {
+    pub name: &'static str,
+    pub callback: fn() -> v8::FunctionCallback,
+    pub length: i32,
+    pub enumerable: bool,
+    pub readonly: bool,
+    pub dont_delete: bool,
+    pub receiver_access_check: bool,
+}
+
+/// Installs a run of methods from metadata instead of repeating call-site code.
+#[doc(hidden)]
+#[inline(never)]
+pub fn install_function_template_methods<'s>(
+    scope: &v8::PinScope<'s, '_, ()>,
+    target: v8::Local<'s, v8::ObjectTemplate>,
+    methods: &[FunctionTemplateMethod],
+) {
+    for method in methods {
+        let name = v8str(scope, method.name);
+        let mut attributes = v8::PropertyAttribute::NONE;
+        if !method.enumerable {
+            attributes = attributes | v8::PropertyAttribute::DONT_ENUM;
+        }
+        if method.readonly {
+            attributes = attributes | v8::PropertyAttribute::READ_ONLY;
+        }
+        if method.dont_delete {
+            attributes = attributes | v8::PropertyAttribute::DONT_DELETE;
+        }
+        install_function_template_method(
+            scope,
+            target,
+            name.into(),
+            FunctionTemplateMember {
+                callback: (method.callback)(),
+                length: method.length,
+                data: None,
+                class_name: Some(name),
+                receiver_access_check: method.receiver_access_check,
+            },
+            attributes,
+        );
     }
 }

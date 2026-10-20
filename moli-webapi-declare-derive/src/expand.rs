@@ -10,6 +10,27 @@ use crate::attrs::{
     parse_function_template_attrs, parse_object_attrs,
 };
 
+/// Static metadata stores mappings so V8's own callback adapter can be resolved
+/// at installation time. Associated functions can reference Self and generics.
+#[derive(Default)]
+struct CallbackMappings {
+    helpers: Vec<proc_macro2::TokenStream>,
+}
+
+impl CallbackMappings {
+    fn map(&mut self, callback: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let name = format_ident!("__webapi_callback_mapping_{}", self.helpers.len());
+        self.helpers.push(quote! {
+            fn #name() -> ::moli_webapi_declare::v8::FunctionCallback {
+                ::moli_webapi_declare::v8::MapFnTo::<
+                    ::moli_webapi_declare::v8::FunctionCallback,
+                >::map_fn_to(#callback)
+            }
+        });
+        quote!(Self::#name)
+    }
+}
+
 struct DeclaredField {
     field: Field,
     attrs: FieldAttrs,
@@ -153,7 +174,10 @@ pub(crate) fn expand_webapi_function_template(
             None
         }
     });
-    let template_fields = expand_function_template_fields(&fields, &template_name)?;
+    let mut callback_mappings = CallbackMappings::default();
+    let template_fields =
+        expand_function_template_fields(&fields, &template_name, &mut callback_mappings)?;
+    let callback_mappings = callback_mappings.helpers;
     let FunctionTemplateFieldExpansions {
         template_methods,
         prototype_methods,
@@ -161,6 +185,8 @@ pub(crate) fn expand_webapi_function_template(
 
     Ok(quote! {
         impl #impl_generics #struct_name #ty_generics #where_clause {
+            #(#callback_mappings)*
+
             fn __webapi_mark_declaration_fields_used(&self) {
                 #(#declaration_field_reads)*
             }
@@ -469,14 +495,83 @@ struct FunctionTemplateFieldExpansions {
     prototype_methods: Vec<proc_macro2::TokenStream>,
 }
 
+fn flush_template_methods(
+    output: &mut Vec<proc_macro2::TokenStream>,
+    methods: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if !methods.is_empty() {
+        let methods = std::mem::take(methods);
+        output.push(quote! {
+            ::moli_webapi_declare::__private::install_function_template_methods(
+                scope, prototype, const { &[#(#methods),*] },
+            );
+        });
+    }
+}
+
+fn static_template_method(
+    field: &Field,
+    attrs: &FieldAttrs,
+    callback_mappings: &mut CallbackMappings,
+) -> Result<Option<proc_macro2::TokenStream>, Error> {
+    if !matches!(attrs.kind, FieldKind::Method)
+        || attrs.data.is_some()
+        || attrs.symbol.is_some()
+        || attrs.function_name.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(name) = webapi_field_name_literal(attrs.name.as_ref()) else {
+        return Ok(None);
+    };
+    let callback = attrs.callback.as_ref().ok_or_else(|| {
+        Error::new(
+            field.span(),
+            "method field requires #[webapi(callback = path)]",
+        )
+    })?;
+    let callback = callback_mappings.map(expand_callback(callback, attrs, false));
+    let length = attrs.length.unwrap_or(0);
+    let enumerable = attrs.enumerable;
+    let readonly = attrs.readonly;
+    let dont_delete = attrs.dont_delete;
+    let receiver_access_check = attrs
+        .receiver_access_check
+        .unwrap_or_default()
+        .checks_getter();
+    Ok(Some(quote! {
+        ::moli_webapi_declare::__private::FunctionTemplateMethod {
+            name: #name,
+            callback: #callback,
+            length: #length,
+            enumerable: #enumerable,
+            readonly: #readonly,
+            dont_delete: #dont_delete,
+            receiver_access_check: #receiver_access_check,
+        }
+    }))
+}
+
 fn expand_function_template_fields(
     fields: &[DeclaredField],
     template_name: &proc_macro2::TokenStream,
+    callback_mappings: &mut CallbackMappings,
 ) -> Result<FunctionTemplateFieldExpansions, Error> {
     let mut template_methods = Vec::new();
     let mut prototype_methods = Vec::new();
     let mut method_bindings = HashMap::new();
+    // Aliases reference the actual templates bound by earlier declarations.
+    let can_batch = !fields
+        .iter()
+        .any(|field| matches!(field.attrs.kind, FieldKind::Alias(_)));
+    let mut methods = Vec::new();
     for (index, DeclaredField { field, attrs }) in fields.iter().enumerate() {
+        if can_batch && let Some(method) = static_template_method(field, attrs, callback_mappings)?
+        {
+            methods.push(method);
+            continue;
+        }
+        flush_template_methods(&mut prototype_methods, &mut methods);
         if matches!(attrs.kind, FieldKind::Constant) {
             template_methods.push(expand_function_template_constant_field(
                 field,
@@ -550,6 +645,7 @@ fn expand_function_template_fields(
             ));
         }
     }
+    flush_template_methods(&mut prototype_methods, &mut methods);
     Ok(FunctionTemplateFieldExpansions {
         template_methods,
         prototype_methods,

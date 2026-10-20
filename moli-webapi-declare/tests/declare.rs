@@ -3146,3 +3146,134 @@ fn null_prototype_declarations_ignore_object_prototype_pollution() {
         .is_true()
     );
 }
+trait CallbackMarker {
+    const VALUE: u32;
+}
+
+struct Seven;
+impl CallbackMarker for Seven {
+    const VALUE: u32 = 7;
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "GenericCallbacks")]
+struct GenericCallbacks<T: CallbackMarker> {
+    #[webapi(method, callback = Self::call, data = 3u32)]
+    call: (),
+    #[webapi(method, callback = Self::call)]
+    no_data: (),
+    marker: std::marker::PhantomData<T>,
+}
+
+impl<T: CallbackMarker> GenericCallbacks<T> {
+    fn call<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: v8::FunctionCallbackArguments<'s>,
+        mut rv: v8::ReturnValue<'s>,
+    ) {
+        let value = if let Ok(callback) = v8::Local::<v8::Function>::try_from(args.get(0)) {
+            let Some(value) = callback.call(scope, args.this().into(), &[args.data()]) else {
+                return;
+            };
+            value.uint32_value(scope).unwrap()
+        } else {
+            args.data().uint32_value(scope).unwrap()
+        };
+        rv.set_uint32(T::VALUE + value);
+    }
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct GenericCallbackObject<'s, T: CallbackMarker> {
+    #[webapi(method, callback = GenericCallbacks::<T>::call, data = self.data)]
+    call: (),
+    data: v8::Local<'s, v8::Value>,
+    marker: std::marker::PhantomData<T>,
+}
+
+#[test]
+fn generic_callbacks_keep_data_and_return_values_across_nested_v8_entries() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    install_template::<GenericCallbacks<Seven>>(scope, global);
+    let data = v8::Integer::new_from_unsigned(scope, 5).into();
+    let object = GenericCallbackObject::<Seven>::new(data, std::marker::PhantomData)
+        .bind(scope)
+        .unwrap();
+    global
+        .set(
+            scope,
+            v8::String::new(scope, "object").unwrap().into(),
+            object.into(),
+        )
+        .unwrap();
+    assert!(
+        run_script(
+            scope,
+            r#"
+        (() => {
+            const template = GenericCallbacks.prototype;
+            if (template.call() !== 10 || object.call() !== 12 || template.noData() !== 7) return false;
+            if (template.call(n => object.call(m => n + m)) !== 22) return false;
+            const error = {};
+            try { object.call(() => { throw error; }); return false; }
+            catch (caught) { if (caught !== error) return false; }
+            return template.call() === 10 && object.call() === 12;
+        })()
+    "#
+        )
+        .boolean_value(scope)
+    );
+}
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "MethodOrder", enumerable)]
+struct MethodOrder {
+    #[webapi(method, callback = sample_now_callback, readonly)]
+    first: (),
+    #[webapi(method, callback = sample_now_callback, length = 2, dont_delete)]
+    second: (),
+    #[webapi(accessor_property, getter = sample_now_callback)]
+    middle: (),
+    #[webapi(method, callback = sample_data_callback, data = "payload")]
+    data: (),
+    #[webapi(method, callback = sample_now_callback)]
+    last: (),
+}
+
+#[test]
+fn template_method_runs_preserve_order_descriptors_and_callback_data() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    install_template::<MethodOrder>(scope, global);
+    assert!(
+        run_script(
+            scope,
+            r#"
+        (() => {
+            const p = MethodOrder.prototype;
+            const names = Object.keys(p);
+            if (names.join(',') !== 'first,second,middle,data,last') return false;
+            const first = Object.getOwnPropertyDescriptor(p, 'first');
+            const second = Object.getOwnPropertyDescriptor(p, 'second');
+            return !first.writable && first.configurable && first.enumerable
+                && second.writable && !second.configurable && second.enumerable
+                && p.first.name === 'first' && p.first.length === 0
+                && p.second.name === 'second' && p.second.length === 2
+                && p.middle === 7 && p.data() === 'payload' && p.last() === 7;
+        })()
+    "#
+        )
+        .boolean_value(scope)
+    );
+}
