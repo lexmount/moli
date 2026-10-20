@@ -4,6 +4,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+mod document_close;
 mod document_open;
 mod history_traversal;
 mod lifecycle;

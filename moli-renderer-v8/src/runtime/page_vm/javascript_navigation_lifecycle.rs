@@ -23,8 +23,8 @@ use super::super::document_lifecycle_turn::{
     DocumentLifecycleNavigationTiming, DocumentLifecycleTurnAction, DocumentLifecycleTurnOutcome,
     PendingDocumentLifecycleTurn,
 };
-use super::document_lifecycle_turn::DocumentReplacementLifecycleActionSnapshot;
 use super::{PageVm, renderer_document_lifecycle_milestone_for_stage};
+use crate::runtime::DocumentReplacementLifecycleActionSnapshot;
 
 /// The durable lifecycle fact left after one `javascript:` URL finishes.
 ///
