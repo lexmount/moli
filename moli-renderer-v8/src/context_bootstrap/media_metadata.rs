@@ -17,7 +17,7 @@ use crate::{
 
 mod dictionary;
 mod session;
-use dictionary::{ChapterInformationInit, MediaImage, MediaMetadataInit, Text, convert_dictionary};
+use dictionary::{ChapterInformationInit, MediaImage, MetadataArgs, Text};
 
 const TITLE: &str = "__moliMediaMetadataTitle";
 const ARTIST: &str = "__moliMediaMetadataArtist";
@@ -129,24 +129,16 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
         throw_type_error(scope, "MediaMetadata requires the 'new' operator.");
         return;
     }
-    let init = match convert_dictionary::<MediaMetadataInit>(
-        scope,
-        args.get(0),
-        webidl::Context::argument("MediaMetadata", 1),
-    ) {
-        Ok(init) => init,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
+    let Some(MetadataArgs { init }) = webidl::parse_args(scope, &args) else {
+        return;
     };
     if !initialize_web_api_constructor_receiver(scope, args.this(), "MediaMetadata") {
         return;
     }
-    let Some(artwork) = convert_artwork(scope, init.artwork.0) else {
+    let Some(artwork) = convert_artwork(scope, init.artwork) else {
         return;
     };
-    let Some(chapters) = create_chapters(scope, init.chapter_info.0) else {
+    let Some(chapters) = create_chapters(scope, init.chapter_info) else {
         return;
     };
     MetadataObject::new(
@@ -262,7 +254,7 @@ fn create_chapters<'s>(
             throw_type_error(scope, "ChapterInformation.startTime must not be negative.");
             return None;
         }
-        let artwork = convert_artwork(scope, chapter.artwork.0)?;
+        let artwork = convert_artwork(scope, chapter.artwork)?;
         let artwork = freeze_artwork(scope, artwork)?;
         let value = ChapterObject::new(
             text_value(scope, &chapter.title),
