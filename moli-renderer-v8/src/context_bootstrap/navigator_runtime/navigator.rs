@@ -14,10 +14,11 @@ use super::super::window_runtime::{
     navigator_service_worker_ready_getter_callback, navigator_service_worker_register_callback,
     navigator_service_worker_start_messages_callback, navigator_storage_estimate_callback,
     navigator_storage_get_directory_callback, navigator_storage_persist_callback,
-    navigator_storage_persisted_callback, navigator_ua_data_get_high_entropy_values_callback,
-    navigator_ua_data_to_json_callback, navigator_vibrate_callback,
-    permission_status_name_getter_callback, permission_status_state_getter_callback,
-    service_worker_object_set_owner_scope,
+    navigator_storage_persisted_callback, navigator_ua_data_brands_getter,
+    navigator_ua_data_get_high_entropy_values_callback, navigator_ua_data_mobile_getter,
+    navigator_ua_data_platform_getter, navigator_ua_data_to_json_callback,
+    navigator_vibrate_callback, permission_status_name_getter_callback,
+    permission_status_state_getter_callback, service_worker_object_set_owner_scope,
 };
 use super::super::*;
 use super::clipboard::{build_clipboard_object, install_clipboard_template_bindings};
@@ -397,6 +398,13 @@ struct StorageBucketManagerObjectDeclaration {}
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::NavigatorUAData, enumerable, receiver)]
 struct NavigatorUaDataPrototypeMethodsDeclaration {
+    #[webapi(accessor_property, getter = navigator_ua_data_brands_getter)]
+    brands: (),
+    #[webapi(accessor_property, getter = navigator_ua_data_mobile_getter)]
+    mobile: (),
+    #[webapi(accessor_property, getter = navigator_ua_data_platform_getter)]
+    platform: (),
+
     #[webapi(method, name = "toJSON", length = 0, callback = navigator_ua_data_to_json_callback)]
     to_json: (),
 
