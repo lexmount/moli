@@ -46,27 +46,8 @@ struct EncodedVideoChunkInit<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "EncodedVideoChunk")]
 struct EncodedVideoChunkConstructorArgs<'s> {
-    #[webidl(with = parse_init)]
+    #[webidl(required, dictionary)]
     init: EncodedVideoChunkInit<'s>,
-}
-
-fn parse_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<EncodedVideoChunkInit<'s>, webidl::WebIdlError> {
-    let context = webidl::Context::argument("EncodedVideoChunk", (index + 1) as usize);
-    if args.length() <= index {
-        return Err(webidl::WebIdlError::cannot_convert(
-            context,
-            "EncodedVideoChunkInit",
-        ));
-    }
-    // Nullish dictionaries have no members, regardless of Object.prototype.
-    // This dictionary requires data, so an empty dictionary cannot be valid.
-    let object = webidl::dictionary_arg(args, index, context)?
-        .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "EncodedVideoChunkInit"))?;
-    webidl::parse_dictionary_object(scope, object)
 }
 
 #[derive(webidl::WebIdlArgs)]
