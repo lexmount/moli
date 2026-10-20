@@ -117,7 +117,8 @@ impl ScriptVm {
                     page_task_tx.main_parser_continuation_sender(),
                 );
                 runtime.set_author_styles_disabled(author_styles_disabled);
-                runtime.set_bypass_content_security_policy(
+                runtime.initialize_new_document_policy(
+                    env.document_policy_container.clone(),
                     env.document_settings.bypass_content_security_policy,
                 );
                 runtime.retain_performance_clock_from_initial_document(&vm.document_runtime);

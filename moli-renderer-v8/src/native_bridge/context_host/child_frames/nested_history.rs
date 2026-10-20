@@ -257,6 +257,7 @@ impl PageScriptHost {
             &url,
             record.seed,
             None,
+            None,
         );
     }
 

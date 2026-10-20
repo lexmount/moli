@@ -133,6 +133,7 @@ impl PageScriptHost {
             initiator,
             initiator_url,
             target_snapshot,
+            source_policy,
         } = navigation;
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_owner = navigation_load.owner();
@@ -243,6 +244,7 @@ impl PageScriptHost {
         let fetch = ChildDocumentFetch {
             response_body: None,
             download_policy,
+            source_policy,
             target_snapshot: target_snapshot.clone(),
             timing_origin: initiating_loader.fetch_context().request_origin(),
             target,
@@ -1177,6 +1179,7 @@ impl PageScriptHost {
 pub(crate) struct ChildDocumentFetch {
     response_body: Option<crate::network::ResourceInterceptionBody>,
     download_policy: ChildNavigationDownloadPolicy,
+    source_policy: Option<crate::runtime::RendererNavigationPolicy>,
     target_snapshot: ChildNavigationTargetSnapshot,
     timing_origin: moli_url::WebOrigin,
     target: ChildDocumentNavigationFetchTarget,
@@ -1518,6 +1521,7 @@ impl ChildDocumentFetch {
                 request_method: request.method.clone(),
                 request_headers: request.request_headers.to_byte_strings(),
                 target: self.target_snapshot.clone(),
+                source_policy: self.source_policy.clone(),
             },
             head,
             body,
@@ -1595,6 +1599,7 @@ struct ChildDocumentRequestSnapshot {
     request_method: String,
     request_headers: Vec<(String, String)>,
     target: ChildNavigationTargetSnapshot,
+    source_policy: Option<crate::runtime::RendererNavigationPolicy>,
 }
 
 fn child_document_load_outcome_from_response(
@@ -1642,8 +1647,12 @@ fn child_document_load_outcome_from_response(
             .negotiated_http_version
             .filter(|_| head.cache_state != moli_fetch::ResponseCacheState::Local),
     };
-    let mut policy_container =
-        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
+    let mut policy_container = DocumentPolicyContainer::for_navigation_response(
+        &head.headers,
+        &navigation_url,
+        None,
+        request.source_policy.as_ref(),
+    );
     // 204/205 cannot start downloads. Required CSP is still enforced below.
     if matches!(head.status, 204 | 205) {
         if let Some(body) = download_body {
@@ -1839,6 +1848,7 @@ mod tests {
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new(),
                         target: Default::default(),
+                        source_policy: None,
                     },
                     head.clone(),
                     moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
@@ -1992,6 +2002,7 @@ mod tests {
                 request_method: "GET".to_owned(),
                 request_headers: Vec::new(),
                 target: Default::default(),
+                source_policy: None,
             },
             moli_fetch::ResponseHead {
                 status_text: None,

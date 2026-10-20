@@ -645,6 +645,12 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         return true;
     }
     // formdata may update the policy after the submitting document was captured.
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(policy) = runtime.owner_dispatch_scope_for_node(submitting_document)
+        .and_then(|owner| runtime.document_policy_container_for_inheritance(owner))
+    else {
+        return false;
+    };
     let initiator = RendererNavigationInitiator::new(
         initiator_url,
         initiator_origin,
@@ -652,6 +658,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
             unsafe { &*runtime_ptr },
             submitting_document,
         ),
+        policy,
     );
 
     let Some(destination) = super::super::activation::choose_form_navigation_target(

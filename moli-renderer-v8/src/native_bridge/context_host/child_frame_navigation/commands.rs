@@ -47,12 +47,16 @@ impl PageScriptHost {
             )
         });
         if request.method == "GET" {
+            let policy = initiator
+                .and_then(|source| self.document_policy_container_for_inheritance(source))
+                .map(|policy| crate::runtime::RendererNavigationPolicy::capture(&policy));
             return self.queue_deferred_child_browsing_context_navigation_from_entry_seed(
                 scope,
                 handle,
                 request.url.as_str(),
                 entry_seed,
                 None,
+                policy,
             );
         }
         self.reject_replaced_service_worker_child_client_navigation(
@@ -73,7 +77,7 @@ impl PageScriptHost {
                     self.snapshot_child_navigation_target(handle, &url),
                 ),
                 false,
-                None,
+                initiator,
             )
             .is_none()
         {
@@ -210,6 +214,7 @@ impl PageScriptHost {
         resolved_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
         initiator_url: Option<Url>,
+        source_policy: Option<crate::runtime::RendererNavigationPolicy>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
@@ -238,7 +243,8 @@ impl PageScriptHost {
                     initiator_url,
                     ChildDocumentNavigationInitiator::BrowsingContext(None),
                     self.snapshot_child_navigation_target(handle, &url),
-                ),
+                )
+                .with_source_policy(source_policy),
                 false,
                 None,
             )
