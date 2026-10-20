@@ -93,20 +93,17 @@ pub(super) fn create_navigation_activation_object<'s>(
         return v8::null(scope).into();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let activated_origin_url = activation
-        .entry
-        .inherited_origin
-        .as_deref()
-        .unwrap_or(&activation.entry.url);
-    let from = activation.from.as_ref().filter(|from| {
-        from.url == "about:blank"
-            || moli_url::parsed_same_origin(
-                from.inherited_origin.as_deref().unwrap_or(&from.url),
-                activated_origin_url,
-            )
-    });
     let entry = navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry);
-    let from = from
+    let destination_origin =
+        native::entry(scope, current_entry).map(|entry| entry.borrow().document_origin.clone());
+    let from = activation
+        .from
+        .as_ref()
+        .filter(|snapshot| {
+            activation.source_document == moli_page_types::NavigationSourceDocument::NonInitial
+                && snapshot.document_origin != "null"
+                && destination_origin.as_deref() == Some(snapshot.document_origin.as_str())
+        })
         .map(|snapshot| navigation_entry_object_from_snapshot(scope, current_entry, snapshot))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
@@ -122,7 +119,14 @@ pub(super) fn create_navigation_activation_object<'s>(
     } else {
         from
     };
-    new_navigation_activation(scope, entry, from, navigation_type).into()
+    new_navigation_activation(
+        scope,
+        entry,
+        from,
+        navigation_type,
+        activation.source_document == moli_page_types::NavigationSourceDocument::InitialEmpty,
+    )
+    .into()
 }
 
 pub(super) fn install_navigation_activation_runtime_state<'s>(

@@ -75,9 +75,38 @@ pub struct NavigationHistoryEntrySeed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationActivationSeed {
     pub entry: NavigationHistorySerializedEntry,
-    /// Snapshot of the previous entry. Visibility is decided when the activation is exposed.
+    pub source_document: NavigationSourceDocument,
+    /// Candidate old entry. The destination realm projects it using the
+    /// committed Document's origin, which an inherited URL cannot describe.
     pub from: Option<NavigationHistorySerializedEntry>,
     pub navigation_type: Option<String>,
+}
+
+/// Lifecycle of the source Document, independent of its URL or history length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationSourceDocument {
+    InitialEmpty,
+    NonInitial,
+}
+
+impl NavigationSourceDocument {
+    pub fn from_initial_empty(initial: bool) -> Self {
+        if initial {
+            Self::InitialEmpty
+        } else {
+            Self::NonInitial
+        }
+    }
+
+    fn activation_from(
+        self,
+        previous: Option<&NavigationHistorySerializedEntry>,
+    ) -> Option<NavigationHistorySerializedEntry> {
+        match self {
+            Self::InitialEmpty => None,
+            Self::NonInitial => previous.cloned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +173,7 @@ pub fn initial_navigation_history_seed(
             session_history: Default::default(),
             current_index: 1,
             activation: Some(NavigationActivationSeed {
+                source_document: NavigationSourceDocument::InitialEmpty,
                 entry: entries[1].clone(),
                 from: None,
                 navigation_type: Some("push".to_owned()),
@@ -163,6 +193,7 @@ pub fn initial_navigation_history_seed(
         session_history: Default::default(),
         current_index: 0,
         activation: (href != "about:blank").then(|| NavigationActivationSeed {
+            source_document: NavigationSourceDocument::InitialEmpty,
             entry: entries[0].clone(),
             from: None,
             navigation_type: Some("push".to_owned()),
@@ -197,6 +228,7 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
         return NavigationHistoryEntrySeed {
             session_history: Default::default(),
             activation: Some(NavigationActivationSeed {
+                source_document: NavigationSourceDocument::InitialEmpty,
                 entry: entries[1].clone(),
                 from: None,
                 navigation_type: Some("replace".to_owned()),
@@ -224,6 +256,7 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
 pub fn apply_child_browsing_context_navigation_to_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
     url: &Url,
+    source: NavigationSourceDocument,
 ) {
     seed.session_history = crate::SessionHistorySeed {
         commit: crate::SessionHistoryCommit::Push,
@@ -248,40 +281,26 @@ pub fn apply_child_browsing_context_navigation_to_entry_seed(
     ));
     seed.current_index = next_index;
     seed.activation = Some(NavigationActivationSeed {
+        source_document: source,
         entry: seed
             .entries
             .iter()
             .find(|entry| entry.history_index == next_index)
             .cloned()
             .unwrap_or_else(|| seed.entries.last().cloned().unwrap()),
-        from: seed
-            .entries
-            .iter()
-            .find(|entry| entry.history_index == next_index.saturating_sub(1))
-            .cloned(),
+        from: source.activation_from(
+            seed.entries
+                .iter()
+                .find(|entry| entry.history_index == next_index.saturating_sub(1)),
+        ),
         navigation_type: Some("push".to_owned()),
     });
-}
-
-fn entry_is_same_origin_with_destination(
-    entry: &NavigationHistorySerializedEntry,
-    destination: &NavigationHistorySerializedEntry,
-) -> bool {
-    let entry_origin = entry.inherited_origin.as_deref().unwrap_or(&entry.url);
-    let destination_origin = destination
-        .inherited_origin
-        .as_deref()
-        .unwrap_or(&destination.url);
-    (entry.url == "about:blank" && entry.inherited_origin.is_none())
-        || Url::parse(entry_origin)
-            .ok()
-            .zip(Url::parse(destination_origin).ok())
-            .is_some_and(|(entry, destination)| same_origin(&entry, &destination))
 }
 
 pub fn replace_child_browsing_context_navigation_in_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
     url: &Url,
+    source: NavigationSourceDocument,
 ) {
     seed.session_history = crate::SessionHistorySeed {
         commit: crate::SessionHistoryCommit::Replace,
@@ -319,14 +338,16 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
         seed.entries.push(next_entry.clone());
     }
     seed.activation = Some(NavigationActivationSeed {
+        source_document: source,
         entry: next_entry,
-        from: previous_entry,
+        from: source.activation_from(previous_entry.as_ref()),
         navigation_type: Some("replace".to_owned()),
     });
 }
 
 pub fn apply_child_browsing_context_javascript_url_navigation_to_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
+    source: NavigationSourceDocument,
 ) {
     seed.session_history = crate::SessionHistorySeed {
         commit: crate::SessionHistoryCommit::Replace,
@@ -353,8 +374,9 @@ pub fn apply_child_browsing_context_javascript_url_navigation_to_entry_seed(
         *existing = next_entry.clone();
     }
     seed.activation = Some(NavigationActivationSeed {
+        source_document: source,
         entry: next_entry,
-        from: Some(previous_entry),
+        from: source.activation_from(Some(&previous_entry)),
         navigation_type: Some("replace".to_owned()),
     });
 }
@@ -365,6 +387,7 @@ pub fn cross_document_navigation_seed(
     current_navigation_index: u32,
     destination_url: &Url,
     mutation: NavigationHistoryMutation,
+    source: NavigationSourceDocument,
 ) -> NavigationHistoryEntrySeed {
     let current_entry_snapshot = entries
         .iter()
@@ -419,8 +442,9 @@ pub fn cross_document_navigation_seed(
         entries,
         current_index: destination_index,
         activation: Some(NavigationActivationSeed {
+            source_document: source,
             entry: destination_entry,
-            from: current_entry_snapshot,
+            from: source.activation_from(current_entry_snapshot.as_ref()),
             navigation_type: Some(mutation.navigation_type().to_owned()),
         }),
     }
@@ -429,6 +453,7 @@ pub fn cross_document_navigation_seed(
 pub fn reload_navigation_seed(
     entries: Vec<NavigationHistorySerializedEntry>,
     current_index: u32,
+    source: NavigationSourceDocument,
 ) -> Option<NavigationHistoryEntrySeed> {
     let current_entry = entries
         .iter()
@@ -442,8 +467,9 @@ pub fn reload_navigation_seed(
         entries,
         current_index,
         activation: Some(NavigationActivationSeed {
+            source_document: source,
             entry: current_entry.clone(),
-            from: Some(current_entry),
+            from: source.activation_from(Some(&current_entry)),
             navigation_type: Some("reload".to_owned()),
         }),
     })
@@ -453,6 +479,7 @@ pub fn traversal_navigation_seed_candidate(
     entries: Vec<NavigationHistorySerializedEntry>,
     current_index: u32,
     target_index: u32,
+    source: NavigationSourceDocument,
 ) -> Option<NavigationTraversalSeedCandidate> {
     let current_entry = entries
         .iter()
@@ -467,14 +494,20 @@ pub fn traversal_navigation_seed_candidate(
     }
 
     let target_url = Url::parse(&target_entry.url).ok()?;
-    // Traversals only expose an activation source that belongs to the
-    // destination's contiguous same-origin entry list.
+    // Traversals only expose an old entry in the destination's contiguous
+    // same-origin list. Compare Document origins, including inherited ones.
     let traversed_indices = current_index.min(target_index)..=current_index.max(target_index);
-    let from = entries
+    let same_origin_region = entries
         .iter()
         .filter(|entry| traversed_indices.contains(&entry.history_index))
-        .all(|entry| entry_is_same_origin_with_destination(entry, &target_entry))
-        .then_some(current_entry);
+        .all(|entry| {
+            entry.document_origin != "null" && entry.document_origin == target_entry.document_origin
+        });
+    let from = if same_origin_region {
+        source.activation_from(Some(&current_entry))
+    } else {
+        None
+    };
     Some(NavigationTraversalSeedCandidate {
         target_url,
         seed: NavigationHistoryEntrySeed {
@@ -485,6 +518,7 @@ pub fn traversal_navigation_seed_candidate(
             entries,
             current_index: target_index,
             activation: Some(NavigationActivationSeed {
+                source_document: source,
                 entry: target_entry,
                 from,
                 navigation_type: Some("traverse".to_owned()),
@@ -595,10 +629,18 @@ mod tests {
         let url = Url::parse("https://child.example/frame").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url);
+        replace_child_browsing_context_navigation_in_entry_seed(
+            &mut seed,
+            &url,
+            NavigationSourceDocument::NonInitial,
+        );
         let first = seed.entries[0].clone();
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url);
+        replace_child_browsing_context_navigation_in_entry_seed(
+            &mut seed,
+            &url,
+            NavigationSourceDocument::NonInitial,
+        );
         let second = seed.entries[0].clone();
 
         assert_eq!(first.history_index, second.history_index);
@@ -633,6 +675,7 @@ mod tests {
             2,
             &destination,
             NavigationHistoryMutation::Replace,
+            NavigationSourceDocument::NonInitial,
         );
         let first_document_id = first.entries[0].document_id.clone();
         let second = cross_document_navigation_seed(
@@ -641,6 +684,7 @@ mod tests {
             2,
             &destination,
             NavigationHistoryMutation::Replace,
+            NavigationSourceDocument::NonInitial,
         );
 
         assert_ne!(first_document_id, second.entries[0].document_id);
@@ -667,12 +711,24 @@ mod tests {
         let second = Url::parse("https://example.test/second").unwrap();
         let replacement = Url::parse("https://example.test/replacement").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &first);
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &second);
+        apply_child_browsing_context_navigation_to_entry_seed(
+            &mut seed,
+            &first,
+            NavigationSourceDocument::NonInitial,
+        );
+        apply_child_browsing_context_navigation_to_entry_seed(
+            &mut seed,
+            &second,
+            NavigationSourceDocument::NonInitial,
+        );
         let retired_forward_entry = seed.entries[2].clone();
 
         seed.current_index = 1;
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &replacement);
+        apply_child_browsing_context_navigation_to_entry_seed(
+            &mut seed,
+            &replacement,
+            NavigationSourceDocument::NonInitial,
+        );
 
         let replacement_entry = &seed.entries[2];
         assert_eq!(
@@ -695,7 +751,11 @@ mod tests {
         let mut seed = child_browsing_context_single_entry_seed(Some(&first));
         let previous = seed.entries[1].clone();
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &second);
+        replace_child_browsing_context_navigation_in_entry_seed(
+            &mut seed,
+            &second,
+            NavigationSourceDocument::NonInitial,
+        );
 
         assert_eq!(seed.entries[1].history_index, previous.history_index);
         assert_ne!(seed.entries[1].id, previous.id);
@@ -703,68 +763,98 @@ mod tests {
     }
 
     #[test]
-    fn child_activation_seed_retains_the_previous_cross_origin_entry() {
-        let first = Url::parse("http://127.0.0.1:1111/common/blank.html").unwrap();
-        let second = Url::parse("http://127.0.0.1:2222/common/blank.html").unwrap();
+    fn child_activation_retains_cross_origin_candidates_for_document_projection() {
+        let first = Url::parse("http://127.0.0.1:1111/source").unwrap();
+        let second = Url::parse("http://127.0.0.1:2222/destination").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(Some(&first));
-
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &second);
-
-        assert_eq!(
-            seed.activation
-                .as_ref()
-                .and_then(|activation| activation.navigation_type.as_deref()),
-            Some("push")
+        let previous = seed.entries.last().unwrap().clone();
+        apply_child_browsing_context_navigation_to_entry_seed(
+            &mut seed,
+            &second,
+            NavigationSourceDocument::NonInitial,
         );
         assert_eq!(
-            seed.activation
-                .as_ref()
-                .and_then(|activation| activation.from.as_ref())
-                .map(|entry| entry.url.as_str()),
-            Some(first.as_str())
+            seed.activation.as_ref().unwrap().from.as_ref(),
+            Some(&previous)
         );
-
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &first);
-
-        assert_eq!(
-            seed.activation
-                .as_ref()
-                .and_then(|activation| activation.navigation_type.as_deref()),
-            Some("replace")
+        let previous = seed.entries.last().unwrap().clone();
+        replace_child_browsing_context_navigation_in_entry_seed(
+            &mut seed,
+            &first,
+            NavigationSourceDocument::NonInitial,
         );
         assert_eq!(
-            seed.activation
-                .as_ref()
-                .and_then(|activation| activation.from.as_ref())
-                .map(|entry| entry.url.as_str()),
-            Some(second.as_str())
+            seed.activation.as_ref().unwrap().from.as_ref(),
+            Some(&previous)
         );
     }
 
     #[test]
-    fn child_activation_keeps_initial_about_blank_from_entry() {
+    fn child_activation_distinguishes_identical_blank_urls_by_document_lifecycle() {
         let url = Url::parse("http://127.0.0.1:1111/common/blank.html").unwrap();
-        let mut seed = child_browsing_context_single_entry_seed(None);
+        let seed = child_browsing_context_single_entry_seed(None);
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url);
-
-        assert_eq!(
-            seed.activation
-                .as_ref()
-                .and_then(|activation| activation.from.as_ref())
-                .map(|entry| entry.url.as_str()),
-            Some("about:blank")
-        );
+        for (source, expected_url) in [
+            (NavigationSourceDocument::InitialEmpty, None),
+            (NavigationSourceDocument::NonInitial, Some("about:blank")),
+        ] {
+            let mut candidate = seed.clone();
+            replace_child_browsing_context_navigation_in_entry_seed(&mut candidate, &url, source);
+            assert_eq!(
+                candidate
+                    .activation
+                    .as_ref()
+                    .unwrap()
+                    .from
+                    .as_ref()
+                    .map(|entry| entry.url.as_str()),
+                expected_url
+            );
+            let mut pushed = seed.clone();
+            apply_child_browsing_context_navigation_to_entry_seed(&mut pushed, &url, source);
+            assert_eq!(
+                pushed
+                    .activation
+                    .as_ref()
+                    .unwrap()
+                    .from
+                    .as_ref()
+                    .map(|entry| entry.url.as_str()),
+                expected_url
+            );
+            let mut javascript = seed.clone();
+            apply_child_browsing_context_javascript_url_navigation_to_entry_seed(
+                &mut javascript,
+                source,
+            );
+            assert_eq!(
+                javascript
+                    .activation
+                    .as_ref()
+                    .unwrap()
+                    .from
+                    .as_ref()
+                    .map(|entry| entry.url.as_str()),
+                expected_url
+            );
+        }
     }
 
     #[test]
     fn child_javascript_url_navigation_preserves_current_entry_url_and_key() {
         let url = Url::parse("http://127.0.0.1:1111/common/blank.html?1").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &url);
+        apply_child_browsing_context_navigation_to_entry_seed(
+            &mut seed,
+            &url,
+            NavigationSourceDocument::NonInitial,
+        );
         let before = seed.entries[1].clone();
 
-        apply_child_browsing_context_javascript_url_navigation_to_entry_seed(&mut seed);
+        apply_child_browsing_context_javascript_url_navigation_to_entry_seed(
+            &mut seed,
+            NavigationSourceDocument::NonInitial,
+        );
 
         assert_eq!(seed.entries.len(), 2);
         assert_eq!(seed.current_index, 1);
@@ -810,6 +900,7 @@ mod tests {
             1,
             &destination,
             NavigationHistoryMutation::Push,
+            NavigationSourceDocument::NonInitial,
         );
 
         assert_eq!(seed.current_index, 2);
@@ -843,6 +934,7 @@ mod tests {
             2,
             &destination,
             NavigationHistoryMutation::Replace,
+            NavigationSourceDocument::NonInitial,
         );
 
         assert_eq!(seed.current_index, 4);
@@ -892,6 +984,7 @@ mod tests {
                 1,
                 &Url::parse(destination).unwrap(),
                 NavigationHistoryMutation::Replace,
+                NavigationSourceDocument::NonInitial,
             );
             assert_eq!(seed.current_index, 1);
             assert_eq!(seed.entries.len(), entries.len());
@@ -915,7 +1008,8 @@ mod tests {
             entry_key("key-7"),
         )];
 
-        let seed = reload_navigation_seed(entries, 7).expect("reload seed");
+        let seed = reload_navigation_seed(entries, 7, NavigationSourceDocument::NonInitial)
+            .expect("reload seed");
         let activation = seed.activation.as_ref().expect("activation");
         assert_eq!(seed.current_index, 7);
         assert_eq!(activation.entry.url, "https://example.test/current");
@@ -947,7 +1041,15 @@ mod tests {
             ),
         ];
 
-        assert!(traversal_navigation_seed_candidate(entries, 0, 1).is_none());
+        assert!(
+            traversal_navigation_seed_candidate(
+                entries,
+                0,
+                1,
+                NavigationSourceDocument::NonInitial
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -971,8 +1073,17 @@ mod tests {
             ),
         ];
 
-        let candidate =
-            traversal_navigation_seed_candidate(entries, 0, 1).expect("traversal candidate");
+        let candidate = traversal_navigation_seed_candidate(
+            entries,
+            0,
+            1,
+            NavigationSourceDocument::NonInitial,
+        )
+        .expect("traversal candidate");
+        assert_eq!(
+            candidate.current_url.as_str(),
+            "https://example.test/current"
+        );
         assert_eq!(candidate.target_url.as_str(), "https://example.test/target");
         assert_eq!(candidate.seed.current_index, 1);
         assert_eq!(
@@ -1038,9 +1149,13 @@ mod tests {
                 })
                 .collect();
             for (current, target) in [(0, 2), (2, 0)] {
-                let candidate =
-                    traversal_navigation_seed_candidate(entries.clone(), current, target)
-                        .expect("distinct Documents with identical URLs require a traversal");
+                let candidate = traversal_navigation_seed_candidate(
+                    entries.clone(),
+                    current,
+                    target,
+                    NavigationSourceDocument::NonInitial,
+                )
+                .expect("distinct Documents with identical URLs require a traversal");
                 let activation = candidate.seed.activation.unwrap();
                 assert_eq!(activation.entry, entries[target as usize]);
                 assert_eq!(
