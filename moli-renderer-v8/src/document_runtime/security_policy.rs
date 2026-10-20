@@ -403,14 +403,15 @@ impl DocumentPolicyContainer {
         headers: &[(String, Vec<u8>)],
         final_url: &Url,
         history: Option<&Self>,
+        history_policy: Option<&crate::runtime::RendererNavigationPolicy>,
         initiator: Option<&crate::runtime::RendererNavigationPolicy>,
     ) -> Self {
         if let Some(history) = history {
             return history.clone();
         }
         let mut policy = Self::from_navigation_response_headers(headers, final_url);
-        if let Some(initiator) = initiator {
-            initiator.apply_to(&mut policy, final_url);
+        if let Some(source) = history_policy.or(initiator) {
+            source.apply_to(&mut policy, final_url);
         }
         policy
     }

@@ -1111,6 +1111,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     pub(crate) about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
+    pub(crate) history_policy_container: Option<crate::runtime::RendererNavigationPolicy>,
     pub(crate) navigation_history_source: Option<crate::runtime::RendererNavigationHistory>,
     pub(crate) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
@@ -1153,6 +1154,7 @@ impl PageVmEnvConfig {
                 self.about_document_state
                     .as_ref()
                     .map(|state| state.policy_container()),
+                self.history_policy_container.as_ref(),
                 self.main_document_commit
                     .as_ref()
                     .and_then(|commit| commit.navigation_policy.as_ref()),
@@ -4527,6 +4529,7 @@ impl PageVm {
             env.main_document_commit.clone().map(|commit| (document_lifecycle_identity, commit)),
             env.top_level_storage_key.clone(),
             env.reserved_service_worker_client_id,
+            env.document_policy_container.clone(),
             env.about_document_state.clone(),
         )?;
             vm_bootstrap.finish()?

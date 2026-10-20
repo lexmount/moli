@@ -138,6 +138,9 @@ pub(crate) fn publish_top_level_navigation_history<'s>(
             activation: None,
         },
         host.current_about_document_state(),
+        matches!(host.document_url().scheme(), "blob" | "data").then(|| {
+            crate::runtime::RendererNavigationPolicy::capture(host.document_policy_container())
+        }),
     );
 }
 

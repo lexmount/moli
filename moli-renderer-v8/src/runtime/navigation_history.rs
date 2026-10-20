@@ -73,6 +73,114 @@ pub struct RendererNavigationHistory {
     nested: NestedHistoryStore,
     selected_step: Arc<Mutex<Option<(String, SessionHistoryStepId)>>>,
     about_documents: Arc<Mutex<HashMap<NavigationHistoryDocumentId, RendererAboutDocumentState>>>,
+    local_policies:
+        Arc<Mutex<HashMap<NavigationHistoryDocumentId, super::RendererNavigationPolicy>>>,
+}
+
+#[cfg(test)]
+mod policy_history_tests {
+    use super::*;
+    use crate::document_runtime::DocumentPolicyContainer;
+    use crate::runtime::RendererNavigationPolicy;
+
+    #[test]
+    fn local_history_policy_is_frozen_by_document_identity() {
+        let url = Url::parse("blob:https://creator.test/original").unwrap();
+        let history = RendererNavigationHistory::default();
+        let seed = moli_page_types::initial_navigation_history_seed(true, url.as_str());
+        let mut policy = DocumentPolicyContainer {
+            inherited_meta_content_security_policies: vec!["img-src 'none'".to_owned()],
+            content_security_policy_self_url: Some(
+                Url::parse("https://creator.test/source").unwrap(),
+            ),
+            ..Default::default()
+        };
+        let original = RendererNavigationPolicy::capture(&policy);
+        history.publish(seed.clone(), None, Some(original.clone()));
+        policy
+            .inherited_meta_content_security_policies
+            .push("script-src 'none'".to_owned());
+        history.publish(seed, None, Some(RendererNavigationPolicy::capture(&policy)));
+        assert_eq!(
+            history.reload().unwrap().history_policy_container(&url),
+            Some(original.clone())
+        );
+        assert!(
+            history
+                .navigate(&url, NavigationHistoryMutation::Replace)
+                .unwrap()
+                .history_policy_container(&url)
+                .is_none()
+        );
+
+        let away = Url::parse("https://away.test/page").unwrap();
+        let next = history
+            .navigate(&away, NavigationHistoryMutation::Push)
+            .unwrap()
+            .resolve(&away)
+            .unwrap();
+        let restored = history.restore_for(&next);
+        restored.publish(next, None, None);
+        assert_eq!(
+            restored
+                .traverse(-1)
+                .unwrap()
+                .history_policy_container(&url),
+            Some(original)
+        );
+        assert!(
+            restored
+                .reload()
+                .unwrap()
+                .history_policy_container(&away)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn local_history_policy_precedes_initiator_without_copying_other_authority() {
+        let url = Url::parse("blob:https://creator.test/policy").unwrap();
+        let policy = RendererNavigationPolicy::capture(&DocumentPolicyContainer {
+            inherited_meta_content_security_policies: vec!["img-src 'none'".to_owned()],
+            document_referrer: "https://secret.test/source".to_owned(),
+            cross_origin_isolated: true,
+            credentialless: true,
+            sandbox: crate::document_runtime::DocumentSandboxPolicy {
+                forces_opaque_origin: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let initiator = RendererNavigationPolicy::capture(&DocumentPolicyContainer {
+            inherited_meta_content_security_policies: vec!["script-src 'none'".to_owned()],
+            ..Default::default()
+        });
+        let result = DocumentPolicyContainer::for_navigation_response(
+            &[],
+            &url,
+            None,
+            Some(&policy),
+            Some(&initiator),
+        );
+        assert_eq!(
+            result.inherited_meta_content_security_policies,
+            vec!["img-src 'none'"]
+        );
+        assert!(result.document_referrer.is_empty());
+        assert!(
+            !result.cross_origin_isolated
+                && !result.credentialless
+                && !result.sandbox.forces_opaque_origin
+        );
+        let network = DocumentPolicyContainer::for_navigation_response(
+            &[],
+            &Url::parse("https://network.test/page").unwrap(),
+            None,
+            Some(&policy),
+            Some(&initiator),
+        );
+        assert!(network.inherited_meta_content_security_policies.is_empty());
+    }
 }
 
 impl PartialEq for RendererNavigationHistory {
@@ -157,6 +265,7 @@ impl RendererNavigationHistory {
             nested: self.nested.clone(),
             selected_step: Arc::default(),
             about_documents: self.about_documents.clone(),
+            local_policies: self.local_policies.clone(),
         }
     }
 
@@ -169,10 +278,25 @@ impl RendererNavigationHistory {
         &self,
         seed: NavigationHistoryEntrySeed,
         state: Option<RendererAboutDocumentState>,
+        policy: Option<super::RendererNavigationPolicy>,
     ) {
         if let Some(history) = seed.session_history.traversable.as_deref() {
             *self.joint.lock() = Some(history.clone());
         }
+        let mut policies = self.local_policies.lock();
+        policies.retain(|document, _| {
+            seed.entries
+                .iter()
+                .any(|entry| &entry.document_id == document)
+        });
+        if let Some(policy) = policy
+            && let Some(entry) = current_entry(&seed)
+        {
+            // A history Document keeps its creation policy. Target meta and
+            // later mutations in the creator are not a new navigation response.
+            policies.entry(entry.document_id.clone()).or_insert(policy);
+        }
+        drop(policies);
         let mut documents = self.about_documents.lock();
         documents.retain(|document, _| {
             seed.entries
@@ -282,6 +406,17 @@ impl RendererNavigationHistory {
         let source_index = self.snapshot().map(|source| source.current_index);
         let about_document_state = current_entry(&seed)
             .and_then(|entry| self.about_documents.lock().get(&entry.document_id).cloned());
+        let history_policy_container = seed
+            .activation
+            .as_ref()
+            .filter(|activation| {
+                matches!(
+                    activation.navigation_type.as_deref(),
+                    Some("reload" | "traverse")
+                )
+            })
+            .and_then(|_| current_entry(&seed))
+            .and_then(|entry| self.local_policies.lock().get(&entry.document_id).cloned());
         let initial_empty_source = seed.activation.as_ref().is_some_and(|activation| {
             activation.source_document == moli_page_types::NavigationSourceDocument::InitialEmpty
         });
@@ -292,6 +427,7 @@ impl RendererNavigationHistory {
             initial_empty_source,
             selected_step: self.selected_step.lock().clone(),
             about_document_state,
+            history_policy_container,
         }
     }
 }
@@ -308,6 +444,7 @@ pub struct RendererNavigationHistoryRequest {
     initial_empty_source: bool,
     selected_step: Option<(String, SessionHistoryStepId)>,
     about_document_state: Option<RendererAboutDocumentState>,
+    history_policy_container: Option<super::RendererNavigationPolicy>,
 }
 
 impl PartialEq for RendererNavigationHistoryRequest {
@@ -316,12 +453,22 @@ impl PartialEq for RendererNavigationHistoryRequest {
             && Arc::ptr_eq(&self.requested, &other.requested)
             && self.initial_empty_source == other.initial_empty_source
             && self.about_document_state == other.about_document_state
+            && self.history_policy_container == other.history_policy_container
     }
 }
 
 impl Eq for RendererNavigationHistoryRequest {}
 
 impl RendererNavigationHistoryRequest {
+    pub(crate) fn history_policy_container(
+        &self,
+        final_url: &Url,
+    ) -> Option<super::RendererNavigationPolicy> {
+        matches!(final_url.scheme(), "blob" | "data")
+            .then(|| self.history_policy_container.clone())
+            .flatten()
+    }
+
     /// A new about:blank navigation inherits its initiator's frozen state.
     /// Reload and traversal retain the destination Document's recorded state.
     pub fn with_about_document_state(mut self, state: Option<RendererAboutDocumentState>) -> Self {

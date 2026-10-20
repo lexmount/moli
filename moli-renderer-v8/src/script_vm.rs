@@ -2064,6 +2064,7 @@ impl ScriptVmPageRealmBootstrap {
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
+        initial_policy: crate::document_runtime::DocumentPolicyContainer,
         initial_environment: Option<ScriptVmInitialDocumentEnvironment>,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
         let initial_environment = initial_environment.or_else(|| {
@@ -2100,16 +2101,7 @@ impl ScriptVmPageRealmBootstrap {
         let initial_policy = initial_environment
             .as_ref()
             .map(|environment| environment.policy_container.clone())
-            .unwrap_or_else(|| {
-                crate::document_runtime::DocumentPolicyContainer::for_navigation_response(
-                    &[],
-                    &document_url,
-                    None,
-                    main_document_commit
-                        .as_ref()
-                        .and_then(|commit| commit.navigation_policy.as_ref()),
-                )
-            });
+            .unwrap_or(initial_policy);
         let mut frame_owner_store = FrameOwnerStore::default();
         frame_owner_store.ensure_main_frame(
             document_handle,
@@ -2500,6 +2492,7 @@ impl ScriptVmDefaultWorldBootstrap {
             None,
             None,
             None,
+            Default::default(),
             None,
         )
     }
@@ -2526,6 +2519,7 @@ impl ScriptVmDefaultWorldBootstrap {
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
+        initial_policy: crate::document_runtime::DocumentPolicyContainer,
         about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
         let about_document_state = renderer_document_isolate_bootstrap
@@ -2572,6 +2566,7 @@ impl ScriptVmDefaultWorldBootstrap {
             main_document_commit,
             top_level_storage_key,
             reserved_service_worker_client_id,
+            initial_policy,
             initial_environment,
         )?;
         if let Some(state) = &about_document_state {
