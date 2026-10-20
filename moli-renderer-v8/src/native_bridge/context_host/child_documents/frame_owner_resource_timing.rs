@@ -1,6 +1,8 @@
 use super::super::{JsContextHost, OwnerDispatchScope, WindowExecutionContextOwner};
 use crate::{
-    context_bootstrap::{ResourcePerformanceEntry, record_resource_performance_entry},
+    context_bootstrap::{
+        FetchResourceTiming, ResourcePerformanceEntry, record_resource_performance_entry,
+    },
     document_runtime::DomHandle,
     frame_owner_model::{
         FrameDocumentDescendantLoadParent, FrameDocumentLoadDeliveryAction, FrameDocumentTaskOwner,
@@ -22,6 +24,7 @@ pub(in crate::native_bridge::context_host) struct PendingFrameOwnerResourceTimin
     request_url: String,
     initiator_type: &'static str,
     start_unix_millis_bits: u64,
+    started_at: std::time::Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +34,7 @@ pub(in crate::native_bridge::context_host) struct CompletedFrameOwnerResourceTim
     request_url: String,
     initiator_type: &'static str,
     start_unix_millis_bits: u64,
+    started_at: std::time::Instant,
     network: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
 }
 
@@ -46,6 +50,7 @@ impl PendingFrameOwnerResourceTiming {
             request_url: self.request_url,
             initiator_type: self.initiator_type,
             start_unix_millis_bits: self.start_unix_millis_bits,
+            started_at: self.started_at,
             network,
         }
     }
@@ -77,12 +82,22 @@ impl CompletedFrameOwnerResourceTiming {
     }
 
     fn performance_entry(&self) -> ResourcePerformanceEntry {
-        ResourcePerformanceEntry::from_child_frame_document_network(
+        let mut entry = ResourcePerformanceEntry::from_child_frame_document_network(
             self.request_url.clone(),
             self.initiator_type,
             Some(f64::from_bits(self.start_unix_millis_bits)),
             &self.network,
-        )
+        );
+        let mut timing = FetchResourceTiming::from_start(
+            self.initiator_type,
+            self.started_at,
+            f64::from_bits(self.start_unix_millis_bits),
+        );
+        if let Some(native) = self.network.resource_timing_response.as_deref() {
+            timing.observe_native_timing(*native);
+        }
+        timing.apply_child_document_timing(&mut entry, &self.network);
+        entry
     }
 }
 
@@ -107,6 +122,7 @@ impl JsContextHost {
             request_url: target_url.as_str().to_owned(),
             initiator_type,
             start_unix_millis_bits: moli_time::unix_epoch_millis().to_bits(),
+            started_at: std::time::Instant::now(),
         })
     }
 

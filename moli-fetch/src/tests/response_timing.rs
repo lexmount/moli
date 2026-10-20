@@ -236,6 +236,8 @@ async fn raw_response_timing_is_native_even_when_the_consumer_does_not_poll() ->
     let headers = cancel.response_timing();
     assert!(headers.response_started_at().is_some());
     assert!(headers.response_end_at().is_none());
+    assert!(headers.connection_timing().unwrap().connection.is_some());
+    assert!(headers.connection_timing().unwrap().curl.is_none());
     release_body.send(())?;
     // Intentionally keep this Tokio thread occupied: the curl semantic owner
     // must capture completion without the response consumer being polled.
@@ -320,6 +322,7 @@ async fn native_request_timing_is_transfer_scoped_on_multiplexed_http2() -> Resu
     let after = Instant::now();
     let mut new_connections = 0;
     let mut tls_observations = 0;
+    let mut selected_connection = None;
     for cancel in [buffered_cancel, raw_cancel] {
         let timing = cancel.response_timing();
         assert!(timing.request_started_at().unwrap() >= before);
@@ -329,6 +332,21 @@ async fn native_request_timing_is_transfer_scoped_on_multiplexed_http2() -> Resu
         let connection = timing
             .connection_timing()
             .context("HTTP/2 connection timing")?;
+        let selected = connection
+            .connection
+            .context("selected HTTP/2 connection")?;
+        if let Some(previous) = selected_connection {
+            assert_eq!(
+                selected, previous,
+                "multiplexed streams observe the same native connection"
+            );
+        } else {
+            selected_connection = Some(selected);
+        }
+        assert!(before <= selected.connect_started_at);
+        assert!(selected.connect_started_at <= selected.secure_started_at.unwrap());
+        assert!(selected.secure_started_at.unwrap() <= selected.connect_completed_at);
+        assert!(selected.connect_completed_at <= timing.request_started_at().unwrap());
         let prepared = connection
             .request_prepared_at
             .context("HTTP/2 preparation")?;
@@ -428,6 +446,13 @@ async fn native_request_timing_waits_for_the_proxy_tunnel() -> Result<()> {
     let connection = timing
         .connection_timing()
         .context("tunnel connection timing")?;
+    let selected = connection
+        .connection
+        .context("selected tunnel connection")?;
+    assert!(selected.connect_started_at <= released_at);
+    assert!(selected.secure_started_at.context("origin TLS start")? >= released_at);
+    assert!(selected.secure_started_at.unwrap() <= selected.connect_completed_at);
+    assert!(selected.connect_completed_at <= timing.request_started_at().unwrap());
     let prepared = connection
         .request_prepared_at
         .context("tunnel request preparation")?;

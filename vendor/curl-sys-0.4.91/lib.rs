@@ -140,6 +140,18 @@ pub struct curl_blob {
     pub flags: c_uint,
 }
 
+/// Private Moli extension; each observation uses the installed monotonic clock.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct curl_moli_connection_timing {
+    pub dns_start: curl_off_t,
+    pub dns_end: curl_off_t,
+    pub has_dns: curl_off_t,
+    pub connect_start: curl_off_t,
+    pub connect_end: curl_off_t,
+    pub secure_start: curl_off_t,
+}
+
 pub const CURL_CHUNK_BGN_FUNC_OK: c_long = 0;
 pub const CURL_CHUNK_BGN_FUNC_FAIL: c_long = 1;
 pub const CURL_CHUNK_BGN_FUNC_SKIP: c_long = 2;
@@ -1136,6 +1148,17 @@ extern "C" {
     pub fn curl_easy_perform(curl: *mut CURL) -> CURLcode;
     pub fn curl_easy_cleanup(curl: *mut CURL);
     pub fn curl_easy_getinfo(curl: *mut CURL, info: CURLINFO, ...) -> CURLcode;
+    pub fn curl_easy_moli_timing_init(
+        curl: *mut CURL,
+        clock: Option<extern "C" fn() -> curl_off_t>,
+        dns_start: curl_off_t,
+        dns_end: curl_off_t,
+        has_dns: c_int,
+    ) -> CURLcode;
+    pub fn curl_easy_moli_connection_timing(
+        curl: *mut CURL,
+        timing: *mut curl_moli_connection_timing,
+    ) -> CURLcode;
     pub fn curl_easy_duphandle(curl: *mut CURL) -> *mut CURL;
     pub fn curl_easy_reset(curl: *mut CURL);
     pub fn curl_easy_recv(

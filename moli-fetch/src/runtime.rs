@@ -896,6 +896,8 @@ impl RuntimeOwner {
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
         job.response_progress = job.cancel_handle.begin_response_progress();
+        job.response_progress
+            .mark_fetch_started(job.hop.started_at(&job.request));
         if job.cancel_handle.is_cancelled() {
             return Err((
                 job.response_tx,
@@ -1053,6 +1055,8 @@ impl RuntimeOwner {
         ),
     > {
         job.response_progress = job.cancel_handle.begin_response_progress();
+        job.response_progress
+            .mark_fetch_started(job.hop.started_at(&job.request));
         if job.cancel_handle.is_cancelled() {
             let easy = job.easy.take();
             return Err((
@@ -1274,6 +1278,8 @@ impl RuntimeOwner {
         ),
     > {
         job.response_progress = job.cancel_handle.begin_response_progress();
+        job.response_progress
+            .mark_fetch_started(job.hop.started_at(&job.request));
         if job.cancel_handle.is_cancelled() {
             let easy = job.easy.take();
             return Err((
@@ -1481,6 +1487,10 @@ impl RuntimeOwner {
                     .easy
                     .as_ref()
                     .map(crate::FetchCurlTiming::from_easy),
+                completion
+                    .easy
+                    .as_ref()
+                    .and_then(moli_curl::CurlConnectionTiming::from_easy),
             );
         if let Some(easy) = completion.easy.as_mut() {
             if let Some(error) = easy.get_mut().content_decoding_error.take() {
@@ -2641,7 +2651,40 @@ struct OwnerState {
 }
 
 #[derive(Debug)]
+struct FetchHopClock {
+    redirects: usize,
+    started_at: Instant,
+}
+
+impl FetchHopClock {
+    fn redirect_count(request: &Request) -> usize {
+        request
+            .redirect_chain
+            .iter()
+            .filter(|redirect| redirect.source != crate::RedirectSource::Internal)
+            .count()
+    }
+
+    fn new(request: &Request, cancel: &FetchCancelHandle) -> Self {
+        Self {
+            redirects: Self::redirect_count(request),
+            started_at: cancel.fetch_hop_started_at().unwrap_or_else(Instant::now),
+        }
+    }
+
+    fn started_at(&mut self, request: &Request) -> Instant {
+        let redirects = Self::redirect_count(request);
+        if self.redirects != redirects {
+            self.redirects = redirects;
+            self.started_at = Instant::now();
+        }
+        self.started_at
+    }
+}
+
+#[derive(Debug)]
 struct RuntimeJob {
+    hop: FetchHopClock,
     request: Request,
     current_url: Url,
     current_cookie_context: NetworkCookieRequestContext,
@@ -2664,6 +2707,7 @@ impl RuntimeJob {
         let origin_key = origin_key(&request);
         let response_progress = cancel_handle.response_progress();
         Self {
+            hop: FetchHopClock::new(&request, &cancel_handle),
             current_url: request.url.clone(),
             current_cookie_context: request.network_cookie_context(),
             redirect_count: request.redirect_count(),
@@ -2680,6 +2724,7 @@ impl RuntimeJob {
 }
 
 struct StreamingRuntimeJob {
+    hop: FetchHopClock,
     request: Request,
     current_url: Url,
     current_cookie_context: NetworkCookieRequestContext,
@@ -2707,6 +2752,7 @@ impl StreamingRuntimeJob {
         let origin_key = origin_key(&request);
         let response_progress = cancel_handle.response_progress();
         Self {
+            hop: FetchHopClock::new(&request, &cancel_handle),
             current_url: request.url.clone(),
             current_cookie_context: request.network_cookie_context(),
             redirect_count: request.redirect_count(),
@@ -2726,6 +2772,7 @@ impl StreamingRuntimeJob {
 }
 
 struct StreamingRawRuntimeJob {
+    hop: FetchHopClock,
     request: Request,
     current_url: Url,
     current_cookie_context: NetworkCookieRequestContext,
@@ -2753,6 +2800,7 @@ impl StreamingRawRuntimeJob {
         let origin_key = origin_key(&request);
         let response_progress = cancel_handle.response_progress();
         Self {
+            hop: FetchHopClock::new(&request, &cancel_handle),
             current_url: request.url.clone(),
             current_cookie_context: request.network_cookie_context(),
             redirect_count: request.redirect_count(),
@@ -2841,7 +2889,17 @@ struct ActiveRawStreamingTransferContext {
     effective_request: Request,
 }
 
+#[derive(Clone, Copy)]
+struct CallbackEasyHandle(std::ptr::NonNull<curl_sys::CURL>);
+
+// SAFETY: this private non-owning pointer travels only inside the Handler of
+// that same owning Easy2. Moving the Easy2 across threads preserves libcurl's
+// allocation. It is read only synchronously in that handle's prereq callback;
+// neither destruction nor callback execution races with another thread.
+unsafe impl Send for CallbackEasyHandle {}
+
 pub(crate) struct FetchTransferHandler {
+    callback_easy: Option<CallbackEasyHandle>,
     response: FetchResponseCollector,
     response_body_observed: bool,
     network_observation_recorder: Option<NetworkObservationRecorder>,
@@ -2895,6 +2953,7 @@ impl FetchTransferHandler {
 
     fn new(response: FetchResponseCollector) -> Self {
         Self {
+            callback_easy: None,
             response,
             response_body_observed: false,
             network_observation_recorder: None,
@@ -3020,8 +3079,16 @@ impl Handler for FetchTransferHandler {
         _primary_port: u16,
         _local_port: u16,
     ) -> bool {
+        let connection = match self.callback_easy {
+            // SAFETY: configure_network_observation binds this pointer to the
+            // exact Easy2 owning this Handler, before callback registration.
+            Some(handle) => unsafe {
+                moli_curl::CurlConnectionTiming::from_raw_handle(handle.0.as_ptr())
+            },
+            None => None,
+        };
         if let Some(timing) = self.response_progress() {
-            timing.mark_request_started();
+            timing.mark_request_started(connection);
         }
         true
     }
@@ -3186,6 +3253,8 @@ fn configure_network_observation(
     request_cookie_report: Option<&StoredCookieQueryReport>,
     capture_proxy_connect_response: bool,
 ) -> Result<()> {
+    let callback_easy = std::ptr::NonNull::new(easy.raw()).expect("live easy handle");
+    easy.get_mut().callback_easy = Some(CallbackEasyHandle(callback_easy));
     let recorder = request.network_observation_recorder().cloned();
     let upload_observer = request
         .body

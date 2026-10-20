@@ -300,6 +300,8 @@ fn send_synchronous_network_xhr(
     prepared: PreparedXhrSendRequest,
     loader: ResourceRequestClient,
 ) {
+    let mut timing =
+        crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest");
     let request = Request::new_bytes(
         &prepared.method,
         prepared.resolved_url.as_str(),
@@ -384,6 +386,8 @@ fn send_synchronous_network_xhr(
             recv(timeout_rx) -> _ => {
                 let timeout = xhr_timeout.expect("never channel should not fire without xhr timeout");
                 cancel_handle.cancel();
+                timing.observe_native_timing(cancel_handle.response_timing());
+                crate::context_bootstrap::record_resource_performance_entry(scope, timing.failure(&prepared.resolved_url));
                 host.record_subresource_network(SubresourceNetworkRecord::failure(
                     prepared.frame_id,
                     prepared.document_url,
@@ -445,13 +449,26 @@ fn send_synchronous_network_xhr(
 
     match result {
         Ok(response) => {
+            timing.observe_native_timing(cancel_handle.response_timing());
+            let head = response.head();
+            let filter = crate::network_host::FetchResponseRequest {
+                method: &prepared.method,
+                mode: RequestMode::Cors,
+                redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+            }
+            .network_response_filter(
+                &prepared.request_origin,
+                &head,
+                prepared.credentials_mode,
+            );
             crate::context_bootstrap::record_resource_performance_entry(
                 scope,
-                crate::context_bootstrap::ResourcePerformanceEntry::from_fetch_response(
-                    prepared.resolved_url.as_str(),
-                    "xmlhttprequest",
-                    None,
-                    &response,
+                timing.response(
+                    &prepared.resolved_url,
+                    &prepared.request_origin,
+                    &head,
+                    &filter,
+                    response.body_bytes().len(),
                 ),
             );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
@@ -492,6 +509,11 @@ fn send_synchronous_network_xhr(
             apply_xhr_response(scope, xhr, response);
         }
         Err(error_text) => {
+            timing.observe_native_timing(cancel_handle.response_timing());
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                timing.failure(&prepared.resolved_url),
+            );
             host.record_subresource_network(SubresourceNetworkRecord::failure(
                 prepared.frame_id,
                 prepared.document_url,

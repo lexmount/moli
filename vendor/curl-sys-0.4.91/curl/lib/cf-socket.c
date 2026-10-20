@@ -22,6 +22,7 @@
  *
  ***************************************************************************/
 #include "curl_setup.h"
+#include "moli_timing.h"
 
 #ifdef HAVE_NETINET_IN_H
 #include <netinet/in.h> /* <netinet/tcp.h> may need it */
@@ -1019,6 +1020,8 @@ struct cf_socket_ctx {
   struct ip_quadruple ip;            /* The IP quadruple 2x(addr+port) */
   struct curltime started_at;        /* when socket was created */
   struct curltime connected_at;      /* when socket connected/got first byte */
+  curl_off_t moli_started_at;
+  curl_off_t moli_connected_at;
   struct curltime first_byte_at;     /* when first byte was recvd */
 #ifdef USE_WINSOCK
   struct curltime last_sndbuf_query_at;  /* when SO_SNDBUF last queried */
@@ -1256,6 +1259,8 @@ static CURLcode cf_socket_open(struct Curl_cfilter *cf,
 
   DEBUGASSERT(ctx->sock == CURL_SOCKET_BAD);
   ctx->started_at = *Curl_pgrs_now(data);
+  ctx->moli_started_at = Curl_moli_now(data);
+  ctx->moli_connected_at = 0;
 #ifdef CURL_USE_SOCK_NONBLOCK
   /* Do not tuck SOCK_NONBLOCK into socktype when opensocket callback is set
    * because we would not know how socktype is about to be used in the
@@ -1398,6 +1403,7 @@ out:
   else if(isconnected) {
     set_local_ip(cf, data);
     ctx->connected_at = *Curl_pgrs_now(data);
+    ctx->moli_connected_at = Curl_moli_now(data);
     cf->connected = TRUE;
   }
   CURL_TRC_CF(data, cf, "cf_socket_open() -> %d, fd=%" FMT_SOCKET_T,
@@ -1517,6 +1523,7 @@ static CURLcode cf_tcp_connect(struct Curl_cfilter *cf,
     if(verifyconnect(ctx->sock, &ctx->sockerr)) {
       /* we are connected with TCP, awesome! */
       ctx->connected_at = *Curl_pgrs_now(data);
+      ctx->moli_connected_at = Curl_moli_now(data);
       set_local_ip(cf, data);
       *done = TRUE;
       cf->connected = TRUE;
@@ -1754,6 +1761,18 @@ static void cf_socket_update_data(struct Curl_cfilter *cf,
 static void cf_socket_active(struct Curl_cfilter *cf, struct Curl_easy *data)
 {
   struct cf_socket_ctx *ctx = cf->ctx;
+
+  /* Only the winning socket contributes, not discarded Happy Eyeballs
+   * attempts. Never replace connection provenance on stream reuse. */
+  if((cf->sockindex == FIRSTSOCKET) &&
+     !cf->conn->moli_timing.connect_start) {
+    cf->conn->moli_timing.connect_start = ctx->moli_started_at;
+    if(ctx->moli_connected_at > cf->conn->moli_timing.connect_end)
+      cf->conn->moli_timing.connect_end = ctx->moli_connected_at;
+    cf->conn->moli_timing.dns_start = data->set.moli_dns_start;
+    cf->conn->moli_timing.dns_end = data->set.moli_dns_end;
+    cf->conn->moli_timing.has_dns = data->set.moli_has_dns;
+  }
 
   /* use this socket from now on */
   cf->conn->sock[cf->sockindex] = ctx->sock;
@@ -2388,6 +2407,7 @@ static CURLcode cf_tcp_accept_connect(struct Curl_cfilter *cf,
   set_local_ip(cf, data);
   ctx->active = TRUE;
   ctx->connected_at = *Curl_pgrs_now(data);
+  ctx->moli_connected_at = Curl_moli_now(data);
   cf->connected = TRUE;
   CURL_TRC_CF(data, cf, "accepted_set(sock=%" FMT_SOCKET_T
               ", remote=%s port=%d)",
@@ -2454,6 +2474,8 @@ CURLcode Curl_conn_tcp_listen_set(struct Curl_easy *data,
   Curl_conn_cf_add(data, conn, sockindex, cf);
 
   ctx->started_at = *Curl_pgrs_now(data);
+  ctx->moli_started_at = Curl_moli_now(data);
+  ctx->moli_connected_at = 0;
   conn->sock[sockindex] = ctx->sock;
   set_local_ip(cf, data);
   CURL_TRC_CF(data, cf, "set filter for listen socket fd=%" FMT_SOCKET_T
