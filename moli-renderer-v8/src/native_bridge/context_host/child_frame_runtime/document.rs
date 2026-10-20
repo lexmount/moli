@@ -387,7 +387,7 @@ impl JsContextHost {
                 {
                     return;
                 }
-                let entry_document = host.document_open_entry_document(scope);
+                let entry_document = Self::document_open_entry_document(scope);
                 let Some(context) = Self::begin_child_document_stream_replacement(
                     scope,
                     host_ptr,
@@ -511,7 +511,7 @@ impl JsContextHost {
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
-        entry_document: Option<DomHandle>,
+        entry_document: Option<v8::Local<'s, v8::Object>>,
     ) -> Option<v8::Local<'s, v8::Context>> {
         if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
             != Some(document_handle)
@@ -617,8 +617,8 @@ impl JsContextHost {
         let previous_url = unsafe { &mut *host_ptr }.document_url_for_handle(document_handle);
         let replacement_url = entry_document
             .filter(|_| unsafe { &mut *host_ptr }.child_browsing_context_is_live(child_handle))
-            .map(|entry| {
-                unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry)
+            .and_then(|entry| {
+                unsafe { &*host_ptr }.document_open_replacement_url(scope, document_handle, entry)
             });
         let document_url = replacement_url.as_ref().unwrap_or(&previous_url).clone();
         let document_base_url = if replacement_url.is_some() {
