@@ -1180,12 +1180,12 @@ fn navigator_plugin_collections_declared_fixed_members_keep_descriptors() {
                 ].join(',');
               }
               function valueDescriptor(object, name) {
-                const descriptor = Object.getOwnPropertyDescriptor(object, name);
+                const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(object), name);
                 return [
                   descriptor.enumerable,
-                  descriptor.writable,
+                  descriptor.set === undefined,
                   descriptor.configurable,
-                  String(descriptor.value)
+                  String(descriptor.get.call(object))
                 ].join(',');
               }
               function outcome(callback) {
@@ -1259,9 +1259,24 @@ fn navigator_plugin_collections_declared_fixed_members_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"pluginsPrototype":true,"pluginPrototype":true,"mimeTypesPrototype":true,"pluginsItem":"true,true,true,item,1","pluginsNamedItem":"true,true,true,namedItem,1","pluginsRefresh":"true,true,true,refresh,0","pluginsIterator":"false,true,true,values,0","pluginItem":"true,true,true,item,1","pluginNamedItem":"true,true,true,namedItem,1","pluginIterator":"false,true,true,values,0","mimeTypesItem":"true,true,true,item,1","mimeTypesNamedItem":"true,true,true,namedItem,1","mimeTypesIterator":"false,true,true,values,0","iteratorIdentity":true,"mimeTypesRefresh":false,"pluginName":"false,true,true,PDF Viewer","pluginFilename":"false,true,true,internal-pdf-viewer","pluginDescription":"false,true,true,Portable Document Format","pluginFixedNames":["description","filename","name"],"pluginArrayFixedNames":[],"privateSlotNames":"||","realRefresh":"undefined","fakeReceivers":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError","crossReceivers":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError"}"#
+        r#"{"pluginsPrototype":true,"pluginPrototype":true,"mimeTypesPrototype":true,"pluginsItem":"true,true,true,item,1","pluginsNamedItem":"true,true,true,namedItem,1","pluginsRefresh":"true,true,true,refresh,0","pluginsIterator":"false,true,true,values,0","pluginItem":"true,true,true,item,1","pluginNamedItem":"true,true,true,namedItem,1","pluginIterator":"false,true,true,values,0","mimeTypesItem":"true,true,true,item,1","mimeTypesNamedItem":"true,true,true,namedItem,1","mimeTypesIterator":"false,true,true,values,0","iteratorIdentity":true,"mimeTypesRefresh":false,"pluginName":"true,true,true,PDF Viewer","pluginFilename":"true,true,true,internal-pdf-viewer","pluginDescription":"true,true,true,Portable Document Format","pluginFixedNames":[],"pluginArrayFixedNames":[],"privateSlotNames":"||","realRefresh":"undefined","fakeReceivers":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError","crossReceivers":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError"}"#
     );
 }
+#[test]
+fn navigator_plugin_collections_preserve_native_lists_and_legacy_property_semantics() {
+    let mut vm = new_storage_html_test_vm("https://navigator-plugin-native-list.test/");
+    let fixture = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/navigator-plugin-collections.js"
+    ));
+    let result = vm
+        .eval(&format!(
+            "JSON.stringify(({fixture}).checks.filter(check => !check.pass))"
+        ))
+        .expect("native plugin collection regression should evaluate");
+    assert_eq!(result, "[]");
+}
+
 #[test]
 fn screen_orientation_lock_converts_webidl_enum_before_device_rejection() {
     let mut vm = new_storage_test_vm("https://screen-orientation-lock.test/");
