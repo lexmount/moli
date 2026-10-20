@@ -17,6 +17,8 @@ pub fn finish_template<'s>(
     interface: WebApiInterfaceDescriptor,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
+    moli_webapi_declare::capture_web_api_reflect_set(scope)
+        .expect("standalone realm captures trusted Reflect.set before author script");
     interface.register(scope).unwrap();
     template.set_class_name(v8str(scope, interface.name()));
     template.read_only_prototype();
