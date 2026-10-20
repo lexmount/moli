@@ -1716,7 +1716,9 @@ pub(super) struct LoadedChildDocument {
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation,
+    /// The response completed without replacing the active Document. Its
+    /// network facts still belong to the original navigation request.
+    IgnoredNavigation(Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>),
 }
 
 /// Immutable frame/protocol attribution captured before a child-document
@@ -1796,7 +1798,8 @@ impl ChildDocumentLoadCompletion {
     ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) | Err(_) => None,
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
+            Err(_) => None,
         }
     }
 

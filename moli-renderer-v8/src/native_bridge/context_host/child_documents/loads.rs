@@ -343,7 +343,14 @@ impl JsContextHost {
         let Some(snapshot) = completion.document_network().cloned() else {
             return false;
         };
-        let attribution = completion.network_attribution();
+        self.record_child_document_network_activity(completion.network_attribution(), snapshot)
+    }
+
+    fn record_child_document_network_activity(
+        &mut self,
+        attribution: &ChildDocumentLoadNetworkAttribution,
+        snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+    ) -> bool {
         let event = crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
             frame_id: attribution.frame_id().to_owned(),
             parent_frame_id: attribution.parent_frame_id().map(ToOwned::to_owned),
@@ -524,10 +531,13 @@ impl JsContextHost {
                         (Ok(ChildDocumentLoadOutcome::Loaded(loaded)), false)
                     }
                 }
-                Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => (
-                    Err("object resource cannot be represented as a nested document".to_owned()),
-                    true,
-                ),
+                Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => {
+                    self.record_child_document_network_activity(&network_attribution, *network);
+                    (
+                        Err("object resource cannot be represented as a nested document".to_owned()),
+                        true,
+                    )
+                }
                 Err(error) => (Err(error), true),
             }
         } else {
@@ -547,7 +557,13 @@ impl JsContextHost {
         let mut response_links = crate::response_links::DocumentResponseLinks::default();
         let mut body_activity = ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
         let snapshot_to_install = match result {
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => {
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => {
+                if let Some(timing) = pending.frame_owner_resource_timing.take() {
+                    self.record_frame_owner_resource_timing_without_document_commit(
+                        scope, &timing, &network,
+                    );
+                }
+                self.record_child_document_network_activity(&network_attribution, *network);
                 crate::context_bootstrap::finish_joint_history_without_document_commit(
                     scope,
                     self,
@@ -884,14 +900,46 @@ fn child_document_load_outcome_from_response(
     timing: ChildDocumentTiming<'_>,
     encoding_context: &super::encoding::ChildDocumentEncodingContext,
 ) -> Result<ChildDocumentLoadOutcome, String> {
-    if child_document_response_should_ignore_navigation(head.status, &head.headers) {
-        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
-    }
     let response_body = SubresourceResponseBody::from_bytes(
         body.try_into_materialized_bytes()
             .map_err(|_| "child document response body should remain materialized".to_owned())?,
     );
     let encoded_data_length = response_body.len();
+    let network = crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+        request_url,
+        request_method,
+        request_headers,
+        final_url: head.final_url.as_str().to_owned(),
+        status: head.status,
+        response_headers: head.headers.clone(),
+        encoded_data_length,
+        response_body: Some(response_body.clone()),
+        from_cache: head.from_cache,
+        cache_state: head.cache_state,
+        preload_state: head.preload_state.clone(),
+        resource_timing_body_visible: timing
+            .origin
+            .is_some_and(|origin| !head.url_list().has_cross_origin_url(origin)),
+        resource_timing_response: timing
+            .response
+            .fetch_started_at()
+            .map(|_| Box::new(timing.response)),
+        resource_timing_allowed: timing.origin.is_some_and(|origin| {
+            crate::context_bootstrap::FetchResourceTiming::timing_allowed(origin, &head)
+        }),
+        resource_timing_redirected: head
+            .redirect_chain
+            .iter()
+            .any(|redirect| redirect.source != moli_fetch::RedirectSource::Internal),
+        resource_timing_protocol: head
+            .negotiated_http_version
+            .filter(|_| head.cache_state != moli_fetch::ResponseCacheState::Local),
+    };
+    if child_document_response_should_ignore_navigation(head.status, &head.headers) {
+        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
+            network,
+        )));
+    }
     let policy_container =
         DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &head.final_url);
     let (content_type, content, character_set) = {
@@ -900,7 +948,9 @@ fn child_document_load_outcome_from_response(
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
         let mime = navigation_response_content_type(&head.final_url, &head.headers, &body_bytes);
         if !moli_web_mime::is_supported_document_mime_type(&mime) {
-            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
+            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
+                network,
+            )));
         }
         let fallback = encoding_context.fallback_encoding(
             &head.final_url,
@@ -927,36 +977,7 @@ fn child_document_load_outcome_from_response(
             content_type,
             character_set,
             content,
-            document_network: Some(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-                request_url,
-                request_method,
-                request_headers,
-                final_url: head.final_url.as_str().to_owned(),
-                status: head.status,
-                response_headers: head.headers.clone(),
-                encoded_data_length,
-                response_body: Some(response_body),
-                from_cache: head.from_cache,
-                cache_state: head.cache_state,
-                preload_state: head.preload_state.clone(),
-                resource_timing_body_visible: timing
-                    .origin
-                    .is_some_and(|origin| !head.url_list().has_cross_origin_url(origin)),
-                resource_timing_response: timing
-                    .response
-                    .fetch_started_at()
-                    .map(|_| Box::new(timing.response)),
-                resource_timing_allowed: timing.origin.is_some_and(|origin| {
-                    crate::context_bootstrap::FetchResourceTiming::timing_allowed(origin, &head)
-                }),
-                resource_timing_redirected: head
-                    .redirect_chain
-                    .iter()
-                    .any(|redirect| redirect.source != moli_fetch::RedirectSource::Internal),
-                resource_timing_protocol: head
-                    .negotiated_http_version
-                    .filter(|_| head.cache_state != moli_fetch::ResponseCacheState::Local),
-            }),
+            document_network: Some(network),
         },
     )))
 }
