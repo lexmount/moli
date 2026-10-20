@@ -250,6 +250,7 @@ async fn null_body_child_navigation_reports_network_without_replacing_document()
                     assert_eq!(network.len(), 1, "the real response must still reach Network exactly once");
                     assert_eq!(network[0].snapshot.status, status);
                     assert_eq!(network[0].snapshot.request_url, child_url);
+                    assert!(network[0].snapshot.resource_timing_response.is_some());
                     let timing: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval(
                         &format!("JSON.stringify(performance.getEntriesByName({child_url:?}, 'resource').map(entry => entry.toJSON()))")
                     )?)?;
@@ -259,9 +260,14 @@ async fn null_body_child_navigation_reports_network_without_replacing_document()
                         assert_eq!(entry["initiatorType"], "iframe");
                         assert_eq!(entry["responseStatus"], if same_origin { status } else { 0 });
                         assert_eq!(entry["contentType"], "");
+                        assert_eq!(entry["contentEncoding"], "");
                         assert_eq!(entry["encodedBodySize"], 0);
                         assert_eq!(entry["decodedBodySize"], 0);
                         assert_eq!(entry["transferSize"], 300);
+                        assert_eq!(entry["nextHopProtocol"], "http/1.1");
+                        assert!(entry["requestStart"].as_f64().unwrap() >= entry["fetchStart"].as_f64().unwrap());
+                        assert!(entry["responseStart"].as_f64().unwrap() >= entry["requestStart"].as_f64().unwrap());
+                        assert!(entry["responseEnd"].as_f64().unwrap() >= entry["responseStart"].as_f64().unwrap());
                     }
                     assert!(!queue.has_ready_completion());
                     server.await.expect("null-body response server should finish");
@@ -484,98 +490,118 @@ async fn retiring_child_navigation_without_fetch_interception_cancels_transport(
 #[tokio::test(flavor = "current_thread")]
 async fn response_for_replaced_child_document_is_historical_network_only() {
     run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_path_response_http_server(vec![(
-            "/retired-child.html",
-            "HTTP/1.1 200 OK",
-            "<!doctype html><p id='must-not-commit'>retired response</p>".to_owned(),
-            Duration::from_millis(100),
-        )])
-        .await;
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
-            &loader,
-            Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
-        );
-        let root_document = page_vm.document_lifecycle.identity().document;
-        let retired_url = format!("{base_url}/retired-child.html");
-        let (handle, retired_target) = start_external_child_document_load(
-            &mut page_vm,
-            "replacement-child-frame",
-            &retired_url,
-        )
-        .await;
-        // The response has arrived, but its owner turn has not run. Replacing
-        // the navigation must preserve this fact without committing it.
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "completed child response")
+        for (status, status_line) in [
+            (200, "HTTP/1.1 200 OK"),
+            (204, "HTTP/1.1 204 No Content"),
+            (205, "HTTP/1.1 205 Reset Content"),
+        ] {
+            let (base_url, server) = spawn_path_response_http_server(vec![(
+                "/retired-child.html",
+                status_line,
+                if status == 200 {
+                    "<!doctype html><p id='must-not-commit'>retired response</p>".to_owned()
+                } else {
+                    String::new()
+                },
+                Duration::from_millis(100),
+            )])
+            .await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+                .expect("loader");
+            let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+                &loader,
+                Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
+            );
+            let root_document = page_vm.document_lifecycle.identity().document;
+            let retired_url = format!("{base_url}/retired-child.html");
+            let (handle, retired_target) = start_external_child_document_load(
+                &mut page_vm,
+                "replacement-child-frame",
+                &retired_url,
+            )
             .await;
 
-        page_vm.vm_mut().eval(
-            "document.getElementById('replacement-child-frame').srcdoc = \
+            // Capture the native completion before replacement; cancellation
+            // of an unreceived response is a different lifecycle scenario.
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, "completed child response")
+                .await;
+
+            page_vm.vm_mut().eval(
+                "document.getElementById('replacement-child-frame').srcdoc = \
              \"<p id='replacement-child'>replacement</p>\";",
-        )?;
-        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-            &mut page_vm,
-            ChildFrameSemanticTurnKind::NavigationCommit,
-            "replacement srcdoc commit",
-        )
-        .await;
-        assert_ne!(
-            page_vm
-                .vm()
-                .current_child_document_navigation_fetch_target(handle),
-            Some(retired_target),
-            "replacement must retire the exact fetch target before its terminal is applied"
-        );
-        let _ = page_vm.take_completed_child_frame_navigation_loads();
-        while wake_rx.try_recv().is_ok() {}
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "retired child fetch").await;
-        let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
-
-        let outcome = page_vm
-            .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
-            .expect("retired response should consume one stale-discard turn");
-        assert_eq!(
-            outcome.action.owner,
-            RendererPageResourceCompletionOwner::child_document_navigation(
-                root_document,
-                retired_target,
+            )?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm,
+                ChildFrameSemanticTurnKind::NavigationCommit,
+                "replacement srcdoc commit",
             )
-        );
-        assert!(matches!(
-            outcome.action.document_effect,
-            PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }
-        ));
-        assert_eq!(
-            page_vm.vm().subresource_activity_epoch(),
-            activity_epoch_before,
-            "historical child response must not become replacement Document activity"
-        );
-        assert_eq!(
-            page_vm.vm_mut().eval(
-                "document.getElementById('replacement-child-frame').contentDocument\
-                 .getElementById('replacement-child').textContent"
-            )?,
-            "replacement"
-        );
-        assert_eq!(
-            page_vm.vm_mut().eval(
-                "String(document.getElementById('replacement-child-frame').contentDocument\
-                 .getElementById('must-not-commit'))"
-            )?,
-            "null"
-        );
-        let historical = page_vm.take_completed_child_document_networks();
-        assert_eq!(historical.len(), 1);
-        assert_eq!(historical[0].snapshot.request_url, retired_url);
-        assert!(
-            page_vm
-                .take_completed_child_frame_navigation_loads()
-                .is_empty(),
-            "stale response must not synthesize a child navigation commit/lifecycle snapshot"
-        );
+            .await;
+            assert_ne!(
+                page_vm
+                    .vm()
+                    .current_child_document_navigation_fetch_target(handle),
+                Some(retired_target),
+                "replacement must retire the exact fetch target before its response arrives"
+            );
+            let _ = page_vm.take_completed_child_frame_navigation_loads();
+            while wake_rx.try_recv().is_ok() {}
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, "retired child fetch")
+                .await;
+            let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
 
-        server.await.expect("retired child server should finish");
+            let outcome = page_vm
+                .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                .expect("retired response should consume one stale-discard turn");
+            assert_eq!(
+                outcome.action.owner,
+                RendererPageResourceCompletionOwner::child_document_navigation(
+                    root_document,
+                    retired_target,
+                )
+            );
+            assert!(matches!(
+                outcome.action.document_effect,
+                PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }
+            ));
+            assert_eq!(
+                page_vm.vm().subresource_activity_epoch(),
+                activity_epoch_before,
+                "historical child response must not become replacement Document activity"
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval(
+                    "document.getElementById('replacement-child-frame').contentDocument\
+                 .getElementById('replacement-child').textContent"
+                )?,
+                "replacement"
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval(
+                    "String(document.getElementById('replacement-child-frame').contentDocument\
+                 .getElementById('must-not-commit'))"
+                )?,
+                "null"
+            );
+            let historical = page_vm.take_completed_child_document_networks();
+            assert_eq!(historical.len(), 1);
+            assert_eq!(historical[0].snapshot.request_url, retired_url);
+            assert_eq!(historical[0].snapshot.status, status);
+            assert_eq!(
+                page_vm.vm_mut().eval(&format!(
+                    "String(performance.getEntriesByName({retired_url:?}, 'resource').length)"
+                ))?,
+                "0",
+                "a stale fetch cannot add timing to the replacement owner"
+            );
+            assert!(
+                page_vm
+                    .take_completed_child_frame_navigation_loads()
+                    .is_empty(),
+                "stale response must not synthesize a child navigation commit/lifecycle snapshot"
+            );
+
+            server.await.expect("retired child server should finish");
+        }
         Ok::<_, anyhow::Error>(())
     })
     .await

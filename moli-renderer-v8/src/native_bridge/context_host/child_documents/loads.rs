@@ -344,10 +344,10 @@ impl PageScriptHost {
         let Some(snapshot) = completion.document_network().cloned() else {
             return false;
         };
-        self.record_child_document_load_network(completion.network_attribution(), snapshot)
+        self.record_child_document_network_activity(completion.network_attribution(), snapshot)
     }
 
-    fn record_child_document_load_network(
+    fn record_child_document_network_activity(
         &mut self,
         attribution: &ChildDocumentLoadNetworkAttribution,
         snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
@@ -567,10 +567,13 @@ impl PageScriptHost {
                         (Ok(ChildDocumentLoadOutcome::Loaded(loaded)), false)
                     }
                 }
-                Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => (
-                    Err("object resource cannot be represented as a nested document".to_owned()),
-                    true,
-                ),
+                Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => {
+                    self.record_child_document_network_activity(&network_attribution, *network);
+                    (
+                        Err("object resource cannot be represented as a nested document".to_owned()),
+                        true,
+                    )
+                }
                 Err(error) => (Err(error), true),
             }
         } else {
@@ -620,7 +623,7 @@ impl PageScriptHost {
                         response_status,
                     );
                 }
-                self.record_child_document_load_network(&network_attribution, network);
+                self.record_child_document_network_activity(&network_attribution, network);
                 if let Some(response) = download {
                     self.record_pending_download_activation(
                         crate::runtime::RendererPendingDownloadActivation {

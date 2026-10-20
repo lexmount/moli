@@ -67,6 +67,22 @@ impl PendingFrameOwnerResourceTiming {
         }
     }
 
+    fn apply_native_timing(
+        &self,
+        entry: &mut ResourcePerformanceEntry,
+        network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+    ) {
+        let timing = FetchResourceTiming::from_start(
+            self.initiator_type,
+            self.started_at,
+            self.start_unix_millis(),
+        );
+        if let Some(native) = network.resource_timing_response.as_deref() {
+            timing.observe_native_timing(*native);
+        }
+        timing.apply_child_document_timing(entry, network);
+    }
+
     fn start_unix_millis(&self) -> f64 {
         f64::from_bits(self.start_unix_millis_bits)
     }
@@ -84,15 +100,7 @@ impl CompletedFrameOwnerResourceTiming {
             Some(self.timing.start_unix_millis()),
             &self.network,
         );
-        let timing = FetchResourceTiming::from_start(
-            self.timing.initiator_type,
-            self.timing.started_at,
-            self.timing.start_unix_millis(),
-        );
-        if let Some(native) = self.network.resource_timing_response.as_deref() {
-            timing.observe_native_timing(*native);
-        }
-        timing.apply_child_document_timing(&mut entry, &self.network);
+        self.timing.apply_native_timing(&mut entry, &self.network);
         entry
     }
 }
@@ -151,7 +159,10 @@ impl PageScriptHost {
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
         response_status: u16,
     ) {
-        let entry = ResourcePerformanceEntry::from_child_frame_no_content(
+        if !network.resource_timing_allowed {
+            return;
+        }
+        let mut entry = ResourcePerformanceEntry::from_child_frame_no_content(
             timing.request_url.clone(),
             timing.initiator_type,
             Some(timing.start_unix_millis()),
@@ -159,6 +170,7 @@ impl PageScriptHost {
             network.cache_state,
             network.preload_state.clone(),
         );
+        timing.apply_native_timing(&mut entry, network);
         self.record_frame_owner_resource_timing(scope, timing, entry);
     }
 
