@@ -214,7 +214,20 @@ impl NavigationResourceLoader {
         }
     }
 
+    pub(crate) fn response_timing(&self) -> moli_fetch::FetchResponseTiming {
+        self.inner.cancel.response_timing()
+    }
+
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
+        let (response, _) = self.fetch_raw_with_timing(request).await?;
+        Ok(response)
+    }
+
+    /// Materialize the body while retaining the selected native response clock.
+    pub async fn fetch_raw_with_timing(
+        &self,
+        request: Request,
+    ) -> Result<(RawResponse, moli_fetch::FetchResponseTiming)> {
         self.begin_fetch()?;
         let single_hop = !request.transport_follows_redirects();
         let response_cancel = if single_hop {
@@ -244,7 +257,10 @@ impl NavigationResourceLoader {
                 {
                     response_cancel.cancel();
                     self.finish_response_ready()?;
-                    return Ok(RawResponse::from_head_and_body(head, body));
+                    return Ok((
+                        RawResponse::from_head_and_body(head, body),
+                        response_cancel.response_timing(),
+                    ));
                 }
                 while let Some(chunk) = response.next_chunk().await {
                     body.extend_from_slice(&chunk);
@@ -257,7 +273,10 @@ impl NavigationResourceLoader {
                 if single_hop {
                     self.inner.cancel.adopt_response_progress(&response_cancel);
                 }
-                Ok(RawResponse::from_head_and_body(head, body))
+                Ok((
+                    RawResponse::from_head_and_body(head, body),
+                    response_cancel.response_timing(),
+                ))
             }
             Err(error) => {
                 self.finish_failed();

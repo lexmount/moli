@@ -288,6 +288,10 @@ fn send_synchronous_network_xhr(
     prepared: PreparedXhrSendRequest,
     control: Option<ControlledXhrContext>,
 ) {
+    let timing = crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+        "xmlhttprequest",
+        prepared.initiator_url.clone(),
+    );
     let request = prepared.request().with_request_mode(RequestMode::Cors);
 
     let request_cookie_report = observe_subresource_request_cookie_report(
@@ -376,6 +380,11 @@ fn send_synchronous_network_xhr(
         SynchronousLoadOutcome::TimedOut => {
             cancel_handle.cancel();
             drop(output_scope);
+            timing.observe_native_timing(cancel_handle.response_timing());
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                timing.failed(&prepared.resolved_url),
+            );
             let mut record = SubresourceNetworkRecord::failure(
                 prepared.frame_id,
                 prepared.document_url,
@@ -424,12 +433,17 @@ fn send_synchronous_network_xhr(
             return;
         }
     };
+    timing.observe_native_timing(cancel_handle.response_timing());
     // XHR's own completion events may now run on the original JS stack; the
     // native network publication privilege ends before entering those callbacks.
     drop(output_scope);
     let completed = match result {
         Ok(completed) => completed,
         Err(error) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                timing.failed(&prepared.resolved_url),
+            );
             record_xhr_failure(scope, host, xhr, prepared, false, error);
             return;
         }
@@ -446,18 +460,14 @@ fn send_synchronous_network_xhr(
         Ok(response) => {
             crate::context_bootstrap::record_resource_performance_entry(
                 scope,
-                crate::context_bootstrap::ResourcePerformanceEntry::from_fetch_response(
-                    prepared.resolved_url.as_str(),
-                    "xmlhttprequest",
-                    None,
-                    &response,
-                )
-                .with_initiator_url(crate::resource_initiator::response_url(
-                    prepared.initiator_url.clone(),
+                timing.completed(
+                    &prepared.resolved_url,
                     &prepared.request_origin,
-                    &response.final_url,
-                    response.cache_state,
-                )),
+                    RequestMode::Cors,
+                    &response.head(),
+                    response.body_bytes().len(),
+                    None,
+                ),
             );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.request_origin,
@@ -473,6 +483,10 @@ fn send_synchronous_network_xhr(
             apply_xhr_response(scope, xhr, response);
         }
         Err(_) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                timing.failed(&prepared.resolved_url),
+            );
             throw_synchronous_xhr_failure(scope, xhr, request_url.as_str(), "NetworkError");
         }
     }

@@ -107,7 +107,10 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         }
     }
 
-    pub(crate) fn admit(&mut self, transfer_id: CurlTransferId, job: CurlMultiJob<H, C>) {
+    pub(crate) fn admit(&mut self, transfer_id: CurlTransferId, mut job: CurlMultiJob<H, C>) {
+        // Recycled handles must lose the previous transfer's connection even
+        // when this job expires before reaching the Multi.
+        crate::connection_timing::initialize(&mut job.easy, None);
         if self.closed {
             self.send_completion(CurlMultiCompletion {
                 transfer_id,
@@ -312,6 +315,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         let dns_timing = pending.dns_timing;
         let queued_for = pending.enqueued_at.elapsed();
         let mut job = pending.job;
+        crate::connection_timing::initialize(&mut job.easy, dns_timing);
         let label = job.label.clone();
         if let Some(deadline) = job.deadline {
             let Some(remaining) = curl_timeout_for_deadline(deadline, Instant::now()) else {
