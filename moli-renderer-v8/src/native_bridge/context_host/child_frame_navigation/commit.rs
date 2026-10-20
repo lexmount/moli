@@ -273,7 +273,7 @@ impl JsContextHost {
                     ChildBrowsingContextBootstrap::Url(url.clone()),
                     initiator_url,
                     navigation_initiator,
-                    self.snapshot_child_navigation_target(handle),
+                    self.snapshot_child_navigation_target(handle, url),
                 ),
                 true,
                 initiator,

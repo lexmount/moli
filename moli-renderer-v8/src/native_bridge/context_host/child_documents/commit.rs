@@ -74,14 +74,18 @@ impl JsContextHost {
             !creation_kind.is_initial_empty(),
             "initial-empty frame initialization must not enter snapshot commit planning"
         );
-        let origin = self
-            .child_browsing_context_document_origin_for_url(handle, &snapshot.url)
-            .unwrap_or_else(|| moli_url::origin_ascii_serialization(&snapshot.url));
+        let origin = if creation_kind == DocumentCreationKind::Error {
+            "null".to_owned()
+        } else {
+            self.child_browsing_context_document_origin_for_url(handle, &snapshot.url)
+                .unwrap_or_else(|| moli_url::origin_ascii_serialization(&snapshot.url))
+        };
         let current_document_domain_was_set = preflight.current_document_domain_was_set
             || self
                 .child_browsing_context_document_domain_override(handle)
                 .is_some();
-        let security_origin_allows_reuse = !current_document_domain_was_set
+        let security_origin_allows_reuse = creation_kind != DocumentCreationKind::Error
+            && !current_document_domain_was_set
             && preflight
                 .current_access_origin
                 .as_ref()
@@ -229,7 +233,7 @@ impl JsContextHost {
         if let Some(origin) = self.child_window_access_origin(handle)
             && let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
         {
-            entry.remember_srcdoc_history_resource(snapshot, origin);
+            entry.remember_local_history_resource(snapshot, origin);
         }
         self.remember_child_history(handle);
         let owner_local_window_id = current_owner.local_window_id;

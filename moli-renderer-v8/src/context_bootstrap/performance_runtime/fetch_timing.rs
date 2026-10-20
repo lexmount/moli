@@ -363,20 +363,22 @@ impl FetchResourceTiming {
         &self,
         entry: &mut ResourcePerformanceEntry,
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        expose_document_response: bool,
     ) {
+        let timing_allowed = expose_document_response && network.resource_timing_allowed;
         // Cross-origin timing failures use the enclosing frame's actual load
         // boundary, rather than leaking when its response body finished.
-        entry.end_unix_millis = Some(if network.resource_timing_allowed {
+        entry.end_unix_millis = Some(if timing_allowed {
             self.end()
         } else {
             self.now()
         });
-        if !network.resource_timing_body_visible {
+        if !expose_document_response || !network.resource_timing_body_visible {
             entry.content_encoding.clear();
             entry.response_status = 0.0;
             entry.content_type.clear();
         }
-        if !network.resource_timing_allowed {
+        if !timing_allowed {
             entry.encoded_body_size = 0.0;
             entry.decoded_body_size = 0.0;
             entry.transfer_size = 0.0;

@@ -118,20 +118,20 @@ impl JsContextHost {
         handle: DomHandle,
         bootstrap: &ChildBrowsingContextBootstrap,
     ) -> LocalChildDocumentPreparation {
+        if let Some(snapshot) = self
+            .child_browsing_contexts
+            .get(&handle)
+            .and_then(|entry| entry.pending_local_history_snapshot(bootstrap))
+        {
+            return LocalChildDocumentPreparation::Historical(Box::new(
+                self.apply_page_csp_bypass_to_child_snapshot(snapshot),
+            ));
+        }
         let mut snapshot = match bootstrap {
             ChildBrowsingContextBootstrap::AboutBlank => ChildBrowsingContextSnapshot::about_blank(
                 self.document_base_url_for_child_context(handle),
             ),
             ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
-                if let Some(snapshot) = self
-                    .child_browsing_contexts
-                    .get(&handle)
-                    .and_then(|entry| entry.pending_srcdoc_history_snapshot())
-                {
-                    return LocalChildDocumentPreparation::Ready(Box::new(
-                        self.apply_page_csp_bypass_to_child_snapshot(snapshot),
-                    ));
-                }
                 ChildBrowsingContextSnapshot::srcdoc(base_url.clone(), markup.clone())
             }
             ChildBrowsingContextBootstrap::Url(url) => {

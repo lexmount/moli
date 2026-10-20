@@ -70,6 +70,7 @@ impl PendingFrameOwnerResourceTiming {
     fn performance_entry(
         &self,
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        expose_document_response: bool,
     ) -> ResourcePerformanceEntry {
         let mut entry = ResourcePerformanceEntry::from_child_frame_document_network(
             self.request_url.clone(),
@@ -85,7 +86,7 @@ impl PendingFrameOwnerResourceTiming {
         if let Some(native) = network.resource_timing_response.as_deref() {
             timing.observe_native_timing(*native);
         }
-        timing.apply_child_document_timing(&mut entry, network);
+        timing.apply_child_document_timing(&mut entry, network, expose_document_response);
         entry
     }
 }
@@ -133,7 +134,16 @@ impl JsContextHost {
         else {
             return;
         };
-        if !self.record_frame_owner_resource_timing(scope, &timing.timing, &timing.network) {
+        let expose_response = self
+            .frame_owner_store
+            .current_child_document_creation_kind(action.child_handle())
+            != Some(crate::frame_owner_model::DocumentCreationKind::Error);
+        if !self.record_frame_owner_resource_timing(
+            scope,
+            &timing.timing,
+            &timing.network,
+            expose_response,
+        ) {
             return;
         }
         if let Some(entry) = self.child_browsing_contexts.get_mut(&action.child_handle()) {
@@ -151,7 +161,7 @@ impl JsContextHost {
         // Document or load event. Downloads and unsupported MIME types do not.
         // A TAO failure has no normal entry and, without load, no fallback entry.
         if matches!(network.status, 204 | 205) && network.resource_timing_allowed {
-            self.record_frame_owner_resource_timing(scope, timing, network);
+            self.record_frame_owner_resource_timing(scope, timing, network, true);
         }
     }
 
@@ -160,6 +170,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         timing: &PendingFrameOwnerResourceTiming,
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        expose_document_response: bool,
     ) -> bool {
         if !timing.parent_owner_is_current(self) {
             return false;
@@ -174,7 +185,10 @@ impl JsContextHost {
         };
         {
             let scope = &mut v8::ContextScope::new(scope, context);
-            record_resource_performance_entry(scope, timing.performance_entry(network));
+            record_resource_performance_entry(
+                scope,
+                timing.performance_entry(network, expose_document_response),
+            );
         }
         true
     }
