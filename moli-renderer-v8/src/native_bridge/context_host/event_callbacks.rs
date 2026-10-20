@@ -1,4 +1,5 @@
 use super::{JsContextHost, WindowExecutionContextIdentity, WindowExecutionContextOwner};
+use crate::common_runtime::{CommonRuntimeBinding, RuntimeExecutionContext};
 use crate::event_type::EventTypeKey;
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
@@ -25,6 +26,7 @@ pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
     kind: EventCallbackKind,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+    relevant_host: *mut JsContextHost,
 }
 
 pub(crate) struct WindowErrorReportingScope {
@@ -65,6 +67,10 @@ impl PreparedEventCallback {
 
     pub(crate) fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
         self.relevant_identity
+    }
+
+    pub(crate) fn relevant_host(&self) -> *mut JsContextHost {
+        self.relevant_host
     }
 
     pub(crate) fn is_callable(&self) -> bool {
@@ -128,6 +134,31 @@ impl EventCallbackRegistry {
 }
 
 impl JsContextHost {
+    fn event_callback_host_for_context(
+        &self,
+        context: v8::Local<'_, v8::Context>,
+    ) -> Option<*mut Self> {
+        // Bare V8 test contexts have no renderer binding. An installed but
+        // disconnected binding, however, must never fall back to this target.
+        if context.get_slot::<CommonRuntimeBinding>().is_none() {
+            return Some(std::ptr::from_ref(self).cast_mut());
+        }
+        match CommonRuntimeBinding::from_context(context)?.1 {
+            RuntimeExecutionContext::Window(host) => Some(host),
+            RuntimeExecutionContext::Worker => None,
+        }
+    }
+
+    fn event_callback_identity_for_context(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<'_, v8::Context>,
+    ) -> Option<WindowExecutionContextIdentity> {
+        let host_ptr = self.event_callback_host_for_context(context)?;
+        let host = unsafe { &*host_ptr };
+        host.window_execution_context_identity_for_v8_context(scope, context)
+    }
+
     pub(crate) fn enter_window_error_reporting_scope(
         &mut self,
         owner: WindowExecutionContextOwner,
@@ -380,16 +411,22 @@ impl JsContextHost {
         let relevant_context = callback.relevant_context(scope);
         // A non-callable handler does not execute in its object's realm.
         // Retiring that realm must not clear the value from another target.
-        let relevant_identity =
+        let registration_identity =
             if kind == EventCallbackKind::Handler && !callback.callable_at_conversion() {
                 None
             } else {
                 self.window_execution_context_identity_for_v8_context(scope, relevant_context)
             };
+        let relevant_identity =
+            if kind == EventCallbackKind::Handler && !callback.callable_at_conversion() {
+                None
+            } else {
+                self.event_callback_identity_for_context(scope, relevant_context)
+            };
         #[cfg(test)]
         let incumbent_identity = {
             let incumbent_context = callback.incumbent_context(scope);
-            self.window_execution_context_identity_for_v8_context(scope, incumbent_context)
+            self.event_callback_identity_for_context(scope, incumbent_context)
         };
         let id = self.event_callbacks.allocate_id();
         let previous = self.event_callbacks.records.insert(
@@ -398,7 +435,7 @@ impl JsContextHost {
                 callback,
                 kind,
                 relevant_identity,
-                registration_identity: relevant_identity,
+                registration_identity,
                 #[cfg(test)]
                 incumbent_identity,
             },
@@ -488,12 +525,15 @@ impl JsContextHost {
         {
             return None;
         }
+        let relevant_context = record.callback.relevant_context(scope);
+        let relevant_host = self.event_callback_host_for_context(relevant_context)?;
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
             kind: record.kind,
-            relevant_identity: record
-                .relevant_identity
-                .filter(|identity| self.window_execution_context_identity_is_current(*identity)),
+            relevant_identity: record.relevant_identity.filter(|identity| {
+                unsafe { &*relevant_host }.window_execution_context_identity_is_current(*identity)
+            }),
+            relevant_host,
         })
     }
 

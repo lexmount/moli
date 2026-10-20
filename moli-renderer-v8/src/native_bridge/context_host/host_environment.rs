@@ -1130,8 +1130,10 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
     ) {
+        let foreign_action = self.foreign_document_replacement_action_snapshot(scope);
         self.close_root_document_parser_stream(scope, host_ptr);
         self.sync_pending_document_style_sources();
+        self.publish_foreign_document_replacement_action(foreign_action);
     }
 
     pub(crate) fn owner_style_sheet_text(&self, owner: DomHandle) -> Option<String> {
