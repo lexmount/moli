@@ -1,14 +1,35 @@
 use super::super::JsContextHost;
-use crate::{content_security_policy::IframeCspAttribute, document_runtime::DomHandle};
+use crate::{
+    content_security_policy::IframeCspAttribute,
+    document_runtime::{DocumentPolicyContainer, DomHandle},
+};
+use url::Url;
 
 /// Policy inputs belong to the navigation admission, not to the later fetch
 /// task or a subsequent refresh of the owner element's live attributes.
 #[derive(Clone, Debug, Default)]
 pub(in crate::native_bridge::context_host) struct ChildNavigationTargetSnapshot {
     required_csp: Option<IframeCspAttribute>,
+    embedding_origin: Option<String>,
 }
 
 impl ChildNavigationTargetSnapshot {
+    pub(in crate::native_bridge::context_host) fn apply_response_policy(
+        &self,
+        policy: &mut DocumentPolicyContainer,
+        final_url: &Url,
+        headers: &[(String, Vec<u8>)],
+    ) -> bool {
+        self.required_csp.as_ref().is_none_or(|required| {
+            policy.apply_required_content_security_policy(
+                required,
+                self.embedding_origin.as_deref().unwrap_or("null"),
+                final_url,
+                headers,
+            )
+        })
+    }
+
     pub(in crate::native_bridge::context_host) fn configure_request(
         &self,
         mut request: moli_fetch::Request,
@@ -30,7 +51,21 @@ impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn snapshot_child_navigation_target(
         &self,
         handle: DomHandle,
+        target_url: &Url,
     ) -> ChildNavigationTargetSnapshot {
+        let owner = self.owner_dispatch_scope_for_node(handle);
+        let embedding_origin = owner
+            .and_then(|owner| self.window_access_origin_for_dispatch_scope(owner))
+            .map(|origin| origin.serialized_origin());
+        if self.bypass_content_security_policy() {
+            return ChildNavigationTargetSnapshot {
+                embedding_origin,
+                ..Default::default()
+            };
+        }
+        let inherited = owner
+            .and_then(|owner| self.document_policy_container_for_inheritance(owner))
+            .and_then(|policy| policy.required_content_security_policy);
         let required_csp = if self.dom_host().is_html_element_named(handle, "iframe") {
             self.dom_host()
                 .get_attribute(handle, "csp")
@@ -39,7 +74,17 @@ impl JsContextHost {
         } else {
             None
         };
-        ChildNavigationTargetSnapshot { required_csp }
+        let required_csp = required_csp
+            .filter(|policy| {
+                inherited
+                    .as_ref()
+                    .is_none_or(|parent| parent.subsumes(&[policy.as_str().into()], target_url))
+            })
+            .or(inherited);
+        ChildNavigationTargetSnapshot {
+            required_csp,
+            embedding_origin,
+        }
     }
 }
 
@@ -64,6 +109,7 @@ mod tests {
             ]);
             let snapshot = ChildNavigationTargetSnapshot {
                 required_csp: policy,
+                ..Default::default()
             };
             let request = snapshot.configure_request(request);
             let mut expected = vec![

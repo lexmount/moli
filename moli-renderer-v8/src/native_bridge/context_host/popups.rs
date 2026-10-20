@@ -2995,7 +2995,8 @@ impl JsContextHost {
             },
         );
         let local_outcome = match local_preparation {
-            LocalChildDocumentPreparation::Ready(snapshot) => {
+            LocalChildDocumentPreparation::Ready(snapshot)
+            | LocalChildDocumentPreparation::Historical(snapshot) => {
                 let snapshot = *snapshot;
                 let mut policy_container = snapshot.policy_container.clone();
                 if policy_container
