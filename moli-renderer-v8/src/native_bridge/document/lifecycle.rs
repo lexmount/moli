@@ -207,7 +207,7 @@ fn node_document_write_or_writeln_callback<'s>(
         if !runtime.check_document_open_origin(scope, args.this()) {
             return;
         }
-        let entry_document = runtime.document_open_entry_document(scope);
+        let entry_document = JsContextHost::document_open_entry_document(scope);
         JsContextHost::prepare_root_document_replacement(
             scope,
             runtime_ptr,
@@ -338,7 +338,7 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         if let Some(child_handle) =
             unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
         {
-            let entry_document = unsafe { &*runtime_ptr }.document_open_entry_document(scope);
+            let entry_document = JsContextHost::document_open_entry_document(scope);
             let _ = JsContextHost::begin_child_document_stream_replacement(
                 scope,
                 runtime_ptr,
@@ -360,7 +360,7 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         }
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
-            let entry_document = runtime.document_open_entry_document(scope);
+            let entry_document = JsContextHost::document_open_entry_document(scope);
             JsContextHost::prepare_root_document_replacement(
                 scope,
                 runtime_ptr,
@@ -390,25 +390,13 @@ impl JsContextHost {
         false
     }
 
-    pub(in crate::native_bridge) fn document_open_entry_document(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-    ) -> Option<DomHandle> {
+    pub(in crate::native_bridge) fn document_open_entry_document<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
         // Borrowed methods execute in their callee realm. HTML instead uses
         // the Window that entered this script or microtask.
-        let context = scope.get_entered_or_microtask_context();
+        let context = v8::Local::new(scope, scope.get_entered_or_microtask_context());
         let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
-        if !std::ptr::eq(host_ptr, self) {
-            return None;
-        }
-        // Child realms bind their associated Document through native settings.
-        // The entered realm, rather than the borrowed method's callee realm,
-        // selects the entry Document even after the iframe route changes.
-        if let Some(settings) =
-            context.get_slot::<crate::native_bridge::WindowEnvironmentSettings>()
-        {
-            return Some(settings.document_handle());
-        }
         let window = context.global(scope);
         if let Some(document) = crate::util::get_private_value(
             scope,
@@ -417,23 +405,35 @@ impl JsContextHost {
         )
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         {
-            let (document_host, handle) =
-                node_runtime_and_handle_from_object_or_detached(scope, document).ok()?;
-            return std::ptr::eq(document_host, self).then_some(handle);
+            return Some(document);
         }
-        Some(self.document_handle())
+        let document = context
+            .get_slot::<crate::native_bridge::WindowEnvironmentSettings>()
+            .map(|settings| settings.document_handle())
+            .unwrap_or_else(|| unsafe { &*host_ptr }.document_handle());
+        // A node handle is local to its host. Retain the actual Document across
+        // removal callbacks, including when entry and receiver are separate Pages.
+        // Materialize a lazy Document in its own realm without invoking an
+        // author-replaced global document getter.
+        let scope = &mut v8::ContextScope::new(scope, context);
+        unsafe { &mut *host_ptr }
+            .native_bridge_mut()
+            .wrap_handle(scope, host_ptr, document)
     }
 
-    pub(in crate::native_bridge) fn document_open_replacement_url(
+    pub(in crate::native_bridge) fn document_open_replacement_url<'s>(
         &self,
+        scope: &mut v8::PinScope<'s, '_>,
         document: DomHandle,
-        entry_document: DomHandle,
-    ) -> url::Url {
-        let mut url = self.document_url_for_handle(entry_document);
-        if document != entry_document {
+        entry_document: v8::Local<'s, v8::Object>,
+    ) -> Option<url::Url> {
+        let (entry_host, entry_handle) =
+            node_runtime_and_handle_from_object_or_detached(scope, entry_document).ok()?;
+        let mut url = unsafe { &*entry_host }.document_url_for_handle(entry_handle);
+        if !std::ptr::eq(entry_host, self) || document != entry_handle {
             url.set_fragment(None);
         }
-        url
+        Some(url)
     }
 
     fn prepare_windowless_document_replacement(
@@ -450,11 +450,11 @@ impl JsContextHost {
         });
     }
 
-    fn prepare_root_document_replacement(
-        scope: &mut v8::PinScope<'_, '_>,
+    fn prepare_root_document_replacement<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
-        entry_document: Option<DomHandle>,
+        entry_document: Option<v8::Local<'s, v8::Object>>,
     ) {
         let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
         Self::dispatch_document_open_descendant_frame_unload_lifecycle(
@@ -477,8 +477,8 @@ impl JsContextHost {
         if unsafe { &*host_ptr }.current_main_document_task_owner() != owner {
             return;
         }
-        let replacement_url = entry_document.map(|entry| {
-            unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry)
+        let replacement_url = entry_document.and_then(|entry| {
+            unsafe { &*host_ptr }.document_open_replacement_url(scope, document_handle, entry)
         });
         let url_changed = replacement_url
             .as_ref()
