@@ -118,6 +118,10 @@ pub(crate) fn publish_top_level_navigation_history<'s>(
     );
     let traversable = host.session_histories.get_mut(None).clone();
     let about_document_state = host.current_about_document_state();
+    let history_policy_container =
+        matches!(host.document_url().scheme(), "blob" | "data").then(|| {
+            crate::runtime::RendererNavigationPolicy::capture(host.document_policy_container())
+        });
     host.top_level_navigation_history().publish(
         NavigationHistoryEntrySeed {
             session_history: moli_page_types::SessionHistorySeed {
@@ -131,6 +135,7 @@ pub(crate) fn publish_top_level_navigation_history<'s>(
             activation: None,
         },
         about_document_state,
+        history_policy_container,
     );
 }
 

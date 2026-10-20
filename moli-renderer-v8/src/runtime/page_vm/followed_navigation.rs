@@ -644,6 +644,7 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     initial_document_environment: Option<RendererCapturedDocumentEnvironment>,
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
+    history_policy_container: Option<crate::runtime::RendererNavigationPolicy>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     service_worker_client_navigate: Option<crate::types::ServiceWorkerClientNavigateContinuation>,
     web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
@@ -1043,6 +1044,9 @@ impl PageVm {
         // realm. Publish its current policy at the same pre-unload boundary used
         // by browser-owned navigation commits.
         self.vm_mut().publish_main_document_navigation_history()?;
+        let history_policy_container = navigation_history
+            .as_ref()
+            .and_then(|history| history.history_policy_container(final_url));
         let navigation_bootstrap_entry = navigation_history
             .as_ref()
             .map(|history| history.resolve(final_url))
@@ -1055,6 +1059,7 @@ impl PageVm {
                 initial_document_environment: pending.initial_document_environment,
                 navigation_bootstrap_entry,
                 about_document_state,
+                history_policy_container,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
                 web_mcp_invocation,
@@ -1074,6 +1079,7 @@ impl PageVm {
             loaded,
             navigation_bootstrap_entry,
             about_document_state,
+            history_policy_container,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
             web_mcp_invocation,
@@ -1085,6 +1091,7 @@ impl PageVm {
                 loaded,
                 navigation_bootstrap_entry,
                 about_document_state,
+                history_policy_container,
                 reserved_service_worker_client_id,
                 web_mcp_invocation,
                 stage,
@@ -1189,6 +1196,7 @@ impl PageVm {
             initial_document_environment,
             navigation_bootstrap_entry,
             about_document_state,
+            history_policy_container,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
             web_mcp_invocation,
@@ -1196,6 +1204,7 @@ impl PageVm {
         } = prepared;
         let mut env = self.followed_location_navigation_env();
         env.about_document_state = about_document_state;
+        env.history_policy_container = history_policy_container;
         let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         runtime_hooks.web_mcp_navigation = web_mcp_invocation.clone();
         #[cfg(test)]
@@ -1363,6 +1372,11 @@ impl PageVm {
             &request.final_url,
             &request.response_headers,
             bootstrap.initial_document_environment.as_ref(),
+            request
+                .navigation_history
+                .as_ref()
+                .and_then(|history| history.history_policy_container(&request.final_url))
+                .as_ref(),
             request
                 .main_document_commit
                 .as_ref()
@@ -1667,6 +1681,7 @@ impl PageVm {
             top_level_storage_key: None,
             navigation_bootstrap_entry: None,
             about_document_state: None,
+            history_policy_container: None,
             navigation_history_source: Some(self.vm().top_level_navigation_history()),
             reserved_service_worker_client_id: None,
         }
@@ -1678,6 +1693,7 @@ impl PageVm {
         loaded: LoadedFollowedLocationNavigation,
         navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
         about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
+        history_policy_container: Option<crate::runtime::RendererNavigationPolicy>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
@@ -1696,6 +1712,7 @@ impl PageVm {
         ));
         let mut env = self.followed_location_navigation_env();
         env.about_document_state = about_document_state;
+        env.history_policy_container = history_policy_container;
         let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         runtime_hooks.web_mcp_navigation = web_mcp_invocation;
         if runtime_hooks.renderer_page_script_environment.is_some() {
