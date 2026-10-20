@@ -26,34 +26,22 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <h1>Article</h1><p>Visible body</p>
                 <div class="off" id="waiting">Translation pending</div>
                 <div hidden>Share metadata</div>
-                <p>Followers <span style="opacity:0">9</span><span>2</span></p>
-                <p>Score <span aria-hidden="true">3131</span><span class="offscreen">31</span></p>
                 <div style="position:fixed;left:-9000px;top:-9000px">Parser trap</div>
                 <span style="position:absolute;left:-1px;top:-1px">Accessible helper</span>
                 <div style="opacity:0">Transparent parent <span style="opacity:1">Transparent child</span></div>
-                <div ng-cloak>Buy {{product.name}} for {{product.price | currency}}</div>
-                <div v-cloak>Vue template {{message}}</div>
+                <div ng-cloak>Published Angular article</div>
+                <div v-cloak>Published Vue article</div>
                 <p>Visible value <font id="legacy-hidden" color="white">hidden suffix</font> 8</p>
                 <p>CSS override <font id="css-override" color="white" style="color:black">VISIBLE</font></p>
                 <p>Stylesheet override <font id="external-override" color="white">ALSO VISIBLE</font></p>
                 <p style="background:black;color:white">White on black stays visible</p>
                 <p style="opacity:0.5">Faded text</p>
-                <p style="opacity:0;animation-name:spin">Animated hidden text</p>
-                <style>@KEYFRAMES fade-in { from { opacity:0 } to { opacity:1 } }</style>
-                <p style="opacity:0;animation:fade-in 0.25s ease-in forwards">Animated revealed text</p>
-                <style>@keyframes overridden { to { opacity:1 } } @keyframes overridden { from { opacity:0 } to { opacity:0 } }</style>
-                <p style="opacity:0;animation:overridden 1s forwards">Overridden animation text</p>
-                <style>@keyframes spin { from { transform:rotate(0deg) } to { transform:rotate(1turn) } }</style>
-                <p style="opacity:0;animation:spin 1s forwards">Animated rotation text</p>
-                <p style="opacity:0;animation-name:fade-in,spin;animation-duration:0s,1s;animation-fill-mode:forwards">Zero-duration reveal text</p>
-                <p style="opacity:0;animation:fade-in 1s infinite forwards">Repeating reveal text</p>
-                <p style="opacity:0;animation:fade-in 1s reverse forwards">Reverse reveal text</p>
                 <div><span style="display:inline-block">Active</span><span style="display:inline-block">Reviewed</span></div>
                 <p>Mass 2.4 × 10<span style="vertical-align:super">−17</span> J; m<span style="vertical-align:sub">n</span></p>
                 <p>Account <span style="position:relative;top:-2px">settings</span></p>
                 <img style="width:1px;height:1px" src="/tracking.gif">
                 <img style="width:1px;height:1px" src="/status.gif" alt="Upload complete">
-                <img style="opacity:0" data-src="/article.jpg" src="/spacer.gif" alt="Article photo">
+                <img style="opacity:0" data-src="/article.jpg" src="" alt="Article photo">
                 <div class="invisible">Hidden ancestor <span>Inherited hidden</span><span class="restored">Restored child</span></div>
                 <button role="tab" aria-controls="panel">Specifications</button>
                 <section role="tabpanel" id="panel" class="off"><p>Panel content</p></section>
@@ -71,7 +59,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','white')").unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 313131", "Parser trap", "Accessible helper", "Faded text", "Animated revealed text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Parser trap", "Accessible helper", "Faded text", "Transparent parent", "Transparent child", "hidden suffix", "Published Angular article", "Published Vue article", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -79,7 +67,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Overridden animation text", "Animated rotation text", "Zero-duration reveal text", "Repeating reveal text", "Reverse reveal text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
             assert!(output.contains("Account settings"), "{output}");
@@ -130,8 +118,8 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
             assert_eq!(output.matches("A detailed review starts").count(), 1, "{output}");
-            assert!(output.contains("retains the final conclusion."), "{output}");
-            assert!(!output.contains("A detailed review starts..."), "{output}");
+            assert!(!output.contains("retains the final conclusion."), "{output}");
+            assert!(output.contains("A detailed review starts..."), "{output}");
             assert!(output.contains("A different excerpt..."), "{output}");
             assert!(!output.contains("Unrelated hidden template"), "{output}");
             assert_eq!(output.matches("Complete short review.").count(), 2, "{output}");
@@ -201,102 +189,6 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         for text in ["Independent variable hidden content", "Hidden fallback content"] {
             assert!(!inherited_visibility.contains(text), "leaked {text}: {inherited_visibility}");
         }
-        page.vm_mut().eval(r#"
-            document.body.style.visibility = '';
-            document.head.innerHTML = '<style>@keyframes state{to{opacity:0}}@media (min-width:999999px){@keyframes state{to{opacity:1}}}</style>';
-            document.body.innerHTML = '<p>Count <span style="opacity:0;animation:state 1s forwards">99</span>2</p>';
-        "#).unwrap();
-        let inactive_keyframes = page.render_page_dump(options(false));
-        assert!(inactive_keyframes.contains("Count 2"), "{inactive_keyframes}");
-        assert!(!inactive_keyframes.contains("Count 992"), "{inactive_keyframes}");
-        page.vm_mut().eval(r#"
-            document.head.innerHTML = '<style>@keyframes state{to{opacity:0}}@media (min-width:1px){@keyframes state{to{opacity:1}}}</style>';
-        "#).unwrap();
-        let active_keyframes = page.render_page_dump(options(false));
-        assert!(active_keyframes.contains("Count 992"), "{active_keyframes}");
-        page.vm_mut().eval(r#"
-            document.head.innerHTML = '<style>@keyframes same{to{opacity:0}}</style>';
-            document.body.innerHTML = '<div id="shadow-host"></div><p>Scoped count <span id="scoped-count" style="opacity:0;animation:same 1s forwards">99</span>2</p>';
-            document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML = '<style>@keyframes same{to{opacity:1}}</style>';
-        "#).unwrap();
-        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('scoped-count')).opacity").unwrap(), "0");
-        let scoped_keyframes = page.render_page_dump(options(false));
-        assert!(scoped_keyframes.contains("Scoped count 2"), "{scoped_keyframes}");
-        assert!(!scoped_keyframes.contains("Scoped count 992"), "{scoped_keyframes}");
-        page.vm_mut().eval(r#"
-            document.head.innerHTML = '<style>@layer low,high;@layer high{@keyframes layered{to{opacity:0}}}@layer low{@keyframes layered{to{opacity:1}}}@keyframes repeated{to{opacity:1}to{opacity:0}}</style>';
-            document.body.innerHTML = '<p>Layered count <span id="layered-count" style="opacity:0;animation:layered 1s forwards">99</span>2</p><p>Repeated count <span id="repeated-count" style="opacity:0;animation:repeated 1s forwards">99</span>2</p>';
-        "#).unwrap();
-        for id in ["layered-count", "repeated-count"] {
-            assert_eq!(page.vm_mut().eval(&format!("getComputedStyle(document.getElementById('{id}')).opacity")).unwrap(), "0");
-        }
-        let keyframe_priority = page.render_page_dump(options(false));
-        assert!(keyframe_priority.contains("Layered count 2"), "{keyframe_priority}");
-        assert!(keyframe_priority.contains("Repeated count 2"), "{keyframe_priority}");
-        assert!(!keyframe_priority.contains("Layered count 992"), "{keyframe_priority}");
-        assert!(!keyframe_priority.contains("Repeated count 992"), "{keyframe_priority}");
-        page.vm_mut().eval(r#"
-            document.head.innerHTML = '<style>@keyframes reveal{to{opacity:1}}@keyframes conceal{to{opacity:0}}@keyframes middle{50%{opacity:1}to{transform:none}}@keyframes spin{to{transform:rotate(1turn)}}@keyframes "fade,in"{to{opacity:1}}</style>';
-            document.body.innerHTML = `
-                <p>Leading none <span style="opacity:0;animation-name:none,reveal;animation-duration:1s,1s;animation-fill-mode:none,forwards">kept</span></p>
-                <p>Middle none <span style="opacity:0;animation-name:spin,none,reveal;animation-duration:1s;animation-fill-mode:none,none,forwards">kept</span></p>
-                <p>Trailing none <span style="opacity:0;animation-name:reveal,none;animation-duration:1s;animation-fill-mode:forwards">kept</span></p>
-                <p>Wrong slot <span style="opacity:0;animation-name:none,reveal;animation-duration:1s;animation-fill-mode:forwards,none">hidden99</span>2</p>
-                <p>Escaped name <span style='opacity:0;animation-name:"fade,in";animation-duration:1s;animation-fill-mode:forwards'>kept</span></p>
-                <p>Reveal then conceal <span style="opacity:0;animation:reveal 1s forwards,conceal 1s forwards">hidden99</span>2</p>
-                <p>Conceal then reveal <span style="opacity:0;animation:conceal 1s forwards,reveal 1s forwards">kept</span></p>
-                <p>Reveal then transform <span style="opacity:0;animation:reveal 1s forwards,spin 1s forwards">kept</span></p>
-                <p>Reveal then middle <span style="opacity:0;animation:reveal 1s forwards,middle 1s forwards">kept</span></p>
-                <p>Middle then reveal <span style="opacity:0;animation:middle 1s forwards,reveal 1s forwards">kept</span></p>
-                <p>Middle alone <span style="opacity:0;animation:middle 1s forwards">hidden99</span>2</p>
-                <p>Reveal then no fill <span style="opacity:0;animation-name:reveal,conceal;animation-duration:1s;animation-fill-mode:forwards,none">kept</span></p>
-                <p>No fill then reveal <span style="opacity:0;animation-name:conceal,reveal;animation-duration:1s;animation-fill-mode:none,forwards">kept</span></p>
-                <p>Reveal then backwards <span style="opacity:0;animation-name:reveal,conceal;animation-duration:1s;animation-fill-mode:forwards,backwards">kept</span></p>
-                <p>Reveal then paused <span style="opacity:0;animation-name:reveal,conceal;animation-duration:1s;animation-fill-mode:forwards;animation-play-state:running,paused">hidden99</span>2</p>
-                <p>Reveal then infinite <span style="opacity:0;animation-name:reveal,conceal;animation-duration:1s;animation-fill-mode:forwards;animation-iteration-count:1,infinite">hidden99</span>2</p>`;
-        "#).unwrap();
-        for strip_css in [false, true] {
-            let animation_lists = page.render_page_dump(options(strip_css));
-            for text in [
-                "Leading none kept",
-                "Middle none kept",
-                "Trailing none kept",
-                "Escaped name kept",
-                "Conceal then reveal kept",
-                "Reveal then transform kept",
-                "Reveal then middle kept",
-                "Middle then reveal kept",
-                "Reveal then no fill kept",
-                "No fill then reveal kept",
-                "Reveal then backwards kept",
-            ] {
-                assert!(animation_lists.contains(text), "missing {text}: {animation_lists}");
-            }
-            for text in [
-                "Wrong slot hidden99",
-                "Reveal then conceal hidden99",
-                "Middle alone hidden99",
-                "Reveal then paused hidden99",
-                "Reveal then infinite hidden99",
-            ] {
-                assert!(!animation_lists.contains(text), "leaked {text}: {animation_lists}");
-            }
-            assert!(animation_lists.contains("Wrong slot 2"), "{animation_lists}");
-            assert!(animation_lists.contains("Reveal then conceal 2"), "{animation_lists}");
-            assert!(animation_lists.contains("Middle alone 2"), "{animation_lists}");
-            assert!(animation_lists.contains("Reveal then paused 2"), "{animation_lists}");
-            assert!(animation_lists.contains("Reveal then infinite 2"), "{animation_lists}");
-        }
-        page.vm_mut().eval(r#"
-            const unrelatedRules = Array.from({length:128}, (_, index) => `@keyframes unused${index}{to{opacity:1}}`).join('');
-            const unrelatedNodes = Array.from({length:128}, (_, index) => `<span style="opacity:0">hidden${index}</span>`).join('');
-            document.head.innerHTML = `<style>${unrelatedRules}@keyframes used{to{opacity:1}}</style>`;
-            document.body.innerHTML = `<p>Scale ${unrelatedNodes}<span style="opacity:0;animation:used 1s forwards">kept</span></p>`;
-        "#).unwrap();
-        crate::style_engine::reset_final_opacity_animation_query_count_for_test();
-        let scaled_keyframes = page.render_page_dump(options(false));
-        assert!(scaled_keyframes.contains("Scale kept"), "{scaled_keyframes}");
-        assert_eq!(crate::style_engine::final_opacity_animation_query_count_for_test(), 1);
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
                 <button onclick="console.log('tracking')">Save</button>
@@ -367,9 +259,9 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         let composite = page.render_page_dump(options(false));
         assert!(composite.contains("Visible on grey"), "{composite}");
         assert!(composite.contains("Visible shadow"), "{composite}");
-        assert!(!composite.contains("Hidden on opaque child"), "{composite}");
-        assert!(composite.contains("full conclusion"), "{composite}");
-        assert!(!composite.contains("A detailed review..."), "{composite}");
+        assert!(composite.contains("Hidden on opaque child"), "{composite}");
+        assert!(!composite.contains("full conclusion"), "{composite}");
+        assert!(composite.contains("A detailed review..."), "{composite}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = '<input id="field" value="Initial"><input id="check" type="checkbox"><textarea id="notes">Original notes</textarea>';
             document.getElementById('field').value = 'Edited';
@@ -405,5 +297,82 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!responsive.contains("phantom.jpg"), "{responsive}");
         page.vm_mut().eval("document.documentElement.style.display = 'none'").unwrap();
         assert!(page.render_page_dump(options(false)).is_empty());
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_preserves_text_without_guessing_paint_or_framework_state() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <article style="opacity:0">Scroll-entry article</article>
+                <div style="position:relative;background:white">
+                    <img style="position:absolute" src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22/%3E">
+                    <p style="position:relative;color:white">Article over photograph</p>
+                </div>
+                <article v-cloak>Published framework article</article>
+                <p>A detailed review... <a href="#full">Read more</a></p>
+                <div id="full" style="display:none">A detailed review of the full conclusion</div>
+                <div style="display:none">Hidden template</div>`;
+        "##).unwrap();
+        for strip_css in [false, true] {
+            let result = page.render_page_dump(options(strip_css));
+            for kept in ["Scroll-entry article", "Article over photograph", "Published framework article", "A detailed review..."] {
+                assert!(result.contains(kept), "missing {kept}: {result}");
+            }
+            for omitted in ["full conclusion", "Hidden template"] {
+                assert!(!result.contains(omitted), "unexpected {omitted}: {result}");
+            }
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_content_panels_do_not_reveal_hidden_navigation() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <button aria-expanded="false" aria-controls="drawer">Menu</button>
+                <div id="drawer" style="display:none">Hidden drawer link</div>
+                <nav><button aria-expanded="false" aria-controls="navigation">Products</button>
+                    <section id="navigation" style="display:none">Hidden navigation entry</section></nav>
+                <button role="tab" aria-controls="panel">Specifications</button>
+                <section role="tabpanel" id="panel" style="display:none">Technical specifications</section>
+                <details><summary>Details</summary>Native disclosure content</details>`;
+        "##).unwrap();
+        let result = page.render_page_dump(options(false));
+        for kept in ["Technical specifications", "Native disclosure content"] {
+            assert!(result.contains(kept), "missing {kept}: {result}");
+        }
+        for omitted in ["Hidden drawer link", "Hidden navigation entry"] {
+            assert!(!result.contains(omitted), "unexpected {omitted}: {result}");
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_keeps_collapsed_source_lines_but_not_hidden_source_blocks() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <pre>Overview<span style="display:none">Collapsed source line</span></pre>
+                <table><tr><td><pre>Dataset<span style="display:none"><b>Detailed records</b></span></pre></td></tr></table>
+                <pre style="display:none">Hidden outer source</pre>
+                <pre style="visibility:hidden">Invisible outer source</pre>
+                <pre>Code<button>Copy</button></pre>`;
+        "##).unwrap();
+        let result = page.render_page_dump(options(false));
+        for kept in ["Collapsed source line", "Detailed records"] {
+            assert!(result.contains(kept), "missing {kept}: {result}");
+        }
+        for omitted in ["Hidden outer source", "Invisible outer source", "Copy"] {
+            assert!(!result.contains(omitted), "unexpected {omitted}: {result}");
+        }
     }).await;
 }

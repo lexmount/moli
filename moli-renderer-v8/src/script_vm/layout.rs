@@ -70,15 +70,6 @@ impl ScriptVm {
         read(host.dom_host(), &mut input)
     }
 
-    pub(crate) fn elements_with_bounded_final_opacity_for_document_snapshot(
-        &self,
-        elements: impl IntoIterator<Item = DomHandle>,
-    ) -> std::collections::HashSet<DomHandle> {
-        let host = self._context_host.borrow();
-        let document = host.document_handle();
-        host.elements_with_bounded_final_opacity(document, elements)
-    }
-
     pub(crate) fn sync_live_document_style_sources(&mut self) {
         let document = self.document_runtime.document_handle();
         self._context_host
