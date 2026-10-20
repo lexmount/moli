@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from typing import cast
 
 from moli_cdp_smoke.serve import (
@@ -9,6 +12,7 @@ from moli_cdp_smoke.serve import (
     _collect_process_output,
     _endpoint_from_log_line,
     wait_for_browser_endpoint,
+    start_moli_serve,
 )
 
 
@@ -91,6 +95,26 @@ class ServeLogTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(RuntimeError, "bound endpoint"):
             await wait_for_browser_endpoint(serve, timeout_seconds=0.01)
+
+
+
+
+class StartupCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_spawn_removes_cache_directory(self) -> None:
+        for failure in (asyncio.CancelledError, OSError):
+            with self.subTest(failure=failure.__name__), tempfile.TemporaryDirectory() as parent:
+                cache = Path(parent) / "cache"
+                cache.mkdir()
+                with (
+                    patch("moli_cdp_smoke.serve.moli_binary", return_value=Path("moli")),
+                    patch("moli_cdp_smoke.serve.tempfile.mkdtemp", return_value=str(cache)),
+                    patch("moli_cdp_smoke.serve.asyncio.create_subprocess_exec",
+                          new=AsyncMock(side_effect=failure)),
+                    patch.dict("os.environ", {"MOLI_SMOKE_BROWSER": "moli"}),
+                ):
+                    with self.assertRaises(failure):
+                        await start_moli_serve()
+                self.assertFalse(cache.exists(), "failed launch leaked its HTTP cache")
 
 
 if __name__ == "__main__":
