@@ -155,7 +155,7 @@ def build_report(payload: dict, d3_source: str) -> tuple[dict, str]:
     ).total_seconds()
 
     latency = {
-        key: metric_stats([float(row[key]) for row in rows])
+        key: metric_stats([float(row[key]) for row in rows if row[key] is not None])
         for key in ("response_ms", "dcl_ms", "load_ms", "elapsed_ms")
     }
     grouped: dict[str, list[dict]] = defaultdict(list)
@@ -168,9 +168,9 @@ def build_report(payload: dict, d3_source: str) -> tuple[dict, str]:
                 "site": site,
                 "count": len(site_rows),
                 "passes": sum(bool(row["ok"]) for row in site_rows),
-                "response_ms": metric_stats([float(row["response_ms"]) for row in site_rows]),
-                "dcl_ms": metric_stats([float(row["dcl_ms"]) for row in site_rows]),
-                "load_ms": metric_stats([float(row["load_ms"]) for row in site_rows]),
+                "response_ms": metric_stats([float(row["response_ms"]) for row in site_rows if row["response_ms"] is not None]),
+                "dcl_ms": metric_stats([float(row["dcl_ms"]) for row in site_rows if row["dcl_ms"] is not None]),
+                "load_ms": metric_stats([float(row["load_ms"]) for row in site_rows if row["load_ms"] is not None]),
             }
         )
 
@@ -278,9 +278,9 @@ def build_report(payload: dict, d3_source: str) -> tuple[dict, str]:
     latency_points = [
         {
             "x": int(row["index"]),
-            "response": float(row["response_ms"]),
-            "dcl": float(row["dcl_ms"]),
-            "load": float(row["load_ms"]),
+            "response": None if row["response_ms"] is None else float(row["response_ms"]),
+            "dcl": None if row["dcl_ms"] is None else float(row["dcl_ms"]),
+            "load": None if row["load_ms"] is None else float(row["load_ms"]),
             "context": urlparse(row["url"]).netloc,
         }
         for row in rows
@@ -316,7 +316,7 @@ def build_report(payload: dict, d3_source: str) -> tuple[dict, str]:
             "load_ms": row["load_ms"],
             "elapsed_ms": row["elapsed_ms"],
         }
-        for row in sorted(rows, key=lambda row: row["load_ms"], reverse=True)[:10]
+        for row in sorted((row for row in rows if row["load_ms"] is not None), key=lambda row: row["load_ms"], reverse=True)[:10]
     ]
     report_data = {"summary": summary, "charts": chart_data, "slowest": slowest}
     data_json = json.dumps(report_data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
@@ -370,10 +370,12 @@ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,t
 const R=JSON.parse(document.getElementById('report-data').textContent),S=R.summary,C=R.charts;
 const colors={blue:'#60a5fa',green:'#34d399',amber:'#fbbf24',red:'#fb7185',purple:'#c084fc',cyan:'#22d3ee',muted:'#94a3b8'};
 const fmt=(v,n=1)=>v==null?'—':Number(v).toLocaleString('zh-CN',{minimumFractionDigits:n,maximumFractionDigits:n});
+const fmtSeconds=v=>fmt(v==null?null:v/1000,2);
+function chartDomain(values,zeroY=false){if(!values.length)return [0,1];let lo=zeroY?0:d3.min(values),hi=d3.max(values);if(lo===hi)hi=lo+1;return [zeroY?0:lo-(hi-lo)*.06,hi+(hi-lo)*.08]}
 const set=(id,value)=>document.getElementById(id).textContent=value;
 set('report-title',`Moli ${S.navigation.attempted} 次顺序导航性能报告`);document.title=`Moli ${S.navigation.attempted} 次顺序导航性能报告`;set('run-description',`Commit ${S.metadata.commit.slice(0,12)} · ${S.urls_per_round} 个 URL × ${S.rounds} 个循环 · release 构建 · Network diagnostics ${S.network_diagnostics?'开启':'关闭'}`);set('run-time',`${S.started_at} — ${S.finished_at}`);set('run-shape',`本次运行 ${S.navigation.attempted} 次导航：${S.urls_per_round} 个 URL × ${S.rounds} 个循环；URL 顺序见原始 result.json。`); const badge=document.getElementById('status'); badge.classList.add(S.status); badge.textContent=`${S.status.toUpperCase()} · ${S.navigation.observable_passes} / ${S.navigation.attempted}`;
 set('card-nav',`${S.navigation.observable_passes} / ${S.navigation.attempted}`); set('card-nav-sub',`失败 ${S.navigation.failures} · 恢复 ${S.navigation.recovery_attempts} · superseded ${S.navigation.superseded_passes}`);
-set('card-duration',`${fmt(S.duration_seconds/60,2)} min`);set('card-throughput',`${fmt(S.throughput_navigations_per_second,3)} nav/s`);set('card-load',`${fmt(S.latency.load_ms.p50/1000,2)} / ${fmt(S.latency.load_ms.p95/1000,2)}s`);set('card-load-sub',`P99 ${fmt(S.latency.load_ms.p99/1000,2)}s`);
+set('card-duration',`${fmt(S.duration_seconds/60,2)} min`);set('card-throughput',`${fmt(S.throughput_navigations_per_second,3)} nav/s`);set('card-load',`${fmtSeconds(S.latency.load_ms.p50)} / ${fmtSeconds(S.latency.load_ms.p95)}s`);set('card-load-sub',`P99 ${fmtSeconds(S.latency.load_ms.p99)}s`);
 set('card-rss',`${fmt(S.memory.rss_mib.final)} / ${fmt(S.memory.rss_mib.peak)}`);set('card-slope',`${S.memory.rss_mib.warm_slope_per_100_navigations>=0?'+':''}${fmt(S.memory.rss_mib.warm_slope_per_100_navigations,2)}`);set('card-cpu',`${fmt(S.cpu.average)}% / ${fmt(S.cpu.max,0)}%`);set('card-cpu-sub',`P95 ${fmt(S.cpu.p95)}% · 100%=1 核`);
 const tailSite=S.sites.reduce((best,site)=>site.load_ms.p95>best.load_ms.p95?site:best,S.sites[0]);document.getElementById('conclusion').innerHTML=`<p><strong>功能稳定性：</strong>${S.navigation.attempted} 次导航中 ${S.navigation.observable_passes} 次可观测成功；${S.navigation.failures} 次失败、${S.navigation.recovery_attempts} 次恢复、${S.navigation.network_order_violations} 个 Network 事件顺序违规。测试进程退出码为 ${S.benchmark_exit_code}。</p><p><strong>内存：</strong>热身后 RSS 线性斜率为 <strong>${S.memory.rss_mib.warm_slope_per_100_navigations>=0?'+':''}${fmt(S.memory.rss_mib.warm_slope_per_100_navigations,2)} MiB / 100 次</strong>；Q4 平均值比 Q1 高 <strong>${fmt(S.memory.quarter_1_to_4_rss_delta_mib,2)} MiB（${fmt(S.memory.quarter_1_to_4_rss_delta_percent,2)}%）</strong>。最终 RSS ${fmt(S.memory.rss_mib.final)} MiB，较 ${fmt(S.memory.rss_mib.peak)} MiB 峰值已回落。单次压力测试不足以单独判定泄漏；建议后续与固定网络/页面的基线重复跑对比。</p><p><strong>CPU：</strong>进程树平均 ${fmt(S.cpu.average)}%，P95 ${fmt(S.cpu.p95)}%，峰值 ${fmt(S.cpu.max)}%。该指标按逻辑核聚合，所以可超过 100%。</p><p><strong>延迟：</strong>全体 Load P50 ${fmt(S.latency.load_ms.p50)} ms、P95 ${fmt(S.latency.load_ms.p95)} ms、P99 ${fmt(S.latency.load_ms.p99)} ms；最大 P95 长尾来自 ${tailSite.site}（${fmt(tailSite.load_ms.p95)} ms）。</p>`;
 
@@ -384,7 +386,7 @@ function lineChart(selector,data,series,options){
  const controls=root.append('div').attr('class','chart-controls');const legend=controls.append('span');const reset=controls.append('button').text('重置');const save=controls.append('button').text('导出 SVG');
  const tooltip=root.append('div').attr('class','tooltip'),svg=root.append('svg').attr('viewBox',`0 0 ${W} ${H}`).attr('role','img'),g=svg.append('g').attr('transform',`translate(${M.left},${M.top})`);
  const x0=d3.scaleLinear().domain(d3.extent(data,d=>d.x)).range([0,PW]);let currentX=x0;
- const domain=axis=>{const values=[];for(const d of data)for(const s of series)if(s.axis===axis&&d[s.key]!=null)values.push(d[s.key]);let lo=options.zeroY?0:d3.min(values),hi=d3.max(values);if(lo===hi)hi=lo+1;return [options.zeroY?0:lo-(hi-lo)*.06,hi+(hi-lo)*.08]};
+ const domain=axis=>{const values=[];for(const d of data)for(const s of series)if(s.axis===axis&&d[s.key]!=null)values.push(d[s.key]);return chartDomain(values,options.zeroY)};
  const yL=d3.scaleLinear().domain(domain('left')).nice().range([PH,0]),hasRight=series.some(s=>s.axis==='right'),yR=d3.scaleLinear().domain(hasRight?domain('right'):[0,1]).nice().range([PH,0]);
  g.append('g').attr('class','grid').call(d3.axisLeft(yL).ticks(7).tickSize(-PW).tickFormat('')).call(x=>x.select('.domain').remove()).call(x=>x.selectAll('line').attr('stroke','#334155').attr('opacity',.38));
  const xAxis=g.append('g').attr('transform',`translate(0,${PH})`),leftAxis=g.append('g').call(d3.axisLeft(yL).ticks(7));if(hasRight)g.append('g').attr('transform',`translate(${PW},0)`).call(d3.axisRight(yR).ticks(7));
@@ -398,9 +400,9 @@ function lineChart(selector,data,series,options){
  svg.on('mousemove.hover',event=>{const [sx,sy]=d3.pointer(event,svg.node()),mx=sx-M.left,my=sy-M.top;if(mx<0||mx>PW||my<0||my>PH){cross.style('display','none');tooltip.style('display','none');return}const xv=currentX.invert(mx),i=d3.bisector(d=>d.x).center(data,xv),d=data[Math.max(0,Math.min(data.length-1,i))];cross.attr('x1',currentX(d.x)).attr('x2',currentX(d.x)).style('display',null);let body=`<strong>${options.xValue(d.x)}</strong>${d.context?`<br>${d.context}`:''}`;for(const s of series)if(active.has(s.key)&&d[s.key]!=null)body+=`<br><span style="color:${s.color}">●</span> ${s.label}: ${fmt(d[s.key],s.digits??1)}${s.unit||''}`;tooltip.html(body).style('display','block').style('left',`${Math.min(82,Math.max(2,sx/W*100))}%`).style('top',`${Math.max(9,sy/H*100-4)}%`)}).on('mouseleave.hover',()=>{cross.style('display','none');tooltip.style('display','none')});
 }
 function groupedBars(selector,data,keys,options){
- const root=d3.select(selector),W=720,H=430,M={top:25,right:18,bottom:85,left:65},PW=W-M.left-M.right,PH=H-M.top-M.bottom,tooltip=root.append('div').attr('class','tooltip'),svg=root.append('svg').attr('viewBox',`0 0 ${W} ${H}`),g=svg.append('g').attr('transform',`translate(${M.left},${M.top})`),x=d3.scaleBand().domain(data.map(d=>d.name)).range([0,PW]).padding(.18),x1=d3.scaleBand().domain(keys.map(k=>k.key)).range([0,x.bandwidth()]).padding(.08),y=d3.scaleLinear().domain([0,d3.max(data,d=>d3.max(keys,k=>d[k.key]))*1.08]).nice().range([PH,0]);
+ const root=d3.select(selector),W=720,H=430,M={top:25,right:18,bottom:85,left:65},PW=W-M.left-M.right,PH=H-M.top-M.bottom,tooltip=root.append('div').attr('class','tooltip'),svg=root.append('svg').attr('viewBox',`0 0 ${W} ${H}`),g=svg.append('g').attr('transform',`translate(${M.left},${M.top})`),x=d3.scaleBand().domain(data.map(d=>d.name)).range([0,PW]).padding(.18),x1=d3.scaleBand().domain(keys.map(k=>k.key)).range([0,x.bandwidth()]).padding(.08),y=d3.scaleLinear().domain(chartDomain(data.flatMap(d=>keys.map(k=>d[k.key])).filter(v=>v!=null),true)).nice().range([PH,0]);
  g.append('g').call(d3.axisLeft(y).ticks(7));g.append('g').attr('transform',`translate(0,${PH})`).call(d3.axisBottom(x)).selectAll('text').attr('transform','rotate(-20)').style('text-anchor','end');g.append('g').call(d3.axisLeft(y).ticks(7).tickSize(-PW).tickFormat('')).call(z=>z.select('.domain').remove()).call(z=>z.selectAll('line').attr('stroke','#334155').attr('opacity',.38));
- const groups=g.selectAll('.bar-group').data(data).join('g').attr('transform',d=>`translate(${x(d.name)},0)`);groups.selectAll('rect').data(d=>keys.map(k=>({name:d.name,key:k,value:d[k.key]}))).join('rect').attr('x',d=>x1(d.key.key)).attr('y',d=>y(d.value)).attr('width',x1.bandwidth()).attr('height',d=>PH-y(d.value)).attr('rx',2).attr('fill',d=>d.key.color).on('mousemove',(event,d)=>{const [px,py]=d3.pointer(event,root.node());tooltip.html(`<strong>${d.name}</strong><br><span style="color:${d.key.color}">●</span> ${d.key.label}: ${fmt(d.value)} ${options.unit}`).style('display','block').style('left',`${Math.min(78,px/root.node().clientWidth*100)}%`).style('top',`${Math.max(5,py-40)}px`)}).on('mouseleave',()=>tooltip.style('display','none'));
+ const groups=g.selectAll('.bar-group').data(data).join('g').attr('transform',d=>`translate(${x(d.name)},0)`);groups.selectAll('rect').data(d=>keys.filter(k=>d[k.key]!=null).map(k=>({name:d.name,key:k,value:d[k.key]}))).join('rect').attr('x',d=>x1(d.key.key)).attr('y',d=>y(d.value)).attr('width',x1.bandwidth()).attr('height',d=>PH-y(d.value)).attr('rx',2).attr('fill',d=>d.key.color).on('mousemove',(event,d)=>{const [px,py]=d3.pointer(event,root.node());tooltip.html(`<strong>${d.name}</strong><br><span style="color:${d.key.color}">●</span> ${d.key.label}: ${fmt(d.value)} ${options.unit}`).style('display','block').style('left',`${Math.min(78,px/root.node().clientWidth*100)}%`).style('top',`${Math.max(5,py-40)}px`)}).on('mouseleave',()=>tooltip.style('display','none'));
  const legend=root.insert('div',':first-child').attr('class','chart-controls');for(const k of keys)legend.append('span').style('color',k.color).style('margin-right','12px').text(`● ${k.label}`);svg.append('text').attr('transform','rotate(-90)').attr('x',-(M.top+PH/2)).attr('y',16).attr('text-anchor','middle').attr('fill','#94a3b8').text(options.yLabel);
 }
 lineChart('#resource-chart',C.resources,[{key:'rss',label:'RSS',axis:'left',color:colors.red,unit:' MiB'},{key:'pss',label:'PSS',axis:'left',color:colors.purple,unit:' MiB'},{key:'cpu',label:'CPU 原始值（100 ms）',axis:'right',color:colors.amber,unit:'%',width:.7,opacity:.22},{key:'cpu2',label:'CPU 2 秒移动平均',axis:'right',color:'#fde047',unit:'%',width:2}],{xLabel:'运行时间（分钟）',leftLabel:'内存（MiB）',rightLabel:'CPU（%，100%=一个逻辑核）',xValue:x=>`${fmt(x,2)} 分钟`,filename:'moli-rss-pss-cpu.svg'});
