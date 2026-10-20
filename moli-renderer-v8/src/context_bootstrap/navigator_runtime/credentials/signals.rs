@@ -9,13 +9,9 @@ use crate::{
     webidl,
 };
 
-use super::{
-    base64url,
-    value::{Dictionary, Text},
-};
+use super::{base64url, value::Text};
 
-// The derive reads members in declaration order; WebIDL requires lexicographic
-// dictionary conversion before any algorithm-specific validation.
+// Convert members in WebIDL lexicographic order before API-specific validation.
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "UnknownCredentialOptions")]
 struct UnknownCredential {
@@ -52,22 +48,22 @@ struct CurrentUserDetails {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PublicKeyCredential.signalUnknownCredential")]
 struct UnknownCredentialArgs {
-    #[webidl(required, converter = "raw")]
-    options: Dictionary<UnknownCredential>,
+    #[webidl(required, dictionary)]
+    options: UnknownCredential,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PublicKeyCredential.signalAllAcceptedCredentials")]
 struct AllAcceptedCredentialsArgs {
-    #[webidl(required, converter = "raw")]
-    options: Dictionary<AllAcceptedCredentials>,
+    #[webidl(required, dictionary)]
+    options: AllAcceptedCredentials,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PublicKeyCredential.signalCurrentUserDetails")]
 struct CurrentUserDetailsArgs {
-    #[webidl(required, converter = "raw")]
-    options: Dictionary<CurrentUserDetails>,
+    #[webidl(required, dictionary)]
+    options: CurrentUserDetails,
 }
 
 fn valid_base64url(scope: &mut v8::PinScope<'_, '_>, text: &Text) -> bool {
@@ -137,7 +133,7 @@ pub(super) fn unknown_credential<'s>(
     let Some(parsed) = webidl::parse_args::<UnknownCredentialArgs>(scope, &args) else {
         return;
     };
-    let options = parsed.options.0;
+    let options = parsed.options;
     if valid_base64url(scope, &options.credential_id) {
         finish(scope, &options.rp_id, &mut rv);
     }
@@ -151,7 +147,7 @@ pub(super) fn all_accepted_credentials<'s>(
     let Some(parsed) = webidl::parse_args::<AllAcceptedCredentialsArgs>(scope, &args) else {
         return;
     };
-    let options = parsed.options.0;
+    let options = parsed.options;
     if valid_base64url(scope, &options.user_id)
         && options
             .all_accepted_credential_ids
@@ -171,7 +167,7 @@ pub(super) fn current_user_details<'s>(
     let Some(parsed) = webidl::parse_args::<CurrentUserDetailsArgs>(scope, &args) else {
         return;
     };
-    let options = parsed.options.0;
+    let options = parsed.options;
     // Labels still undergo DOMString conversion even without a backend.
     let _ = (&options.display_name, &options.name);
     if valid_base64url(scope, &options.user_id) {
