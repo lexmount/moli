@@ -2650,6 +2650,26 @@ impl DocumentRuntime {
             .unwrap_or_default()
     }
 
+    pub(crate) fn initialize_inherited_meta_content_security_policies(
+        &self,
+        document_handle: DomHandle,
+        policies: &[ContentSecurityPolicy],
+    ) {
+        if self.bypass_content_security_policy {
+            return;
+        }
+        // A new Document receives the creator's delivered meta policies once,
+        // before processing its own markup. They retain meta reporting rules.
+        let previous = self
+            .delivered_meta_content_security_policies
+            .write()
+            .insert(document_handle, policies.to_vec());
+        debug_assert!(
+            previous.is_none(),
+            "new Document already has delivered meta policies"
+        );
+    }
+
     pub(crate) fn reset_meta_content_security_policy_processing_for_document(
         &self,
         document: DomHandle,
