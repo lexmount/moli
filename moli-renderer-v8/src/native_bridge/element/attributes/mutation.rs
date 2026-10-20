@@ -18,7 +18,7 @@ use super::super::{
     set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
     set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
-    trusted_attribute_value_string16, update_iframe_snapshot_navigation,
+    trusted_attribute_value_string16, update_iframe_snapshot_navigation_utf16,
 };
 use super::{
     AttributeNameArgs, AttributeNamespaceNameArgs, SetAttributeArgs, SetAttributeNsArgs,
@@ -121,7 +121,7 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
             .dom_host()
             .is_html_element_named(handle, "iframe")
     {
-        update_iframe_snapshot_navigation(scope, runtime_ptr, handle, &value);
+        update_iframe_snapshot_navigation_utf16(scope, runtime_ptr, handle, units);
         rv.set_undefined();
         return;
     }
@@ -185,6 +185,17 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
     else {
         return;
     };
+    if namespace.is_none()
+        && prefix.is_none()
+        && local_name == "src"
+        && unsafe { &*runtime_ptr }
+            .dom_host()
+            .is_html_element_named(handle, "iframe")
+    {
+        update_iframe_snapshot_navigation_utf16(scope, runtime_ptr, handle, units);
+        rv.set_undefined();
+        return;
+    }
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let _ = set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
             scope,

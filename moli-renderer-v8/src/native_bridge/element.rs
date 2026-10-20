@@ -701,6 +701,7 @@ use url_attributes::{
 };
 pub(super) use url_attributes::{
     live_frame_owner_content_window_for_handle, update_iframe_snapshot_navigation,
+    update_iframe_snapshot_navigation_utf16,
 };
 
 pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_reaction_queue(

@@ -1,6 +1,7 @@
 use super::super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost,
     child_documents::{ChildDocumentCommitResult, ChildDocumentCommitState},
+    child_frames::PendingChildFrameNavigation,
 };
 use crate::native_bridge::context_host::child_documents::ChildDocumentNavigationInitiator;
 use crate::{
@@ -241,6 +242,23 @@ impl JsContextHost {
         initiator_url: Option<Url>,
         initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
+        self.queue_child_browsing_context_navigation_to_url_with_initiator(
+            handle,
+            url,
+            initiator_url,
+            initiator,
+            ChildDocumentNavigationInitiator::BrowsingContext,
+        )
+    }
+
+    pub(in crate::native_bridge::context_host) fn queue_child_browsing_context_navigation_to_url_with_initiator(
+        &mut self,
+        handle: DomHandle,
+        url: &Url,
+        initiator_url: Option<Url>,
+        initiator: Option<super::super::OwnerDispatchScope>,
+        navigation_initiator: ChildDocumentNavigationInitiator,
+    ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -251,8 +269,11 @@ impl JsContextHost {
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
-                ChildBrowsingContextBootstrap::Url(url.clone()),
-                initiator_url,
+                PendingChildFrameNavigation::new(
+                    ChildBrowsingContextBootstrap::Url(url.clone()),
+                    initiator_url,
+                    navigation_initiator,
+                ),
                 true,
                 initiator,
             )
@@ -334,8 +355,11 @@ impl JsContextHost {
                 entry_snapshot.navigation_seed_is_initial_about_blank_commit();
             let entry = self.child_browsing_contexts.get_mut(&handle)?;
             entry.set_pending_navigation(
-                ChildBrowsingContextBootstrap::Url(url.clone()),
-                None,
+                PendingChildFrameNavigation::new(
+                    ChildBrowsingContextBootstrap::Url(url.clone()),
+                    None,
+                    ChildDocumentNavigationInitiator::FrameOwnerElement,
+                ),
                 true,
                 entry_snapshot.pending_javascript_initiator_origin(),
             );
@@ -378,8 +402,9 @@ impl JsContextHost {
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
     ) -> Option<ChildDocumentCommitResult> {
         let entry_snapshot = self.child_browsing_contexts.get(&handle).cloned()?;
-        let pending_bootstrap = entry_snapshot.pending_live_navigation()?;
-        let initiator_url = entry_snapshot.pending_live_navigation_initiator_url();
+        let pending = entry_snapshot.pending_navigation()?;
+        let pending_bootstrap = pending.bootstrap;
+        let initiator_url = pending.initiator_url;
         if self.current_child_navigation_load(handle) != Some(navigation_load) {
             tracing::debug!(
                 ?handle,
@@ -405,7 +430,7 @@ impl JsContextHost {
         {
             ChildDocumentNavigationInitiator::HistoryTraversal
         } else {
-            ChildDocumentNavigationInitiator::BrowsingContext
+            pending.initiator
         };
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
