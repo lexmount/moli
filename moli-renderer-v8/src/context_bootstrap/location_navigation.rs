@@ -1029,6 +1029,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                         resolved.as_str(),
                         entry_seed,
                         initiator_url,
+                        navigation_source
+                            .as_ref()
+                            .and_then(|(initiator, _)| initiator.document_policy(&resolved)),
                     )
                     && let Some(navigation_load) = host.current_child_navigation_load(handle)
                 {
@@ -1124,10 +1127,6 @@ fn capture_location_navigation_source<'s>(
     let source_context = scope.get_incumbent_context()?;
     let source_host = crate::util::context_host_ptr_from_context_slot(source_context)?;
     let target_host = crate::util::context_host_ptr_from_window_object(scope, target)?;
-    // The ordinary same-realm path already carries its Document environment.
-    if source_host == target_host {
-        return None;
-    }
     let source = source_context.global(scope);
     // Only the browsing context's fixed restrictions survive navigation.
     // Sandbox CSP from its old response belongs to the retiring Document.
@@ -1150,7 +1149,13 @@ fn capture_location_navigation_source<'s>(
         initiator_url,
         loader.fetch_context().request_origin(),
         policy.referrer_policy.clone(),
+        policy.clone(),
     );
+    // Same-owner navigation already captures its origin environment separately.
+    // Its policy still needs to cross the browser navigation boundary.
+    if source_host == target_host {
+        return Some((initiator, None));
+    }
     policy.document_referrer = initiator.outgoing_referrer();
     let base_url = super::window_runtime::entered_window_api_base_url(scope, host);
     let child = match dispatch {

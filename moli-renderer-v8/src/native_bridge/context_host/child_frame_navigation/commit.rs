@@ -412,8 +412,6 @@ impl JsContextHost {
     ) -> Option<ChildDocumentCommitResult> {
         let entry_snapshot = self.child_browsing_contexts.get(&handle).cloned()?;
         let pending = entry_snapshot.pending_navigation()?;
-        let pending_bootstrap = pending.bootstrap;
-        let initiator_url = pending.initiator_url;
         if self.current_child_navigation_load(handle) != Some(navigation_load) {
             tracing::debug!(
                 ?handle,
@@ -422,7 +420,7 @@ impl JsContextHost {
             );
             return None;
         }
-        if let ChildBrowsingContextBootstrap::Url(url) = &pending_bootstrap
+        if let ChildBrowsingContextBootstrap::Url(url) = &pending.bootstrap
             && url.scheme() == "javascript"
         {
             self.queue_child_browsing_context_javascript_url_execution(
@@ -435,11 +433,13 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
-        let initiator = if self.child_browsing_context_has_pending_cross_document_traversal(handle)
-        {
-            ChildDocumentNavigationInitiator::HistoryTraversal
-        } else {
-            pending.initiator
+        let pending = PendingChildFrameNavigation {
+            initiator: if self.child_browsing_context_has_pending_cross_document_traversal(handle) {
+                ChildDocumentNavigationInitiator::HistoryTraversal
+            } else {
+                pending.initiator
+            },
+            ..pending
         };
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
@@ -447,12 +447,7 @@ impl JsContextHost {
             scope,
             handle,
             navigation_load,
-            PendingChildFrameNavigation::new(
-                pending_bootstrap,
-                initiator_url,
-                initiator,
-                pending.target_snapshot,
-            ),
+            pending,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result

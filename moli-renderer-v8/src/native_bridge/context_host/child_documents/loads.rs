@@ -124,6 +124,7 @@ impl JsContextHost {
             initiator,
             initiator_url,
             target_snapshot,
+            source_policy,
         } = navigation;
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_loader = self.document_resource_loader_for_owner(navigation_load.owner())?;
@@ -234,6 +235,7 @@ impl JsContextHost {
                     request_method: request.method.clone(),
                     request_headers: request.request_headers.to_byte_strings(),
                     target: target_snapshot,
+                    source_policy,
                 };
                 if let Some(client_id) = service_worker_client_id
                     && let Some(response) = browser_context_runtime
@@ -929,6 +931,7 @@ struct ChildDocumentRequestSnapshot {
     request_method: String,
     request_headers: Vec<(String, String)>,
     target: ChildNavigationTargetSnapshot,
+    source_policy: Option<crate::runtime::RendererNavigationPolicy>,
 }
 
 fn child_document_load_outcome_from_response(
@@ -973,8 +976,12 @@ fn child_document_load_outcome_from_response(
             .negotiated_http_version
             .filter(|_| head.cache_state != moli_fetch::ResponseCacheState::Local),
     };
-    let mut policy_container =
-        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &head.final_url);
+    let mut policy_container = DocumentPolicyContainer::for_navigation_response(
+        &head.headers,
+        &head.final_url,
+        None,
+        request.source_policy.as_ref(),
+    );
     if !request
         .target
         .apply_response_policy(&mut policy_container, &head.final_url, &head.headers)
@@ -1128,6 +1135,7 @@ mod tests {
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new(),
                         target: Default::default(),
+                        source_policy: None,
                     },
                     head.clone(),
                     moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
@@ -1166,6 +1174,7 @@ mod tests {
                 request_method: "GET".to_owned(),
                 request_headers: Vec::new(),
                 target: Default::default(),
+                source_policy: None,
             },
             moli_fetch::ResponseHead {
                 status_text: None,

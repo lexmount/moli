@@ -1146,15 +1146,17 @@ impl PageVmEnvConfig {
             .about_document_state
             .take()
             .filter(|_| moli_url::is_about_blank(final_url));
-        self.document_policy_container = self
-            .about_document_state
-            .as_ref()
-            .map(|state| state.policy_container().clone())
-            .unwrap_or_else(|| {
-                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
-                    headers, final_url,
-                )
-            })
+        self.document_policy_container =
+            crate::document_runtime::DocumentPolicyContainer::for_navigation_response(
+                headers,
+                final_url,
+                self.about_document_state
+                    .as_ref()
+                    .map(|state| state.policy_container()),
+                self.main_document_commit
+                    .as_ref()
+                    .and_then(|commit| commit.navigation_policy.as_ref()),
+            )
             .with_content_security_policy_bypass(
                 self.document_settings.bypass_content_security_policy,
             );
