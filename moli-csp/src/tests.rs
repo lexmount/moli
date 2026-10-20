@@ -2197,6 +2197,18 @@ fn report_to_uses_first_group_endpoint_and_suppresses_report_uri() {
 }
 
 #[test]
+fn csp_nonce_sources_validate_base64_syntax_and_retain_value_case() {
+    for value in ["AbC", "a+/b", "a-_b", "a=", "a=="] {
+        let source = format!("'NoNcE-{value}'");
+        assert_eq!(csp_nonce_source_value(&source), Some(value));
+    }
+    for value in ["", "=", "a===", "a=b", "a.b", "a b"] {
+        let source = format!("'nonce-{value}'");
+        assert_eq!(csp_nonce_source_value(&source), None);
+    }
+}
+
+#[test]
 fn violation_report_body_uses_csp_report_shape() {
     let violation = content_security_policy_url_violation_with_redirect_status(
         &["connect-src 'none'; report-uri /csp-report".into()],
