@@ -1041,11 +1041,9 @@ fn build_navigator_plugin_collection_subobject<'s>(
         .ok_or_else(|| anyhow!("failed to build navigator plugin collections"))?;
     let mime_types: v8::Local<'s, v8::Value> = collections.mime_types.into();
     let plugins: v8::Local<'s, v8::Value> = collections.plugins.into();
-    if backing.set(scope, v8str(scope, "mimeTypes").into(), mime_types) != Some(true)
-        || backing.set(scope, v8str(scope, "plugins").into(), plugins) != Some(true)
-    {
-        return Err(anyhow!("failed to cache navigator plugin collections"));
-    }
+    collections
+        .initialize(scope, backing)
+        .map_err(|error| anyhow!("failed to cache navigator plugin collections: {error}"))?;
     match requested {
         NavigatorSubobject::MimeTypes => Ok(mime_types),
         NavigatorSubobject::Plugins => Ok(plugins),
