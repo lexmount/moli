@@ -12,6 +12,8 @@ use moli_curl::CurlDnsTiming;
 /// Callback observations can be available before the terminal curl statistics.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FetchConnectionTiming {
+    /// The actual selected physical connection, including shared HTTP/2 setup.
+    pub connection: Option<moli_curl::CurlConnectionTiming>,
     pub shared_dns: Option<CurlDnsTiming>,
     /// Last TLS context setup callback, when supported by the TLS backend.
     /// Absence does not establish that the request used plaintext transport.

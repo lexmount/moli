@@ -354,6 +354,8 @@ void Curl_pgrsStart(struct Curl_easy *data, const struct curltime *pnow)
 {
   struct Progress *p = &data->progress;
 
+  memset(&p->moli_connection, 0, sizeof(p->moli_connection));
+
   if(!pnow)
     pnow = Curl_pgrs_now(data);
   p->speeder_c = 0; /* reset the progress meter display */

@@ -360,6 +360,12 @@ fn child_frame_document_network_charge(
     .into_iter()
     .map(string_charge)
     .sum::<usize>()
+    .saturating_add(
+        snapshot
+            .resource_timing_response
+            .as_ref()
+            .map_or(0, |timing| std::mem::size_of_val(timing.as_ref())),
+    )
     .saturating_add(headers_charge(&snapshot.request_headers))
     .saturating_add(headers_charge(&snapshot.response_headers))
     .saturating_add(

@@ -3,7 +3,7 @@ use crate::{
     context_bootstrap::{
         dom_time_since_origin_millis,
         performance_runtime::{
-            ResourcePerformanceEntry,
+            ResourceConnectionTiming, ResourcePerformanceEntry,
             install::{EVENT_COUNTS_TRACKED_TYPES, MIN_LIFECYCLE_TIMING_DELTA_MILLIS},
         },
     },
@@ -68,7 +68,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
 ) {
     let global = scope.get_current_context().global(scope);
     let entries = ensure_private_array(scope, global, WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT, 0);
-    let record = v8::Array::new(scope, 17);
+    let record = v8::Array::new(scope, 25);
     let Some(name) = v8_string(scope, &entry.name) else {
         return;
     };
@@ -127,6 +127,39 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
             .request_start_unix_millis
             .map(|value| v8::Number::new(scope, value).into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .fetch_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.domain_lookup_start).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.domain_lookup_end).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.connect_start).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .map(|value| v8::Number::new(scope, value.connect_end).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .connection_timing
+            .and_then(|value| value.secure_connection_start)
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .redirect_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .redirect_end_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
     ];
     for (index, value) in fields.into_iter().enumerate() {
         let _ = record.set_index(scope, index as u32, value);
@@ -152,6 +185,35 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                 preload_state: Default::default(),
                 name: array_string(scope, record, 0)?,
                 initiator_type: array_string(scope, record, 1)?,
+                redirect_start_unix_millis: record
+                    .get_index(scope, 23)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                redirect_end_unix_millis: record
+                    .get_index(scope, 24)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                fetch_start_unix_millis: record
+                    .get_index(scope, 17)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                connection_timing: if record
+                    .get_index(scope, 18)
+                    .is_some_and(|value| !value.is_undefined())
+                {
+                    Some(ResourceConnectionTiming {
+                        domain_lookup_start: array_number(scope, record, 18)?,
+                        domain_lookup_end: array_number(scope, record, 19)?,
+                        connect_start: array_number(scope, record, 20)?,
+                        connect_end: array_number(scope, record, 21)?,
+                        secure_connection_start: record
+                            .get_index(scope, 22)
+                            .filter(|value| !value.is_undefined())
+                            .and_then(|value| value.number_value(scope)),
+                    })
+                } else {
+                    None
+                },
                 start_unix_millis: record
                     .get_index(scope, 2)
                     .filter(|value| !value.is_undefined())

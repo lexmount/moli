@@ -113,16 +113,16 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
         )
         .await;
     }
+    let cancel_handle = cancel_handle.unwrap_or_default();
+    let response_cancel = cancel_handle.child_for_fetch_hop();
     run_cors_preflight_if_needed(
         &loader,
         &request,
-        cancel_handle.clone(),
+        Some(response_cancel.clone()),
         &preflight_request_headers,
         preflight_observer,
     )
     .await?;
-    let cancel_handle = cancel_handle.unwrap_or_default();
-    let response_cancel = cancel_handle.child_for_subrequest();
     let observed =
         fetch_once_with_network_metadata(&loader, request, Some(response_cancel.clone())).await?;
     cancel_handle.adopt_response_progress(&response_cancel);
@@ -364,11 +364,10 @@ async fn fetch_browser_subresource_with_cors_redirect_checks(
     let mut journal = NetworkObservationJournal::default();
 
     loop {
+        let hop_cancel = cancel_handle.child_for_fetch_hop();
         redirects
-            .run_current_hop_preflight(&loader, Some(cancel_handle.clone()), preflight_observer)
+            .run_current_hop_preflight(&loader, Some(hop_cancel.clone()), preflight_observer)
             .await?;
-
-        let hop_cancel = cancel_handle.child_for_subrequest();
         let observed = fetch_once_with_network_metadata_unvalidated(
             &loader,
             redirects.single_hop_transport_request(),
@@ -410,11 +409,10 @@ async fn fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
     let mut journal = NetworkObservationJournal::default();
 
     loop {
+        let hop_cancel = cancel_handle.child_for_fetch_hop();
         redirects
-            .run_current_hop_preflight(loader, Some(cancel_handle.clone()), preflight_observer)
+            .run_current_hop_preflight(loader, Some(hop_cancel.clone()), preflight_observer)
             .await?;
-
-        let hop_cancel = cancel_handle.child_for_subrequest();
         let observed = loader
             .fetch_raw_stream_with_cancel_and_network_metadata(
                 redirects.single_hop_transport_request(),
@@ -443,10 +441,9 @@ async fn fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
             ManualCorsRedirectTransition::FollowedRedirect => {}
         }
 
-        // The redirect body is unused. Cancel this hop without cancelling the
-        // logical request or waiting for a body that might never finish.
-        hop_cancel.cancel();
-        drop(response);
+        // Keep completed connections reusable without waiting for an unused,
+        // unfinished redirect body or cancelling the logical request.
+        response.discard_unused().await;
     }
 }
 
@@ -532,21 +529,19 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     }
     // Borrow the loader so its fetch runtime stays alive until the caller drains
     // and finishes the returned StreamingRawResponse.
+    let cancel_handle = cancel_handle.unwrap_or_default();
+    let hop_cancel = cancel_handle.child_for_fetch_hop();
     run_cors_preflight_if_needed(
         loader,
         &request,
-        cancel_handle.clone(),
+        Some(hop_cancel.clone()),
         &preflight_request_headers,
         preflight_observer,
     )
     .await?;
-    let cancel_handle = cancel_handle.unwrap_or_default();
     let redirect_mode = request.redirect_mode();
     let result = loader
-        .fetch_raw_stream_with_cancel_and_network_metadata(
-            request,
-            cancel_handle.child_for_subrequest(),
-        )
+        .fetch_raw_stream_with_cancel_and_network_metadata(request, hop_cancel)
         .await
         .map_err(format_network_error)?;
     validate_redirect_mode_response_head(&result.response().head(), redirect_mode)?;
@@ -1003,9 +998,11 @@ async fn fetch_response_head_once(
         .fetch_raw_stream_with_cancel(request, cancel_handle)
         .await
         .map_err(format_network_error)?;
-    // Preflight authorization depends only on the response head. Drop this
-    // private transfer instead of draining an unneeded, possibly endless body.
-    Ok(response.head())
+    // Authorization uses only the head. Retire completed IO without aborting a
+    // reusable connection; an unfinished (possibly endless) body is cancelled.
+    let head = response.head();
+    response.discard_unused().await;
+    Ok(head)
 }
 
 fn validate_redirect_mode_response(

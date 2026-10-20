@@ -4,7 +4,7 @@ use moli_fetch::{FetchResponseFilter, FetchUrlList, ResponseCacheState, Response
 use moli_url::WebOrigin;
 use url::Url;
 
-use super::ResourcePerformanceEntry;
+use super::{ResourceConnectionTiming, ResourcePerformanceEntry};
 
 /// State owned by a fetch, from registration through its body terminal. Reading
 /// or cloning a JavaScript Response does not create another timing record.
@@ -18,6 +18,7 @@ pub(crate) struct FetchResourceTiming {
 
 #[derive(Debug, Default)]
 struct FetchResourceResponseTiming {
+    native: Option<moli_fetch::FetchResponseTiming>,
     request_start: Option<f64>,
     body_sizes: Option<moli_fetch::FetchResponseBodySizes>,
     final_headers_start: Option<f64>,
@@ -31,10 +32,22 @@ impl FetchResourceTiming {
     }
 
     pub(crate) fn for_initiator_type(initiator_type: &'static str) -> Self {
+        Self::from_start(
+            initiator_type,
+            Instant::now(),
+            moli_time::unix_epoch_millis(),
+        )
+    }
+
+    pub(crate) fn from_start(
+        initiator_type: &'static str,
+        started: Instant,
+        start_unix_millis: f64,
+    ) -> Self {
         Self {
             initiator_type,
-            started: Instant::now(),
-            start_unix_millis: moli_time::unix_epoch_millis(),
+            started,
+            start_unix_millis,
             response_timing: None,
         }
     }
@@ -76,10 +89,12 @@ impl FetchResourceTiming {
             && first_interim.is_none()
             && end.is_none()
             && native.body_sizes().is_none()
+            && native.fetch_started_at().is_none()
         {
             return;
         }
         let timing = self.response_timing.get_or_insert_with(Default::default);
+        timing.native = Some(native);
         timing.request_start = request_start;
         timing.body_sizes = native.body_sizes();
         if final_start.is_some() {
@@ -243,8 +258,22 @@ impl FetchResourceTiming {
             entry.delivery_type.clear();
         }
         if allowed {
+            self.apply_connection_timing(
+                entry,
+                head.final_url.scheme() == "https",
+                head.redirect_chain
+                    .iter()
+                    .any(|redirect| redirect.source != moli_fetch::RedirectSource::Internal),
+                head.cache_state,
+            );
             if let Some(timing) = self.response_timing.as_ref() {
-                entry.request_start_unix_millis = timing.request_start;
+                entry.request_start_unix_millis = timing.request_start.or_else(|| {
+                    (head.cache_state == ResponseCacheState::Local).then_some(
+                        entry
+                            .fetch_start_unix_millis
+                            .unwrap_or(self.start_unix_millis),
+                    )
+                });
                 entry.final_response_headers_start_unix_millis = timing.final_headers_start;
                 entry.first_interim_response_start_unix_millis = timing.first_interim_start;
                 entry.response_start_unix_millis =
@@ -252,10 +281,144 @@ impl FetchResourceTiming {
             }
             entry.next_hop_protocol = head
                 .negotiated_http_version
+                .filter(|_| head.cache_state != ResponseCacheState::Local)
                 .map(|version| version.protocol_name().to_owned())
                 .unwrap_or_default();
         }
         allowed
+    }
+
+    pub(crate) fn timing_allowed(origin: &WebOrigin, head: &ResponseHead) -> bool {
+        timing_allow_passes(origin, head)
+    }
+
+    fn apply_connection_timing(
+        &self,
+        entry: &mut ResourcePerformanceEntry,
+        secure: bool,
+        redirected: bool,
+        cache_state: ResponseCacheState,
+    ) {
+        let native = self
+            .response_timing
+            .as_ref()
+            .and_then(|timing| timing.native);
+        let fetch_start = if redirected {
+            native
+                .and_then(|timing| timing.fetch_started_at())
+                .unwrap_or(self.started)
+                .max(self.started)
+        } else {
+            self.started
+        };
+        let start = self.unix_millis(fetch_start);
+        entry.fetch_start_unix_millis = Some(start);
+        if redirected
+            && native
+                .and_then(|timing| timing.fetch_started_at())
+                .is_some()
+        {
+            entry.redirect_start_unix_millis = Some(self.start_unix_millis);
+            entry.redirect_end_unix_millis = Some(start);
+        }
+        if cache_state == ResponseCacheState::Local {
+            entry.connection_timing = Some(ResourceConnectionTiming::at(start, secure));
+            return;
+        }
+        let Some(connection) = native
+            .and_then(|timing| timing.connection_timing())
+            .and_then(|timing| timing.connection)
+        else {
+            return;
+        };
+        // Reuse is decided by the selected connection's actual creation time,
+        // not by whether this individual transfer opened a socket. Concurrent
+        // HTTP/2 streams can legitimately observe setup after their fetch began.
+        entry.connection_timing = Some(if connection.connect_started_at < fetch_start {
+            ResourceConnectionTiming::at(start, secure)
+        } else {
+            let (domain_lookup_start, domain_lookup_end) = connection
+                .domain_lookup
+                .map(|dns| {
+                    (
+                        self.unix_millis(dns.started_at),
+                        self.unix_millis(dns.completed_at),
+                    )
+                })
+                .unwrap_or((start, start));
+            ResourceConnectionTiming {
+                domain_lookup_start,
+                domain_lookup_end,
+                connect_start: self.unix_millis(connection.connect_started_at),
+                connect_end: self.unix_millis(connection.connect_completed_at),
+                secure_connection_start: connection
+                    .secure_started_at
+                    .filter(|_| secure)
+                    .map(|time| self.unix_millis(time)),
+            }
+        });
+    }
+
+    pub(crate) fn apply_child_document_timing(
+        &self,
+        entry: &mut ResourcePerformanceEntry,
+        network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+    ) {
+        // Cross-origin timing failures use the enclosing frame's actual load
+        // boundary, rather than leaking when its response body finished.
+        entry.end_unix_millis = Some(if network.resource_timing_allowed {
+            self.end()
+        } else {
+            self.now()
+        });
+        if !network.resource_timing_body_visible {
+            entry.content_encoding.clear();
+            entry.response_status = 0.0;
+            entry.content_type.clear();
+        }
+        if !network.resource_timing_allowed {
+            entry.encoded_body_size = 0.0;
+            entry.decoded_body_size = 0.0;
+            entry.transfer_size = 0.0;
+            entry.delivery_type.clear();
+            return;
+        }
+        if let Some(sizes) = self
+            .response_timing
+            .as_ref()
+            .and_then(|timing| timing.body_sizes)
+        {
+            entry.encoded_body_size = sizes.encoded as f64;
+            entry.decoded_body_size = sizes.decoded as f64;
+        }
+        entry.transfer_size = match network.cache_state {
+            ResponseCacheState::None => entry.encoded_body_size + 300.0,
+            ResponseCacheState::Local => 0.0,
+            ResponseCacheState::Validated => 300.0,
+        };
+        self.apply_connection_timing(
+            entry,
+            network.final_url.starts_with("https:"),
+            network.resource_timing_redirected,
+            network.cache_state,
+        );
+        if let Some(timing) = self.response_timing.as_ref() {
+            entry.request_start_unix_millis = timing.request_start.or_else(|| {
+                (network.cache_state == ResponseCacheState::Local).then_some(
+                    entry
+                        .fetch_start_unix_millis
+                        .unwrap_or(self.start_unix_millis),
+                )
+            });
+            entry.final_response_headers_start_unix_millis = timing.final_headers_start;
+            entry.first_interim_response_start_unix_millis = timing.first_interim_start;
+            entry.response_start_unix_millis =
+                timing.first_interim_start.or(timing.final_headers_start);
+        }
+        entry.next_hop_protocol = network
+            .resource_timing_protocol
+            .map(|version| version.protocol_name().to_owned())
+            .unwrap_or_default();
     }
 }
 

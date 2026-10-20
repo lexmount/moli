@@ -3344,6 +3344,15 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     /// provenance is discarded. Protocol headers and bytes remain unfiltered.
     #[serde(skip)]
     pub resource_timing_body_visible: bool,
+    /// In-process timing provenance, excluded from the protocol wire shape.
+    #[serde(skip)]
+    pub resource_timing_response: Option<Box<moli_fetch::FetchResponseTiming>>,
+    #[serde(skip)]
+    pub resource_timing_allowed: bool,
+    #[serde(skip)]
+    pub resource_timing_redirected: bool,
+    #[serde(skip)]
+    pub resource_timing_protocol: Option<NegotiatedHttpVersion>,
 }
 
 /// A completed child main-resource request whose Network facts remain

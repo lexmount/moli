@@ -215,6 +215,15 @@ impl NavigationResourceLoader {
     }
 
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
+        let (response, _) = self.fetch_raw_with_timing(request).await?;
+        Ok(response)
+    }
+
+    /// Materialize the body while retaining the selected native response clock.
+    pub async fn fetch_raw_with_timing(
+        &self,
+        request: Request,
+    ) -> Result<(RawResponse, moli_fetch::FetchResponseTiming)> {
         self.begin_fetch()?;
         match self
             .request_client
@@ -235,7 +244,10 @@ impl NavigationResourceLoader {
                     return Err(error);
                 }
                 self.finish_response_ready()?;
-                Ok(RawResponse::from_head_and_body(head, body))
+                Ok((
+                    RawResponse::from_head_and_body(head, body),
+                    response.response_timing(),
+                ))
             }
             Err(error) => {
                 self.finish_failed();
