@@ -107,6 +107,12 @@ impl PageScriptHost {
                 document_handle,
                 Some(init.creator_base_url),
             );
+        unsafe { &*self.document_runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &init
+                .policy_container
+                .inherited_meta_content_security_policies,
+        );
         let document_base_url = self.document_base_url_for_handle(document_handle);
         let document_origin = init.inherited_origin.clone();
         let referrer_policy = init.policy_container.referrer_policy.clone();
