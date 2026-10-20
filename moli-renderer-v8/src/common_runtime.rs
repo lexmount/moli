@@ -144,7 +144,12 @@ impl CommonRuntimeBinding {
     pub(crate) fn from_scope(
         scope: &mut v8::PinScope<'_, '_>,
     ) -> Option<(Rc<Self>, RuntimeExecutionContext)> {
-        let context = scope.get_current_context();
+        Self::from_context(scope.get_current_context())
+    }
+
+    pub(crate) fn from_context(
+        context: v8::Local<'_, v8::Context>,
+    ) -> Option<(Rc<Self>, RuntimeExecutionContext)> {
         let binding = context.get_slot::<Self>()?;
         let (_, owner) = binding.resolve_owner(context)?;
         Some((binding, owner))
