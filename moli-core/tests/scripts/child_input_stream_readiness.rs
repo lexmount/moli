@@ -8,10 +8,13 @@ async fn child_stream_readiness_probe(operation: &str) -> Result<serde_json::Val
       const frame = await new Promise(resolve => {
         const frame = document.createElement('iframe');
         frame.onload = () => resolve(frame);
-        frame.src = '/static';
+        frame.src = '/static?child-stream';
         document.body.append(frame);
       });
       frame.onload = null;
+      // Reopen a fully loaded stream, outside its initial load dispatch. An
+      // in-load document.open() resumes that load rather than firing a second one.
+      await new Promise(resolve => setTimeout(resolve, 0));
       const doc = frame.contentDocument;
       const win = frame.contentWindow;
       const oldBody = doc.body;
