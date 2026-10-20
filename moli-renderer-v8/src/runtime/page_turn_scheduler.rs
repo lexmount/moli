@@ -84,6 +84,8 @@ pub(super) enum DocumentLifecycleClassReadiness {
     /// The DOM source owns the admitted event. Only its FIFO head may run.
     QueuedDomTask,
     Available,
+    /// Another Page produced an exact replacement action for this owner.
+    ReadyReplacementAction,
     RunnableContinuation,
     ReadyMainParserScriptContinuation,
 }
@@ -230,7 +232,8 @@ impl<Entry> PageTurnScheduler<Entry> {
     ) -> Option<PageTurnClass> {
         if matches!(
             document_lifecycle,
-            DocumentLifecycleClassReadiness::RunnableContinuation
+            DocumentLifecycleClassReadiness::ReadyReplacementAction
+                | DocumentLifecycleClassReadiness::RunnableContinuation
                 | DocumentLifecycleClassReadiness::ReadyMainParserScriptContinuation
         ) {
             return Some(self.record_selected_turn_class(PageTurnClass::DocumentLifecycle));
@@ -282,7 +285,8 @@ impl<Entry> PageTurnScheduler<Entry> {
     ) -> Option<PageTurnClass> {
         let selected = if matches!(
             document_lifecycle,
-            DocumentLifecycleClassReadiness::RunnableContinuation
+            DocumentLifecycleClassReadiness::ReadyReplacementAction
+                | DocumentLifecycleClassReadiness::RunnableContinuation
                 | DocumentLifecycleClassReadiness::ReadyMainParserScriptContinuation
         ) {
             PageTurnClass::DocumentLifecycle

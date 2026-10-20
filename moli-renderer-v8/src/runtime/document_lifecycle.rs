@@ -250,6 +250,18 @@ pub(crate) struct RendererDocumentLifecycleDriveAdmission {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DocumentReplacementLifecycleActionSnapshot {
+    pub(super) pending_admission: Option<RendererDocumentLifecycleDriveAdmission>,
+    pub(super) ready_admission: Option<RendererDocumentLifecycleDriveAdmission>,
+}
+
+#[derive(Debug)]
+struct ForeignDocumentReplacementAction {
+    before: DocumentReplacementLifecycleActionSnapshot,
+    admission: RendererDocumentLifecycleDriveAdmission,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RendererDocumentLifecycleDriveAdmissionState {
     Pending(RendererDocumentLifecycleDriveAdmission),
     Active(RendererDocumentLifecycleDriveAdmission),
@@ -308,6 +320,8 @@ pub(crate) struct RendererDocumentLifecycleJournal {
     next_document_open_start_reason: RendererLifecycleStartReason,
     pending_document_open_error: Option<RendererDocumentLifecycleTransition>,
     document_replacement_drive_admission: Option<RendererDocumentLifecycleDriveAdmissionState>,
+    foreign_document_replacement_action: Option<Box<ForeignDocumentReplacementAction>>,
+    owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +338,84 @@ impl RendererDocumentLifecycleJournalHandle {
 
     pub(crate) fn identity(&self) -> RendererDocumentLifecycleIdentity {
         self.0.borrow().current_snapshot.into()
+    }
+
+    pub(crate) fn bind_owner_wake(
+        &self,
+        owner_wake: crate::page_task_queue::RendererOwnerWakeSender,
+    ) {
+        let mut journal = self.0.borrow_mut();
+        if let Some(existing) = &journal.owner_wake {
+            assert_eq!(existing.token(), owner_wake.token());
+        }
+        journal.owner_wake = Some(owner_wake);
+    }
+
+    pub(crate) fn document_replacement_action_snapshot(
+        &self,
+        parser_is_blocked: bool,
+    ) -> DocumentReplacementLifecycleActionSnapshot {
+        let pending_admission = self.pending_document_replacement_drive_admission();
+        DocumentReplacementLifecycleActionSnapshot {
+            pending_admission,
+            ready_admission: pending_admission.filter(|_| !parser_is_blocked),
+        }
+    }
+
+    /// Transfer the exact mutation made by another Page's running script.
+    /// Consecutive open/close calls coalesce at the producing boundary; the
+    /// owner wake merely advertises this retained action, never a rescan.
+    pub(crate) fn publish_foreign_document_replacement_action(
+        &self,
+        before: DocumentReplacementLifecycleActionSnapshot,
+        parser_is_blocked: bool,
+    ) {
+        let after = self.document_replacement_action_snapshot(parser_is_blocked);
+        let Some(admission) = after.pending_admission else {
+            return;
+        };
+        if before == after {
+            return;
+        }
+        let owner_wake = {
+            let mut journal = self.0.borrow_mut();
+            let before = match journal.foreign_document_replacement_action.take() {
+                Some(previous) if before.pending_admission == Some(previous.admission) => {
+                    previous.before
+                }
+                _ => before,
+            };
+            journal.foreign_document_replacement_action =
+                Some(Box::new(ForeignDocumentReplacementAction {
+                    before,
+                    admission,
+                }));
+            journal.owner_wake.clone()
+        };
+        if let Some(owner_wake) = owner_wake {
+            owner_wake.signal_document_lifecycle_turn();
+        }
+    }
+
+    pub(crate) fn has_foreign_document_replacement_action(&self) -> bool {
+        self.0
+            .borrow()
+            .foreign_document_replacement_action
+            .is_some()
+    }
+
+    pub(crate) fn take_foreign_document_replacement_action(
+        &self,
+    ) -> Option<DocumentReplacementLifecycleActionSnapshot> {
+        let mut journal = self.0.borrow_mut();
+        let action = journal.foreign_document_replacement_action.take()?;
+        (journal.document_replacement_drive_admission
+            == Some(RendererDocumentLifecycleDriveAdmissionState::Pending(
+                action.admission,
+            ))
+            && journal.identity() == action.admission.to
+            && journal.current_snapshot.terminated.is_none())
+        .then_some(action.before)
     }
 
     pub(crate) fn bind_output_journal(&self, output_journal: super::RendererTurnOutputJournal) {
@@ -582,6 +674,8 @@ impl RendererDocumentLifecycleJournal {
             next_document_open_start_reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
             pending_document_open_error: None,
             document_replacement_drive_admission: None,
+            foreign_document_replacement_action: None,
+            owner_wake: None,
         }
     }
 
@@ -963,6 +1057,7 @@ impl RendererDocumentLifecycleJournal {
         }
         let document_id = self.next_document_id;
         self.next_document_id = document_id.successor();
+        self.foreign_document_replacement_action = None;
         let document = RendererDocumentToken::with_id(self.frame.page_id, document_id);
         self.start_lifecycle(
             document,
@@ -1121,6 +1216,61 @@ mod tests {
 
     fn journal() -> RendererDocumentLifecycleJournal {
         RendererDocumentLifecycleJournal::new_initial_at(PageId::new_for_testing(7), 10)
+    }
+
+    #[test]
+    fn foreign_replacements_coalesce_before_an_unconsumed_ready_admission() {
+        let journal = RendererDocumentLifecycleJournalHandle(Rc::new(RefCell::new(journal())));
+        let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let token = super::super::RendererPageToken::new_for_testing(PageId::new_for_testing(7));
+        journal.bind_owner_wake(crate::page_task_queue::RendererOwnerWakeSender::new(
+            wake_tx, token,
+        ));
+        let initial = journal.document_replacement_action_snapshot(false);
+        for _ in 0..2 {
+            let before_open = journal.document_replacement_action_snapshot(false);
+            journal.did_open_document();
+            journal.publish_foreign_document_replacement_action(before_open, true);
+            let before_close = journal.document_replacement_action_snapshot(true);
+            journal.publish_foreign_document_replacement_action(before_close, false);
+        }
+        assert!(matches!(
+            wake_rx.try_recv().unwrap(),
+            crate::page_task_queue::RendererOwnerWake::Page {
+                token: actual,
+                source: crate::page_task_queue::RendererOwnerWakeSource::Runtime(
+                    super::super::RendererOwnerRuntimeActivitySource::DocumentLifecycleTurn,
+                ),
+            } if actual == token
+        ));
+        assert_eq!(
+            journal.take_foreign_document_replacement_action(),
+            Some(initial)
+        );
+        assert!(journal.take_foreign_document_replacement_action().is_none());
+        assert_eq!(journal.identity().epoch, RendererLifecycleEpoch(3));
+    }
+
+    #[test]
+    fn foreign_replacement_cannot_consume_a_later_local_admission() {
+        let journal = RendererDocumentLifecycleJournalHandle(Rc::new(RefCell::new(journal())));
+        let before = journal.document_replacement_action_snapshot(false);
+        journal.did_open_document();
+        journal.publish_foreign_document_replacement_action(before, false);
+        let first = journal
+            .pending_document_replacement_drive_admission()
+            .unwrap();
+        assert!(journal.activate_document_replacement_drive_admission(first));
+        journal.did_open_document();
+        let second = journal
+            .pending_document_replacement_drive_admission()
+            .unwrap();
+        assert_ne!(first, second);
+        assert!(journal.take_foreign_document_replacement_action().is_none());
+        assert_eq!(
+            journal.pending_document_replacement_drive_admission(),
+            Some(second)
+        );
     }
 
     #[test]

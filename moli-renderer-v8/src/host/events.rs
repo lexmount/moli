@@ -446,7 +446,6 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
         .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
     invoke_prepared_event_callback_with_receiver(
         scope,
-        host_ptr,
         event_type,
         callback_name,
         callback,
@@ -456,10 +455,8 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn invoke_prepared_event_callback_with_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
     event_type: &(impl EventTypeKey + ?Sized),
     callback_name: &str,
     callback: crate::native_bridge::PreparedEventCallback,
@@ -467,10 +464,11 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     current_event: Option<v8::Local<'s, v8::Object>>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
+    let callback_host = callback.relevant_host();
     let relevant_identity = callback.relevant_identity();
     let invocation = callback
         .invocation(scope, receiver, arguments, current_event)
-        .with_execution_context_currentness(host_ptr, relevant_identity);
+        .with_execution_context_currentness(callback_host, relevant_identity);
     CallbackInvoker::invoke_event_and_then(
         scope,
         "event listener",
@@ -483,7 +481,7 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
             CallbackInvocationOutcome::Threw(report) => {
                 report_event_callback_exception(
                     scope,
-                    host_ptr,
+                    callback_host,
                     event_type,
                     relevant_identity,
                     None,
@@ -513,6 +511,7 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
     };
     let _dom_debugger_pause = unsafe { &*host_ptr }
         .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
+    let callback_host = callback.relevant_host();
     let relevant_identity = callback.relevant_identity();
     let arguments = [view.event.into()];
     let invocation = callback
@@ -522,7 +521,7 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
             &arguments,
             (!invocation_target_in_shadow_tree).then_some(view.event),
         )
-        .with_execution_context_currentness(host_ptr, relevant_identity);
+        .with_execution_context_currentness(callback_host, relevant_identity);
     CallbackInvoker::invoke_event_and_then(
         scope,
         "event listener",
@@ -565,7 +564,7 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
                 if let Some(report) = conversion_report {
                     report_event_callback_exception(
                         scope,
-                        host_ptr,
+                        callback_host,
                         event_type,
                         relevant_identity,
                         None,
@@ -576,7 +575,7 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
             CallbackInvocationOutcome::Threw(report) => {
                 report_event_callback_exception(
                     scope,
-                    host_ptr,
+                    callback_host,
                     event_type,
                     relevant_identity,
                     None,

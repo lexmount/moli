@@ -299,8 +299,8 @@ pub use self::browser_context_runtime::{
     RendererServiceWorkerMainResourceFetch,
 };
 pub(crate) use self::document_lifecycle::{
-    RendererDocumentLifecycleDriveAdmission, RendererDocumentLifecycleJournalHandle,
-    RendererDocumentLifecycleTransition,
+    DocumentReplacementLifecycleActionSnapshot, RendererDocumentLifecycleDriveAdmission,
+    RendererDocumentLifecycleJournalHandle, RendererDocumentLifecycleTransition,
 };
 pub use self::document_lifecycle::{
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
