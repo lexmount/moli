@@ -49,6 +49,7 @@ impl ScriptVmDefaultWorldBootstrap {
             None,
             env.top_level_storage_key.clone(),
             None,
+            env.document_policy_container.clone(),
             Some(ScriptVmInitialDocumentEnvironment {
                 security_token: None,
                 document_domain_override: Default::default(),
