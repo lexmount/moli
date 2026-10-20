@@ -376,3 +376,34 @@ async fn markdown_keeps_collapsed_source_lines_but_not_hidden_source_blocks() {
         }
     }).await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_live_textarea_and_hidden_content_survive_dump_options() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>.hidden{display:none}</style>';
+            document.body.innerHTML = '<textarea value="Nonstandard attribute">Old default</textarea><p class="hidden">Private hidden copy</p><p>Published text</p>';
+            document.querySelector('textarea').value = 'Live text';
+        "#).unwrap();
+        for with_frames in [false, true] {
+            for with_base in [false, true] {
+                for strip_css in [false, true] {
+                    let mut config = options(strip_css);
+                    config.with_frames = with_frames;
+                    config.with_base = with_base;
+                    let output = page.render_page_dump(config);
+                    assert!(output.contains("Live text"), "{output}");
+                    assert!(output.contains("Published text"), "{output}");
+                    for excluded in ["Old default", "Nonstandard attribute", "Private hidden copy"] {
+                        assert!(!output.contains(excluded), "{excluded}: {output}");
+                    }
+                }
+            }
+        }
+        page.vm_mut().eval("document.querySelector('textarea').value = ''").unwrap();
+        let output = page.render_page_dump(options(false));
+        assert!(!output.contains("Old default") && !output.contains("Live text"), "{output}");
+    }).await;
+}
