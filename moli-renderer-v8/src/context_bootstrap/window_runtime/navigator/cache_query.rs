@@ -76,7 +76,7 @@ pub(super) fn rejecting_conversion<'s, T>(
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Cache")]
 struct QueryArgs<'s> {
-    #[webidl(required, with = required_request)]
+    #[webidl(required, converter = "raw")]
     request: RequestInfo<'s>,
     #[webidl(dictionary)]
     options: CacheQueryOptions,
@@ -85,7 +85,7 @@ struct QueryArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Cache")]
 struct OptionalQueryArgs<'s> {
-    #[webidl(with = optional_request)]
+    #[webidl(converter = "raw")]
     request: Option<RequestInfo<'s>>,
     #[webidl(dictionary)]
     options: CacheQueryOptions,
@@ -94,7 +94,7 @@ struct OptionalQueryArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CacheStorage.match")]
 struct StorageQueryArgs<'s> {
-    #[webidl(required, with = required_request)]
+    #[webidl(required, converter = "raw")]
     request: RequestInfo<'s>,
     #[webidl(dictionary)]
     options: MultiCacheQueryOptions,
@@ -103,7 +103,7 @@ struct StorageQueryArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Cache.put")]
 pub(super) struct PutArgs<'s> {
-    #[webidl(required, with = required_request)]
+    #[webidl(required, converter = "raw")]
     pub(super) request: RequestInfo<'s>,
     #[webidl(required, interface = web_api_interfaces::Response)]
     pub(super) response: v8::Local<'s, v8::Object>,
@@ -114,25 +114,6 @@ pub(super) struct PutArgs<'s> {
 struct NameArgs {
     #[webidl(required, converter = "dom_string16")]
     name: Vec<u16>,
-}
-
-fn required_request<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<RequestInfo<'s>, webidl::WebIdlError> {
-    webidl::argument(scope, args, index, webidl::Context::argument("Cache", 1))
-}
-
-fn optional_request<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<Option<RequestInfo<'s>>, webidl::WebIdlError> {
-    if args.length() <= index || args.get(index).is_undefined() {
-        return Ok(None);
-    }
-    required_request(scope, args, index).map(Some)
 }
 
 pub(super) fn materialize_request<'s>(
