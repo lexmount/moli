@@ -1885,3 +1885,62 @@ async fn picture_source_and_image_tree_mutations_reselect_requests() {
         );
     }
 }
+
+#[tokio::test]
+async fn image_update_callback_data_does_not_invoke_author_array_prototype_setters() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-private-data.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    assert_eq!(
+        vm.eval(
+            r#"
+        globalThis.__privateDataImage = new Image();
+        globalThis.__privateDataEvents = '';
+        globalThis.__privateDataSetterCalls = 0;
+        __privateDataImage.onload = () => __privateDataEvents += 'load';
+        __privateDataImage.onerror = () => __privateDataEvents += 'error';
+        const oldDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, '0');
+        const oldLength = Array.prototype.length;
+        Object.defineProperty(Array.prototype, '0', {
+          configurable: true,
+          get() { throw new Error('internal image data must have its own index'); },
+          set(value) { ++__privateDataSetterCalls; }
+        });
+        try {
+          __privateDataImage.src = '/pixel.gif';
+        } finally {
+          if (oldDescriptor) Object.defineProperty(Array.prototype, '0', oldDescriptor);
+          else delete Array.prototype[0];
+          Array.prototype.length = oldLength;
+        }
+        String(__privateDataSetterCalls)
+        "#
+        )
+        .unwrap(),
+        "0",
+    );
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/pixel.gif");
+    vm.fulfill_pending_subresource_fetch(
+        requests[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(
+        &mut vm,
+        &loader,
+        "image with polluted author array prototype",
+    )
+    .await;
+    assert_eq!(vm.eval("__privateDataEvents").unwrap(), "load");
+    assert_eq!(vm.eval("String(__privateDataSetterCalls)").unwrap(), "0");
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+}

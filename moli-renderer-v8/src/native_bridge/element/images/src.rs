@@ -234,22 +234,10 @@ fn queue_image_update_microtask(
     sequence: ImageLoadEventId,
     trigger: ImageLoadQueueTrigger,
 ) {
-    let data = v8::Array::new(scope, 3);
-    let _ = data.set_index(
-        scope,
-        IMAGE_UPDATE_HANDLE_INDEX,
-        v8::BigInt::new_from_u64(scope, handle.index() as u64).into(),
-    );
-    let _ = data.set_index(
-        scope,
-        IMAGE_UPDATE_ID_INDEX,
-        v8::BigInt::new_from_u64(scope, sequence.get()).into(),
-    );
-    let _ = data.set_index(
-        scope,
-        IMAGE_UPDATE_TRIGGER_INDEX,
-        v8::Integer::new_from_unsigned(scope, trigger as u32).into(),
-    );
+    let handle_value = v8::BigInt::new_from_u64(scope, handle.index() as u64).into();
+    let sequence_value = v8::BigInt::new_from_u64(scope, sequence.get()).into();
+    let trigger_value = v8::Integer::new_from_unsigned(scope, trigger as u32).into();
+    let data = v8::Array::new_with_elements(scope, &[handle_value, sequence_value, trigger_value]);
     let Some(callback) = v8::Function::builder(queued_image_update_microtask_callback)
         .data(data.into())
         .build(scope)
