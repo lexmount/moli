@@ -3,8 +3,8 @@
 pub mod options;
 
 use crate::interfaces as web_api_interfaces;
-use moli_v8_util::{get_private_value, set_private_value, v8_string, v8str};
-use moli_webapi_declare::WebApiObject;
+use moli_v8_util::{get_private_object, get_private_value, set_private_value, v8_string, v8str};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 
 const NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT: &str =
     "__lmNavigationTransitionCommittedResolver";
@@ -27,47 +27,97 @@ struct NavigationDestinationDeclaration<'scope> {
     state: v8::Local<'scope, v8::Value>,
 }
 
+const ACTIVATION_ENTRY: &str = "__lmNavigationActivationEntry";
+const ACTIVATION_FROM: &str = "__lmNavigationActivationFrom";
+const ACTIVATION_TYPE: &str = "__lmNavigationActivationType";
+const TRANSITION_FROM: &str = "__lmNavigationTransitionFrom";
+const TRANSITION_TO: &str = "__lmNavigationTransitionTo";
+const TRANSITION_TYPE: &str = "__lmNavigationTransitionType";
+const TRANSITION_COMMITTED: &str = "__lmNavigationTransitionCommitted";
+const TRANSITION_FINISHED: &str = "__lmNavigationTransitionFinished";
+
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::NavigationActivation,
-    own_to_string_tag = "NavigationActivation",
-    readonly_to_string_tag
-)]
-struct NavigationActivationObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    entry: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "navigationType")]
-    navigation_type: v8::Local<'scope, v8::Value>,
+#[webapi(interface = web_api_interfaces::NavigationActivation, require_prototype)]
+struct NavigationActivationObjectDeclaration<'s> {
+    #[webapi(slot = ACTIVATION_ENTRY)]
+    entry: v8::Local<'s, v8::Object>,
+    #[webapi(slot = ACTIVATION_FROM)]
+    from: v8::Local<'s, v8::Value>,
+    #[webapi(slot = ACTIVATION_TYPE)]
+    navigation_type: v8::Local<'s, v8::Value>,
 }
 
+// These are associated platform-object fields, not an author dictionary.
+// World views keep their own projected handles and share settlement authority
+// only through the canonical transition retained by Navigation.
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::NavigationTransition,
-    own_to_string_tag = "NavigationTransition",
-    readonly_to_string_tag
-)]
-struct NavigationTransitionObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property)]
-    to: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "navigationType")]
-    navigation_type: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property)]
-    committed: v8::Local<'scope, v8::Promise>,
-
+#[webapi(interface = web_api_interfaces::NavigationTransition, require_prototype)]
+pub struct NavigationTransitionObjectDeclaration<'s> {
+    #[webapi(slot = TRANSITION_FROM)]
+    pub from: v8::Local<'s, v8::Object>,
+    #[webapi(slot = TRANSITION_TO)]
+    pub to: v8::Local<'s, v8::Value>,
+    #[webapi(slot = TRANSITION_TYPE)]
+    navigation_type: v8::Local<'s, v8::Value>,
+    #[webapi(slot = TRANSITION_COMMITTED)]
+    pub committed: v8::Local<'s, v8::Promise>,
     #[webapi(slot = NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT)]
-    committed_resolver: Option<v8::Local<'scope, v8::PromiseResolver>>,
+    committed_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
+    #[webapi(slot = TRANSITION_FINISHED)]
+    pub finished: v8::Local<'s, v8::Promise>,
+}
 
-    #[webapi(data_property)]
-    finished: v8::Local<'scope, v8::Promise>,
+impl<'s> NavigationTransitionObjectDeclaration<'s> {
+    pub fn from_private_state(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        Some(Self {
+            from: get_private_object(scope, object, TRANSITION_FROM)?,
+            to: get_private_value(scope, object, TRANSITION_TO)?,
+            navigation_type: get_private_value(scope, object, TRANSITION_TYPE)?,
+            committed: get_private_value(scope, object, TRANSITION_COMMITTED)
+                .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())?,
+            committed_resolver: None,
+            finished: transition_finished(scope, object)?,
+        })
+    }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationActivation, enumerable)]
+struct NavigationActivationPrototypeDeclaration {
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, ACTIVATION_FROM))]
+    from: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, ACTIVATION_ENTRY))]
+    entry: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, ACTIVATION_TYPE))]
+    navigation_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationTransition, enumerable)]
+struct NavigationTransitionPrototypeDeclaration {
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_TYPE))]
+    navigation_type: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_FROM))]
+    from: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_TO))]
+    to: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_COMMITTED), returns_promise)]
+    committed: (),
+    #[webapi(accessor_property, getter = associated_field_getter, data = v8str(scope, TRANSITION_FINISHED), returns_promise)]
+    finished: (),
+}
+
+fn associated_field_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let object = web_api_object_target(scope, args.this()).expect("validated navigation receiver");
+    let slot = args.data().to_rust_string_lossy(scope);
+    rv.set(get_private_value(scope, object, &slot).expect("navigation associated field"));
 }
 
 #[derive(WebApiObject)]
@@ -93,14 +143,20 @@ pub fn install_navigation_activation_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
-    if interface_name != "NavigationTransition" {
-        return;
+    let prototype = template.prototype_template(scope);
+    match interface_name {
+        "NavigationActivation" => {
+            NavigationActivationPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "NavigationTransition" => {
+            NavigationTransitionPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        _ => {}
     }
-    template.prototype_template(scope).set_with_attr(
-        v8str(scope, "committed").into(),
-        v8::undefined(scope).into(),
-        v8::PropertyAttribute::DONT_ENUM,
-    );
 }
 
 pub fn new_navigation_activation<'s>(
@@ -123,7 +179,7 @@ pub fn new_navigation_transition<'s>(
     finished: v8::Local<'s, v8::Promise>,
 ) -> v8::Local<'s, v8::Object> {
     NavigationTransitionObjectDeclaration {
-        from: from.into(),
+        from,
         to: to
             .map(v8::Local::<v8::Value>::from)
             .unwrap_or_else(|| v8::null(scope).into()),
@@ -136,24 +192,12 @@ pub fn new_navigation_transition<'s>(
     .expect("NavigationTransition declaration should bind")
 }
 
-pub fn new_navigation_transition_view<'s>(
+pub fn transition_finished<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    from: v8::Local<'s, v8::Value>,
-    to: v8::Local<'s, v8::Value>,
-    navigation_type: v8::Local<'s, v8::Value>,
-    committed: v8::Local<'s, v8::Promise>,
-    finished: v8::Local<'s, v8::Promise>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    NavigationTransitionObjectDeclaration {
-        from,
-        to,
-        navigation_type,
-        committed,
-        committed_resolver: None,
-        finished,
-    }
-    .bind(scope)
-    .ok()
+    transition: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    get_private_value(scope, transition, TRANSITION_FINISHED)
+        .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())
 }
 
 pub fn new_navigation_destination<'s>(

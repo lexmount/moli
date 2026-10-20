@@ -14,6 +14,7 @@ use crate::util::{get_private_value, set_private_value};
 pub(super) use moli_webapi::navigation_values::install_navigation_activation_template_bindings;
 use moli_webapi::navigation_values::{
     new_navigation_activation, new_navigation_transition, take_transition_committed_resolver,
+    transition_finished,
 };
 use moli_webapi_declare::WebApiObject;
 
@@ -296,7 +297,7 @@ pub(super) fn navigation_transition_matches_resolver<'s>(
     resolver: v8::Local<'s, v8::PromiseResolver>,
 ) -> bool {
     let current_finished = navigation_transition_object(scope, navigation)
-        .and_then(|transition| transition.get(scope, v8str(scope, "finished").into()));
+        .and_then(|transition| transition_finished(scope, transition));
     current_finished
         .is_some_and(|finished| finished.strict_equals(resolver.get_promise(scope).into()))
 }
@@ -392,6 +393,22 @@ mod tests {
         for (owner, caller) in [(first, second), (second, first)] {
             let (navigation, from) = {
                 let scope = &mut v8::ContextScope::new(scope, owner);
+                let template = v8::FunctionTemplate::new(scope, navigation_transition_constructor);
+                install_navigation_activation_template_bindings(
+                    scope,
+                    template,
+                    "NavigationTransition",
+                );
+                let constructor = template.get_function(scope).unwrap();
+                let global = owner.global(scope);
+                assert_eq!(
+                    global.create_data_property(
+                        scope,
+                        v8str(scope, "NavigationTransition").into(),
+                        constructor.into()
+                    ),
+                    Some(true)
+                );
                 (v8::Object::new(scope), v8::Object::new(scope))
             };
             let scope = &mut v8::ContextScope::new(scope, caller);

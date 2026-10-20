@@ -1,7 +1,6 @@
 use super::world_wrappers;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
-use crate::util::v8str;
-use moli_webapi::navigation_values::new_navigation_transition_view;
+use moli_webapi::navigation_values::NavigationTransitionObjectDeclaration;
 
 pub(super) fn transition_in_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -9,27 +8,21 @@ pub(super) fn transition_in_realm<'s>(
     context: v8::Local<'s, v8::Context>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let transition = world_wrappers::owner(scope, transition);
+    if world_wrappers::belongs_to_world(scope, transition, context) {
+        return Some(transition);
+    }
     if let Some(wrapper) = world_wrappers::get(scope, transition, context) {
         return Some(wrapper);
     }
     let scope = &mut v8::ContextScope::new(scope, context);
-    let from = transition.get(scope, v8str(scope, "from").into())?;
-    let from = entry_wrappers::value_in_realm(scope, from, context);
-    let to = transition.get(scope, v8str(scope, "to").into())?;
-    let to = if let Ok(to) = v8::Local::<v8::Object>::try_from(to) {
-        super::navigation_events::navigation_destination_for_realm(scope, to)?.into()
-    } else {
-        to
-    };
-    let navigation_type = transition.get(scope, v8str(scope, "navigationType").into())?;
-    let committed = transition.get(scope, v8str(scope, "committed").into())?;
-    let committed =
-        promise_in_current_realm(scope, v8::Local::<v8::Promise>::try_from(committed).ok()?)?;
-    let finished = transition.get(scope, v8str(scope, "finished").into())?;
-    let finished =
-        promise_in_current_realm(scope, v8::Local::<v8::Promise>::try_from(finished).ok()?)?;
-    let wrapper =
-        new_navigation_transition_view(scope, from, to, navigation_type, committed, finished)?;
+    let mut view = NavigationTransitionObjectDeclaration::from_private_state(scope, transition)?;
+    view.from = entry_wrappers::in_realm(scope, view.from, context);
+    if let Ok(to) = v8::Local::<v8::Object>::try_from(view.to) {
+        view.to = super::navigation_events::navigation_destination_for_realm(scope, to)?.into();
+    }
+    view.committed = promise_in_current_realm(scope, view.committed)?;
+    view.finished = promise_in_current_realm(scope, view.finished)?;
+    let wrapper = view.bind(scope).ok()?;
     world_wrappers::insert(scope, transition, wrapper);
     Some(wrapper)
 }
