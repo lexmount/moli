@@ -390,6 +390,13 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> Option<String> {
+        if self
+            .frame_owner_store
+            .current_child_document_creation_kind(handle)
+            == Some(crate::frame_owner_model::DocumentCreationKind::Error)
+        {
+            return Some("null".to_owned());
+        }
         let url = self.child_browsing_context_current_url(handle)?;
         self.child_browsing_context_document_origin_for_url(handle, &url)
     }
@@ -403,7 +410,7 @@ impl PageScriptHost {
         if entry.document_sandbox_forces_opaque_origin() {
             return Some("null".to_owned());
         }
-        if let Some(origin) = entry.current_srcdoc_history_origin() {
+        if let Some(origin) = entry.current_local_history_origin() {
             return Some(origin.serialized_origin());
         }
         if entry.security_origin_inherited() {
@@ -795,6 +802,13 @@ impl PageScriptHost {
     }
 
     pub(crate) fn child_browsing_context_has_opaque_origin(&self, handle: DomHandle) -> bool {
+        if self
+            .frame_owner_store
+            .current_child_document_creation_kind(handle)
+            == Some(crate::frame_owner_model::DocumentCreationKind::Error)
+        {
+            return true;
+        }
         if self
             .child_browsing_contexts
             .get(&handle)

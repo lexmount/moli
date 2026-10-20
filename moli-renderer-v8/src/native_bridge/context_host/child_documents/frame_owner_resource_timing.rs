@@ -71,6 +71,7 @@ impl PendingFrameOwnerResourceTiming {
         &self,
         entry: &mut ResourcePerformanceEntry,
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        expose_document_response: bool,
     ) {
         let timing = FetchResourceTiming::from_start(
             self.initiator_type,
@@ -80,7 +81,7 @@ impl PendingFrameOwnerResourceTiming {
         if let Some(native) = network.resource_timing_response.as_deref() {
             timing.observe_native_timing(*native);
         }
-        timing.apply_child_document_timing(entry, network);
+        timing.apply_child_document_timing(entry, network, expose_document_response);
     }
 
     fn start_unix_millis(&self) -> f64 {
@@ -93,14 +94,15 @@ impl CompletedFrameOwnerResourceTiming {
         self.child_owner
     }
 
-    fn performance_entry(&self) -> ResourcePerformanceEntry {
+    fn performance_entry(&self, expose_document_response: bool) -> ResourcePerformanceEntry {
         let mut entry = ResourcePerformanceEntry::from_child_frame_document_network(
             self.timing.request_url.clone(),
             self.timing.initiator_type,
             Some(self.timing.start_unix_millis()),
             &self.network,
         );
-        self.timing.apply_native_timing(&mut entry, &self.network);
+        self.timing
+            .apply_native_timing(&mut entry, &self.network, expose_document_response);
         entry
     }
 }
@@ -142,10 +144,14 @@ impl PageScriptHost {
         else {
             return;
         };
+        let expose_response = self
+            .frame_owner_store
+            .current_child_document_creation_kind(action.child_handle())
+            != Some(crate::frame_owner_model::DocumentCreationKind::Error);
         if self.record_frame_owner_resource_timing(
             scope,
             &timing.timing,
-            timing.performance_entry(),
+            timing.performance_entry(expose_response),
         ) && let Some(entry) = self.child_browsing_contexts.get_mut(&action.child_handle())
         {
             entry.clear_frame_owner_resource_timing_if_owner(action.owner());
@@ -170,7 +176,7 @@ impl PageScriptHost {
             network.cache_state,
             network.preload_state.clone(),
         );
-        timing.apply_native_timing(&mut entry, network);
+        timing.apply_native_timing(&mut entry, network, true);
         self.record_frame_owner_resource_timing(scope, timing, entry);
     }
 

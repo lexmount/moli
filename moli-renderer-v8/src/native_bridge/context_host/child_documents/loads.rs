@@ -1,6 +1,6 @@
 use super::super::{
     ChildBrowsingContextBootstrap, OwnerDispatchScope, PageScriptHost,
-    child_frames::PendingChildFrameNavigation,
+    child_frames::{ChildNavigationTargetSnapshot, PendingChildFrameNavigation},
 };
 use super::{
     ChildDocumentNavigationInitiator, PendingChildDocumentNavigation,
@@ -243,6 +243,7 @@ impl PageScriptHost {
         let fetch = ChildDocumentFetch {
             response_body: None,
             download_policy,
+            target_snapshot: target_snapshot.clone(),
             timing_origin: initiating_loader.fetch_context().request_origin(),
             target,
             network_attribution,
@@ -547,9 +548,12 @@ impl PageScriptHost {
                     );
                 }
                 if let Some(violation) = enforced_violation.into_iter().next() {
-                    Err(format!(
-                        "child document response blocked by Content Security Policy `{}` for `{}`",
-                        violation.effective_directive, violation.blocked_uri
+                    tracing::debug!(directive = %violation.effective_directive,
+                        url = %violation.blocked_uri, "child response blocked by frame-ancestors");
+                    Ok(ChildDocumentLoadOutcome::blocked_response(
+                        loaded.final_url,
+                        loaded.document_network,
+                        loaded.policy_container.required_content_security_policy,
                     ))
                 } else {
                     Ok(ChildDocumentLoadOutcome::Loaded(loaded))
@@ -575,10 +579,19 @@ impl PageScriptHost {
                         (Ok(ChildDocumentLoadOutcome::Loaded(loaded)), false)
                     }
                 }
-                Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => {
+                Ok(ChildDocumentLoadOutcome::IgnoredNavigation { network, .. }) => {
                     self.record_child_document_network_activity(&network_attribution, *network);
                     (
                         Err("object resource cannot be represented as a nested document".to_owned()),
+                        true,
+                    )
+                }
+                Ok(ChildDocumentLoadOutcome::BlockedResponse(mut document)) => {
+                    if let Some(network) = document.document_network.take() {
+                        self.record_child_document_network_activity(&network_attribution, network);
+                    }
+                    (
+                        Err("object response blocked by Content Security Policy".to_owned()),
                         true,
                     )
                 }
@@ -586,6 +599,11 @@ impl PageScriptHost {
             }
         } else {
             (result, false)
+        };
+        let creation_kind = if matches!(&result, Ok(ChildDocumentLoadOutcome::BlockedResponse(_))) {
+            DocumentCreationKind::Error
+        } else {
+            DocumentCreationKind::Navigation
         };
         let document_credentialless = pending.document_credentialless;
         let credentialless_storage_nonce = pending.credentialless_storage_nonce;
@@ -665,7 +683,10 @@ impl PageScriptHost {
                     body_activity,
                 };
             }
-            Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => {
+            Ok(
+                ChildDocumentLoadOutcome::Loaded(loaded)
+                | ChildDocumentLoadOutcome::BlockedResponse(loaded),
+            ) => {
                 let loaded = *loaded;
                 if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle) {
                     body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
@@ -687,7 +708,10 @@ impl PageScriptHost {
                         completion: ChildDocumentLoadCompletion::new(
                             target,
                             network_attribution,
-                            Ok(ChildDocumentLoadOutcome::Loaded(Box::new(loaded))),
+                            Ok(ChildDocumentLoadOutcome::from_prepared_document(
+                                loaded,
+                                creation_kind,
+                            )),
                         ),
                         body_activity,
                     };
@@ -727,7 +751,10 @@ impl PageScriptHost {
                         completion: ChildDocumentLoadCompletion::new(
                             target,
                             network_attribution,
-                            Ok(ChildDocumentLoadOutcome::Loaded(Box::new(loaded))),
+                            Ok(ChildDocumentLoadOutcome::from_prepared_document(
+                                loaded,
+                                creation_kind,
+                            )),
                         ),
                         body_activity,
                     };
@@ -862,7 +889,7 @@ impl PageScriptHost {
                     handle,
                     snapshot,
                     window_commit_preflight,
-                    DocumentCreationKind::Navigation,
+                    creation_kind,
                     Some(loader_id),
                 )
                 .with_document_network(document_network);
@@ -1150,6 +1177,7 @@ impl PageScriptHost {
 pub(crate) struct ChildDocumentFetch {
     response_body: Option<crate::network::ResourceInterceptionBody>,
     download_policy: ChildNavigationDownloadPolicy,
+    target_snapshot: ChildNavigationTargetSnapshot,
     timing_origin: moli_url::WebOrigin,
     target: ChildDocumentNavigationFetchTarget,
     network_attribution: ChildDocumentLoadNetworkAttribution,
@@ -1485,9 +1513,12 @@ impl ChildDocumentFetch {
             None
         };
         child_document_load_outcome_from_response(
-            request.url.as_str().to_owned(),
-            request.method.clone(),
-            request.request_headers.to_byte_strings(),
+            ChildDocumentRequestSnapshot {
+                request_url: request.url.as_str().to_owned(),
+                request_method: request.method.clone(),
+                request_headers: request.request_headers.to_byte_strings(),
+                target: self.target_snapshot.clone(),
+            },
             head,
             body,
             navigation_url,
@@ -1559,10 +1590,15 @@ struct ChildDocumentTiming<'a> {
     response: moli_fetch::FetchResponseTiming,
 }
 
-fn child_document_load_outcome_from_response(
+struct ChildDocumentRequestSnapshot {
     request_url: String,
     request_method: String,
     request_headers: Vec<(String, String)>,
+    target: ChildNavigationTargetSnapshot,
+}
+
+fn child_document_load_outcome_from_response(
+    request: ChildDocumentRequestSnapshot,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     navigation_url: url::Url,
@@ -1576,9 +1612,9 @@ fn child_document_load_outcome_from_response(
         .try_into_materialized_bytes()
         .map_err(|_| "child document response body should remain materialized".to_owned())?;
     let mut network = crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-        request_url,
-        request_method,
-        request_headers,
+        request_url: request.request_url,
+        request_method: request.request_method,
+        request_headers: request.request_headers,
         final_url: head.final_url.as_str().to_owned(),
         status: head.status,
         response_headers: head.headers.clone(),
@@ -1606,18 +1642,14 @@ fn child_document_load_outcome_from_response(
             .negotiated_http_version
             .filter(|_| head.cache_state != moli_fetch::ResponseCacheState::Local),
     };
-    let policy_container =
+    let mut policy_container =
         DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
+    // 204/205 cannot start downloads. Required CSP is still enforced below.
     if matches!(head.status, 204 | 205) {
         if let Some(body) = download_body {
             body.cancel();
         }
-        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation {
-            network: Box::new(network),
-            resource_timing_status,
-        });
-    }
-    if moli_web_mime::response_headers_indicate_attachment_download(&head.headers) {
+    } else if moli_web_mime::response_headers_indicate_attachment_download(&head.headers) {
         if !download_policy.allows_response(&policy_container) {
             if let Some(body) = download_body {
                 body.cancel();
@@ -1646,23 +1678,32 @@ fn child_document_load_outcome_from_response(
     }
     let response_body = SubresourceResponseBody::from_bytes(bytes);
     network.response_body = Some(response_body.clone());
+    if !request
+        .target
+        .apply_response_policy(&mut policy_container, &head.final_url, &head.headers)
+    {
+        return Ok(ChildDocumentLoadOutcome::blocked_response(
+            navigation_url,
+            Some(network),
+            policy_container.required_content_security_policy,
+        ));
+    }
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::IgnoredNavigation {
             network: Box::new(network),
-            resource_timing_status: None,
+            resource_timing_status,
         });
     }
-    let policy_container =
-        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
     let (content_type, content, character_set) = {
         let body_bytes = response_body
             .try_bytes()
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
         let mime = navigation_response_content_type(&head.final_url, &head.headers, &body_bytes);
         if !moli_web_mime::is_supported_document_mime_type(&mime) {
-            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
-                network,
-            )));
+            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation {
+                network: Box::new(network),
+                resource_timing_status: None,
+            });
         }
         let fallback = encoding_context.fallback_encoding(
             &navigation_url,
@@ -1793,9 +1834,12 @@ mod tests {
             };
             for timing_origin in [Some(&origin), None] {
                 let outcome = child_document_load_outcome_from_response(
-                    home.as_str().to_owned(),
-                    "GET".to_owned(),
-                    Vec::new(),
+                    ChildDocumentRequestSnapshot {
+                        request_url: home.as_str().to_owned(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Vec::new(),
+                        target: Default::default(),
+                    },
                     head.clone(),
                     moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
                     head.final_url.clone(),
@@ -1943,9 +1987,12 @@ mod tests {
     fn loaded_child_document_retains_exact_network_response_body() {
         let body_bytes = b"<!doctype html><p>child network body \xff</p>".to_vec();
         let outcome = child_document_load_outcome_from_response(
-            "https://example.test/child".to_owned(),
-            "GET".to_owned(),
-            Vec::new(),
+            ChildDocumentRequestSnapshot {
+                request_url: "https://example.test/child".to_owned(),
+                request_method: "GET".to_owned(),
+                request_headers: Vec::new(),
+                target: Default::default(),
+            },
             moli_fetch::ResponseHead {
                 status_text: None,
                 final_url: url::Url::parse("https://example.test/child").unwrap(),
