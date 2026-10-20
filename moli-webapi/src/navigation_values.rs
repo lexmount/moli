@@ -30,6 +30,7 @@ struct NavigationDestinationDeclaration<'scope> {
 const ACTIVATION_ENTRY: &str = "__lmNavigationActivationEntry";
 const ACTIVATION_FROM: &str = "__lmNavigationActivationFrom";
 const ACTIVATION_TYPE: &str = "__lmNavigationActivationType";
+const ACTIVATION_SOURCE_INITIAL: &str = "__lmNavigationActivationSourceInitial";
 const TRANSITION_FROM: &str = "__lmNavigationTransitionFrom";
 const TRANSITION_TO: &str = "__lmNavigationTransitionTo";
 const TRANSITION_TYPE: &str = "__lmNavigationTransitionType";
@@ -45,6 +46,8 @@ pub struct NavigationActivationObjectDeclaration<'s> {
     pub from: v8::Local<'s, v8::Value>,
     #[webapi(slot = ACTIVATION_TYPE)]
     pub navigation_type: v8::Local<'s, v8::Value>,
+    #[webapi(slot = ACTIVATION_SOURCE_INITIAL)]
+    pub source_was_initial: bool,
 }
 
 impl<'s> NavigationActivationObjectDeclaration<'s> {
@@ -56,6 +59,8 @@ impl<'s> NavigationActivationObjectDeclaration<'s> {
             entry: get_private_object(scope, object, ACTIVATION_ENTRY)?,
             from: get_private_value(scope, object, ACTIVATION_FROM)?,
             navigation_type: get_private_value(scope, object, ACTIVATION_TYPE)?,
+            source_was_initial: get_private_value(scope, object, ACTIVATION_SOURCE_INITIAL)?
+                .boolean_value(scope),
         })
     }
 }
@@ -177,8 +182,9 @@ pub fn new_navigation_activation<'s>(
     entry: v8::Local<'s, v8::Object>,
     from: v8::Local<'s, v8::Value>,
     navigation_type: v8::Local<'s, v8::Value>,
+    source_was_initial: bool,
 ) -> v8::Local<'s, v8::Object> {
-    NavigationActivationObjectDeclaration::new(entry, from, navigation_type)
+    NavigationActivationObjectDeclaration::new(entry, from, navigation_type, source_was_initial)
         .bind(scope)
         .expect("NavigationActivation declaration should bind")
 }

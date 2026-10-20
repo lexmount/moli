@@ -2695,16 +2695,14 @@ String(frame.contentWindow.navigation.activation === null)
     activation.entry === child.navigation.currentEntry,
     Object.getPrototypeOf(activation) === child.NavigationActivation.prototype,
     Object.getPrototypeOf(activation.entry) === child.NavigationHistoryEntry.prototype,
-    Object.getPrototypeOf(activation.from) === child.NavigationHistoryEntry.prototype,
-    activation.from.url,
-    activation.from.index,
+    activation.from === null,
     activation.navigationType
   ]);
 })()
 "#,
         )
         .expect("activation and its entries should belong to the child realm"),
-        r#"[true,true,true,true,"about:blank",-1,"replace"]"#
+        r#"[true,true,true,true,"replace"]"#
     );
 }
 #[tokio::test]
