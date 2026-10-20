@@ -43,6 +43,7 @@ mod isolate;
 mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
+pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
 
 use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
@@ -1630,6 +1631,7 @@ async fn worker_main(
         closed: false,
         in_error_reporting_mode: false,
         next_timer_id: 0,
+        file_reader_tasks: std::collections::VecDeque::new(),
         loader,
         global_kind,
         script_kind,
@@ -3354,6 +3356,7 @@ async fn worker_main(
     }
     let common = Rc::clone(&state.borrow().common);
     common.clear_for_context_teardown();
+    state.borrow_mut().file_reader_tasks.clear();
     close_worker_owned_broadcast_channels(&state);
     close_worker_owned_message_ports(&state);
     resource_loader.finish_detach();

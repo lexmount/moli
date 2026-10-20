@@ -288,11 +288,12 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
-pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
 pub(crate) use self::file_api::{
-    build_file_list_object, build_file_object, file_list_files_from_object,
-    flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
+    FileReaderTask, FileReaderTaskEffect, build_file_list_object, build_file_object,
+    file_list_files_from_object, flush_one_pending_file_reader, is_file_list_object,
+    selected_file_from_object,
 };
+pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
 pub(crate) use self::form_data_runtime::form_data_request_body;
 use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
 pub(crate) use self::image_data::{
@@ -349,13 +350,13 @@ pub(crate) use self::media_queries::{
     simple_object_event_set_handler, simple_object_event_target_add_listener,
     simple_object_event_target_remove_listener, simple_object_has_event_listeners,
 };
+use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortRealmBinding, detach_message_port_owner_for_transfer,
     detach_transferred_message_port, dispatch_message_port_events_for_port_collecting_errors,
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
 };
-use self::message_ports::{schedule_host_callback, schedule_scope_callback};
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
@@ -974,14 +975,6 @@ fn worker_crypto_lazy_getter_callback<'s>(
     }
 }
 
-pub(crate) fn initialize_worker_file_realm_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    self::file_api::initialize_file_api_runtime_queues(scope, global)?;
-    Ok(())
-}
-
 pub(crate) fn install_worker_script_url_runtime_state(
     scope: &mut v8::PinScope<'_, '_>,
     global: v8::Local<'_, v8::Object>,
@@ -1119,3 +1112,11 @@ pub(crate) use self::window_accessors::{
 pub(crate) use session_history::{
     initialize_main_session_history, install_session_history_position,
 };
+
+pub(crate) fn initialize_worker_file_realm_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    self::file_api::initialize_file_api_runtime_queues(scope, global)?;
+    Ok(())
+}

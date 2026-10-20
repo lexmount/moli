@@ -589,7 +589,7 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn perform_microtask_checkpoints(
+    pub(crate) fn perform_microtask_checkpoints(
         scope: &mut v8::PinScope<'_, '_>,
         script_url: Option<&Url>,
     ) -> Result<()> {

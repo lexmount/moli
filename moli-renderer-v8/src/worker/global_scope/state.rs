@@ -34,6 +34,9 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) in_error_reporting_mode: bool,
     /// Timer id counter.
     pub(in crate::worker) next_timer_id: u32,
+    /// Immutable request epochs and phases, outside the author object graph.
+    pub(in crate::worker) file_reader_tasks:
+        std::collections::VecDeque<crate::context_bootstrap::FileReaderTask>,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.
