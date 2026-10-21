@@ -1,3 +1,8 @@
+pub use moli_page_types::{
+    GeolocationOverride as EmulatedGeolocationOverrideState,
+    GeolocationPositionOverride as EmulatedGeolocationOverride,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmulatedDeviceMetrics {
     pub width: u32,
@@ -59,32 +64,6 @@ impl EmulatedDeviceMetrics {
             window_y: self.window_y,
             screen_orientation: self.screen_orientation,
             emulated_view: self.view,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EmulatedGeolocationOverride {
-    pub latitude: f64,
-    pub longitude: f64,
-    pub accuracy: f64,
-    pub altitude: Option<f64>,
-    pub altitude_accuracy: Option<f64>,
-    pub heading: Option<f64>,
-    pub speed: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum EmulatedGeolocationOverrideState {
-    Position(EmulatedGeolocationOverride),
-    PositionUnavailable,
-}
-
-impl EmulatedGeolocationOverrideState {
-    pub(crate) fn position(&self) -> Option<&EmulatedGeolocationOverride> {
-        match self {
-            Self::Position(position) => Some(position),
-            Self::PositionUnavailable => None,
         }
     }
 }
