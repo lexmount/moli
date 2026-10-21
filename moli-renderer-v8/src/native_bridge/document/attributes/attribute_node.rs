@@ -44,6 +44,16 @@ struct DetachedDocumentCreateAttributeNsArgs {
     qualified_name: String,
 }
 
+fn same_attribute_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    element: v8::Local<'s, v8::Object>,
+) -> bool {
+    use crate::native_bridge::node::reference::TreeNodeReference;
+    TreeNodeReference::from_object(scope, owner)
+        .is_some_and(|owner| Some(owner) == TreeNodeReference::from_object(scope, element))
+}
+
 struct AttrNodeMetadata {
     name: String,
     value: DomStringValue,
@@ -133,7 +143,7 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     metadata.value = DomStringValue::from_utf16(&verified_value);
 
     let owner = object_property_as_object(scope, state, "ownerElement");
-    if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
+    if owner.is_some_and(|owner| !same_attribute_owner(scope, owner, element)) {
         throw_dom_exception(
             scope,
             "InUseAttributeError",
@@ -164,6 +174,36 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
         old.map(Into::into)
             .unwrap_or_else(|| v8::null(scope).into()),
     )
+}
+
+pub(in crate::native_bridge) fn set_attribute_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    attr: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
+    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
+    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
+        return live_set_attribute_node(scope, element, attr.into());
+    }
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        detached_native_set_attribute_node(scope, element, attr.into())
+    })
+}
+
+pub(in crate::native_bridge) fn remove_attribute_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    attr: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
+    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
+    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
+        return live_remove_attribute_node(scope, element, attr.into());
+    }
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        detached_native_remove_attribute_node(scope, element, attr.into())
+    })
 }
 
 pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
@@ -209,7 +249,9 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
                 .dom()
                 .get_attribute_dom_string_value(handle, &name)
         });
-    if !owner.is_some_and(|owner| owner.strict_equals(element.into())) || current_value.is_none() {
+    if !owner.is_some_and(|owner| same_attribute_owner(scope, owner, element))
+        || current_value.is_none()
+    {
         throw_dom_exception(
             scope,
             "NotFoundError",
@@ -285,7 +327,7 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     metadata.value = DomStringValue::from_utf16(&verified_value);
 
     let owner = object_property_as_object(scope, state, "ownerElement");
-    if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
+    if owner.is_some_and(|owner| !same_attribute_owner(scope, owner, element)) {
         throw_dom_exception(
             scope,
             "InUseAttributeError",
@@ -374,7 +416,7 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         metadata.namespace_uri.as_deref(),
         &metadata.local_name,
     );
-    if !owner.is_some_and(|owner| owner.strict_equals(element.into())) || current_value.is_none() {
+    if !owner.is_some_and(|owner| same_attribute_owner(scope, owner, element)) || current_value.is_none() {
         throw_dom_exception(
             scope,
             "NotFoundError",
@@ -824,37 +866,4 @@ pub(in crate::native_bridge::document) fn detached_create_attribute_ns_method_ca
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
-}
-
-pub(in crate::native_bridge) fn set_attribute_node<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-    attr: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
-    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
-    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
-        return live_set_attribute_node(scope, element, attr);
-    }
-    // Native conversion can throw after invoking the default policy. Do not
-    // retry the mutation through the live path after that exception.
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        detached_native_set_attribute_node(scope, element, attr)
-    })
-}
-
-pub(in crate::native_bridge) fn remove_attribute_node<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-    attr: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
-    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
-    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
-        return live_remove_attribute_node(scope, element, attr);
-    }
-    let result = custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        detached_native_remove_attribute_node(scope, element, attr)
-    });
-    result.or_else(|| live_remove_attribute_node(scope, element, attr))
 }
