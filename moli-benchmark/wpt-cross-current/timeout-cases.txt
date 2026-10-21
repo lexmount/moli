@@ -133,7 +133,6 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
-html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
