@@ -4,7 +4,7 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.insertNode")]
 struct RangeInsertNodeArgs<'s> {
-    #[webidl(with = range_insert_node_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
 }
 
@@ -18,24 +18,8 @@ struct RangeCreateContextualFragmentArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.surroundContents")]
 struct RangeSurroundContentsArgs<'s> {
-    #[webidl(with = range_surround_contents_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     new_parent: v8::Local<'s, v8::Object>,
-}
-
-fn range_insert_node_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, "Range.insertNode requires a Node")
-}
-
-fn range_surround_contents_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, "Range.surroundContents requires a Node")
 }
 
 pub(super) fn range_clone_contents_callback<'s>(

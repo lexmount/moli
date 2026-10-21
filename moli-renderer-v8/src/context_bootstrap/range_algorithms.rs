@@ -1,6 +1,6 @@
 use super::super::util::node_wrapper_from_handle;
 use super::range::{
-    RangeBoundarySide, child_index, native_range_boundary_handles, native_range_boundary_point,
+    RangeBoundarySide, native_range_boundary_handles, native_range_boundary_point,
     range_boundary_container_object, range_boundary_offset, range_is_collapsed, set_range_boundary,
 };
 use super::*;

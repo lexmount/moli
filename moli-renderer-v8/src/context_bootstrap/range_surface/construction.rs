@@ -4,8 +4,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "StaticRange")]
 struct StaticRangeConstructorArgs<'s> {
-    #[webidl(required, name = "init")]
-    init: v8::Local<'s, v8::Object>,
+    #[webidl(required, dictionary)]
+    init: StaticRangeInitMembers<'s>,
 }
 
 pub(super) fn range_constructor_callback<'s>(
@@ -43,14 +43,7 @@ pub(super) fn static_range_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<StaticRangeConstructorArgs<'s>>(scope, &args) else {
         return;
     };
-    let init =
-        match webidl::parse_dictionary_object::<StaticRangeInitMembers<'s>>(scope, parsed.init) {
-            Ok(init) => init,
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return;
-            }
-        };
+    let init = parsed.init;
     if static_range_endpoint_type_is_invalid(scope, init.start_container)
         || static_range_endpoint_type_is_invalid(scope, init.end_container)
     {
@@ -89,10 +82,7 @@ fn static_range_endpoint_type_is_invalid<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> bool {
-    matches!(
-        object_number_property(scope, node, "nodeType").map(|node_type| node_type as u32),
-        Some(2 | 10)
-    )
+    matches!(range_node_type(scope, node), Some(2 | 10))
 }
 
 /// `Range.prototype.detach()` — per WHATWG DOM, the steps are to do nothing.

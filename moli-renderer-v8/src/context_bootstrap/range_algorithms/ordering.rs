@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_bridge::NativeNodeReference;
 use crate::range_boundary::RangeBoundaryPoint as NativeRangeBoundaryPoint;
 use crate::util::{object_chain_contains, walk_object_chain};
 
@@ -137,15 +138,7 @@ pub(in crate::context_bootstrap) fn point_order_handles(
     )
 }
 
-/// Compare two boundary points (container, offset) per the DOM "position of a
-/// boundary point relative to a boundary point" algorithm.
-///
-/// This implementation runs in O(d_a + d_b) JS-property fetches (one chain walk
-/// each), plus at most two `child_index` calls. Earlier revisions called
-/// `walk_object_chain` and `walk_object_chain_last` redundantly and used a
-/// nested `ancestor_in` scan that was O(d_a × d_b) per comparison, which made
-/// `Range-comparePoint.html` and `Range-set.html` time out under their large
-/// boundary matrices.
+/// Compare native boundary points without evaluating author-visible tree properties.
 pub(in crate::context_bootstrap) fn point_order<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     a_container: v8::Local<'s, v8::Object>,
@@ -153,69 +146,23 @@ pub(in crate::context_bootstrap) fn point_order<'s>(
     b_container: v8::Local<'s, v8::Object>,
     b_offset: u32,
 ) -> Option<std::cmp::Ordering> {
-    if a_container.strict_equals(b_container.into()) {
+    let a = NativeNodeReference::from_object(scope, a_container)?;
+    let b = NativeNodeReference::from_object(scope, b_container)?;
+    if a.is_same(scope, &b) {
         return Some(a_offset.cmp(&b_offset));
     }
-
-    // a_chain[0] == a_container; a_chain.last() is the root reachable via
-    // parentNode. Same for b_chain.
-    let a_chain = walk_object_chain(scope, a_container, "parentNode");
-    let b_chain = walk_object_chain(scope, b_container, "parentNode");
-
-    let a_root = *a_chain.last()?;
-    let b_root = *b_chain.last()?;
-    if !a_root.strict_equals(b_root.into()) {
+    let a = a.tree_node()?;
+    let b = b.tree_node()?;
+    if a.runtime_ptr != b.runtime_ptr {
         return None;
     }
-
-    // Is b_container a strict ancestor of a_container? Then b appears in
-    // a_chain at some index i >= 1, and the child of b on a's path is
-    // a_chain[i - 1].
-    for i in 1..a_chain.len() {
-        if a_chain[i].strict_equals(b_container.into()) {
-            let child = a_chain[i - 1];
-            let index = child_index(scope, b_container, child)?;
-            return Some(if b_offset <= index {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            });
-        }
-    }
-
-    // Mirror: is a_container a strict ancestor of b_container?
-    for i in 1..b_chain.len() {
-        if b_chain[i].strict_equals(a_container.into()) {
-            let child = b_chain[i - 1];
-            let index = child_index(scope, a_container, child)?;
-            return Some(if index < a_offset {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            });
-        }
-    }
-
-    // Find the lowest common ancestor by walking both chains from the root end
-    // (last element) toward the front while suffixes match. The first index
-    // where the two chains diverge identifies the children of the LCA on each
-    // path. Because neither container ancestors the other (handled above) and
-    // the roots match, both indices stay > 0 after the trim.
-    let mut ai = a_chain.len();
-    let mut bi = b_chain.len();
-    while ai > 0 && bi > 0 && a_chain[ai - 1].strict_equals(b_chain[bi - 1].into()) {
-        ai -= 1;
-        bi -= 1;
-    }
-    if ai == 0 || bi == 0 {
-        return None;
-    }
-    let lca = a_chain[ai];
-    let a_child = a_chain[ai - 1];
-    let b_child = b_chain[bi - 1];
-    let a_index = child_index(scope, lca, a_child)?;
-    let b_index = child_index(scope, lca, b_child)?;
-    Some(a_index.cmp(&b_index))
+    crate::range_boundary::point_order_in_dom(
+        unsafe { &*a.runtime_ptr }.dom_host(),
+        a.handle,
+        a_offset,
+        b.handle,
+        b_offset,
+    )
 }
 
 pub(in crate::context_bootstrap) fn range_compare_point_internal<'s>(
