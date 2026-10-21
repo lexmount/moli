@@ -1,7 +1,7 @@
 # Moli libcurl transport
 
 Based on curl-sys 0.4.91 and libcurl 8.23 from
-[lexmount/curl-rust 9d40ca9](https://github.com/lexmount/curl-rust/tree/9d40ca90d8f19ccfd11afe7dd49bc32aab79435c/curl-sys).
+[lexmount/curl-rust 0392e12](https://github.com/lexmount/curl-rust/tree/0392e12475d8d1160d4cae07c172cac02797cc25/curl-sys).
 The Rust curl wrapper remains at that same revision.
 
 This copy preserves Moli's browser TLS EOF behavior across the upgrade:
@@ -32,3 +32,17 @@ On upgrades, port `moli_timing.c`, the connection/transfer carriers and the
 observation sites in `cf-socket.c`, `vtls.c`, `multi.c`, `progress.c` and
 `getinfo.c`. Native regression coverage includes keep-alive reuse and close,
 DNS provenance, concurrent HTTP/2 streams and proxy CONNECT/TLS ordering.
+
+The `browser-response-headers` feature and its build-time `http_source` adapter
+are copied from that revision. They normalize bare CR segments in HTTP/1
+response headers before framing and header callbacks, retaining strict NUL and
+conflicting framing checks. The adapter patches this vendored `http.c`, so the
+TLS EOF and connection-timing extensions remain in the compiled source.
+The same adapter and C shim must be kept in sync with the Rust curl wrapper.
+Regression coverage includes `moli-fetch`'s bare-CR header and framing tests.
+
+The HTTP build adapter and shim also retain the upstream EOF finalization for
+unterminated plain-HTTP header blocks, including bare-CR fields and up to four
+leading status-line CR bytes. HTTPS header truncation, NUL rejection, completed
+body framing and deferred response publication remain enforced. Coverage lives
+in `moli-fetch/src/tests/header_eof.rs`, including buffered, HTML and raw modes.
