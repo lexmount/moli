@@ -4,6 +4,7 @@ use super::*;
 
 mod basic;
 mod constructor;
+mod custom;
 mod data;
 mod error;
 mod input;
