@@ -2112,17 +2112,6 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "idna"
 version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
-dependencies = [
- "idna_adapter",
- "smallvec",
- "utf8_iter",
-]
-
-[[package]]
-name = "idna"
-version = "1.1.0"
 source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
 dependencies = [
  "idna_adapter",
@@ -2750,7 +2739,7 @@ version = "0.22.1"
 dependencies = [
  "cookie",
  "document-features",
- "idna 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "idna",
  "indexmap",
  "psl-types",
  "time",
@@ -6266,7 +6255,7 @@ version = "2.5.8"
 source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
 dependencies = [
  "form_urlencoded 1.2.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
- "idna 1.1.0 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
+ "idna",
  "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
  "serde",
  "serde_derive",
