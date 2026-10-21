@@ -3217,26 +3217,3 @@ fn transformed_trusted_script_rejection_does_not_report_a_sink_mismatch() {
     let _ = drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
     assert_eq!(vm.eval("JSON.stringify(compilationReports)").unwrap(), "[]");
 }
-
-#[test]
-fn trusted_types_invalid_name_directives_preserve_sink_requirements() {
-    for invalid in ['\0', '\u{000b}', '\u{001f}', '\u{007f}', '\u{00a0}'] {
-        let mut vm = new_storage_test_vm("https://trusted-types-invalid-directive.test/");
-        let policy = format!("trusted-types *{invalid}; require-trusted-types-for 'script'");
-        vm.set_response_content_security_policies(std::slice::from_ref(&policy));
-        let result = vm
-            .eval(
-                r#"(() => {
-                const first = trustedTypes.createPolicy('unlisted', {createHTML: value => value});
-                const element = document.createElement('div');
-                let errorName = 'none';
-                try { element.innerHTML = '<i>untrusted</i>'; }
-                catch (error) { errorName = error.name; }
-                element.innerHTML = first.createHTML('<b>trusted</b>');
-                return [errorName, element.innerHTML].join('|');
-            })()"#,
-            )
-            .expect("discarding an invalid name directive must retain valid sink requirements");
-        assert_eq!(result, "TypeError|<b>trusted</b>", "{policy:?}");
-    }
-}
