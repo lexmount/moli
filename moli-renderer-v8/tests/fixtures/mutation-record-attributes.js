@@ -42,9 +42,9 @@
   function produce(owner, doc) {
     const host = doc.createElement('item');
     const left = doc.createTextNode('left'), right = doc.createTextNode('right');
-    const text = doc.createTextNode('old text\u00e9'), middle = doc.createElement('middle');
+    const text = doc.createTextNode('old text\udfff'), middle = doc.createElement('middle');
     host.append(left, right, text);
-    host.setAttributeNS('urn:record', 'p:keep', 'old attr\u{1D306}');
+    host.setAttributeNS('urn:record', 'p:keep', 'old attr\ud800');
     const observer = new owner.MutationObserver(() => {});
     observer.observe(host, {attributes: true, attributeOldValue: true,
       characterData: true, characterDataOldValue: true, childList: true, subtree: true});
@@ -58,8 +58,8 @@
       attributeName: null, attributeNamespace: null, oldValue: null};
     const expected = [
       {...empty, type: 'attributes', target: host, attributeName: 'keep',
-        attributeNamespace: 'urn:record', oldValue: 'old attr\u{1D306}'},
-      {...empty, type: 'characterData', target: text, oldValue: 'old text\u00e9'},
+        attributeNamespace: 'urn:record', oldValue: 'old attr\ud800'},
+      {...empty, type: 'characterData', target: text, oldValue: 'old text\udfff'},
       {...empty, type: 'childList', target: host, addedNodes: [middle], previousSibling: left, nextSibling: right},
     ];
     return {records, expected, host, text, middle};
