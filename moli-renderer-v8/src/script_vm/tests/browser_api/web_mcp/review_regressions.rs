@@ -301,6 +301,89 @@ fn web_mcp_captured_form_response_survives_removal_and_unrelated_mutations() {
 }
 
 #[test]
+fn web_mcp_manual_submission_removal_cancels_before_response_processing() {
+    for response in [
+        "'result'",
+        "Promise.resolve('result')",
+        "new Promise(resolve => globalThis.finish = resolve)",
+        "({then(resolve) {globalThis.finish = resolve}})",
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+        vm.eval(&format!(r#"
+            document.body.innerHTML='<form toolname=respond tooldescription=Respond><button>Submit</button></form>';
+            globalThis.form=document.querySelector('form');
+            globalThis.probe='pending';
+            form.addEventListener('submit', event=>{{
+                event.preventDefault();
+                event.respondWith({response});
+            }});
+        "#)).unwrap();
+        vm.eval_after_selected_page_tasks("undefined").unwrap();
+        vm.eval("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool)).then(value=>probe=value,error=>probe=error.name)").unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks(
+                "document.activeElement===form.querySelector('button')"
+            )
+            .unwrap(),
+            "true",
+            "{response}"
+        );
+        vm.eval("form.requestSubmit(); form.remove()").unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("probe+'|'+form.matches(':tool-form-active')")
+                .unwrap(),
+            "UnknownError|false",
+            "{response}"
+        );
+        vm.eval("if (typeof finish==='function') finish('late result')")
+            .unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("probe").unwrap(),
+            "UnknownError",
+            "{response}"
+        );
+    }
+}
+
+#[test]
+fn web_mcp_form_response_survives_removal_after_submission_yields() {
+    for autosubmit in [false, true] {
+        for response in [
+            "'result'",
+            "Promise.resolve('result')",
+            "new Promise(resolve => globalThis.finish = resolve)",
+            "({then(resolve) {globalThis.finish = resolve}})",
+        ] {
+            let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+            let attribute = if autosubmit { "toolautosubmit" } else { "" };
+            vm.eval(&format!(r#"
+                document.body.innerHTML='<form toolname=respond tooldescription=Respond {attribute}><button>Submit</button></form>';
+                globalThis.form=document.querySelector('form');
+                globalThis.probe='pending';
+                form.addEventListener('submit', event=>{{
+                    event.preventDefault();
+                    event.respondWith({response});
+                }});
+            "#)).unwrap();
+            vm.eval_after_selected_page_tasks("undefined").unwrap();
+            vm.eval("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool)).then(value=>probe=value,error=>probe=error.name)").unwrap();
+            vm.eval_after_selected_page_tasks("undefined").unwrap();
+            if !autosubmit {
+                vm.eval("form.requestSubmit()").unwrap();
+            }
+            vm.eval("form.remove(); if (typeof finish==='function') finish('result')")
+                .unwrap();
+            assert_eq!(
+                vm.eval_after_selected_page_tasks("probe+'|'+form.matches(':tool-form-active')")
+                    .unwrap(),
+                "result|false",
+                "autosubmit={autosubmit}, response={response}"
+            );
+        }
+    }
+}
+
+#[test]
 fn web_mcp_removed_form_releases_its_registration_synchronously() {
     let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
     vm.eval("document.body.innerHTML = '<form toolname=replace tooldescription=Replace><input name=value></form>'; globalThis.probe='pending'").unwrap();
