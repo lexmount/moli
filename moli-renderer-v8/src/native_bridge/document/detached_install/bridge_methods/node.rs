@@ -9,20 +9,8 @@ use moli_webapi_declare::WebApiObject;
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "Node")]
 struct DetachedNodeMethodsDeclaration {
-    #[webapi(method, callback = detached_append_child_method_callback)]
-    append_child: (),
-
-    #[webapi(method, callback = detached_insert_before_method_callback)]
-    insert_before: (),
-
-    #[webapi(method, length = 1, callback = detached_remove_child_method_callback, receiver = web_api_interfaces::Node::is_instance)]
-    remove_child: (),
-
     #[webapi(method, callback = detached_remove_method_callback)]
     remove: (),
-
-    #[webapi(method, callback = detached_replace_child_method_callback)]
-    replace_child: (),
 
     #[webapi(method, callback = detached_has_child_nodes_method_callback)]
     has_child_nodes: (),

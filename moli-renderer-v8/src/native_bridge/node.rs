@@ -89,13 +89,13 @@ struct NodePrototypeReflectionDeclaration {
         setter = node_text_content_setter_function
     )]
     text_content: (),
-    #[webapi(method, length = 1, callback = node_append_child_prototype_callback)]
+    #[webapi(method, length = 1, callback = node_append_child_callback)]
     append_child: (),
-    #[webapi(method, length = 2, callback = node_insert_before_prototype_callback)]
+    #[webapi(method, length = 2, callback = node_insert_before_callback)]
     insert_before: (),
-    #[webapi(method, length = 1, callback = node_remove_child_prototype_callback)]
+    #[webapi(method, length = 1, callback = node_remove_child_callback)]
     remove_child: (),
-    #[webapi(method, length = 2, callback = node_replace_child_prototype_callback)]
+    #[webapi(method, length = 2, callback = node_replace_child_callback)]
     replace_child: (),
     #[webapi(method, length = 0, callback = node_clone_node_callback)]
     clone_node: (),
@@ -691,76 +691,6 @@ fn non_document_type_child_node_next_element_sibling_getter_function<'s>(
         .node(handle)
         .and_then(|node| node.next_element_sibling(unsafe { &*runtime_ptr }.dom_host().dom()));
     set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
-}
-
-fn node_append_child_prototype_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if node_runtime_and_handle_from_args(scope, &args).is_ok() {
-        node_append_child_callback(scope, args, rv);
-    } else if receiver_has_detached_state(scope, args.this()) {
-        super::document::detached_append_child_method_callback(scope, args, rv);
-    } else {
-        throw_incompatible_method_receiver(scope, "Node", "appendChild");
-    }
-}
-
-fn node_insert_before_prototype_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if node_runtime_and_handle_from_args(scope, &args).is_ok() {
-        node_insert_before_callback(scope, args, rv);
-    } else if receiver_has_detached_state(scope, args.this()) {
-        super::document::detached_insert_before_method_callback(scope, args, rv);
-    } else {
-        throw_incompatible_method_receiver(scope, "Node", "insertBefore");
-    }
-}
-
-fn node_remove_child_prototype_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "removeChild") else {
-        return;
-    };
-    if matches!(node, NativeNodeReference::Attr(_)) {
-        if webidl::parse_args::<RequiredNodeArgs>(scope, &args).is_some() {
-            throw_dom_exception(
-                scope,
-                "NotFoundError",
-                8,
-                "The node to be removed is not a child of this node.",
-            );
-        }
-        return;
-    }
-    if node_runtime_and_handle_from_args(scope, &args).is_ok() {
-        node_remove_child_callback(scope, args, rv);
-    } else if receiver_has_detached_state(scope, args.this()) {
-        super::document::detached_remove_child_method_callback(scope, args, rv);
-    } else {
-        throw_incompatible_method_receiver(scope, "Node", "removeChild");
-    }
-}
-
-fn node_replace_child_prototype_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if node_runtime_and_handle_from_args(scope, &args).is_ok() {
-        node_replace_child_callback(scope, args, rv);
-    } else if receiver_has_detached_state(scope, args.this()) {
-        super::document::detached_replace_child_method_callback(scope, args, rv);
-    } else {
-        throw_incompatible_method_receiver(scope, "Node", "replaceChild");
-    }
 }
 
 pub(crate) fn install_node_template_bindings<'s>(

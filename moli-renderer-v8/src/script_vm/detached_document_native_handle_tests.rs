@@ -3039,10 +3039,14 @@ fn detached_insert_live_node_uses_native_detach_after_parent_tamper() {
             liveChild.id = 'live-child';
             liveNode.appendChild(liveChild);
             liveHost.appendChild(liveNode);
+            const parentNodeGetter = Object.getOwnPropertyDescriptor(Node.prototype, 'parentNode').get;
+            let parentReads = 0;
+            const authorParentGetter = () => {
+                parentReads++;
+                throw new Error('parentNode should not be read');
+            };
             Object.defineProperty(liveNode, 'parentNode', {
-                get() {
-                    throw new Error('parentNode should not be read');
-                },
+                get: authorParentGetter,
                 configurable: true
             });
             Object.defineProperty(liveHost, 'removeChild', {
@@ -3053,17 +3057,18 @@ fn detached_insert_live_node_uses_native_detach_after_parent_tamper() {
             });
             target.appendChild(liveNode);
             return [
-                liveNode.parentNode === target,
+                parentNodeGetter.call(liveNode) === target,
                 liveNode.ownerDocument === d,
                 liveChild.ownerDocument === d,
                 liveNode.firstChild === liveChild,
                 liveChild.parentNode === liveNode,
-                liveHost.contains(liveNode)
+                liveHost.contains(liveNode),
+                parentReads === 0 && Object.getOwnPropertyDescriptor(liveNode, 'parentNode').get === authorParentGetter
             ].join('|');
         })()
         "#,
     );
-    assert_eq!(status, "true|true|true|true|true|false");
+    assert_eq!(status, "true|true|true|true|true|false|true");
 }
 
 #[test]
