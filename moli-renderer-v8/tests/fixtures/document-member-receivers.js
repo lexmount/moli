@@ -19,7 +19,7 @@ async function documentMemberReceiverProbe() {
       getPrototypeOf() { traps++; throw new Error('receiver prototype trap'); }
     }), revoked.proxy, new Proxy(child.document, {})
   ];
-  const promiseMethods = new Set(['hasStorageAccess', 'requestStorageAccess']);
+  const promiseMethods = new Set(['hasStorageAccess', 'requestStorageAccess', 'exitFullscreen']);
   const node = document.createElement('div');
   const nodeArguments = {
     importNode: [node, false], adoptNode: [node], moveBefore: [node, null],

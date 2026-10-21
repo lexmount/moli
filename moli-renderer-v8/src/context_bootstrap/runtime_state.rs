@@ -115,12 +115,25 @@ struct DocumentPrototypeRuntimeDeclaration {
     #[webapi(
         accessor_property = "fullscreenEnabled",
         getter = document_fullscreen_enabled_getter,
-        setter = document_fullscreen_enabled_lenient_setter
+        setter = native_bridge::fullscreen::fullscreen_lenient_setter
     )]
     fullscreen_enabled: (),
     #[webapi(
+        accessor_property = "fullscreen",
+        getter = native_bridge::fullscreen::document_fullscreen_getter,
+        setter = native_bridge::fullscreen::fullscreen_lenient_setter
+    )]
+    fullscreen: (),
+    #[webapi(
+        accessor_property = "fullscreenElement",
+        getter = native_bridge::fullscreen::fullscreen_element_getter,
+        setter = native_bridge::fullscreen::fullscreen_lenient_setter
+    )]
+    fullscreen_element: (),
+    #[webapi(
         method = "exitFullscreen",
         length = 0,
+        returns_promise,
         callback = native_bridge::fullscreen::document_exit_fullscreen_callback
     )]
     exit_fullscreen: (),
@@ -568,13 +581,6 @@ fn document_fullscreen_enabled_getter<'s>(
             .document_permissions_policy_for_document_handle(handle)
             .is_some_and(|policy| policy.fullscreen_enabled()),
     );
-}
-
-fn document_fullscreen_enabled_lenient_setter<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
 }
 
 pub(crate) fn define_replaceable_window_property(
