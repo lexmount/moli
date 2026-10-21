@@ -117,6 +117,7 @@ mod security_policy_event_init;
 mod service_worker_drain;
 mod session_description;
 mod shadow_root_init;
+mod shadow_root_receivers;
 mod simple_event_dispatch;
 mod simple_event_target_handlers;
 mod simple_event_dispatch;

@@ -2204,7 +2204,8 @@ fn event_target_handle_from_object<'s>(
     {
         return Some(EventTargetHandle::Node(handle));
     }
-    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, this)
+    if let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, this)
         && runtime_ptr == host_ptr
         && host.dom_host().node(handle).is_some()
     {
