@@ -243,8 +243,7 @@ fn unused_forgiving_selector_marker(
 }
 
 fn outermost_forgiving_selector_argument_ranges(selector_text: &str) -> Option<Vec<Range<usize>>> {
-    let input = selector_text;
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(selector_text);
     let mut ranges = Vec::new();
     collect_outermost_forgiving_selector_argument_ranges(&mut parser, &mut ranges)?;
     Some(ranges)
@@ -274,7 +273,7 @@ fn collect_outermost_forgiving_selector_argument_ranges(
                         Ok(())
                     } else {
                         collect_outermost_forgiving_selector_argument_ranges(input, ranges)
-                            .ok_or_else(|| ParseError::custom(()))
+                            .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                     }
                 });
                 nested.ok()?;
@@ -286,7 +285,7 @@ fn collect_outermost_forgiving_selector_argument_ranges(
             Token::ParenthesisBlock | Token::CurlyBracketBlock => {
                 let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                     collect_outermost_forgiving_selector_argument_ranges(input, ranges)
-                        .ok_or_else(|| ParseError::custom(()))
+                        .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                 });
                 nested.ok()?;
                 previous_was_colon = false;
@@ -302,8 +301,7 @@ fn collect_outermost_forgiving_selector_argument_ranges(
 }
 
 fn top_level_comma_separated_selector_item_ranges(argument: &str) -> Option<Vec<Range<usize>>> {
-    let input = argument;
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(argument);
     let mut ranges = Vec::new();
     let mut item_start = 0;
     while !parser.is_exhausted() {
@@ -854,8 +852,7 @@ pub(crate) fn dom_api_selector_list_contains_known_pseudo_element(selector_text:
 pub(crate) fn webkit_compat_pseudo_element_validation_selector(
     selector_text: &str,
 ) -> Option<String> {
-    let input = selector_text;
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(selector_text);
     let mut replacements = Vec::new();
 
     while !parser.is_exhausted() {

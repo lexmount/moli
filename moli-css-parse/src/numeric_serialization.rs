@@ -185,8 +185,7 @@ mod tests {
     use cssparser::Parser;
 
     fn serialize(source: &str) -> String {
-        let input = source;
-        let mut parser = Parser::new(input);
+        let mut parser = Parser::new(source);
         let token = parser.next().unwrap().clone();
         let mut result = String::new();
         serialize_css_token(&token, source, &mut result).unwrap();
@@ -253,8 +252,7 @@ mod tests {
             ("-2\\65 -foo", "e-foo", -2.0),
         ] {
             let text = serialize(source);
-            let input = &text;
-            let mut parser = Parser::new(input);
+            let mut parser = Parser::new(&text);
             let token = parser.next().unwrap().clone();
             assert!(
                 matches!(&token, Token::Dimension { unit: parsed, .. } if parsed.as_ref() == unit),

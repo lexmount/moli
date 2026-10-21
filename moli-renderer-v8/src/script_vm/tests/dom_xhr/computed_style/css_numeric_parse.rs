@@ -50,8 +50,10 @@ fn css_numeric_parse_bounds_input_work_and_recovers_after_errors() {
         vm.eval(
             r#"(() => {
         const parse = CSSNumericValue.parse;
-        const good = 'calc('.repeat(64) + '1px' + ')'.repeat(64);
-        if (parse(good).to('px').value !== 1) return false;
+        for (const depth of [64, 96]) {
+            const good = 'calc('.repeat(depth) + '1px' + ')'.repeat(depth);
+            if (parse(good).to('px').value !== 1) return false;
+        }
         for (const input of [
             'calc('.repeat(2000) + '1px' + ')'.repeat(2000),
             'calc(' + Array(40000).fill('1px').join(' + ') + ')',

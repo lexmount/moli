@@ -77,8 +77,7 @@ fn validate_dom_api_pseudo_element_selector_list(selector: &str) -> bool {
 }
 
 fn slotted_pseudo_element_validation_selector(selector_text: &str) -> Option<String> {
-    let input = selector_text;
-    let mut parser = cssparser::Parser::new(input);
+    let mut parser = cssparser::Parser::new(selector_text);
     let mut replacements = Vec::new();
 
     while !parser.is_exhausted() {

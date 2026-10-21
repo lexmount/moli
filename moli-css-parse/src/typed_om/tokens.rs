@@ -32,8 +32,7 @@ impl Frame {
 // Consume raw tokens without cssparser's component parser skipping nested
 // blocks; the input has already passed Stylo's declaration-value validation.
 fn next<'a>(source: &mut &'a str) -> Option<(Token<'a>, &'a str)> {
-    let input = *source;
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(source);
     let token = parser
         .next_including_whitespace_and_comments()
         .ok()?

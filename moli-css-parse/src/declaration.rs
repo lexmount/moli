@@ -108,8 +108,7 @@ fn serialized_declaration_suffix_matches(suffix: &str, important: bool) -> bool 
 
 fn eof_open_curly_block_starts(css_text: &str) -> Vec<usize> {
     let mut open_blocks = Vec::new();
-    let input = css_text;
-    let mut input = Parser::new(input);
+    let mut input = Parser::new(css_text);
     collect_eof_open_curly_block_starts(&mut input, &mut open_blocks);
     open_blocks
 }
