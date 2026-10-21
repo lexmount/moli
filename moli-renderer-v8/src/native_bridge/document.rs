@@ -667,10 +667,15 @@ struct DocumentObsoleteMethodsPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::DocumentFragment, enumerable, receiver)]
+struct DocumentFragmentGetElementByIdPrototypeDeclaration {
+    #[webapi(method, length = 1, callback = document_fragment_get_element_by_id_callback)]
+    get_element_by_id: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::DocumentFragment)]
 struct DocumentFragmentCollectionQueryPrototypeDeclaration {
-    #[webapi(method, length = 1, callback = node_get_element_by_id_callback)]
-    get_element_by_id: (),
     #[webapi(
         method,
         length = 1,
@@ -695,6 +700,18 @@ struct DocumentFragmentCollectionQueryPrototypeDeclaration {
         callback = super::element::node_get_elements_by_name_callback
     )]
     get_elements_by_name: (),
+}
+
+fn document_fragment_get_element_by_id_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if crate::native_bridge::node_runtime_and_handle_from_object(scope, args.this()).is_ok() {
+        node_get_element_by_id_callback(scope, args, rv);
+    } else {
+        detached_get_element_by_id_method_callback(scope, args, rv);
+    }
 }
 
 fn document_receiver_runtime_and_handle<'s>(
@@ -1729,6 +1746,11 @@ pub(crate) fn install_document_template_bindings<'s>(
             scope, prototype,
         );
         DocumentObsoleteMethodsPrototypeDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
+    }
+    if interface_name == "DocumentFragment" {
+        DocumentFragmentGetElementByIdPrototypeDeclaration::initialize_prototype_template(
             scope, prototype,
         );
     }

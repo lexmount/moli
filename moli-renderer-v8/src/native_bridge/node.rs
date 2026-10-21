@@ -151,9 +151,16 @@ macro_rules! declare_parent_node_prototype {
 }
 
 declare_parent_node_prototype!(
-    ParentNodePrototypeDeclaration,
-    name = "ParentNode",
-    enumerable
+    ElementParentNodePrototypeDeclaration,
+    interface = web_api_interfaces::Element,
+    enumerable,
+    receiver
+);
+declare_parent_node_prototype!(
+    DocumentFragmentParentNodePrototypeDeclaration,
+    interface = web_api_interfaces::DocumentFragment,
+    enumerable,
+    receiver
 );
 // A mixin member must validate the interface whose prototype owns it.
 declare_parent_node_prototype!(
@@ -767,8 +774,12 @@ pub(crate) fn install_node_template_bindings<'s>(
     }
     if interface_name == "Document" {
         DocumentParentNodePrototypeDeclaration::initialize_prototype_template(scope, prototype);
-    } else if matches!(interface_name, "DocumentFragment" | "Element") {
-        ParentNodePrototypeDeclaration::initialize_prototype_template(scope, prototype);
+    } else if interface_name == "DocumentFragment" {
+        DocumentFragmentParentNodePrototypeDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
+    } else if interface_name == "Element" {
+        ElementParentNodePrototypeDeclaration::initialize_prototype_template(scope, prototype);
     }
     if matches!(interface_name, "DocumentType" | "Element" | "CharacterData") {
         ChildNodePrototypeDeclaration::initialize_prototype_template(scope, prototype);
