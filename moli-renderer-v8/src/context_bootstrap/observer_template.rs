@@ -134,6 +134,9 @@ pub(super) fn install_observer_template_bindings<'s>(
     spec_name: &str,
 ) {
     match spec_name {
+        "MutationRecord" => {
+            observer_runtime::install_mutation_record_template_bindings(scope, template);
+        }
         "MutationObserver" => {
             let proto = template.prototype_template(scope);
             MutationObserverTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);

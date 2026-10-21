@@ -1,5 +1,136 @@
 use super::*;
 
+fn assert_mutation_record_attribute_checks(json: &str, total: usize) {
+    let facts: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(facts["complete"], true);
+    assert_eq!(facts["total"], total);
+    let checks = facts["checks"].as_array().unwrap();
+    let failures: Vec<_> = checks.iter().filter(|row| row["passed"] != true).collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), total);
+    let names: std::collections::BTreeSet<_> = checks
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), total);
+}
+
+fn run_mutation_record_attribute_checks(group: &str, total: usize) {
+    let mut vm = new_storage_html_test_vm("https://mutation-record-attributes.test/");
+    vm.eval(&format!(
+        "document.body.innerHTML='<iframe id=child></iframe>'; \
+         globalThis.__mutationRecordGroup={group:?};"
+    ))
+    .unwrap();
+    vm.eval(include_str!(
+        "../../../tests/fixtures/mutation-record-attributes.js"
+    ))
+    .unwrap();
+    assert_mutation_record_attribute_checks(
+        &vm.eval("JSON.stringify(__uiEventResults)").unwrap(),
+        total,
+    );
+}
+
+#[test]
+fn mutation_record_attributes_are_readonly_prototype_snapshots() {
+    run_mutation_record_attribute_checks("snapshots", 324);
+}
+
+#[test]
+fn mutation_record_getters_validate_native_receivers_before_public_lookup() {
+    run_mutation_record_attribute_checks("brands", 228);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mutation_record_delivery_uses_callback_realm_and_retains_snapshot_values() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://mutation-record-delivery.test/",
+        &loader,
+    );
+    vm.exec(
+        "document.body.innerHTML='<iframe id=child></iframe>'; \
+         globalThis.__mutationRecordGroup='delivery';",
+        None,
+    )
+    .unwrap();
+    vm.exec(
+        include_str!("../../../tests/fixtures/mutation-record-attributes.js"),
+        None,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "MutationRecord callback conversion and retained snapshots",
+    )
+    .await;
+    assert_mutation_record_attribute_checks(
+        &vm.eval("JSON.stringify(__uiEventResults)").unwrap(),
+        12,
+    );
+}
+
+#[test]
+fn mutation_record_getters_read_registered_native_proxy_payloads() {
+    fn register_proxy<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: v8::FunctionCallbackArguments<'s>,
+        mut rv: v8::ReturnValue<'s>,
+    ) {
+        let target = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+        let handler = crate::util::new_null_prototype_object(scope);
+        let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+        moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+        assert!(crate::web_api_interfaces::MutationRecord::is_instance(
+            scope,
+            proxy.into()
+        ));
+        rv.set(proxy.into());
+    }
+    let mut vm = new_storage_html_test_vm("https://mutation-record-native-proxy.test/");
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let function = v8::Function::new(scope, register_proxy).unwrap();
+        let key = crate::util::v8str(scope, "registerNativeRecordProxy");
+        assert_eq!(
+            global.create_data_property(scope, key.into(), function.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        document.body.innerHTML='<iframe id=child></iframe>';
+        const child=document.getElementById('child').contentWindow;
+        const target=document.createElement('item');
+        target.setAttribute('keep','before\ud800');
+        const observer=new MutationObserver(()=>{});
+        observer.observe(target,{attributeOldValue:true});
+        target.setAttribute('keep','after');
+        const record=observer.takeRecords()[0]; observer.disconnect();
+        const proxy=registerNativeRecordProxy(record);
+        const revoked=Proxy.revocable(proxy,{}); revoked.revoke();
+        let traps=0;
+        const author=new Proxy(proxy,{get(){traps++;throw 42;},getPrototypeOf(){traps++;throw 43;}});
+        for(const callee of [globalThis,child]) {
+            for(const key of ['type','target','addedNodes','removedNodes','previousSibling',
+                'nextSibling','attributeName','attributeNamespace','oldValue']) {
+                const get=Object.getOwnPropertyDescriptor(callee.MutationRecord.prototype,key).get;
+                if(get.call(proxy)!==record[key])throw Error('native payload '+key);
+                for(const invalid of [author,revoked.proxy,Object.create(proxy)]) {
+                    let error;try{get.call(invalid);}catch(caught){error=caught;}
+                    if(!(error instanceof callee.TypeError))throw Error('author receiver '+key);
+                }
+            }
+        }
+        return traps===0;
+    })()"#).unwrap(), "true");
+}
+
 fn run_mutation_observer_init_checks(group: &str, total: usize) {
     let mut vm = new_storage_html_test_vm("https://mutation-observer-init.test/");
     vm.eval(&format!(

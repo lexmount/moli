@@ -3,7 +3,10 @@
 mod callback;
 mod dom_access;
 mod intersection;
+mod mutation_record;
 mod schedule;
+
+pub(crate) use mutation_record::install_template_bindings as install_mutation_record_template_bindings;
 
 pub(crate) use dom_access::{
     ObserverStoreAccessToken, activate_resize_observer_callback, active_resize_observer_callbacks,
@@ -35,10 +38,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use super::{
     context_bootstrap::{build_dom_rect_object, throw_dom_exception_value},
     native_bridge::document::{DETACHED_STATE_SLOT, detached_native_handle_for_runtime},
-    native_bridge::{
-        JsContextHost, build_static_handle_node_list_wrapper, callback_value_dom_handle,
-        wrapped_handle_value,
-    },
+    native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
     native_bridge::{
         compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
     },
@@ -81,21 +81,6 @@ const ROOTLESS_IO_VERTICAL_GEOMETRY_PROPERTIES: [&str; 18] = [
     "transform",
     "translate",
 ];
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MutationRecord, data_properties, enumerable)]
-struct MutationRecordDeclaration<'scope> {
-    target: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property = "type")]
-    record_type: v8::Local<'scope, v8::Value>,
-    attribute_name: v8::Local<'scope, v8::Value>,
-    attribute_namespace: v8::Local<'scope, v8::Value>,
-    old_value: v8::Local<'scope, v8::Value>,
-    added_nodes: v8::Local<'scope, v8::Value>,
-    removed_nodes: v8::Local<'scope, v8::Value>,
-    previous_sibling: v8::Local<'scope, v8::Value>,
-    next_sibling: v8::Local<'scope, v8::Value>,
-}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::IntersectionObserverEntry)]
@@ -895,7 +880,13 @@ fn invoke_mutation_deliveries<'s>(
         if !delivery.callback.is_current(scope) {
             continue;
         }
-        let records_array = build_mutation_records_array(scope, host_ptr, &delivery.records);
+        // Convert callback arguments in the callback function's Realm, which
+        // can differ from the observer's construction Realm.
+        let callback_context = delivery.callback.relevant_context(scope);
+        let records_array = {
+            let scope = &mut v8::ContextScope::new(scope, callback_context);
+            build_mutation_records_array(scope, host_ptr, &delivery.records)
+        };
         let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
         delivery.callback.invoke_and_report(
             scope,
@@ -1322,123 +1313,12 @@ fn build_mutation_records_array<'s>(
     let values = records
         .iter()
         .map(|record| {
-            build_mutation_record_object(scope, host_ptr, record)
+            mutation_record::build_object(scope, host_ptr, record)
                 .map(v8::Local::<v8::Value>::from)
                 .unwrap_or_else(|| v8::null(scope).into())
         })
         .collect::<Vec<_>>();
     serialize_v8_iter_array(scope, values).unwrap_or_else(|| v8::Array::new(scope, 0))
-}
-
-fn build_mutation_record_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    record: &QueuedMutationRecord,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let target = wrap_node_handle(scope, host_ptr, record.target)?;
-    let (
-        record_type,
-        attribute_name,
-        attribute_namespace,
-        old_value,
-        added_nodes,
-        removed_nodes,
-        previous_sibling,
-        next_sibling,
-    ) = match &record.kind {
-        QueuedMutationRecordKind::Attributes {
-            attribute_name,
-            attribute_namespace,
-            old_value,
-        } => {
-            let attribute_namespace_value = attribute_namespace
-                .as_ref()
-                .and_then(|namespace| v8_string(scope, namespace))
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into());
-            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            let removed_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            (
-                v8str(scope, "attributes").into(),
-                v8_string(scope, attribute_name)?.into(),
-                attribute_namespace_value,
-                old_value
-                    .as_ref()
-                    .and_then(|value| crate::util::v8_string_from_dom_string_value(scope, value))
-                    .map(v8::Local::<v8::Value>::from)
-                    .unwrap_or_else(|| v8::null(scope).into()),
-                added_nodes.into(),
-                removed_nodes.into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-            )
-        }
-        QueuedMutationRecordKind::CharacterData { old_value } => {
-            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            let removed_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            (
-                v8str(scope, "characterData").into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-                old_value
-                    .as_ref()
-                    .and_then(|value| {
-                        v8::String::new_from_two_byte(
-                            scope,
-                            &value.utf16_units(),
-                            v8::NewStringType::Normal,
-                        )
-                    })
-                    .map(v8::Local::<v8::Value>::from)
-                    .unwrap_or_else(|| v8::null(scope).into()),
-                added_nodes.into(),
-                removed_nodes.into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-            )
-        }
-        QueuedMutationRecordKind::ChildList {
-            added_nodes,
-            removed_nodes,
-            previous_sibling,
-            next_sibling,
-        } => {
-            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, added_nodes);
-            let removed_nodes =
-                build_static_handle_node_list_wrapper(scope, host_ptr, removed_nodes);
-            let previous_sibling = previous_sibling
-                .and_then(|handle| wrap_node_handle(scope, host_ptr, handle))
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into());
-            let next_sibling = next_sibling
-                .and_then(|handle| wrap_node_handle(scope, host_ptr, handle))
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into());
-            (
-                v8str(scope, "childList").into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-                added_nodes.into(),
-                removed_nodes.into(),
-                previous_sibling,
-                next_sibling,
-            )
-        }
-    };
-    MutationRecordDeclaration {
-        target: target.into(),
-        record_type,
-        attribute_name,
-        attribute_namespace,
-        old_value,
-        added_nodes,
-        removed_nodes,
-        previous_sibling,
-        next_sibling,
-    }
-    .bind(scope)
-    .ok()
 }
 
 fn build_intersection_entries_array<'s>(
