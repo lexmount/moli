@@ -9,6 +9,7 @@ fn ensure_object_cache<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     if let Some(cache) = get_private_value(scope, object, slot)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
@@ -58,6 +59,9 @@ pub(in crate::native_bridge) fn clear_live_attr_cache_entry<'s>(
     element: v8::Local<'s, v8::Object>,
     name: &str,
 ) {
+    let Some(element) = moli_webapi_declare::web_api_object_target(scope, element) else {
+        return;
+    };
     let Some(cache) = get_private_value(scope, element, ATTR_OBJECT_CACHE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -72,6 +76,9 @@ pub(in crate::native_bridge) fn clear_live_attr_cache_entry_ns<'s>(
     namespace_uri: Option<&str>,
     local_name: &str,
 ) {
+    let Some(element) = moli_webapi_declare::web_api_object_target(scope, element) else {
+        return;
+    };
     let Some(cache) = get_private_value(scope, element, ATTR_OBJECT_CACHE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {

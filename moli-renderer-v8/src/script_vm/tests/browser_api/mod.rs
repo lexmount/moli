@@ -45,6 +45,7 @@ mod drag_data_modes;
 mod drag_default_payload;
 mod drag_init;
 mod drag_lifecycle;
+mod element_extended_bindings;
 mod encrypted_media_events;
 mod error_event_init;
 mod event_constructor_type;
