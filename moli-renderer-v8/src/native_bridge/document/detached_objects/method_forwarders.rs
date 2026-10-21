@@ -60,13 +60,6 @@ macro_rules! detached_bridge_method_forwarder {
     };
 }
 
-pub(in crate::native_bridge::document) fn detached_move_before_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let _ = detached_method_forward(scope, args, "__detachedMoveBefore");
-}
 detached_bridge_method_forwarder!(
     detached_has_child_nodes_method_callback,
     "__detachedHasChildNodes"

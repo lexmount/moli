@@ -162,7 +162,7 @@
               const records = observer.takeRecords();
               const expected = [[[a], []], [[b], []], [[c], [a]], [[], [b]]];
               return sameNodes(parent.childNodes, [c]) && a.parentNode === null && b.parentNode === null &&
-                b.data === expectedData && [a, b, c].every(node => node.ownerDocument === doc) &&
+                b.data === expectedData && b.data === '\ud800text\udfff' && [a, b, c].every(node => node.ownerDocument === doc) &&
                 records.length === 4 && records.every((record, index) => record.target === parent &&
                   sameNodes(record.addedNodes, expected[index][0]) && sameNodes(record.removedNodes, expected[index][1])) &&
                 (iterator === null || iterator.invalidIteratorState === true);

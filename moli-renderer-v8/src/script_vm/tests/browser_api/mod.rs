@@ -104,6 +104,7 @@ mod navigation;
 mod navigation_event_init;
 mod navigation_recursion;
 mod nested_frame_access;
+mod node_tree_mutation_bindings;
 mod notification_init;
 mod opaque_document_cookie;
 mod opaque_wasm_origins;
@@ -180,7 +181,6 @@ mod event_target_identity;
 mod event_target_prototype;
 mod named_node_map_receivers;
 mod node_native_aliases;
-mod node_tree_mutation_bindings;
 mod range_bindings;
 mod window_focus;
 
