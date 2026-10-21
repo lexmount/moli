@@ -42,11 +42,9 @@ pub(in crate::native_bridge::document) fn build_detached_document_fragment_objec
     scope: &mut v8::PinScope<'s, '_>,
     owner_document: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = new_detached_object_with_prototype(
-        scope,
-        "__detachedDocumentFragmentPrototype",
-        Some("DocumentFragment"),
-    )?;
+    let context = owner_document.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = new_detached_node_object(scope, "DocumentFragment")?;
     let state = new_detached_state_object(scope, "fragment", 11, "#document-fragment")?;
     let _ = state.set(
         scope,

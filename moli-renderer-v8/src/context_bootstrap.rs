@@ -78,6 +78,7 @@ pub(crate) use exposed_interfaces::{
     lazy_window_interface_names,
     materialized_interface_names as lazy_materialized_constructor_names,
     ready_interface_template_names as lazy_ready_constructor_template_names,
+    realm_interface_is_materialized,
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
 pub(crate) use indexed_db::dispatch_indexed_db_event_callback;
