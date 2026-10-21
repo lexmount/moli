@@ -87,6 +87,9 @@ struct HashChangeEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CustomEvent, enumerable)]
 struct CustomEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "detail"))]
+    detail: (),
+
     #[webapi(method = "initCustomEvent", length = 1, callback = custom_event_init_callback)]
     init_custom_event: (),
 }
