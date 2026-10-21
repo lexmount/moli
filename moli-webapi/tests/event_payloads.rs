@@ -853,7 +853,10 @@ fn value_subclass_constructors_keep_payloads_flags_and_own_property_shapes() {
             } else assert(e[property] === expected, Ctor.name + '.' + property);
         }
         const custom = new CustomEvent('c', {detail: details});
-        assert(Object.hasOwn(custom, 'detail') && !Object.hasOwn(custom, 'initCustomEvent'));
+        assert(!Object.hasOwn(custom, 'detail') && !Object.hasOwn(custom, 'initCustomEvent'), 'CustomEvent own fields');
+        const detail = Object.getOwnPropertyDescriptor(CustomEvent.prototype, 'detail');
+        assert(typeof detail.get === 'function' && detail.set === undefined && detail.enumerable && detail.configurable, 'CustomEvent detail descriptor');
+        assert(detail.get.call(custom) === details, 'CustomEvent detail value');
         for (const Ctor of [CommandEvent, ToggleEvent]) {
             const event = new Ctor('source', {source: sourceElement});
             const source = Object.getOwnPropertyDescriptor(Ctor.prototype, 'source');
