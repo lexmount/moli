@@ -213,12 +213,6 @@ pub(in crate::native_bridge) fn detached_clone_node_method_callback<'a>(
         None => rv.set_undefined(),
     }
 }
-detached_bridge_method_forwarder!(detached_append_method_callback, "__detachedAppend");
-detached_bridge_method_forwarder!(detached_prepend_method_callback, "__detachedPrepend");
-detached_bridge_method_forwarder!(
-    detached_replace_children_method_callback,
-    "__detachedReplaceChildren"
-);
 detached_bridge_method_forwarder!(detached_before_method_callback, "__detachedBefore");
 detached_bridge_method_forwarder!(detached_after_method_callback, "__detachedAfter");
 detached_bridge_method_forwarder!(

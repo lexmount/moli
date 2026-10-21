@@ -106,6 +106,7 @@ mod nested_frame_access;
 mod notification_init;
 mod opaque_document_cookie;
 mod opaque_wasm_origins;
+mod parent_node_bindings;
 mod payload_event_init;
 mod performance;
 mod performance_memory;
