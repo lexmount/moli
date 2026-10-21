@@ -880,6 +880,8 @@ fn invoke_mutation_deliveries<'s>(
         if !delivery.callback.is_current(scope) {
             continue;
         }
+        // Convert callback arguments in the callback function's Realm, which
+        // can differ from the observer's construction Realm.
         let callback_context = delivery.callback.relevant_context(scope);
         let records_array = {
             let scope = &mut v8::ContextScope::new(scope, callback_context);
