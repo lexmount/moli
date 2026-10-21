@@ -45,6 +45,16 @@ struct DetachedDocumentCreateAttributeNsArgs {
     qualified_name: String,
 }
 
+fn same_attribute_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    element: v8::Local<'s, v8::Object>,
+) -> bool {
+    use crate::native_bridge::node::reference::TreeNodeReference;
+    TreeNodeReference::from_object(scope, owner)
+        .is_some_and(|owner| Some(owner) == TreeNodeReference::from_object(scope, element))
+}
+
 struct AttrNodeMetadata {
     name: String,
     value: DomStringValue,
@@ -85,23 +95,6 @@ pub(in crate::native_bridge) fn detached_get_attribute_node_ns_method_callback<'
         .filter(|namespace| !namespace.is_empty());
     match live_get_attribute_node_ns_object(scope, this, namespace, &parsed.local_name) {
         Some(attr) => rv.set(attr.into()),
-        None => rv.set_null(),
-    }
-}
-
-pub(in crate::native_bridge::document) fn bridge_set_attribute_node_for_live_element_callback<
-    'a,
->(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(element) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    match live_set_attribute_node(scope, element, args.get(1)) {
-        Some(value) => rv.set(value),
         None => rv.set_null(),
     }
 }
@@ -162,7 +155,7 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     metadata.value = DomStringValue::from_utf16(&verified_value);
 
     let owner = object_property_as_object(scope, state, "ownerElement");
-    if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
+    if owner.is_some_and(|owner| !same_attribute_owner(scope, owner, element)) {
         throw_dom_exception(
             scope,
             "InUseAttributeError",
@@ -195,72 +188,34 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     )
 }
 
-pub(in crate::native_bridge) fn detached_set_attribute_node_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, args.this()) {
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0))
-            {
-                rv.set(value);
-            }
-        });
-        // A native receiver was handled even when conversion threw. Retrying
-        // would invoke the default policy twice and can swallow its exception.
-        return;
+pub(in crate::native_bridge) fn set_attribute_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    attr: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
+    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
+    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
+        return live_set_attribute_node(scope, element, attr.into());
     }
-    match detached_method_forward(scope, args, "__setAttributeNodeForLiveElement") {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        detached_native_set_attribute_node(scope, element, attr.into())
+    })
 }
 
-pub(in crate::native_bridge) fn detached_remove_attribute_node_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, args.this()) {
-        let mut handled = false;
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) =
-                detached_native_remove_attribute_node(scope, args.this(), args.get(0))
-            {
-                rv.set(value);
-                handled = true;
-            }
-        });
-        if handled {
-            return;
-        }
+pub(in crate::native_bridge) fn remove_attribute_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    attr: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
+    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
+    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
+        return live_remove_attribute_node(scope, element, attr.into());
     }
-    if let Some(value) = detached_native_remove_attribute_node(scope, args.this(), args.get(0)) {
-        rv.set(value);
-        return;
-    }
-    match detached_method_forward(scope, args, "__removeAttributeNodeForLiveElement") {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
-}
-
-pub(in crate::native_bridge::document) fn bridge_remove_attribute_node_for_live_element_callback<
-    'a,
->(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(element) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    match live_remove_attribute_node(scope, element, args.get(1)) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        detached_native_remove_attribute_node(scope, element, attr.into())
+    })
 }
 
 pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
@@ -305,7 +260,9 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
                 .dom()
                 .get_attribute_dom_string_value(handle, &name)
         });
-    if !owner.is_some_and(|owner| owner.strict_equals(element.into())) || current_value.is_none() {
+    if !owner.is_some_and(|owner| same_attribute_owner(scope, owner, element))
+        || current_value.is_none()
+    {
         throw_dom_exception(
             scope,
             "NotFoundError",
@@ -385,7 +342,7 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     metadata.value = DomStringValue::from_utf16(&verified_value);
 
     let owner = object_property_as_object(scope, state, "ownerElement");
-    if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
+    if owner.is_some_and(|owner| !same_attribute_owner(scope, owner, element)) {
         throw_dom_exception(
             scope,
             "InUseAttributeError",
@@ -493,7 +450,9 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         let name = detached_attribute_name(scope, element, &metadata.name);
         read_detached_native_attribute(scope, element, &name)
     };
-    if !owner.is_some_and(|owner| owner.strict_equals(element.into())) || current_value.is_none() {
+    if !owner.is_some_and(|owner| same_attribute_owner(scope, owner, element))
+        || current_value.is_none()
+    {
         throw_dom_exception(
             scope,
             "NotFoundError",

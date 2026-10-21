@@ -1,7 +1,6 @@
 use crate::dom::native::Node;
-use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::throw_type_error;
-use crate::webidl;
+use crate::{web_api_interfaces, webidl};
 
 use super::super::super::{
     node::{
@@ -24,8 +23,8 @@ use super::{
 struct InsertAdjacentElementArgs<'s> {
     #[webidl(required)]
     position: String,
-    #[webidl(required)]
-    element: v8::Local<'s, v8::Value>,
+    #[webidl(required, interface = web_api_interfaces::Element)]
+    element: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -33,8 +32,8 @@ struct InsertAdjacentElementArgs<'s> {
 struct InsertAdjacentTextArgs {
     #[webidl(required)]
     position: String,
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -79,12 +78,6 @@ pub(in crate::native_bridge) fn node_insert_adjacent_element_callback<'s>(
         rv.set_null();
         return;
     };
-    let receiver_is_detached = crate::native_bridge::document::detached_native_handle_for_runtime(
-        scope,
-        runtime_ptr,
-        args.this(),
-    )
-    .is_some();
     let Some(parsed) = webidl::parse_args::<InsertAdjacentElementArgs>(scope, &args) else {
         return;
     };
@@ -123,7 +116,7 @@ pub(in crate::native_bridge) fn node_insert_adjacent_element_callback<'s>(
         scope,
         runtime_ptr,
         document_handle,
-        parsed.element,
+        parsed.element.into(),
     ) else {
         throw_insert_adjacent_element_type_error(scope);
         return;
@@ -136,18 +129,9 @@ pub(in crate::native_bridge) fn node_insert_adjacent_element_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    if receiver_is_detached {
-        match crate::native_bridge::document::detached_native_object_for_handle(
-            scope,
-            runtime_ptr,
-            handle,
-        ) {
-            Some(node) => rv.set(node.into()),
-            None => rv.set_null(),
-        }
-        return;
-    }
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
+    // Web IDL retains the original interface argument, including a registered
+    // native Proxy. Returning another wrapper would change observable identity.
+    rv.set(parsed.element.into());
 }
 
 pub(in crate::native_bridge) fn node_insert_adjacent_text_callback<'s>(
@@ -192,14 +176,11 @@ pub(in crate::native_bridge) fn node_insert_adjacent_text_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    let handle = match unsafe { &*runtime_ptr }
+    let document = unsafe { &*runtime_ptr }
         .dom_host()
-        .owner_document_handle(target)
-    {
-        Some(document_handle) => unsafe { &mut *runtime_ptr }
-            .create_text_node_for_document(document_handle, &parsed.data),
-        None => unsafe { &mut *runtime_ptr }.create_text_node(&parsed.data),
-    };
+        .owner_document_handle(target);
+    let handle = unsafe { &mut *runtime_ptr }
+        .create_text_node_from_utf16_units(document, parsed.data.0.into());
     if !insert_adjacent_handle(scope, runtime_ptr, target, position, handle) {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
