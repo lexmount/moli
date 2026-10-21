@@ -77,8 +77,7 @@ fn validate_dom_api_pseudo_element_selector_list(selector: &str) -> bool {
 }
 
 fn slotted_pseudo_element_validation_selector(selector_text: &str) -> Option<String> {
-    let mut input = cssparser::ParserInput::new(selector_text);
-    let mut parser = cssparser::Parser::new(&mut input);
+    let mut parser = cssparser::Parser::new(selector_text);
     let mut replacements = Vec::new();
 
     while !parser.is_exhausted() {
@@ -128,7 +127,7 @@ fn slotted_pseudo_element_validation_selector(selector_text: &str) -> Option<Str
     Some(selector)
 }
 
-fn next_significant_token_is_single_colon(parser: &mut cssparser::Parser<'_, '_>) -> bool {
+fn next_significant_token_is_single_colon(parser: &mut cssparser::Parser<'_>) -> bool {
     let state = parser.state();
     let mut is_single_colon = false;
     while let Ok(token) = parser.next_including_whitespace_and_comments().cloned() {

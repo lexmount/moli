@@ -36,7 +36,7 @@ impl CanvasColor {
         if self.absolute.is_legacy_syntax() {
             let legacy = self.absolute.into_srgb_legacy();
             if legacy.alpha == 1.0 {
-                let [red, green, blue, _] = legacy.to_nscolor().to_le_bytes();
+                let [red, green, blue, _] = absolute_srgb_bytes(legacy);
                 return format!("#{red:02x}{green:02x}{blue:02x}");
             }
             return legacy.to_css_string();

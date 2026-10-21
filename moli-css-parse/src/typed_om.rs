@@ -1,6 +1,6 @@
 //! Typed OM projection of Stylo-owned property grammar and value types.
 
-use cssparser::{Parser, ParserInput};
+use cssparser::Parser;
 use style::{
     context::QuirksMode,
     custom_properties::SpecifiedValue,
@@ -74,8 +74,7 @@ pub fn parse_typed_style_value(
         return None;
     }
     // Empty or comment-only text cannot produce a CSSStyleValue for parse().
-    let mut input = ParserInput::new(css_text);
-    Parser::new(&mut input).next().ok()?;
+    Parser::new(css_text).next().ok()?;
     let base_url = base_url
         .cloned()
         .unwrap_or_else(|| url::Url::parse("about:blank").expect("static URL"));
@@ -154,8 +153,7 @@ pub fn reify_unparsed_style_value(
             &fallback_url
         }
     };
-    let mut input = ParserInput::new(css_text);
-    let value = Parser::new(&mut input)
+    let value = Parser::new(css_text)
         .parse_entirely(|input| SpecifiedValue::parse(input, None, url_data))
         .ok()?;
     tokens::reify(value.css_text())

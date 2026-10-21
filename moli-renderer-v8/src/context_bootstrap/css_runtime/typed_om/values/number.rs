@@ -1,12 +1,11 @@
-use cssparser::{Parser, ParserInput, Token};
+use cssparser::{Parser, Token};
 
 // The property grammar and numeric type have already been established by
 // Stylo. Recover a single numeric token's original double precision instead
 // of exposing Stylo/cssparser's f32 rounding as a WebIDL double. Expressions
 // and property-specific conversions beyond number/percentage use Stylo's value.
 pub(super) fn from_literal(source: &str, target_unit: &str) -> Option<f64> {
-    let mut input = ParserInput::new(source);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(source);
     parser.skip_whitespace();
     let start = parser.position();
     let token = parser.next().ok()?.clone();
