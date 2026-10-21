@@ -238,7 +238,6 @@ pub(in crate::context_bootstrap) fn initialize_uninitialized_touch_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) {
-    initialize_touch_ui_event(scope, event, None);
     let null = v8::null(scope).into();
     TouchEventObjectDeclaration::new(null, null, null, false, false, false, false)
         .initialize(scope, event)

@@ -122,6 +122,8 @@ pub(in crate::context_bootstrap) fn new_uninitialized_touch_event<'s>(
     let wrapper = event;
     let event = new_event_state(scope);
     base::initialize_event_object(scope, event, "", false, false);
+    let view = scope.get_current_context().global(scope);
+    ui::initialize_legacy_ui_event(scope, event, Some(view), 0);
     super::touch_runtime::initialize_uninitialized_touch_event(scope, event);
     set_private_value(
         scope,
