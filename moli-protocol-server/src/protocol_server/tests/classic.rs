@@ -2,7 +2,9 @@ use super::*;
 use axum::http::{HeaderMap, header};
 use serde_json::{Map, Value};
 
-async fn classic_capture_layout(app: Router, session_id: &str) {
+type ProtocolApp = super::super::trailing_slash::TrailingSlash<axum::Router>;
+
+async fn classic_capture_layout(app: ProtocolApp, session_id: &str) {
     let captured = classic_request_json(
         app,
         Method::GET,
@@ -195,7 +197,7 @@ async fn assert_window_prompt_command_matches_chromium_wpt(command: WindowPrompt
         },
     ];
 
-    async fn window_surface(app: Router, session_id: &str) -> serde_json::Value {
+    async fn window_surface(app: ProtocolApp, session_id: &str) -> serde_json::Value {
         let response = classic_request_json_with_body(
             app,
             Method::POST,
@@ -215,7 +217,7 @@ async fn assert_window_prompt_command_matches_chromium_wpt(command: WindowPrompt
     }
 
     async fn run_window_prompt_command(
-        app: Router,
+        app: ProtocolApp,
         session_id: &str,
         command: WindowPromptCommand,
     ) -> (StatusCode, serde_json::Value) {
@@ -427,7 +429,7 @@ fn classic_data_url(html: &str) -> String {
 }
 
 async fn classic_open_dialog_and_wait(
-    app: Router,
+    app: ProtocolApp,
     session_id: &str,
     script: &str,
     expected_text: &str,
@@ -443,7 +445,7 @@ async fn classic_open_dialog_and_wait(
 }
 
 async fn classic_open_dialog_and_wait_with_timeout(
-    app: Router,
+    app: ProtocolApp,
     session_id: &str,
     script: &str,
     expected_text: &str,
@@ -480,7 +482,7 @@ async fn classic_open_dialog_and_wait_with_timeout(
     assert_eq!(alert, json!({ "value": expected_text }));
 }
 
-async fn classic_request_json(app: Router, method: Method, path: &str) -> serde_json::Value {
+async fn classic_request_json(app: ProtocolApp, method: Method, path: &str) -> serde_json::Value {
     let (status, value) = classic_request_status_and_json(app, method, path).await;
     assert_eq!(status, StatusCode::OK, "path {path}: {value:?}");
     value
@@ -842,7 +844,7 @@ fn spawn_classic_service_worker_fixture_server() -> (std::net::SocketAddr, Dedic
 }
 
 async fn classic_switch_to_child_frame_and_remove_current_frame(
-    app: Router,
+    app: ProtocolApp,
     session_id: &str,
     page_url: &str,
 ) {
@@ -883,7 +885,7 @@ async fn classic_switch_to_child_frame_and_remove_current_frame(
 }
 
 async fn classic_switch_to_nested_frame_and_remove_parent_frame(
-    app: Router,
+    app: ProtocolApp,
     session_id: &str,
     page_url: &str,
 ) {
@@ -937,7 +939,7 @@ async fn classic_switch_to_nested_frame_and_remove_parent_frame(
     assert_eq!(removed, json!({ "value": "removed" }));
 }
 
-async fn classic_find_css_element_id(app: Router, session_id: &str, selector: &str) -> String {
+async fn classic_find_css_element_id(app: ProtocolApp, session_id: &str, selector: &str) -> String {
     classic_request_json_with_body(
         app,
         Method::POST,
@@ -954,7 +956,7 @@ async fn classic_find_css_element_id(app: Router, session_id: &str, selector: &s
 }
 
 async fn classic_assert_web_element_array_eq(
-    app: Router,
+    app: ProtocolApp,
     session_id: &str,
     label: &str,
     response: &serde_json::Value,
@@ -1033,7 +1035,7 @@ fn classic_assert_serialized_file_list_names(
     }
 }
 
-async fn classic_assert_no_such_window(app: Router, method: Method, path: &str) {
+async fn classic_assert_no_such_window(app: ProtocolApp, method: Method, path: &str) {
     let (status, response) = classic_request_status_and_json(app, method, path).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "path {path}: {response:?}");
     assert_eq!(
@@ -1044,7 +1046,7 @@ async fn classic_assert_no_such_window(app: Router, method: Method, path: &str) 
 }
 
 async fn classic_assert_no_such_window_with_body(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
     body: serde_json::Value,
@@ -1060,7 +1062,7 @@ async fn classic_assert_no_such_window_with_body(
 }
 
 async fn classic_request_json_with_body(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
     body: serde_json::Value,
@@ -1071,7 +1073,7 @@ async fn classic_request_json_with_body(
 }
 
 async fn classic_request_status_and_json(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
 ) -> (StatusCode, serde_json::Value) {
@@ -1096,7 +1098,7 @@ async fn classic_request_status_and_json(
 }
 
 async fn classic_request_status_headers_and_json(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
 ) -> (StatusCode, HeaderMap, serde_json::Value) {
@@ -1123,7 +1125,7 @@ async fn classic_request_status_headers_and_json(
 }
 
 async fn classic_request_status_headers_and_text(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
 ) -> (StatusCode, HeaderMap, String) {
@@ -1150,7 +1152,7 @@ async fn classic_request_status_headers_and_text(
 }
 
 async fn classic_request_status_and_json_with_body(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
     body: serde_json::Value,
@@ -1177,7 +1179,7 @@ async fn classic_request_status_and_json_with_body(
 }
 
 async fn classic_request_status_headers_and_json_with_body(
-    app: Router,
+    app: ProtocolApp,
     method: Method,
     path: &str,
     body: serde_json::Value,

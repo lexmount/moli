@@ -26,6 +26,7 @@ serde_json = "1.0.145"
 socket2 = { version = "0.6.3", features = ["all"] }
 tokio = { version = "1.51.0", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
 tracing = "0.1.41"
+tower = { version = "0.5.2", default-features = false, features = ["util"] }
 url = "2.5.7"
 
 [dev-dependencies]
@@ -35,7 +36,6 @@ moli-protocol = { path = "../moli-protocol", features = ["test-support"] }
 png = "0.18"
 time = "0.3"
 tokio-tungstenite = "0.28.0"
-tower = { version = "0.5.2", features = ["util"] }
 
 [lints]
 workspace = true

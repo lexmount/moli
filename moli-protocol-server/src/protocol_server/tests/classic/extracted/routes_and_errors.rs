@@ -60,18 +60,32 @@ async fn webdriver_classic_response_headers_do_not_relabel_axum_route_errors() {
         "axum 404 should stay a non-Classic response body: {missing_body:?}"
     );
 
-    let (method_status, method_headers, method_body) = classic_request_status_headers_and_text(
-        app.clone(),
-        Method::PUT,
-        &format!("/session/{session_id}/window"),
-    )
-    .await;
-    assert_eq!(method_status, StatusCode::METHOD_NOT_ALLOWED);
-    assert_classic_json_content_type_absent(&method_headers);
-    assert!(
-        !method_body.trim_start().starts_with('{'),
-        "axum 405 should stay a non-Classic response body: {method_body:?}"
-    );
+    for suffix in ["", "/"] {
+        let (method_status, method_headers, method_body) = classic_request_status_headers_and_text(
+            app.clone(),
+            Method::PUT,
+            &format!("/session/{session_id}/window{suffix}"),
+        )
+        .await;
+        assert_eq!(method_status, StatusCode::METHOD_NOT_ALLOWED);
+        let allowed = method_headers
+            .get(header::ALLOW)
+            .expect("405 Allow header")
+            .to_str()
+            .expect("ASCII Allow header")
+            .split(',')
+            .map(str::trim)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            allowed,
+            std::collections::BTreeSet::from(["GET", "HEAD", "POST", "DELETE"])
+        );
+        assert_classic_json_content_type_absent(&method_headers);
+        assert!(
+            !method_body.trim_start().starts_with('{'),
+            "axum 405 should stay a non-Classic response body: {method_body:?}"
+        );
+    }
 
     let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
 }

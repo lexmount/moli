@@ -86,7 +86,7 @@ async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope()
     let updated_timeouts = classic_request_json(
         app.clone(),
         Method::GET,
-        &format!("/session/{session_id}/timeouts"),
+        &format!("/session/{session_id}/timeouts/"),
     )
     .await;
     assert_eq!(
@@ -96,6 +96,32 @@ async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope()
                 "script": 25,
                 "pageLoad": 300000,
                 "implicit": 4
+            }
+        })
+    );
+
+    // The slash alias must execute POST in place with its JSON body intact.
+    let set_timeouts_via_alias = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/timeouts/"),
+        json!({ "script": 26, "implicit": 5 }),
+    )
+    .await;
+    assert_eq!(set_timeouts_via_alias, json!({ "value": null }));
+    let updated_via_alias = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/timeouts"),
+    )
+    .await;
+    assert_eq!(
+        updated_via_alias,
+        json!({
+            "value": {
+                "script": 26,
+                "pageLoad": 300000,
+                "implicit": 5
             }
         })
     );

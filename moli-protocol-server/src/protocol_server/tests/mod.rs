@@ -356,7 +356,8 @@ async fn spawn_test_protocol_server_with_owner_registry() -> (
     );
     let owner_registry = state.cdp_owner_registry.clone();
     let server = tokio::spawn(async move {
-        axum::serve(listener, build_router(state))
+        let service = axum::ServiceExt::<Request<Body>>::into_make_service(build_router(state));
+        axum::serve(listener, service)
             .await
             .expect("test protocol server should serve");
     });
@@ -444,7 +445,8 @@ async fn spawn_test_protocol_server_with_runtime_config(
     )
     .expect("test app state should initialize");
     let server = tokio::spawn(async move {
-        axum::serve(listener, build_router(state))
+        let service = axum::ServiceExt::<Request<Body>>::into_make_service(build_router(state));
+        axum::serve(listener, service)
             .await
             .expect("test protocol server should serve");
     });
