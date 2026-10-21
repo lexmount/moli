@@ -159,6 +159,19 @@ class CliAmiiboProfileTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["agent-episode", "--live"])
 
+    def test_fingerprint_is_an_explicit_native_observational_command(self) -> None:
+        from moli_benchmark.fingerprint.cli import command
+
+        args = build_parser().parse_args(["fingerprint", "--site", "creepjs", "--engine", "moli"])
+        self.assertIs(args.func, command)
+        self.assertEqual(args.site, ["creepjs"])
+        self.assertEqual(args.engine, ["moli"])
+        self.assertEqual(args.runs, 1)
+        self.assertNotIn("fingerprint", _run_suites(argparse.Namespace(profile="smoke", suite=None)))
+        for unsupported in ["--headless", "--disable-gpu", "--user-agent", "--retry"]:
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                build_parser().parse_args(["fingerprint", unsupported])
+
     def test_finish_report_builds_readiness_after_top_level_artifacts_exist(self) -> None:
         summaries = [
             {
