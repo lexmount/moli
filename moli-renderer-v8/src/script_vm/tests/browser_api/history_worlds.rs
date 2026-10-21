@@ -12,12 +12,16 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
   const own = (event, name) => Object.getOwnPropertyDescriptor(event, name);
   const first = new CustomEvent('first', { detail: { value: 1 } });
   const child = new other.CustomEvent('child', { detail: { value: 2 } });
+  const detail = own(CustomEvent.prototype, 'detail');
+  const childDetail = own(other.CustomEvent.prototype, 'detail');
   for (let i = 0; i < 200; i++) {
     const event = new CustomEvent(String(i), { detail: { value: i } });
     for (const name of Object.keys(event)) getters.add(own(event, name).get);
     if (event.type !== String(i) || event.detail.value !== i) throw new Error('captured instance');
+    if (own(event, 'detail') || own(Object.getPrototypeOf(event), 'detail').get !== detail.get)
+      throw new Error('detail getter must be shared on the prototype');
   }
-  const type = own(Event.prototype, 'type'), detail = own(first, 'detail');
+  const type = own(Event.prototype, 'type');
   const childType = own(other.Event.prototype, 'type');
   let illegal = false;
   try { childType.get.call({}); }
@@ -48,9 +52,13 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     base: !own(first, 'type') && !own(new Event('base'), 'type') &&
       type.get.call(first) === first.type && type.get.call(new Event('base')) === 'base',
     realm: type.get instanceof Function && childType.get instanceof other.Function &&
-      childType.get !== type.get && !(childType.get instanceof Function),
+      childType.get !== type.get && !(childType.get instanceof Function) &&
+      detail.get instanceof Function && childDetail.get instanceof other.Function &&
+      childDetail.get !== detail.get && !(childDetail.get instanceof Function),
     borrowed: type.get.call(child) === 'child' && detail.get.call(child) === child.detail,
     descriptor: [type.get.name, type.get.length, type.set === undefined, type.enumerable, type.configurable],
+    detailDescriptor: [detail.get.name, detail.get.length, detail.set === undefined, detail.enumerable, detail.configurable],
+    inheritedDetail: !own(first, 'detail') && !own(child, 'detail'),
     trusted: own(first, 'isTrusted').configurable === false && first.isTrusted === false,
     errorValues: withoutError.error === undefined && nullError.error === null && withError.error === first &&
       [withoutError, nullError, withError].every(event => !own(event, 'error') &&
@@ -69,10 +77,15 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
         result["descriptor"],
         serde_json::json!(["get type", 0, true, true, true])
     );
+    assert_eq!(
+        result["detailDescriptor"],
+        serde_json::json!(["get detail", 0, true, true, true])
+    );
     for property in [
         "base",
         "realm",
         "borrowed",
+        "inheritedDetail",
         "trusted",
         "errorValues",
         "prototypeSource",

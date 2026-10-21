@@ -33,6 +33,7 @@ mod crypto_subtle_other;
 mod crypto_subtle_x25519;
 mod css_image_worker;
 mod css_unparsed_worker;
+mod custom_event_init;
 mod date_locale;
 mod details;
 mod document_domain_lifetime;

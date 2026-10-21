@@ -307,6 +307,9 @@ struct CompositionEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CustomEvent, enumerable, receiver)]
 struct CustomEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "detail"))]
+    detail: (),
+
     #[webapi(method = "initCustomEvent", length = 1, callback = custom_event_init_callback)]
     init_custom_event: (),
 }
