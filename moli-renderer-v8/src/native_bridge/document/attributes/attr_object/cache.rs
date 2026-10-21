@@ -33,6 +33,7 @@ fn ensure_object_cache<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     if let Some(cache) = get_private_value(scope, object, slot)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
