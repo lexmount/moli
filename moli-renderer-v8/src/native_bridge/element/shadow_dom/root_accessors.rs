@@ -27,7 +27,7 @@ use moli_web_mime::{
 use std::collections::{HashMap, HashSet};
 
 use super::super::super::node::{
-    node_runtime_and_handle_from_args, node_runtime_and_handle_from_object,
+    node_backing_object, node_runtime_and_handle_from_args, node_runtime_and_handle_from_object,
     node_runtime_and_handle_from_object_or_detached,
 };
 use super::super::property_string_value;
@@ -199,6 +199,10 @@ fn get_shadow_root_adopted_style_sheets_for_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(receiver) = node_backing_object(scope, receiver) else {
+        throw_shadow_root_style_sheets_illegal_invocation(scope, "adoptedStyleSheets");
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -233,6 +237,9 @@ pub(crate) fn ensure_shadow_root_adopted_style_sheets_initialized<'s>(
     handle: crate::document_runtime::DomHandle,
     holder: v8::Local<'s, v8::Object>,
 ) {
+    let Some(holder) = node_backing_object(scope, holder) else {
+        return;
+    };
     let array = v8::Array::new(scope, 0);
     if let Some(existing) = get_private_value(scope, holder, SHADOW_ROOT_ADOPTED_STYLE_SHEETS_SLOT)
         && !existing.is_undefined()
@@ -283,7 +290,9 @@ pub(crate) fn clear_shadow_root_adopted_style_sheets(
     handle: crate::document_runtime::DomHandle,
 ) {
     runtime.set_shadow_root_adopted_style_sheet_installations(handle, Vec::new());
-    let Some(holder) = node_wrapper_from_handle(scope, handle) else {
+    let Some(holder) = node_wrapper_from_handle(scope, handle)
+        .and_then(|holder| node_backing_object(scope, holder))
+    else {
         return;
     };
     if let Some(existing) = get_private_value(scope, holder, SHADOW_ROOT_ADOPTED_STYLE_SHEETS_SLOT)
@@ -638,6 +647,10 @@ fn set_shadow_root_adopted_style_sheets_for_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) {
+    let Some(receiver) = node_backing_object(scope, receiver) else {
+        throw_shadow_root_style_sheets_illegal_invocation(scope, "adoptedStyleSheets");
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -766,6 +779,10 @@ fn get_shadow_root_style_sheets_for_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(receiver) = node_backing_object(scope, receiver) else {
+        throw_shadow_root_style_sheets_illegal_invocation(scope, "styleSheets");
+        return;
+    };
     let is_live_receiver = node_runtime_and_handle_from_object(scope, receiver).is_ok();
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
@@ -780,10 +797,7 @@ fn get_shadow_root_style_sheets_for_receiver<'s>(
         return;
     }
     let holder = receiver;
-    let slot = v8str(scope, SHADOW_ROOT_STYLE_SHEETS_SLOT);
-    if let Some(existing) = holder.get(scope, slot.into())
-        && !existing.is_undefined()
-    {
+    if let Some(existing) = get_private_value(scope, holder, SHADOW_ROOT_STYLE_SHEETS_SLOT) {
         if let Ok(list) = v8::Local::<v8::Object>::try_from(existing) {
             if is_live_receiver {
                 sync_shadow_root_style_sheets(scope, list, unsafe { &*runtime_ptr }, handle);
@@ -803,7 +817,7 @@ fn get_shadow_root_style_sheets_for_receiver<'s>(
         return;
     }
     let list = new_style_sheet_list_object(scope);
-    let _ = holder.set(scope, slot.into(), list.into());
+    set_private_value(scope, holder, SHADOW_ROOT_STYLE_SHEETS_SLOT, list.into());
     if is_live_receiver {
         sync_shadow_root_style_sheets(scope, list, unsafe { &*runtime_ptr }, handle);
     } else {

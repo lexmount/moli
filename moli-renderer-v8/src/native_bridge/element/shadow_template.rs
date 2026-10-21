@@ -1,12 +1,11 @@
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ShadowRoot)]
+#[webapi(interface = web_api_interfaces::ShadowRoot, enumerable, receiver)]
 pub(super) struct ShadowRootPrototypeReflectionDeclaration {
     #[webapi(
         accessor_property = "onslotchange",
         enumerable,
-        receiver = web_api_interfaces::ShadowRoot::is_instance,
         getter = event_handlers::shadow_root_event_handler_getter_function,
         setter = event_handlers::shadow_root_event_handler_setter_function,
         data = v8str(scope, "onslotchange")
@@ -92,14 +91,14 @@ pub(super) struct ShadowRootPrototypeReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Text)]
+#[webapi(interface = web_api_interfaces::Text, receiver)]
 pub(super) struct TextPrototypeReflectionDeclaration {
     #[webapi(accessor_property = "assignedSlot", enumerable, getter = slot_assigned_slot_getter_function)]
     assigned_slot: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLSlotElement, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLSlotElement, enumerable, receiver)]
 pub(super) struct HtmlSlotElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
