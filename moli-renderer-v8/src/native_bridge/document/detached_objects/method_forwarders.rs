@@ -60,47 +60,6 @@ macro_rules! detached_bridge_method_forwarder {
     };
 }
 
-pub(in crate::native_bridge) fn detached_append_child_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let child = args.get(0);
-    match detached_method_forward(scope, args, "__detachedAppendChild") {
-        Some(_) => rv.set(child),
-        None => rv.set_undefined(),
-    }
-}
-
-pub(in crate::native_bridge) fn detached_insert_before_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let child = args.get(0);
-    match detached_method_forward(scope, args, "__detachedInsertBefore") {
-        Some(_) => rv.set(child),
-        None => rv.set_undefined(),
-    }
-}
-
-pub(in crate::native_bridge) fn detached_remove_child_method_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if webidl::parse_args::<crate::native_bridge::node::RequiredNodeArgs>(scope, &args).is_none() {
-        return;
-    }
-    match detached_method_forward(scope, args, "__detachedRemoveChild") {
-        Some(value) => rv.set(value),
-        None => rv.set_undefined(),
-    }
-}
-detached_bridge_method_forwarder!(
-    detached_replace_child_method_callback,
-    "__detachedReplaceChild"
-);
 detached_bridge_method_forwarder!(
     detached_has_child_nodes_method_callback,
     "__detachedHasChildNodes"

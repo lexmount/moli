@@ -1,7 +1,7 @@
 use super::fragment::validate_document_sequence;
 use super::*;
 use crate::custom_elements;
-use crate::native_bridge::document::{detached_native_handle_for_runtime, is_attr_node_value};
+use crate::native_bridge::document::is_attr_node_value;
 
 #[derive(Clone, Copy)]
 enum TreeInsertionNodeArgument {
@@ -9,28 +9,6 @@ enum TreeInsertionNodeArgument {
     // Preserve it through argument conversion until insertion type validation.
     Attribute,
     TreeNode(DomHandle),
-}
-
-fn require_node_argument<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    message: &'static str,
-) -> bool {
-    if webidl::convert_with_options::<webidl::InterfaceObject>(
-        scope,
-        value,
-        webidl::Context::argument("Node", 1),
-        &webidl::InterfaceOptions {
-            name: web_api_interfaces::Node::NAME,
-            brand_check: web_api_interfaces::Node::is_instance,
-        },
-    )
-    .is_ok()
-    {
-        return true;
-    }
-    throw_type_error(scope, message);
-    false
 }
 
 impl TreeInsertionNodeArgument {
@@ -69,46 +47,29 @@ fn required_tree_insertion_node_arg(
     Some(TreeInsertionNodeArgument::TreeNode(handle))
 }
 
-fn set_original_node_arg_or_wrapped_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
-    value: v8::Local<'s, v8::Value>,
-    handle: DomHandle,
-) {
-    if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && detached_native_handle_for_runtime(scope, runtime_ptr, object)
-            .is_some_and(|object_handle| object_handle == handle)
-    {
-        rv.set(object.into());
-        return;
-    }
-    set_wrapped_node_or_null(scope, rv, runtime_ptr, Some(handle));
-}
-
 pub(in crate::native_bridge) fn node_append_child_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        rv.set_null();
+    let Some(receiver) = NativeNodeReference::receiver(scope, args.this(), "appendChild") else {
         return;
     };
-    if !require_node_argument(
-        scope,
-        args.get(0),
-        "Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.",
-    ) {
+    let Some(parsed) = webidl::parse_args::<AppendChildArgs>(scope, &args) else {
         return;
-    }
+    };
+    let Some(parent) = receiver.tree_node() else {
+        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
+        return;
+    };
+    let detached = node_runtime_and_handle_from_object(scope, receiver.object()).is_err();
+    let (runtime_ptr, parent) = (parent.runtime_ptr, parent.handle);
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let Some(child) = required_tree_insertion_node_arg(
         scope,
         runtime_ptr,
         document_handle,
-        args.get(0),
+        parsed.node.into(),
         "Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.",
     ) else {
         return;
@@ -119,21 +80,31 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
     if !validate_pre_insert_handles(scope, unsafe { &*runtime_ptr }, parent, child, None, &[]) {
         return;
     }
-    let child_value = args.get(0);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                parent,
-                child,
-            )
+            let runtime = unsafe { &mut *runtime_ptr };
+            if detached {
+                runtime.insert_detached_native_child_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    child,
+                    None,
+                )
+            } else {
+                runtime.append_child_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    child,
+                )
+            }
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, child_value, child);
+    rv.set(parsed.node.into());
 }
 
 pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
@@ -141,37 +112,24 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        rv.set_null();
+    let Some(receiver) = NativeNodeReference::receiver(scope, args.this(), "insertBefore") else {
         return;
     };
-    if args.length() < 2 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'insertBefore' on 'Node': 2 arguments required.",
-        );
+    let Some(parsed) = webidl::parse_args::<InsertBeforeArgs>(scope, &args) else {
         return;
-    }
-    if !require_node_argument(
-        scope,
-        args.get(0),
-        "Failed to execute 'insertBefore' on 'Node': parameter 1 is not of type 'Node'.",
-    ) || (!args.get(1).is_null_or_undefined()
-        && !require_node_argument(
-            scope,
-            args.get(1),
-            "Failed to execute 'insertBefore' on 'Node': parameter 2 is not of type 'Node'.",
-        ))
-    {
+    };
+    let Some(parent) = receiver.tree_node() else {
+        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
-    }
+    };
+    let detached = node_runtime_and_handle_from_object(scope, receiver.object()).is_err();
+    let (runtime_ptr, parent) = (parent.runtime_ptr, parent.handle);
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let Some(child) = required_tree_insertion_node_arg(
         scope,
         runtime_ptr,
         document_handle,
-        args.get(0),
+        parsed.node.into(),
         "Failed to execute 'insertBefore' on 'Node': parameter 1 is not of type 'Node'.",
     ) else {
         return;
@@ -180,10 +138,8 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
     if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, child.native_handle()) {
         return;
     }
-    let reference_child = if args.get(1).is_null_or_undefined() {
-        None
-    } else {
-        match existing_node_arg(scope, runtime_ptr, args.get(1)) {
+    let reference_child = if let Some(reference_child) = parsed.child {
+        match existing_node_arg(scope, runtime_ptr, reference_child.into()) {
             ExistingNodeArgument::Handle(reference_child) => Some(reference_child),
             ExistingNodeArgument::ForeignNode => {
                 throw_dom_exception(
@@ -202,6 +158,8 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
                 return;
             }
         }
+    } else {
+        None
     };
     if let Some(reference_child) = reference_child {
         let is_child_of_parent = unsafe { &*runtime_ptr }
@@ -233,22 +191,32 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
     ) {
         return;
     }
-    let child_value = args.get(0);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            unsafe { &mut *runtime_ptr }.insert_before_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                parent,
-                child,
-                reference_child,
-            )
+            let runtime = unsafe { &mut *runtime_ptr };
+            if detached {
+                runtime.insert_detached_native_child_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    child,
+                    reference_child,
+                )
+            } else {
+                runtime.insert_before_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    child,
+                    reference_child,
+                )
+            }
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, child_value, child);
+    rv.set(parsed.node.into());
 }
 
 pub(crate) fn validate_pre_insert_handles(
@@ -537,14 +505,22 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        rv.set_null();
+    let Some(receiver) = NativeNodeReference::receiver(scope, args.this(), "removeChild") else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<RequiredNodeArgs>(scope, &args) else {
         return;
     };
+    let Some(parent) = receiver.tree_node() else {
+        throw_dom_exception(
+            scope,
+            "NotFoundError",
+            8,
+            "The node to be removed is not a child of this node.",
+        );
+        return;
+    };
+    let (runtime_ptr, parent) = (parent.runtime_ptr, parent.handle);
     let child = match existing_node_arg(scope, runtime_ptr, parsed.node.into()) {
         ExistingNodeArgument::Handle(child) => child,
         ExistingNodeArgument::ForeignNode => {
@@ -596,7 +572,7 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
         );
         return;
     }
-    set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, args.get(0), child);
+    rv.set(parsed.node.into());
 }
 
 pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
@@ -604,69 +580,52 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        rv.set_null();
+    let Some(receiver) = NativeNodeReference::receiver(scope, args.this(), "replaceChild") else {
         return;
     };
-    if args.length() < 2 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'replaceChild' on 'Node': 2 arguments required.",
-        );
+    let Some(parsed) = webidl::parse_args::<ReplaceChildArgs>(scope, &args) else {
         return;
-    }
-    if let Some(old_child) =
-        replace_node_child(scope, runtime_ptr, parent, args.get(0), args.get(1), false)
+    };
+    let Some(parent) = receiver.tree_node() else {
+        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
+        return;
+    };
+    let detached = node_runtime_and_handle_from_object(scope, receiver.object()).is_err();
+    if replace_node_child(
+        scope,
+        parent.runtime_ptr,
+        parent.handle,
+        parsed.node,
+        parsed.child,
+        detached,
+    )
+    .is_some()
     {
-        set_original_node_arg_or_wrapped_handle(
-            scope,
-            &mut rv,
-            runtime_ptr,
-            args.get(1),
-            old_child,
-        );
+        rv.set(parsed.child.into());
     }
 }
 
-pub(in crate::native_bridge) fn replace_node_child<'s>(
+fn replace_node_child<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     parent: DomHandle,
-    new_child_value: v8::Local<'s, v8::Value>,
-    old_child_value: v8::Local<'s, v8::Value>,
+    new_child_value: v8::Local<'s, v8::Object>,
+    old_child_value: v8::Local<'s, v8::Object>,
     detached: bool,
 ) -> Option<DomHandle> {
-    // Convert both Node arguments before hierarchy checks or foreign-node
-    // materialization. Native brands reject author objects without reading
-    // their properties and still accept registered native proxies.
-    for (value, message) in [
-        (
-            new_child_value,
-            "Failed to execute 'replaceChild' on 'Node': parameter 1 is not of type 'Node'.",
-        ),
-        (
-            old_child_value,
-            "Failed to execute 'replaceChild' on 'Node': parameter 2 is not of type 'Node'.",
-        ),
-    ] {
-        if !require_node_argument(scope, value, message) {
-            return None;
-        }
-    }
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let new_child = required_tree_insertion_node_arg(
         scope,
         runtime_ptr,
         document_handle,
-        new_child_value,
+        new_child_value.into(),
         "Failed to execute 'replaceChild' on 'Node': parameter 1 is not of type 'Node'.",
     )?;
     let runtime = unsafe { &*runtime_ptr };
     if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, new_child.native_handle()) {
         return None;
     }
-    let old_child = match existing_node_arg(scope, runtime_ptr, old_child_value) {
+    let old_child = match existing_node_arg(scope, runtime_ptr, old_child_value.into()) {
         ExistingNodeArgument::Handle(old_child) => old_child,
         ExistingNodeArgument::ForeignNode => {
             throw_dom_exception(

@@ -199,7 +199,7 @@ fn detached_dom_parser_nodes_keep_relationship_state_after_node_prototype_migrat
 }
 
 #[test]
-fn detached_document_rejects_overdeep_live_subtree_adoption() {
+fn detached_document_moves_deep_live_subtree_without_snapshot_recursion() {
     run_large_stack_dom_test("detached-adopt-depth", || {
         let mut vm = new_storage_test_vm("https://detached-adopt-depth.test/");
 
@@ -209,23 +209,32 @@ fn detached_document_rejects_overdeep_live_subtree_adoption() {
 (() => {
   const detached = document.implementation.createDocument(null, 'container', null);
   const root = document.createElement('div');
+  const nodes = [root];
   let cursor = root;
   for (let i = 0; i < 514; i++) {
     const child = document.createElement('div');
     cursor.appendChild(child);
+    nodes.push(child);
     cursor = child;
   }
   try {
-    detached.documentElement.appendChild(root);
-    return `inserted:${detached.documentElement.childNodes.length}`;
+    const returned = detached.documentElement.appendChild(root);
+    return [
+      returned === root,
+      detached.documentElement.childNodes.length === 1,
+      nodes.length === 515,
+      nodes.every((node, i) => node.ownerDocument === detached &&
+        node.parentNode === (i ? nodes[i - 1] : detached.documentElement) &&
+        node.firstChild === (nodes[i + 1] || null))
+    ].join('|');
   } catch (error) {
     return `${error.name}:${detached.documentElement.childNodes.length}`;
   }
 })()
 "#,
             )
-            .expect("overdeep detached live subtree adoption should return a bounded result");
+            .expect("deep native subtree adoption should preserve identity without a JS snapshot");
 
-        assert_eq!(result, "HierarchyRequestError:0");
+        assert_eq!(result, "true|true|true|true");
     });
 }

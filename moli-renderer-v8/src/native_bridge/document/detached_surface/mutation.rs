@@ -1,7 +1,6 @@
 use super::*;
 use crate::native_bridge::node::{
     ChildNodeMutation, ParentNodeMutation, mutate_child_node, mutate_parent_node,
-    replace_node_child,
 };
 
 fn detached_insert_or_throw<'s>(
@@ -24,23 +23,6 @@ fn detached_insert_or_throw<'s>(
     }
 }
 
-fn detached_pre_insert_hierarchy_error() -> (&'static str, i32, &'static str) {
-    (
-        "HierarchyRequestError",
-        3,
-        "The operation would yield an invalid node tree.",
-    )
-}
-
-fn detached_pre_insert_parent_and_ancestor_are_valid<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parent: v8::Local<'s, v8::Object>,
-    child: v8::Local<'s, v8::Object>,
-) -> bool {
-    detached_move_before_valid_parent(scope, parent)
-        && !detached_shadow_including_contains(scope, child, parent)
-}
-
 fn detached_pre_insert_node_type_is_valid<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     parent: v8::Local<'s, v8::Object>,
@@ -50,80 +32,6 @@ fn detached_pre_insert_node_type_is_valid<'s>(
     matches!(child_type, Some(1 | 3 | 4 | 7 | 8 | 10 | 11))
         && !(child_type == Some(3) && detached_node_type(scope, parent) == Some(9))
         && !(child_type == Some(10) && detached_node_type(scope, parent) != Some(9))
-}
-
-fn detached_document_direct_element_child_matches<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parent: v8::Local<'s, v8::Object>,
-    child: v8::Local<'s, v8::Object>,
-) -> bool {
-    if detached_node_type(scope, parent) != Some(9) || detached_node_type(scope, child) != Some(1) {
-        return false;
-    }
-    if !detached_owner_document_object(scope, child)
-        .is_some_and(|owner| owner.strict_equals(parent.into()))
-    {
-        return false;
-    }
-    let child_name = detached_element_local_name(scope, child)
-        .or_else(|| object_string_property(scope, child, "localName"));
-    for candidate in detached_child_node_objects(scope, parent) {
-        if detached_node_type(scope, candidate) != Some(1) {
-            continue;
-        }
-        if candidate.strict_equals(child.into())
-            || detached_element_local_name(scope, candidate)
-                .or_else(|| object_string_property(scope, candidate, "localName"))
-                == child_name
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn detached_document_replace_would_violate_root_shape<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parent: v8::Local<'s, v8::Object>,
-    new_child: v8::Local<'s, v8::Object>,
-    old_child: v8::Local<'s, v8::Object>,
-) -> bool {
-    if detached_node_type(scope, parent) != Some(9) {
-        return false;
-    }
-    let current_children = detached_child_node_objects(scope, parent);
-    let Some(old_child_index) = current_children
-        .iter()
-        .position(|candidate| candidate.strict_equals(old_child.into()))
-    else {
-        // Membership is checked separately so that a missing old child keeps
-        // producing NotFoundError rather than a document-shape error.
-        return false;
-    };
-    let insertion_nodes = detached_flattened_insertion_nodes(scope, new_child);
-    let insertion_index = current_children[..old_child_index]
-        .iter()
-        .filter(|candidate| {
-            !insertion_nodes
-                .iter()
-                .any(|inserted| candidate.strict_equals((*inserted).into()))
-        })
-        .count();
-    let mut prospective = current_children
-        .iter()
-        .copied()
-        .filter(|candidate| {
-            !candidate.strict_equals(old_child.into())
-                && !insertion_nodes
-                    .iter()
-                    .any(|inserted| candidate.strict_equals((*inserted).into()))
-        })
-        .collect::<Vec<_>>();
-    prospective.splice(
-        insertion_index..insertion_index,
-        insertion_nodes.iter().copied(),
-    );
-    !detached_validate_document_children(scope, &prospective)
 }
 
 pub(in crate::native_bridge) fn bridge_detached_append_callback<'a>(
@@ -440,70 +348,6 @@ pub(in crate::native_bridge) fn bridge_detached_replace_with_callback<'a>(
     });
 }
 
-pub(in crate::native_bridge) fn bridge_detached_append_child_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(parent) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    let Ok(child) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
-        throw_dom_exception(
-            scope,
-            "HierarchyRequestError",
-            3,
-            "The operation would yield an invalid node tree.",
-        );
-        return;
-    };
-    let result = with_detached_tree_reaction_scope(scope, |scope| {
-        detached_insert_node_appending_to_current_reaction_queue(scope, parent, child, None)
-    });
-    match result {
-        Ok(inserted) => rv.set(inserted.into()),
-        Err((name, code, message)) => throw_dom_exception(scope, name, code, message),
-    }
-}
-
-pub(in crate::native_bridge) fn bridge_detached_insert_before_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(parent) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    let Ok(child) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
-        throw_dom_exception(
-            scope,
-            "HierarchyRequestError",
-            3,
-            "The operation would yield an invalid node tree.",
-        );
-        return;
-    };
-    let reference_child = if args.get(2).is_null_or_undefined() {
-        None
-    } else {
-        v8::Local::<v8::Object>::try_from(args.get(2)).ok()
-    };
-    let result = with_detached_tree_reaction_scope(scope, |scope| {
-        detached_insert_node_appending_to_current_reaction_queue(
-            scope,
-            parent,
-            child,
-            reference_child,
-        )
-    });
-    match result {
-        Ok(inserted) => rv.set(inserted.into()),
-        Err((name, code, message)) => throw_dom_exception(scope, name, code, message),
-    }
-}
-
 pub(in crate::native_bridge) fn bridge_detached_move_before_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     args: v8::FunctionCallbackArguments<'a>,
@@ -692,94 +536,4 @@ pub(in crate::native_bridge) fn bridge_detached_remove_child_callback<'a>(
         }
     });
     rv.set(child.into());
-}
-
-pub(in crate::native_bridge) fn bridge_detached_replace_child_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(parent) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    if let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(parent_handle) = detached_native_handle_for_runtime(scope, runtime_ptr, parent)
-    {
-        if replace_node_child(
-            scope,
-            runtime_ptr,
-            parent_handle,
-            args.get(1),
-            args.get(2),
-            true,
-        )
-        .is_some()
-        {
-            rv.set(args.get(2));
-        }
-        return;
-    }
-    let Ok(new_child) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
-        throw_dom_exception(
-            scope,
-            "HierarchyRequestError",
-            3,
-            "The operation would yield an invalid node tree.",
-        );
-        return;
-    };
-    let Ok(old_child) = v8::Local::<v8::Object>::try_from(args.get(2)) else {
-        throw_dom_exception(
-            scope,
-            "NotFoundError",
-            8,
-            "The node to be replaced is not a child of this node.",
-        );
-        return;
-    };
-    if !detached_pre_insert_parent_and_ancestor_are_valid(scope, parent, new_child) {
-        let (name, code, message) = detached_pre_insert_hierarchy_error();
-        throw_dom_exception(scope, name, code, message);
-        return;
-    }
-    if detached_document_replace_would_violate_root_shape(scope, parent, new_child, old_child) {
-        let (name, code, message) = detached_pre_insert_hierarchy_error();
-        throw_dom_exception(scope, name, code, message);
-        return;
-    }
-    let old_child_is_child = detached_parent_node_object(scope, old_child)
-        .is_some_and(|value| value.strict_equals(parent.into()))
-        || detached_document_direct_element_child_matches(scope, parent, old_child);
-    if !old_child_is_child {
-        throw_dom_exception(
-            scope,
-            "NotFoundError",
-            8,
-            "The node to be replaced is not a child of this node.",
-        );
-        return;
-    }
-    if !detached_pre_insert_node_type_is_valid(scope, parent, new_child) {
-        let (name, code, message) = detached_pre_insert_hierarchy_error();
-        throw_dom_exception(scope, name, code, message);
-        return;
-    }
-    if new_child.strict_equals(old_child.into()) {
-        rv.set(old_child.into());
-        return;
-    }
-    let replaced = with_detached_tree_reaction_scope(scope, |scope| {
-        if !detached_insert_or_throw(scope, parent, new_child, Some(old_child)) {
-            return false;
-        }
-        detached_detach_from_parent_appending_to_current_reaction_queue(scope, old_child);
-        true
-    });
-    if !replaced {
-        let (name, code, message) = detached_pre_insert_hierarchy_error();
-        throw_dom_exception(scope, name, code, message);
-        return;
-    }
-    rv.set(old_child.into());
 }
