@@ -62,7 +62,8 @@ async fn native_document_encodings_follow_child_commit_and_stay_document_local()
     assert_eq!(
         vm.document_runtime
             .document_character_set_for_handle(child_document),
-        Some("windows-1252")
+        // srcdoc supplies Unicode markup and is parsed as UTF-8.
+        Some("UTF-8")
     );
     vm.document_runtime
         .dom_host_mut()
