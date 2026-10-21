@@ -11,28 +11,12 @@ fn payment_update_event_payloads_and_operations_use_native_cross_realm_brands() 
     );
     vm.eval(&source).unwrap();
     assert_eq!(vm.eval("typeof __paymentChecks").unwrap(), "object");
-    // Keep the native-Promise wrapping gaps explicit while the shared converter
-    // still preserves native Promise inputs. Every other check must pass.
-    let mut known_gaps = Vec::new();
-    for owner in 0..2 {
-        for event in ["PaymentRequestUpdateEvent", "PaymentMethodChangeEvent"] {
-            for callee in 0..2 {
-                for check in [
-                    "WebIDL native Promise wrapping",
-                    "native Promise then invoked asynchronously",
-                ] {
-                    known_gaps.push(format!("{owner}:{event}:callee-{callee}:{check}"));
-                }
-            }
-        }
-    }
-    known_gaps.sort();
     assert_eq!(
         vm.eval(
             "JSON.stringify(__paymentChecks.filter(row => !row.passed).map(row => row.name).sort())"
         )
         .unwrap(),
-        serde_json::to_string(&known_gaps).unwrap()
+        "[]"
     );
     assert_eq!(vm.eval("__paymentChecks.length").unwrap(), "378");
 }
