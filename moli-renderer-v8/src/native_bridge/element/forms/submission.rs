@@ -228,6 +228,7 @@ fn submit_form_with_submit_event_inner(
     user_initiated: bool,
 ) -> bool {
     let invocation = crate::context_bootstrap::web_mcp::begin_form_submit(
+        scope,
         unsafe { &mut *runtime_ptr },
         form_handle,
     );

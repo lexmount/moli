@@ -1,6 +1,7 @@
 //! Declarative execution uses native control state and the normal submit path.
 use super::super::bindings::document_owner;
 use super::super::state::{FormInvocation, FormInvocationState, PendingInvocation, ToolExecutor};
+use super::super::tasks::invocation_context;
 use super::super::{execution, navigation};
 use super::schema;
 use crate::{
@@ -197,7 +198,11 @@ fn form_is_current(host: &JsContextHost, id: u64, form: DomHandle) -> bool {
             )
 }
 
-pub(crate) fn begin_form_submit(host: &mut JsContextHost, form: DomHandle) -> Option<u64> {
+pub(crate) fn begin_form_submit(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut JsContextHost,
+    form: DomHandle,
+) -> Option<u64> {
     let store = &mut host.native_bridge_mut().web_mcp;
     let id = store.pending_form_id(form)?;
     let active = store.pending.get_mut(&id)?.form.as_mut()?;
@@ -205,7 +210,37 @@ pub(crate) fn begin_form_submit(host: &mut JsContextHost, form: DomHandle) -> Op
         return None;
     }
     active.state = FormInvocationState::Submitting;
+    // Hand response processing over at the submission's microtask checkpoint.
+    // Queue before author callbacks, which can themselves await the submission.
+    // Synchronous removal after requestSubmit() still cancels; once this job
+    // starts processing a captured response, registration can retire separately.
+    let data = v8::BigInt::new_from_u64(scope, id);
+    let callback = v8::Function::builder(submission_checkpoint_callback)
+        .data(data.into())
+        .build(scope)
+        .expect("WebMCP submission checkpoint");
+    scope.enqueue_microtask(callback);
     Some(id)
+}
+
+fn submission_checkpoint_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some((host_ptr, id)) = invocation_context(scope, &args) else {
+        return;
+    };
+    if let Some(form) = unsafe { &mut *host_ptr }
+        .native_bridge_mut()
+        .web_mcp
+        .pending
+        .get_mut(&id)
+        .and_then(|pending| pending.form.as_mut())
+        && matches!(form.state, FormInvocationState::ResponseQueued)
+    {
+        form.state = FormInvocationState::Responding;
+    }
 }
 
 pub(crate) fn finish_form_submit<'s>(
@@ -227,7 +262,7 @@ pub(crate) fn finish_form_submit<'s>(
     if let Some(response) =
         crate::context_bootstrap::events::take_submit_event_response(scope, event)
     {
-        form.state = FormInvocationState::Responding(v8::Global::new(scope, response));
+        form.state = FormInvocationState::ResponseQueued;
         execution::await_response(scope, host_ptr, id, response);
     } else {
         let form_handle = form.handle;
