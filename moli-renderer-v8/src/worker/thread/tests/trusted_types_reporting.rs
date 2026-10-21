@@ -13,7 +13,7 @@ addEventListener('securitypolicyviolation', e => {
 for (let i = 0; i < 5; i++) { try { eval('1'); } catch {} }
 try { eval('2'); } catch {}
 "#;
-        let policies = vec!["script-src 'self'".to_owned()];
+        let policies = vec!["script-src 'self'".into()];
         let options = WorkerSpawnOptions::new(
             source.to_owned(),
             "https://app.test/worker.js?secret#fragment".into(),
@@ -87,8 +87,14 @@ postMessage({{names, reports: reports.length}});
         );
         let mut handle = spawn_test_worker_with_options(
             WorkerSpawnOptions::new(script, "https://app.test/worker/main.js".into())
-                .with_content_security_policies(if enforce { enforced.to_vec() } else { vec![] })
-                .with_content_security_report_only_policies(report_only.to_vec()),
+                .with_content_security_policies(if enforce {
+                    enforced.iter().cloned().map(Into::into).collect()
+                } else {
+                    vec![]
+                })
+                .with_content_security_report_only_policies(
+                    report_only.iter().cloned().map(Into::into).collect(),
+                ),
         );
         let sync = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
         assert_eq!(
@@ -156,11 +162,13 @@ postMessage({{error, ran, reports: reports.length}});
             let mut handle = spawn_test_worker_with_options(
                 WorkerSpawnOptions::new(script, url.into())
                     .with_content_security_policies(if enforce {
-                        policies.to_vec()
+                        policies.iter().cloned().map(Into::into).collect()
                     } else {
                         vec![]
                     })
-                    .with_content_security_report_only_policies(policies.to_vec()),
+                    .with_content_security_report_only_policies(
+                        policies.iter().cloned().map(Into::into).collect(),
+                    ),
             );
             let sync = timeout(TIMEOUT, handle.recv())
                 .await

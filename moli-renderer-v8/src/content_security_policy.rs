@@ -2,10 +2,18 @@
 
 pub(crate) use moli_csp::*;
 
+/// Live local Workers follow their creator's delivered policies. The lock is
+/// renderer lifecycle state; the shared engine retains immutable policy values.
+pub(crate) type ContentSecurityPolicySource =
+    std::sync::Arc<parking_lot::RwLock<InheritedContentSecurityPolicy>>;
+
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
 use crate::network::ResourceRequestClient;
 use serde_json::json;
-use std::{collections::{HashSet, hash_map::DefaultHasher}, hash::{Hash, Hasher}};
+use std::{
+    collections::{HashSet, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+};
 
 use moli_fetch::{
     Request, RequestCredentialsMode, RequestMode, RequestRedirectMode, RequestResourceType,
@@ -70,7 +78,6 @@ impl ContentSecurityPolicyReports {
         requests
     }
 }
-
 
 fn append_content_security_policy_report_requests(
     requests: &mut Vec<Request>,
@@ -245,12 +252,14 @@ mod tests {
     }
     #[test]
     fn duplicate_reports_preserve_distinct_violations_and_all_endpoints() {
-        let violation = content_security_policy_url_violation_with_redirect_status(
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
             &["connect-src 'none'; report-uri /csp-report".into()],
             &protected_url(),
             &request_url("https://api.test/data.json"),
             ContentSecurityPolicyResourceKind::WorkerConnect,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
         )
         .unwrap();
         let endpoints = vec![
@@ -337,12 +346,14 @@ mod tests {
 
     #[test]
     fn violation_report_formats_preserve_captured_script_locations() {
-        let mut violation = content_security_policy_url_violation_with_redirect_status(
+        let mut violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
             &["connect-src 'none'".into()],
             &protected_url(),
             &request_url("https://api.test/data.json"),
             ContentSecurityPolicyResourceKind::WorkerConnect,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
         )
         .unwrap();
         violation.source_file = "https://app.test/imported/script.js".into();
@@ -362,7 +373,7 @@ mod tests {
         assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
         assert_eq!(reporting[0]["body"]["lineNumber"], 12);
         assert_eq!(reporting[0]["body"]["columnNumber"], 34);
-    
+
         ContentSecurityPolicySourceLocation::default().apply_to(&mut violation);
         let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
         let legacy: serde_json::Value =
@@ -377,5 +388,4 @@ mod tests {
             assert!(reporting[0]["body"].get(key).is_none());
         }
     }
-
 }

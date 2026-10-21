@@ -399,4 +399,3 @@ fn current_entry_referrer_policy<'s>(
     navigation_current_entry(scope, owner)
         .and_then(|entry| navigation_entry_referrer_policy_value(scope, entry))
 }
-

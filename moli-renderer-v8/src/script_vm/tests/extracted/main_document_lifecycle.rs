@@ -2437,7 +2437,7 @@ document.addEventListener('securitypolicyviolation', e => {
 "#,
         )
         .unwrap();
-        let policies = vec!["connect-src 'self'".to_owned()];
+        let policies = vec!["connect-src 'self'".into()];
         let policy = if enforce {
             crate::document_runtime::DocumentPolicyContainer {
                 response_content_security_policies: policies,
@@ -2495,7 +2495,7 @@ fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document() {
         let request_url = Url::parse("https://fetch-csp-queued.test/request").unwrap();
         let policy = crate::document_runtime::DocumentPolicyContainer {
             response_content_security_policies: vec![
-                "connect-src 'self'; report-uri /report".to_owned(),
+                "connect-src 'self'; report-uri /report".to_owned().into(),
             ],
             ..Default::default()
         };

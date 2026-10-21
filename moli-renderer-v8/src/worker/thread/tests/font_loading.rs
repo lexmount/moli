@@ -157,7 +157,9 @@ async fn worker_font_loading_fetches_with_font_metadata_cors_and_worker_csp() {
     let mut handle = spawn_test_worker_with_options(
         WorkerSpawnOptions::new(probe, format!("{base}/folder/worker.js"))
             .with_request_client(loader)
-            .with_content_security_policies(vec!["font-src *; connect-src 'none'".to_owned()]),
+            .with_content_security_policies(vec![
+                "font-src *; connect-src 'none'".to_owned().into(),
+            ]),
     );
     let result: serde_json::Value =
         serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
@@ -183,7 +185,9 @@ async fn worker_font_loading_fetches_with_font_metadata_cors_and_worker_csp() {
     let mut handle = spawn_test_worker_with_options(
         WorkerSpawnOptions::new(probe, format!("{base}/folder/worker.js"))
             .with_request_client(loader)
-            .with_content_security_policies(vec!["font-src 'self'; connect-src *".to_owned()]),
+            .with_content_security_policies(vec![
+                "font-src 'self'; connect-src *".to_owned().into(),
+            ]),
     );
     let result: serde_json::Value =
         serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();

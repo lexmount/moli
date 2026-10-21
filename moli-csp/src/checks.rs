@@ -1516,6 +1516,5 @@ pub fn content_security_policy_trusted_types_policy_violation_with_disposition_a
     })
 }
 
-#[path = "embedded_enforcement.rs"]
 mod embedded_enforcement;
 pub use embedded_enforcement::RequiredCspResponse;

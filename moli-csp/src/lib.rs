@@ -3,9 +3,9 @@
 //! across documents, workers, and request snapshots.
 
 mod checks;
-mod integrity;
-mod inheritance;
 mod iframe_attribute;
+mod inheritance;
+mod integrity;
 mod policy;
 mod reporting;
 mod types;
@@ -19,6 +19,6 @@ pub use policy::{
 pub use reporting::*;
 pub use types::*;
 
-pub use inheritance::{ContentSecurityPolicySource, InheritedContentSecurityPolicy};
+pub use inheritance::InheritedContentSecurityPolicy;
 
 pub use iframe_attribute::IframeCspAttribute;

@@ -63,10 +63,7 @@ async fn fetch_redirect_csp_precedes_target_cors_and_reports_every_policy() -> R
             }
             Ok::<_, anyhow::Error>(requests)
         });
-        let policies = vec![
-            "connect-src 'self'".to_owned(),
-            "default-src 'self'".to_owned(),
-        ];
+        let policies = vec!["connect-src 'self'".into(), "default-src 'self'".into()];
         let policy = if enforce {
             DocumentConnectPolicySnapshot::from_policies(policies, Vec::new(), Default::default())
         } else {
