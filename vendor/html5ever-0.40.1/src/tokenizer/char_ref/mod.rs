@@ -130,12 +130,12 @@ impl CharRefTokenizer {
                 self.state = State::Named;
                 self.name_buf_opt = Some(StrTendril::new());
                 Status::Progress
-            },
+            }
             Some('#') => {
                 tokenizer.discard_char(input);
                 self.state = State::Octothorpe;
                 Status::Progress
-            },
+            }
             Some(_) => Status::Done(CharRef::EMPTY),
             None => Status::Stuck,
         }
@@ -151,11 +151,11 @@ impl CharRefTokenizer {
                 tokenizer.discard_char(input);
                 self.hex_marker = Some(c);
                 self.state = State::Numeric(16);
-            },
+            }
             Some(_) => {
                 self.hex_marker = None;
                 self.state = State::Numeric(10);
-            },
+            }
             None => return Status::Stuck,
         }
         Status::Progress
@@ -182,14 +182,14 @@ impl CharRefTokenizer {
                 self.num = self.num.wrapping_add(n);
                 self.seen_digit = true;
                 Status::Progress
-            },
+            }
 
             None if !self.seen_digit => self.unconsume_numeric(tokenizer, input),
 
             None => {
                 self.state = State::NumericSemicolon;
                 Status::Progress
-            },
+            }
         }
     }
 
@@ -282,7 +282,7 @@ impl CharRefTokenizer {
                 }
                 // Otherwise we just have a prefix match.
                 Status::Progress
-            },
+            }
 
             // Can't continue the match.
             None => self.finish_named(tokenizer, input, Some(c)),
@@ -321,7 +321,7 @@ impl CharRefTokenizer {
                         // we emit a parse error.
                         self.state = State::BogusName;
                         return Status::Progress;
-                    },
+                    }
 
                     // Check length because &; is not a parse error.
                     Some(';') if self.name_buf().len() > 1 => self.emit_name_error(tokenizer),
@@ -330,7 +330,7 @@ impl CharRefTokenizer {
                 }
                 self.unconsume_name(tokenizer, input);
                 Status::Done(CharRef::EMPTY)
-            },
+            }
 
             Some((c1, c2)) => {
                 // We have a complete match, but we may have consumed
@@ -372,7 +372,7 @@ impl CharRefTokenizer {
                             "Character reference does not end with semicolon",
                         ));
                         false
-                    },
+                    }
                 };
 
                 if unconsume_all {
@@ -388,7 +388,7 @@ impl CharRefTokenizer {
                         num_chars: if c2 == 0 { 1 } else { 2 },
                     })
                 }
-            },
+            }
         }
     }
 
@@ -425,28 +425,28 @@ impl CharRefTokenizer {
                 State::Numeric(_) | State::NumericSemicolon => {
                     tokenizer.emit_error(Borrowed("EOF in numeric character reference"));
                     self.finish_numeric(tokenizer)
-                },
+                }
                 State::Named => self.finish_named(tokenizer, input, None),
                 State::BogusName => {
                     self.unconsume_name(tokenizer, input);
                     Status::Done(CharRef::EMPTY)
-                },
+                }
                 State::Octothorpe => {
                     input.push_front(StrTendril::from_slice("#"));
                     tokenizer.source_position.set(self.position_after_ampersand);
                     tokenizer.emit_error(Borrowed("EOF after '#' in character reference"));
                     Status::Done(CharRef::EMPTY)
-                },
+                }
             };
 
             match status {
                 Status::Done(char_ref) => {
                     return char_ref;
-                },
+                }
                 Status::Stuck => {
                     return CharRef::EMPTY;
-                },
-                Status::Progress => {},
+                }
+                Status::Progress => {}
             }
         }
     }

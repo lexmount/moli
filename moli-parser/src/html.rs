@@ -1590,7 +1590,8 @@ impl ParseHandle {
 
     fn is_html_option_element(&self) -> bool {
         self.element_name.as_ref().is_some_and(|name| {
-            name.local.as_ref() == "option" && name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+            AsRef::<str>::as_ref(&name.local) == "option"
+                && AsRef::<str>::as_ref(&name.ns) == "http://www.w3.org/1999/xhtml"
         })
     }
 

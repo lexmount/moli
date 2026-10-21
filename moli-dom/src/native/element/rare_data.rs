@@ -134,8 +134,8 @@ impl ElementRareData {
             .attribute_utf16_units
             .iter()
             .find(|(namespace, local_name, _)| {
-                namespace.as_ref() == attribute.namespace()
-                    && local_name.as_ref() == attribute.local_name()
+                AsRef::<str>::as_ref(namespace) == attribute.namespace()
+                    && AsRef::<str>::as_ref(local_name) == attribute.local_name()
             })
             .map(|(_, _, units)| units.as_ref())
     }
@@ -152,8 +152,8 @@ impl ElementRareData {
         if let Some(units) = units {
             let values = &mut self.payload_mut().attribute_utf16_units;
             if let Some((_, _, current)) = values.iter_mut().find(|(namespace, local_name, _)| {
-                namespace.as_ref() == attribute.namespace()
-                    && local_name.as_ref() == attribute.local_name()
+                AsRef::<str>::as_ref(namespace) == attribute.namespace()
+                    && AsRef::<str>::as_ref(local_name) == attribute.local_name()
             }) {
                 *current = units;
             } else {
@@ -167,8 +167,8 @@ impl ElementRareData {
             payload
                 .attribute_utf16_units
                 .retain(|(namespace, local_name, _)| {
-                    namespace.as_ref() != attribute.namespace()
-                        || local_name.as_ref() != attribute.local_name()
+                    AsRef::<str>::as_ref(namespace) != attribute.namespace()
+                        || AsRef::<str>::as_ref(local_name) != attribute.local_name()
                 });
         }
         self.release_empty_payload();
@@ -184,7 +184,9 @@ impl ElementRareData {
             .as_deref()?
             .attribute_source_locations
             .iter()
-            .find(|(ns, name, _)| ns.as_ref() == namespace && name.as_ref() == local_name)
+            .find(|(ns, name, _)| {
+                AsRef::<str>::as_ref(ns) == namespace && AsRef::<str>::as_ref(name) == local_name
+            })
             .map(|(_, _, location)| location)
     }
 
@@ -196,8 +198,8 @@ impl ElementRareData {
         if let Some(location) = location {
             let values = &mut self.payload_mut().attribute_source_locations;
             if let Some((_, _, current)) = values.iter_mut().find(|(namespace, name, _)| {
-                namespace.as_ref() == attribute.namespace()
-                    && name.as_ref() == attribute.local_name()
+                AsRef::<str>::as_ref(namespace) == attribute.namespace()
+                    && AsRef::<str>::as_ref(name) == attribute.local_name()
             }) {
                 *current = location;
             } else {
@@ -211,8 +213,8 @@ impl ElementRareData {
             payload
                 .attribute_source_locations
                 .retain(|(namespace, name, _)| {
-                    namespace.as_ref() != attribute.namespace()
-                        || name.as_ref() != attribute.local_name()
+                    AsRef::<str>::as_ref(namespace) != attribute.namespace()
+                        || AsRef::<str>::as_ref(name) != attribute.local_name()
                 });
             self.release_empty_payload();
         }

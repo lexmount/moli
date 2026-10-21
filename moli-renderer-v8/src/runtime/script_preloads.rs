@@ -1655,7 +1655,7 @@ impl HtmlPreloadScannerSink {
     }
 
     fn maybe_update_referrer_policy(&self, tag: &Tag) {
-        if tag.name.as_ref() == "meta"
+        if AsRef::<str>::as_ref(&tag.name) == "meta"
             && html_attr_value(&tag.attrs, "name")
                 .is_some_and(|name| name.eq_ignore_ascii_case("referrer"))
             && let Some(policy) = html_attr_value(&tag.attrs, "content")
