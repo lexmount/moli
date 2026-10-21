@@ -132,7 +132,7 @@ addEventListener('securitypolicyviolation', e => {
 for (let i = 0; i < 5; i++) { fetch('data:text/plain,blocked').catch(() => {}); }
 fetch('data:text/plain,blocked').catch(() => {});
 "#;
-        let policies = vec!["connect-src 'none'".to_owned()];
+        let policies = vec!["connect-src 'none'".into()];
         let options = WorkerSpawnOptions::new(
             source.to_owned(),
             "https://app.test/fetch-worker.js?secret#fragment".into(),

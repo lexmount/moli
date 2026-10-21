@@ -12,7 +12,7 @@ pub struct RendererNavigationPolicy(Arc<NavigationPolicyData>);
 struct NavigationPolicyData {
     referrer_policy: Option<String>,
     embedder_policy: crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
-    document_content_security_policies: Vec<String>,
+    document_content_security_policies: Vec<crate::content_security_policy::ContentSecurityPolicy>,
     csp: crate::content_security_policy::InheritedContentSecurityPolicy,
 }
 

@@ -74,7 +74,7 @@ async fn worker_wasm_csp_covers_sync_async_and_streaming_compilation() {
     ] {
         let result = wasm_csp_result(
             wasm_csp_options(if allowed { 0 } else { 5 })
-                .with_content_security_policies(vec![policy.to_owned()]),
+                .with_content_security_policies(vec![policy.to_owned().into()]),
         )
         .await;
         assert_wasm_compilation_result(&result, allowed);
@@ -98,8 +98,14 @@ async fn worker_wasm_csp_reports_every_policy_without_enforcing_report_only() {
     for enforce in [false, true] {
         let result = wasm_csp_result(
             wasm_csp_options(if enforce { 20 } else { 10 })
-                .with_content_security_policies(if enforce { policies.to_vec() } else { vec![] })
-                .with_content_security_report_only_policies(policies.to_vec()),
+                .with_content_security_policies(if enforce {
+                    policies.iter().cloned().map(Into::into).collect()
+                } else {
+                    vec![]
+                })
+                .with_content_security_report_only_policies(
+                    policies.iter().cloned().map(Into::into).collect(),
+                ),
         )
         .await;
         assert_wasm_compilation_result(&result, !enforce);
@@ -130,9 +136,9 @@ async fn worker_wasm_csp_uses_inherited_header_meta_and_report_only_policies() {
     let result = wasm_csp_result(wasm_csp_options(10).with_content_security_policy_snapshot(
         crate::content_security_policy::InheritedContentSecurityPolicy {
             self_url: Some(url::Url::parse("https://creator.test/").unwrap()),
-            header_policies: vec!["script-src 'wasm-unsafe-eval'".to_owned()],
-            meta_policies: vec!["script-src 'none'".to_owned()],
-            report_only_policies: vec!["default-src 'none'".to_owned()],
+            header_policies: vec!["script-src 'wasm-unsafe-eval'".to_owned().into()],
+            meta_policies: vec!["script-src 'none'".to_owned().into()],
+            report_only_policies: vec!["default-src 'none'".to_owned().into()],
             ..Default::default()
         },
     ))
@@ -180,7 +186,7 @@ async fn worker_wasm_csp_allows_instantiating_a_cloned_compiled_module() {
           }, 30);
         };
         "#.to_owned(), "test://wasm_module_csp".to_owned(),
-    ).with_content_security_policies(vec!["script-src 'none'".to_owned()]));
+    ).with_content_security_policies(vec!["script-src 'none'".to_owned().into()]));
     handle.post_message(serialize_test_post_message_value(
         "new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))",
     ));
@@ -205,7 +211,7 @@ async fn worker_compilation_csp_shared_path_reports_each_string_violation() {
         try { eval('42'); } catch (error) { blocked = error instanceof EvalError; }
         setTimeout(() => { postMessage({blocked, events}); close(); }, 30);
         "#.to_owned(), "https://app.test/worker.js".to_owned(),
-    ).with_content_security_policies(policies.to_vec()).with_content_security_report_only_policies(policies.to_vec()));
+    ).with_content_security_policies(policies.iter().cloned().map(Into::into).collect()).with_content_security_report_only_policies(policies.iter().cloned().map(Into::into).collect()));
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
     let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
     assert_eq!(result["blocked"], true);
@@ -252,7 +258,7 @@ async fn shared_and_service_worker_isolates_install_the_wasm_csp_callback() {
                 "https://app.test/worker.js".to_owned(),
             )
             .with_global_kind(kind.clone())
-            .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
+            .with_content_security_policies(vec!["script-src 'none'".to_owned().into()]),
         );
         let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
         let WorkerToParentMessage::Console(message) = message else {

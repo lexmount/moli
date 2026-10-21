@@ -1,5 +1,7 @@
-use super::{ContentSecurityPolicy, ContentSecurityPolicyDisposition, ContentSecurityPolicyReportingEndpoints};
-use std::sync::Arc;
+use super::{
+    ContentSecurityPolicy, ContentSecurityPolicyDisposition,
+    ContentSecurityPolicyReportingEndpoints,
+};
 use url::Url;
 
 /// The source and delivery rules survive cloning a policy into a local Worker.
@@ -11,9 +13,6 @@ pub struct InheritedContentSecurityPolicy {
     pub report_only_policies: Vec<ContentSecurityPolicy>,
     pub reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
 }
-
-pub type ContentSecurityPolicySource =
-    Arc<parking_lot::RwLock<InheritedContentSecurityPolicy>>;
 
 impl InheritedContentSecurityPolicy {
     pub fn policies(
@@ -35,7 +34,7 @@ impl InheritedContentSecurityPolicy {
             .chain(meta.iter().map(|policy| (policy, false)))
     }
 
-    pub fn enforced_strings(&self) -> Vec<ContentSecurityPolicy> {
+    pub fn enforced_policies(&self) -> Vec<ContentSecurityPolicy> {
         self.policies(ContentSecurityPolicyDisposition::Enforce)
             .map(|(policy, _)| policy.to_owned())
             .collect()
@@ -72,9 +71,7 @@ impl InheritedContentSecurityPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
-    };
+    use crate::{ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind};
 
     #[test]
     fn inherited_worker_policy_preserves_self_origin_delivery_and_report_url() {

@@ -1,8 +1,8 @@
 use super::super::{
-    BASE_URI, CHILD_SRC, CONNECT_SRC, CspHashAlgorithm, DEFAULT_SRC, FONT_SRC, FRAME_ANCESTORS,
-    FRAME_SRC, IMG_SRC, MANIFEST_SRC, MEDIA_SRC, SCRIPT_SRC, SCRIPT_SRC_ATTR, SCRIPT_SRC_ELEM,
-    STYLE_SRC, STYLE_SRC_ATTR, STYLE_SRC_ELEM, WORKER_SRC, csp_hash_source_value, csp_keyword_eq,
-    csp_nonce_source_value, directive_source_list, ContentSecurityPolicy,
+    BASE_URI, CHILD_SRC, CONNECT_SRC, ContentSecurityPolicy, CspHashAlgorithm, DEFAULT_SRC,
+    FONT_SRC, FRAME_ANCESTORS, FRAME_SRC, IMG_SRC, MANIFEST_SRC, MEDIA_SRC, SCRIPT_SRC,
+    SCRIPT_SRC_ATTR, SCRIPT_SRC_ELEM, STYLE_SRC, STYLE_SRC_ATTR, STYLE_SRC_ELEM, WORKER_SRC,
+    csp_hash_source_value, csp_keyword_eq, csp_nonce_source_value, directive_source_list,
 };
 use super::sources::UrlSource;
 use base64::{
@@ -45,7 +45,11 @@ const DIRECTIVES: &[&[&str]] = &[
 /// Whether all behavior permitted by the returned policy list is permitted by
 /// the required policy. Nonces compare by presence after intersecting the
 /// returned list; their actual values must not become an embedder oracle.
-pub(super) fn subsumes(required: &ContentSecurityPolicy, returned: &[ContentSecurityPolicy], origin: &Url) -> bool {
+pub(super) fn subsumes(
+    required: &ContentSecurityPolicy,
+    returned: &[ContentSecurityPolicy],
+    origin: &Url,
+) -> bool {
     DIRECTIVES.iter().all(|fallbacks| {
         let Some((name, tokens)) = fallbacks
             .iter()

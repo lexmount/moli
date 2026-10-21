@@ -2517,9 +2517,13 @@ fn non_url_wasm_eval_uses_script_src_or_default_src() {
 #[test]
 fn trusted_types_directive_filters_policy_names() {
     let allowed = |policies: &[&str], name: &str, is_duplicate: bool| {
-        policies
-            .iter()
-            .all(|policy| policy_allows_trusted_type_policy_name(&ContentSecurityPolicy::from(*policy), name, is_duplicate))
+        policies.iter().all(|policy| {
+            policy_allows_trusted_type_policy_name(
+                &ContentSecurityPolicy::from(*policy),
+                name,
+                is_duplicate,
+            )
+        })
     };
 
     assert!(allowed(&[], "SomeName", false));
@@ -2622,10 +2626,14 @@ fn trusted_types_csp_name_grammar_does_not_restrict_unlisted_or_wildcard_names()
             ));
         }
         assert!(!policy_allows_trusted_type_policy_name(
-            &ContentSecurityPolicy::from("trusted-types *"), name, true,
+            &ContentSecurityPolicy::from("trusted-types *"),
+            name,
+            true,
         ));
         assert!(policy_allows_trusted_type_policy_name(
-            &ContentSecurityPolicy::from("trusted-types * 'allow-duplicates'"), name, true,
+            &ContentSecurityPolicy::from("trusted-types * 'allow-duplicates'"),
+            name,
+            true,
         ));
     }
 }
@@ -2821,7 +2829,6 @@ fn sandbox_directive_allows_popups_to_escape_only_when_all_active_sandboxes_allo
     ]));
 }
 
-
 #[test]
 fn base_uri_uses_its_own_source_list_and_reports_violations() {
     let protected_url = Url::parse("https://page.test/path/page.html").unwrap();
@@ -2841,15 +2848,14 @@ fn base_uri_uses_its_own_source_list_and_reports_violations() {
             false,
         ),
     ] {
-        let violation =
-            content_security_policy_url_violation_with_redirect_status_and_disposition(
-                &[policy.into()],
-                &protected_url,
-                &Url::parse(request).unwrap(),
-                ContentSecurityPolicyResourceKind::DocumentBase,
-                ContentSecurityPolicyRedirectStatus::NoRedirect,
-                ContentSecurityPolicyDisposition::Report,
-            );
+        let violation = content_security_policy_url_violation_with_redirect_status_and_disposition(
+            &[policy.into()],
+            &protected_url,
+            &Url::parse(request).unwrap(),
+            ContentSecurityPolicyResourceKind::DocumentBase,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Report,
+        );
         assert_eq!(violation.is_none(), allowed, "{policy}: {request}");
         if let Some(violation) = violation {
             assert_eq!(violation.effective_directive, "base-uri");
@@ -2888,7 +2894,10 @@ fn sandbox_top_navigation_permissions_intersect_with_activation_requirements() {
             false,
         ),
     ] {
-        let policies = policies.into_iter().map(ContentSecurityPolicy::from).collect::<Vec<_>>();
+        let policies = policies
+            .into_iter()
+            .map(ContentSecurityPolicy::from)
+            .collect::<Vec<_>>();
         assert_eq!(
             content_security_policy_sandbox_allows_top_navigation(&policies, false),
             without_activation,

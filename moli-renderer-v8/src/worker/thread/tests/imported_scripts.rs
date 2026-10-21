@@ -681,9 +681,9 @@ async fn worker_importscripts_redirects_check_csp_and_ignore_redirected_paths() 
             format!("{worker_url}/worker/main.js"),
         );
         options = if report_only {
-            options.with_content_security_report_only_policies(vec![policy])
+            options.with_content_security_report_only_policies(vec![policy.into()])
         } else {
-            options.with_content_security_policies(vec![policy])
+            options.with_content_security_policies(vec![policy.into()])
         };
         let mut handle = spawn_test_worker_with_options(options);
         let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
