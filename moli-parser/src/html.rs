@@ -1650,10 +1650,14 @@ impl DocumentSink {
             .captured_blocking_stylesheet_signatures()
     }
 
-    pub(super) fn note_foreign_end_tag_processed(&self, local_name: &str) -> Option<NativeNodeId> {
+    pub(super) fn note_foreign_end_tag_processed(
+        &self,
+        local_name: &str,
+        retained_handles: impl FnOnce() -> HashSet<NativeNodeId>,
+    ) -> Option<NativeNodeId> {
         self.target
             .borrow_mut()
-            .note_foreign_end_tag_processed(local_name)
+            .note_foreign_end_tag_processed(local_name, retained_handles)
     }
 
     pub(super) fn note_self_closing_foreign_element_processed(
@@ -1981,6 +1985,42 @@ mod tests {
         let bold = first_element_by_ns(&document, HTML_NS, "b");
         assert_eq!(document.text_content(bold).as_deref(), Some("Gülçek&"));
         assert_eq!(document.document().unwrap().content_type(), "text/html");
+    }
+
+    #[test]
+    fn malformed_foreign_style_parses_in_documents_and_fragments() {
+        const SOURCE: &str = "<div><svg><style>a</div>";
+        const SVG_NS: &str = "http://www.w3.org/2000/svg";
+        for scripting_enabled in [false, true] {
+            let parser = HtmlParser::with_scripting_enabled(scripting_enabled);
+            for document in [
+                parser.parse(
+                    Url::parse("https://foreign-style.test/").unwrap(),
+                    SOURCE.into(),
+                ),
+                parser.parse_fragment_without_declarative_shadow_roots(
+                    Url::parse("https://foreign-style.test/").unwrap(),
+                    HTML_NS,
+                    "body",
+                    SOURCE.into(),
+                ),
+            ] {
+                let div = first_element_by_ns(&document, HTML_NS, "div");
+                let svg = first_element_by_ns(&document, SVG_NS, "svg");
+                let style = first_element_by_ns(&document, SVG_NS, "style");
+                assert_eq!(document.node(svg).unwrap().parent_node(), Some(div));
+                assert_eq!(document.node(style).unwrap().parent_node(), Some(svg));
+                assert_eq!(document.text_content(style).as_deref(), Some("a"));
+                assert!(
+                    !document
+                        .node(style)
+                        .unwrap()
+                        .as_element()
+                        .unwrap()
+                        .style_children_parsing()
+                );
+            }
+        }
     }
 
     fn parse_test_document(html: &str) -> NativeDom {

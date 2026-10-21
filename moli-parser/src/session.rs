@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     rc::Rc,
 };
 
@@ -10,7 +11,7 @@ use html5ever::{
     tokenizer::{
         BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
     },
-    tree_builder::{TreeBuilder, TreeBuilderOpts, TreeSink},
+    tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts, TreeSink},
 };
 use markup5ever::TokenizerResult;
 use moli_dom::native::NativeNodeId;
@@ -51,6 +52,19 @@ struct EmbedderPausingTreeBuilder {
     // an undelivered notification, not a copy of the owner's current run state;
     // it must survive both later Continue callbacks and input chunk boundaries.
     deferred_owner_interruption: Cell<bool>,
+}
+
+#[derive(Default)]
+struct TreeBuilderHandles(RefCell<HashSet<NativeNodeId>>);
+
+impl Tracer for TreeBuilderHandles {
+    type Handle = ParseHandle;
+
+    fn trace_handle(&self, handle: &ParseHandle) {
+        if let Some(node_id) = handle.dom_node_id() {
+            self.0.borrow_mut().insert(node_id);
+        }
+    }
 }
 
 impl EmbedderPausingTreeBuilder {
@@ -150,7 +164,11 @@ impl EmbedderPausingTreeBuilder {
             // mirror synchronized and expose closed SVG scripts below.
             self.inner
                 .sink
-                .note_foreign_end_tag_processed(local_name.as_ref())
+                .note_foreign_end_tag_processed(local_name.as_ref(), || {
+                    let handles = TreeBuilderHandles::default();
+                    self.inner.trace_handles(&handles);
+                    handles.0.into_inner()
+                })
         } else if let Some(local_name) = self_closing_foreign_start_tag {
             self.inner
                 .sink

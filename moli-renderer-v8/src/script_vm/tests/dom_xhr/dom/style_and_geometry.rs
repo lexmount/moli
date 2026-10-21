@@ -260,6 +260,50 @@ fn parser_style_finishes_in_svg_and_detached_fragments() {
 }
 
 #[test]
+fn parser_style_finishes_when_foreign_content_closes_an_html_ancestor() {
+    let mut vm = new_parsed_test_vm(
+        "https://foreign-style-completion.test/",
+        "<!doctype html><div><svg><style>#probe { color: rgb(1, 2, 3); }</div><p id=probe>after",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const initial = [document.querySelector('style').sheet.cssRules.length,
+    getComputedStyle(document.getElementById('probe')).color];
+  const fragment = document.createElement('div');
+  fragment.innerHTML = '<div><svg><style>a</div>';
+  document.body.appendChild(fragment);
+  const fragmentState = [fragment.innerHTML,
+    fragment.querySelector('style').sheet.cssRules.length];
+  const parsed = new DOMParser().parseFromString('<div><svg><style>a</div>', 'text/html');
+  const parsedMarkup = parsed.body.innerHTML;
+  document.open();
+  document.write('<div><svg><style>#probe { color: rgb(4, 5, 6); }');
+  const style = document.querySelector('style');
+  const pending = style.sheet === null;
+  document.write('</div><p id=probe>after');
+  const completed = [style.sheet.cssRules.length,
+    getComputedStyle(document.getElementById('probe')).color];
+  document.close();
+  return JSON.stringify({initial, fragmentState, parsedMarkup, pending, completed});
+})()
+"#,
+        )
+        .expect("implicit foreign-content closure must publish the completed style");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "initial": [1, "rgb(1, 2, 3)"],
+            "fragmentState": ["<div><svg><style>a</style></svg></div>", 0],
+            "parsedMarkup": "<div><svg><style>a</style></svg></div>",
+            "pending": true,
+            "completed": [1, "rgb(4, 5, 6)"]
+        }),
+    );
+}
+
+#[test]
 fn parser_coalesced_style_text_updates_main_and_child_hit_tests() {
     let mut vm = new_rendered_test_vm(
         "https://parser-style-hit-test.test/",

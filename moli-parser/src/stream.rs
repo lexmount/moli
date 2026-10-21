@@ -2569,6 +2569,98 @@ mod tests {
     }
 
     #[test]
+    fn parser_style_children_finish_when_foreign_content_closes_an_html_ancestor() {
+        for html in [
+            "<div><svg><style>a</div>",
+            "<div><svg><g><style>a</div>",
+            "<span><svg><style>a</span>",
+            "<section><svg><style>a</section>",
+            "<svg><foreignObject><span><svg><style>a</span>",
+            "<table><tr><td><svg><style>a</td>",
+            "<div><svg><g><style>a</svg>",
+            "<div><svg><style>a<p>",
+            "<div><svg><style>a</p>",
+        ] {
+            for split in 0..=html.len() {
+                let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                    Url::parse("https://foreign-style.test/").unwrap(),
+                );
+                stream.pump_parser_step(&html[..split]);
+                stream.pump_parser_step(&html[split..]);
+                let document = stream.snapshot_parser_stream_document().into_document();
+                let style = document.elements_by_tag_name_ns(
+                    document.document_node_id(),
+                    Some("http://www.w3.org/2000/svg"),
+                    "style",
+                    true,
+                )[0];
+                assert!(
+                    !document
+                        .node(style)
+                        .and_then(Node::as_element)
+                        .unwrap()
+                        .style_children_parsing(),
+                    "style must finish before EOF: {html}, split at {split}",
+                );
+                assert_eq!(document.text_content(style).as_deref(), Some("a"));
+                stream.finish();
+            }
+        }
+    }
+
+    #[test]
+    fn ignored_foreign_end_tags_leave_style_children_open() {
+        for html in [
+            "<div><svg><style>a</missing>",
+            "<svg><g><style>a</span>",
+            "<div><svg><foreignObject><svg><style>a</div>",
+        ] {
+            let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                Url::parse("https://foreign-style.test/").unwrap(),
+            );
+            stream.pump_parser_step(html);
+            let document = stream.snapshot_parser_stream_document().into_document();
+            let style =
+                document.elements_by_tag_name(document.document_node_id(), "style", false)[0];
+            assert!(
+                document
+                    .node(style)
+                    .and_then(Node::as_element)
+                    .unwrap()
+                    .style_children_parsing(),
+                "an ignored end tag must not publish an incomplete style: {html}",
+            );
+            stream.pump_parser_step("b</style>");
+            let document = stream.finish();
+            assert_eq!(document.text_content(style).as_deref(), Some("ab"));
+            assert!(
+                !document
+                    .node(style)
+                    .and_then(Node::as_element)
+                    .unwrap()
+                    .style_children_parsing()
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_html_end_tags_do_not_handoff_unterminated_svg_scripts() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://foreign-script.test/").unwrap(),
+        );
+        let implicit =
+            stream.pump_parser_step("<div><svg><script>globalThis.unterminatedSvgScript = 1</div>");
+        assert!(matches!(implicit.result, ParserPumpStep::InputDrained));
+        let explicit =
+            stream.pump_parser_step("<svg><script>globalThis.closedSvgScript = 42</script></svg>");
+        assert!(matches!(
+            explicit.result,
+            ParserPumpStep::Yield(ParserYield::Script(_))
+        ));
+        stream.finish();
+    }
+
+    #[test]
     fn parser_stream_reports_split_connected_meta_csp_once_and_ignores_template_contents() {
         let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page").expect("test url"),

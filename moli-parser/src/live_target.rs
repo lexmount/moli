@@ -1,4 +1,4 @@
-use std::{ptr::NonNull, rc::Rc};
+use std::{collections::HashSet, ptr::NonNull, rc::Rc};
 
 use html5ever::{
     Attribute, QualName,
@@ -2659,12 +2659,26 @@ impl ParserStreamHtmlTreeSinkTarget {
     pub(super) fn note_foreign_end_tag_processed(
         &mut self,
         local_name: &str,
+        retained_handles: impl FnOnce() -> HashSet<NativeNodeId>,
     ) -> Option<NativeNodeId> {
         let mut first = true;
         let mut matching_index = None;
         for (index, element) in self.open_parser_elements.iter().enumerate().rev() {
             let is_html = AsRef::<str>::as_ref(&element.name.ns) == "http://www.w3.org/1999/xhtml";
             if !first && is_html {
+                // HTML reprocessing can also remove foreign elements without
+                // pop callbacks. Only finish nodes the tree builder released;
+                // an ignored end tag must leave its style source unfinished.
+                let retained = retained_handles();
+                let closed = self.open_parser_elements[index + 1..]
+                    .iter()
+                    .rev()
+                    .filter(|element| !retained.contains(&element.node_id))
+                    .map(|element| element.node_id)
+                    .collect::<Vec<_>>();
+                for node_id in closed {
+                    self.note_node_popped_without_script_handoff(node_id);
+                }
                 return None;
             }
             if AsRef::<str>::as_ref(&element.name.local).eq_ignore_ascii_case(local_name) {
