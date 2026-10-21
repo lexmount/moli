@@ -399,7 +399,7 @@ impl PageScriptHost {
                     self, document,
                 );
             policy.inherited_meta_content_security_policies = unsafe { &*self.document_runtime }
-                .meta_content_security_policy_strings_for_document(document);
+                .meta_content_security_policies_for_document(document);
         }
         Some(policy)
     }

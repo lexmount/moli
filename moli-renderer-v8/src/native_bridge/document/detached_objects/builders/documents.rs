@@ -9,7 +9,7 @@ use url::Url;
 pub(crate) enum DetachedDocumentBuildContext<'a> {
     Windowless,
     BrowsingContextProjection {
-        inherited_meta_policies: &'a [String],
+        inherited_meta_policies: &'a [crate::content_security_policy::ContentSecurityPolicy],
     },
 }
 

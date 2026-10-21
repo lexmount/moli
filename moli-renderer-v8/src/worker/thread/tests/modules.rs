@@ -255,7 +255,7 @@ async fn worker_importscripts_csp_uses_script_src_elem_and_its_fallbacks() {
                 .into(),
                 "https://app.test/worker/main.js".into(),
             )
-            .with_content_security_policies(policies.iter().map(|p| (*p).to_owned()).collect()),
+            .with_content_security_policies(policies.iter().map(|p| (*p).into()).collect()),
         );
         let msg = timeout(TIMEOUT, handle.recv())
             .await
@@ -1229,9 +1229,11 @@ async fn worker_trusted_types_eval_keyword_requires_enforced_trusted_types() {
                 "https://app.test/worker/main.js".to_owned(),
             )
             .with_content_security_policies(vec![
-                "script-src 'self' 'trusted-types-eval'".to_owned(),
+                "script-src 'self' 'trusted-types-eval'".to_owned().into(),
             ])
-            .with_content_security_report_only_policies(report_only_policies),
+            .with_content_security_report_only_policies(
+                report_only_policies.into_iter().map(Into::into).collect(),
+            ),
         );
 
         let evaluated = timeout(TIMEOUT, handle.recv())
@@ -1271,7 +1273,9 @@ async fn worker_trusted_types_eval_keyword_allows_eval_when_trusted_types_are_en
             "https://app.test/worker/main.js".to_owned(),
         )
         .with_content_security_policies(vec![
-            "script-src 'self' 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned(),
+            "script-src 'self' 'trusted-types-eval'; require-trusted-types-for 'script'"
+                .to_owned()
+                .into(),
         ]),
     );
 
@@ -1291,9 +1295,9 @@ async fn worker_report_only_function_constructors_preserve_brands_and_default_co
     );
     let mut handle = spawn_test_worker_with_options(
         WorkerSpawnOptions::new(source, "https://app.test/worker/main.js".to_owned())
-            .with_content_security_policies(vec!["script-src 'unsafe-eval'".to_owned()])
+            .with_content_security_policies(vec!["script-src 'unsafe-eval'".to_owned().into()])
             .with_content_security_report_only_policies(vec![
-                "require-trusted-types-for 'script'".to_owned(),
+                "require-trusted-types-for 'script'".to_owned().into(),
             ]),
     );
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
@@ -1336,7 +1340,9 @@ async fn worker_trusted_script_code_like_brand_drives_function_constructor() {
             .to_owned(),
             "https://app.test/worker/main.js".to_owned(),
         )
-        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+        .with_content_security_policies(vec![
+            "require-trusted-types-for 'script'".to_owned().into(),
+        ]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())

@@ -39,7 +39,7 @@ impl IframeCspAttribute {
         Some(Self(value.into()))
     }
 
-    pub(crate) fn policy(&self) -> &crate::ContentSecurityPolicy {
+    pub fn policy(&self) -> &crate::ContentSecurityPolicy {
         &self.0
     }
 
