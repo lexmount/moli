@@ -32,8 +32,8 @@ struct InsertAdjacentElementArgs<'s> {
 struct InsertAdjacentTextArgs {
     #[webidl(required)]
     position: String,
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -78,7 +78,6 @@ pub(in crate::native_bridge) fn node_insert_adjacent_element_callback<'s>(
         rv.set_null();
         return;
     };
-
     let Some(parsed) = webidl::parse_args::<InsertAdjacentElementArgs>(scope, &args) else {
         return;
     };
@@ -130,8 +129,8 @@ pub(in crate::native_bridge) fn node_insert_adjacent_element_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    // Return the original interface argument, including registered native
-    // aliases, rather than allocating another wrapper for its native handle.
+    // Web IDL retains the original interface argument, including a registered
+    // native Proxy. Returning another wrapper would change observable identity.
     rv.set(parsed.element.into());
 }
 
@@ -177,14 +176,11 @@ pub(in crate::native_bridge) fn node_insert_adjacent_text_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    let handle = match unsafe { &*runtime_ptr }
+    let document = unsafe { &*runtime_ptr }
         .dom_host()
-        .owner_document_handle(target)
-    {
-        Some(document_handle) => unsafe { &mut *runtime_ptr }
-            .create_text_node_for_document(document_handle, &parsed.data),
-        None => unsafe { &mut *runtime_ptr }.create_text_node(&parsed.data),
-    };
+        .owner_document_handle(target);
+    let handle = unsafe { &mut *runtime_ptr }
+        .create_text_node_from_utf16_units(document, parsed.data.0.into());
     if !insert_adjacent_handle(scope, runtime_ptr, target, position, handle) {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;

@@ -297,7 +297,7 @@ pub(super) struct ElementPrototypeQueryAndAttributeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
 pub(super) struct ExtendedElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = node_get_attribute_node_callback)]
     get_attribute_node: (),

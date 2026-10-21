@@ -1,7 +1,5 @@
 use super::attributes::{
-    bridge_remove_attribute_node_for_live_element_callback,
-    bridge_set_attribute_node_for_live_element_callback, detached_create_attribute_method_callback,
-    detached_create_attribute_ns_method_callback,
+    detached_create_attribute_method_callback, detached_create_attribute_ns_method_callback,
 };
 use super::*;
 
