@@ -2345,7 +2345,7 @@ fn element_methods_and_dataset_live_on_owner_prototypes() {
               fragmentChild.id = "fragment-id";
               fragment.appendChild(fragmentChild);
               method(Document.prototype, "getElementById", 1, true);
-              method(DocumentFragment.prototype, "getElementById", 1, false);
+              method(DocumentFragment.prototype, "getElementById", 1, true);
               assert(!own(document, "getElementById"), "getElementById should not be own on document");
               assert(!own(fragment, "getElementById"), "getElementById should not be own on fragment");
               method(DocumentFragment.prototype, "getElementsByTagName", 1, false);
