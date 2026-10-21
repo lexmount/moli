@@ -158,11 +158,11 @@ fn set_detached_document_parse_metadata<'s>(
     let handle = detached_native_handle_for_runtime(scope, runtime_ptr, document)?;
     let dom_host = unsafe { &mut *runtime_ptr }.dom_host_mut();
     dom_host.set_document_quirks_mode_for_handle(handle, quirks_mode);
-    dom_host.set_document_character_set_for_handle(handle, character_set);
     dom_host.set_document_allow_declarative_shadow_roots_for_handle(
         handle,
         allow_declarative_shadow_roots,
     );
+    set_detached_document_character_set(scope, document, character_set)?;
     Some(())
 }
 
