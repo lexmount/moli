@@ -66,8 +66,8 @@ impl Tracer for OpenFormControlTracer {
 
     fn trace_handle(&self, node: &ParseHandle) {
         let is_blocking_control = node.element_name.as_ref().is_some_and(|name| {
-            name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                && matches!(name.local.as_ref(), "select" | "textarea")
+            AsRef::<str>::as_ref(&name.ns) == "http://www.w3.org/1999/xhtml"
+                && matches!(AsRef::<str>::as_ref(&name.local), "select" | "textarea")
         });
         if !is_blocking_control {
             return;

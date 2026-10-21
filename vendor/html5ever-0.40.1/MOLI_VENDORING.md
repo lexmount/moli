@@ -1,6 +1,6 @@
-# html5ever 0.39.0
+# html5ever 0.40.1
 
-This directory contains the source of the crates.io `html5ever` 0.39.0 release.
+This directory contains the source of the crates.io `html5ever` 0.40.1 release.
 The upstream source is licensed under MIT or Apache-2.0; see `LICENSE-MIT`
 and `LICENSE-APACHE`.
 
@@ -22,4 +22,4 @@ The upstream tokenizer and driver tests are retained. Additional tokenizer
 tests cover input splits, entity rewinds, newline normalization, UTF-16,
 SIMD-sized text, BOMs, EOF, default sinks and profiling. This crate is excluded
 from the workspace, so run its tests explicitly with
-`cargo test --manifest-path vendor/html5ever-0.39.0/Cargo.toml --all-features`.
+`cargo test --manifest-path vendor/html5ever-0.40.1/Cargo.toml --all-features`.
