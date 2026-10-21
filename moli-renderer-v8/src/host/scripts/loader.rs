@@ -384,7 +384,7 @@ pub(crate) fn decide_runtime_script_start(
         }
     };
 
-    if !dom_host.is_connected(node) {
+    if !dom_host.is_connected_to_document(node) {
         return RuntimeScriptStartDecision::Skip {
             commit_start: false,
             reason: Some(ScriptSkipReason::NotInMainDocument),
