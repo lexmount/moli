@@ -24,13 +24,13 @@ impl SourcePosition {
             '\r' => {
                 self.line = self.line.saturating_add(1);
                 self.column = 1;
-            },
+            }
             '\n' => {
                 if !self.after_cr {
                     self.line = self.line.saturating_add(1);
                 }
                 self.column = 1;
-            },
+            }
             _ => self.column = self.column.saturating_add(c.len_utf16() as u64),
         }
         self.after_cr = c == '\r';
