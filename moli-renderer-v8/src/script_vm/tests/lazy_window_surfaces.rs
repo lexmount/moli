@@ -834,6 +834,94 @@ fn detached_child_screen_materializes_on_first_read_after_removal() {
 }
 
 #[test]
+fn detached_child_cold_navigator_and_performance_keep_realm_and_seed() {
+    let mut vm = new_storage_test_vm("https://cold-detached-child-surfaces.test/");
+    vm.eval(
+        r#"
+        (() => {
+          const root = document.documentElement ||
+            document.appendChild(document.createElement("html"));
+          const frame = document.createElement("iframe");
+          frame.id = "cold-detached-surfaces-frame";
+          root.appendChild(frame);
+          globalThis.__coldChildWindow = frame.contentWindow;
+        })()
+        "#,
+    )
+    .expect("retain a child Window without reading its lazy surfaces");
+    let child_context_id =
+        materialize_single_child_default_realm_for_test(&mut vm, "cold detached child surfaces");
+    let context_ptr = vm
+        .child_frame_realm_context_ptr_for_execution_context_id(child_context_id)
+        .expect("child default context");
+    let time_origin = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _host_ptr| {
+            Ok(crate::context_bootstrap::current_performance_time_origin(
+                scope,
+            ))
+        })
+        .expect("read the native Performance seed without creating its wrapper");
+    assert!(time_origin.is_finite() && time_origin > 0.0);
+    vm.eval(
+        r#"
+        globalThis.__coldNavigatorPrototype = __coldChildWindow.Navigator.prototype;
+        globalThis.__coldPerformancePrototype = __coldChildWindow.Performance.prototype;
+        "#,
+    )
+    .expect("capture original Realm prototypes without reading the instances");
+    assert_eq!(
+        child_surface_state(&mut vm, child_context_id),
+        (false, false, false),
+        "both instances must still be cold when the iframe is removed"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              document.getElementById("cold-detached-surfaces-frame").remove();
+              const child = __coldChildWindow;
+              const nav = child.navigator;
+              const perf = child.performance;
+              return JSON.stringify({
+                navigatorSame: nav === child.navigator,
+                navigatorAlias: nav === child.clientInformation,
+                navigatorRealm: Object.getPrototypeOf(nav) === __coldNavigatorPrototype,
+                navigatorNotParent: Object.getPrototypeOf(nav) !== Navigator.prototype,
+                performanceSame: perf === child.performance,
+                performanceRealm: Object.getPrototypeOf(perf) === __coldPerformancePrototype,
+                performanceNotParent: Object.getPrototypeOf(perf) !== Performance.prototype,
+                timeOrigin: perf.timeOrigin,
+                timeOriginStable: perf.timeOrigin === child.performance.timeOrigin
+              });
+            })()
+            "#,
+        )
+        .expect("cold surfaces should materialize in the retained child's original Realm");
+    let mut result = serde_json::from_str::<serde_json::Value>(&result).unwrap();
+    assert_eq!(result["timeOrigin"].as_f64(), Some(time_origin));
+    result.as_object_mut().unwrap().remove("timeOrigin");
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "navigatorSame": true,
+            "navigatorAlias": true,
+            "navigatorRealm": true,
+            "navigatorNotParent": true,
+            "performanceSame": true,
+            "performanceRealm": true,
+            "performanceNotParent": true,
+            "timeOriginStable": true
+        })
+    );
+    assert_eq!(
+        default_surface_state(&mut vm),
+        (false, false, false),
+        "reading retained child surfaces must not create parent instances"
+    );
+}
+
+#[test]
 fn borrowed_navigator_getters_materialize_subobjects_in_the_receiver_realm() {
     let mut vm = new_storage_test_vm("https://lazy-navigator-borrowed-getter.test/");
     vm.eval(
