@@ -4,6 +4,7 @@ use std::rc::Rc;
 use url::Url;
 
 use crate::content_security_policy::{
+    ContentSecurityPolicy,
     content_security_policy_non_url_violation_with_source,
     ContentSecurityPolicyNonUrlKind,
     ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
@@ -66,7 +67,7 @@ pub(super) fn worker_policy_violation(
 fn worker_policies(
     state: &WorkerGlobalState,
     disposition: ContentSecurityPolicyDisposition,
-) -> impl Iterator<Item = (&String, bool)> {
+) -> impl Iterator<Item = (&ContentSecurityPolicy, bool)> {
     let (headers, meta) = match (state.content_security_policy_snapshot.as_ref(), disposition) {
         (Some(policy), ContentSecurityPolicyDisposition::Enforce) => (
             policy.header_policies.as_slice(),
@@ -185,16 +186,21 @@ pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
 
 fn trusted_types_policies(
     state: &WorkerGlobalState,
-) -> impl Iterator<Item = (&str, ContentSecurityPolicyDisposition, bool)> {
+) -> impl Iterator<
+    Item = (
+        &ContentSecurityPolicy,
+        ContentSecurityPolicyDisposition,
+        bool,
+    ),
+> {
     [
         ContentSecurityPolicyDisposition::Enforce,
         ContentSecurityPolicyDisposition::Report,
     ]
     .into_iter()
     .flat_map(move |disposition| {
-        worker_policies(state, disposition).map(move |(policy, report_uri_enabled)| {
-            (policy.as_str(), disposition, report_uri_enabled)
-        })
+        worker_policies(state, disposition)
+            .map(move |(policy, report_uri_enabled)| (policy, disposition, report_uri_enabled))
     })
 }
 

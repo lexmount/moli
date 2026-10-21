@@ -5034,7 +5034,6 @@ dependencies = [
  "content-security-policy",
  "moli-crypto",
  "moli-header-field",
- "parking_lot",
  "percent-encoding",
  "serde_json",
  "strum 0.28.0",

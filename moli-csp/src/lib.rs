@@ -19,6 +19,6 @@ pub use policy::{
 pub use reporting::*;
 pub use types::*;
 
-pub use inheritance::{ContentSecurityPolicySource, InheritedContentSecurityPolicy};
+pub use inheritance::InheritedContentSecurityPolicy;
 
 pub use iframe_attribute::IframeCspAttribute;

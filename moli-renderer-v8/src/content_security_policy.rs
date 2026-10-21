@@ -6,6 +6,11 @@ mod stylesheet_fetch;
 pub(crate) use module_fetch::ModuleFetchCspContext;
 pub(crate) use stylesheet_fetch::{StylesheetFetchCspContext, StylesheetRequestCspCheck};
 
+/// Live local Workers follow their creator's delivered policies. The lock is
+/// renderer lifecycle state; the shared engine retains immutable policy values.
+pub(crate) type ContentSecurityPolicySource =
+    std::sync::Arc<parking_lot::RwLock<InheritedContentSecurityPolicy>>;
+
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
 use crate::network::ResourceRequestClient;
 use serde_json::json;
@@ -270,12 +275,14 @@ mod tests {
     }
     #[test]
     fn duplicate_reports_preserve_distinct_violations_and_all_endpoints() {
-        let violation = content_security_policy_url_violation_with_redirect_status(
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
             &["connect-src 'none'; report-uri /csp-report".into()],
             &protected_url(),
             &request_url("https://api.test/data.json"),
             ContentSecurityPolicyResourceKind::WorkerConnect,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
         )
         .unwrap();
         let endpoints = vec![
@@ -362,12 +369,14 @@ mod tests {
 
     #[test]
     fn violation_report_formats_preserve_captured_script_locations() {
-        let mut violation = content_security_policy_url_violation_with_redirect_status(
+        let mut violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
             &["connect-src 'none'".into()],
             &protected_url(),
             &request_url("https://api.test/data.json"),
             ContentSecurityPolicyResourceKind::WorkerConnect,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
         )
         .unwrap();
         violation.source_file = "https://app.test/imported/script.js".into();

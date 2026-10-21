@@ -191,13 +191,16 @@ impl DocumentRequestPolicySnapshot {
         snapshot.policy_self_url = policy.self_url.clone().map(Box::new);
         snapshot
             .enforce_policies
-            .extend(policy.meta_policies.iter().map(|policy_text| {
-                DocumentContentSecurityPolicyString {
-                    policy: policy_text.clone(),
-                    report_uri_enabled: false,
-                    reporting_endpoints: policy.reporting_endpoints.clone(),
-                }
-            }));
+            .extend(
+                policy
+                    .meta_policies
+                    .iter()
+                    .map(|policy_text| DocumentContentSecurityPolicy {
+                        policy: policy_text.clone(),
+                        report_uri_enabled: false,
+                        reporting_endpoints: policy.reporting_endpoints.clone(),
+                    }),
+            );
         snapshot
     }
 
@@ -222,7 +225,7 @@ impl DocumentRequestPolicySnapshot {
         let policy_url = self.policy_self_url.as_deref().unwrap_or(document_url);
         if let Some(DocumentPreloadPolicyMetadata::Style(nonce)) = self.preload_metadata.as_deref()
         {
-            let check = |policies: Vec<DocumentContentSecurityPolicyString>, disposition| {
+            let check = |policies: Vec<DocumentContentSecurityPolicy>, disposition| {
                 let mut violations =
                     document_style_element_url_policy_violations_from_document_policies(
                         policies,
@@ -248,7 +251,7 @@ impl DocumentRequestPolicySnapshot {
                     ContentSecurityPolicyDisposition::Enforce,
                 ),
                 report_only_violations: check(
-                    document_response_content_security_policy_strings(
+                    document_response_content_security_policies(
                         &self.report_only_policies,
                         &self.reporting_endpoints,
                     ),
@@ -264,7 +267,7 @@ impl DocumentRequestPolicySnapshot {
                 integrity: metadata.integrity.as_deref(),
                 parser_inserted: false,
             };
-            let check = |policies: Vec<DocumentContentSecurityPolicyString>, disposition| {
+            let check = |policies: Vec<DocumentContentSecurityPolicy>, disposition| {
                 policies
                     .into_iter()
                     .filter_map(|policy| {
@@ -292,7 +295,7 @@ impl DocumentRequestPolicySnapshot {
                     ContentSecurityPolicyDisposition::Enforce,
                 ),
                 report_only_violations: check(
-                    document_response_content_security_policy_strings(
+                    document_response_content_security_policies(
                         &self.report_only_policies,
                         &self.reporting_endpoints,
                     ),
@@ -501,9 +504,9 @@ impl DocumentPolicyContainer {
         }
         if let RequiredCspResponse::Enforce(self_url) = disposition {
             self.document_content_security_policies
-                .push(required.as_str().to_owned());
+                .push(required.policy().clone());
             self.response_content_security_policies
-                .push(required.as_str().to_owned());
+                .push(required.policy().clone());
             self.content_security_policy_self_url
                 .get_or_insert(self_url);
             self.sandbox = self.sandbox.with_response_content_security_policy(
@@ -593,7 +596,7 @@ impl DocumentRuntime {
             .content_security_policy_self_url
             .as_ref()
             .unwrap_or(document_url);
-        let check = |policies: Vec<DocumentContentSecurityPolicyString>, disposition| {
+        let check = |policies: Vec<DocumentContentSecurityPolicy>, disposition| {
             let mut violations = match destination {
                 LinkAsDestination::Style => {
                     document_style_element_url_policy_violations_from_document_policies(
@@ -2794,6 +2797,7 @@ impl DocumentRuntime {
             return;
         }
         if let Some(policy) = policy {
+            let policy = ContentSecurityPolicy::from_meta(policy);
             if let Some(source) = self
                 .local_worker_policy_sources
                 .borrow()
@@ -2806,7 +2810,7 @@ impl DocumentRuntime {
                 .write()
                 .entry(document_handle)
                 .or_default()
-                .push(ContentSecurityPolicy::from_meta(policy));
+                .push(policy);
         }
     }
 }
@@ -3341,7 +3345,7 @@ mod tests {
         );
         runtime.initialize_inherited_meta_content_security_policies(
             runtime.document_handle(),
-            std::slice::from_ref(&policy_text),
+            &[ContentSecurityPolicy::from_meta(policy_text.clone())],
         );
         let snapshot = runtime.document_connect_policy_snapshot_for_document(
             Some(runtime.document_handle()),
@@ -3482,8 +3486,13 @@ mod tests {
             checks.push(runtime.non_url_csp_check_for_document(
                 Some(runtime.document_handle()),
                 runtime.document_url(),
-                &enforced,
-                &report_only,
+                &enforced.clone().map(Into::into),
+                &report_only.clone().map(|policy| {
+                    ContentSecurityPolicy::from_header(
+                        policy,
+                        ContentSecurityPolicyDisposition::Report,
+                    )
+                }),
                 &Default::default(),
                 kind,
                 Some("blocked eval source"),
@@ -3559,7 +3568,10 @@ mod tests {
         let policy = "img-src 'none'; report-uri /report".to_owned();
         runtime.initialize_inherited_meta_content_security_policies(
             runtime.document_handle(),
-            &[policy.clone(), policy.clone()],
+            &[
+                ContentSecurityPolicy::from_meta(policy.clone()),
+                ContentSecurityPolicy::from_meta(policy.clone()),
+            ],
         );
         runtime.set_response_content_security_policies(std::slice::from_ref(&policy));
         let (_, blocked) = runtime
@@ -3688,8 +3700,10 @@ mod tests {
         let reports = runtime.trusted_type_policy_name_csp_violations_for_document(
             Some(runtime.document_handle()),
             runtime.document_url(),
-            &enforced,
-            &report_only,
+            &enforced.clone().map(Into::into),
+            &report_only.clone().map(|policy| {
+                ContentSecurityPolicy::from_header(policy, ContentSecurityPolicyDisposition::Report)
+            }),
             &Default::default(),
             &"p".repeat(50),
             false,
@@ -3971,9 +3985,11 @@ mod tests {
         );
         let policies = runtime.meta_content_security_policies_for_document(child_document);
         assert_eq!(
-            policies.len(),
-            1,
-            "reopening the parent must not reprocess a child's meta"
+            runtime.meta_content_security_policies_for_document(child_document),
+            [ContentSecurityPolicy::from_meta(
+                "require-trusted-types-for 'script'".to_owned()
+            )],
+            "reopening the parent must not discard or reprocess another Document's delivered meta"
         );
         assert!(content_security_policy_requires_trusted_types_for_script(
             &policies
