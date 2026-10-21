@@ -38,7 +38,6 @@ enum DocumentWriteParserPumpInput<'a> {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum HtmlFragmentParserContextMode {
     Standard,
-    RangeCreateContextualFragment,
     SiblingInsertion,
 }
 
@@ -613,11 +612,8 @@ impl DocumentRuntime {
             .and_then(Node::local_name)
             .unwrap_or("body")
             .to_owned();
-        if matches!(
-            context_mode,
-            HtmlFragmentParserContextMode::RangeCreateContextualFragment
-                | HtmlFragmentParserContextMode::SiblingInsertion
-        ) && context_namespace == "http://www.w3.org/1999/xhtml"
+        if context_mode == HtmlFragmentParserContextMode::SiblingInsertion
+            && context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("html")
         {
             context_local_name = "body".to_owned();
@@ -724,7 +720,7 @@ impl DocumentRuntime {
             html,
             false,
             HtmlFragmentCustomElementUpgradeTiming::InReturnedFragment,
-            HtmlFragmentParserContextMode::RangeCreateContextualFragment,
+            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             false,
         )
