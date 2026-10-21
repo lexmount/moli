@@ -542,6 +542,10 @@ pub(in crate::native_bridge) fn bridge_detached_query_selector_all_callback<'a>(
     if let Some(result) = detached_native_query_selector_handles(scope, root, &parsed.selectors) {
         match result {
             Ok(handles) => {
+                let context = root
+                    .get_creation_context(scope)
+                    .unwrap_or_else(|| scope.get_current_context());
+                let scope = &mut v8::ContextScope::new(scope, context);
                 match build_detached_native_node_list(scope, &handles) {
                     Some(list) => rv.set(list.into()),
                     None => rv.set_null(),
@@ -573,6 +577,10 @@ pub(in crate::native_bridge) fn bridge_detached_query_selector_all_callback<'a>(
             }
         }
     };
+    let context = root
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     match build_detached_node_list(scope, &nodes) {
         Some(list) => rv.set(list.into()),
         None => rv.set_null(),

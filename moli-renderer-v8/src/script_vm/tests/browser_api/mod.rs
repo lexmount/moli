@@ -91,6 +91,7 @@ mod notification_init;
 mod payload_event_init;
 mod navigation_recursion;
 mod nested_frame_access;
+mod parent_node_bindings;
 mod performance;
 mod performance_memory;
 mod platform_identity;
