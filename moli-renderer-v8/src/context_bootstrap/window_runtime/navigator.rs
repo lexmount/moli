@@ -343,12 +343,37 @@ struct CacheRequestInfo {
     headers: Vec<(String, String)>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, webidl::WebIdlDictionary)]
+#[webidl(prefix = "CacheQueryOptions")]
 struct CacheQueryOptions {
-    ignore_search: bool,
+    #[webidl(default = false)]
     ignore_method: bool,
+    #[webidl(default = false)]
+    ignore_search: bool,
+    #[webidl(default = false)]
     ignore_vary: bool,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MultiCacheQueryOptions")]
+struct MultiCacheQueryOptions {
+    #[webidl(inherit)]
+    base: CacheQueryOptions,
     cache_name: Option<String>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Cache")]
+struct CacheQueryArgs {
+    #[webidl(index = 1, dictionary)]
+    options: CacheQueryOptions,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CacheStorage.match")]
+struct MultiCacheQueryArgs {
+    #[webidl(index = 1, dictionary)]
+    options: MultiCacheQueryOptions,
 }
 
 #[derive(WebApiObject)]
@@ -1474,11 +1499,11 @@ fn storage_bucket_cache_storage_match_callback<'s>(
             return;
         }
     };
-    let Some(options) = cache_query_options(scope, &args, 1) else {
-        reject_type_error(scope, resolver, "CacheStorage.match options are invalid.");
+    let Some(MultiCacheQueryArgs { options }) = cache_query_arguments(scope, &args, resolver)
+    else {
         return;
     };
-    let query = storage_bucket_cache_query(request, &options);
+    let query = storage_bucket_cache_query(request, &options.base);
     let Some(handle) =
         storage_bucket_cache_storage_live_handle(scope, args.this(), resolver, "match")
     else {
@@ -2000,8 +2025,7 @@ fn storage_bucket_cache_match_callback<'s>(
             return;
         }
     };
-    let Some(options) = cache_query_options(scope, &args, 1) else {
-        reject_type_error(scope, resolver, "Cache.match options are invalid.");
+    let Some(CacheQueryArgs { options }) = cache_query_arguments(scope, &args, resolver) else {
         return;
     };
     let query = storage_bucket_cache_query(request, &options);
@@ -2055,8 +2079,7 @@ fn storage_bucket_cache_match_all_callback<'s>(
             return;
         }
     };
-    let Some(options) = cache_query_options(scope, &args, 1) else {
-        reject_type_error(scope, resolver, "Cache.matchAll options are invalid.");
+    let Some(CacheQueryArgs { options }) = cache_query_arguments(scope, &args, resolver) else {
         return;
     };
     let query = request.map(|request| storage_bucket_cache_query(request, &options));
@@ -2126,8 +2149,7 @@ fn storage_bucket_cache_keys_callback<'s>(
             return;
         }
     };
-    let Some(options) = cache_query_options(scope, &args, 1) else {
-        reject_type_error(scope, resolver, "Cache.keys options are invalid.");
+    let Some(CacheQueryArgs { options }) = cache_query_arguments(scope, &args, resolver) else {
         return;
     };
     let query = request.map(|request| storage_bucket_cache_query(request, &options));
@@ -2184,8 +2206,7 @@ fn storage_bucket_cache_delete_callback<'s>(
             return;
         }
     };
-    let Some(options) = cache_query_options(scope, &args, 1) else {
-        reject_type_error(scope, resolver, "Cache.delete options are invalid.");
+    let Some(CacheQueryArgs { options }) = cache_query_arguments(scope, &args, resolver) else {
         return;
     };
     let query = storage_bucket_cache_query(request, &options);
@@ -2844,48 +2865,27 @@ fn cache_request_info_argument<'s>(
     })
 }
 
-fn cache_query_options<'s>(
+fn cache_query_arguments<'s, T>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Option<CacheQueryOptions> {
-    if args.length() <= index || args.get(index).is_null_or_undefined() {
-        return Some(CacheQueryOptions::default());
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+) -> Option<T>
+where
+    T: webidl::WebIdlArguments<'s>,
+{
+    v8::tc_scope!(let scope, scope);
+    match webidl::try_parse_args::<T>(scope, args) {
+        Ok(arguments) => Some(arguments),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            let exception = scope
+                .exception()
+                .unwrap_or_else(|| v8::undefined(scope).into());
+            scope.reset();
+            let _ = resolver.reject(scope, exception);
+            None
+        }
     }
-    let options = args.get(index).to_object(scope)?;
-    let cache_name = cache_query_cache_name_option(scope, options)?;
-    let ignore_method = cache_query_boolean_option(scope, options, "ignoreMethod")?;
-    let ignore_search = cache_query_boolean_option(scope, options, "ignoreSearch")?;
-    let ignore_vary = cache_query_boolean_option(scope, options, "ignoreVary")?;
-    Some(CacheQueryOptions {
-        ignore_search,
-        ignore_method,
-        ignore_vary,
-        cache_name,
-    })
-}
-
-fn cache_query_boolean_option(
-    scope: &mut v8::PinScope<'_, '_>,
-    options: v8::Local<'_, v8::Object>,
-    name: &str,
-) -> Option<bool> {
-    options
-        .get(scope, v8_string(scope, name)?.into())
-        .map(|value| value.boolean_value(scope))
-}
-
-fn cache_query_cache_name_option(
-    scope: &mut v8::PinScope<'_, '_>,
-    options: v8::Local<'_, v8::Object>,
-) -> Option<Option<String>> {
-    let value = options.get(scope, v8str(scope, "cacheName").into())?;
-    if value.is_undefined() {
-        return Some(None);
-    }
-    value
-        .to_string(scope)
-        .map(|value| Some(value.to_rust_string_lossy(scope)))
 }
 
 fn storage_bucket_cache_query(
