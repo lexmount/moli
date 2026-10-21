@@ -105,9 +105,9 @@ impl JsContextHost {
             self.pending_image_load_events
                 .iter()
                 .any(|(pending_element, pending)| {
-                    self.pending_image_load_event_is_current(*pending_element, *pending)
-                        && image_selected_request_key(self, *pending_element).as_ref()
-                            == Some(&request.request_key)
+                    self.pending_image_load_event_is_current(*pending_element, pending)
+                        && pending.request_key() == Some(&request.request_key)
+                        && !pending.is_failed()
                 });
         if waits_for_current_load {
             request.state = PendingImageDecodeRequestState::PendingLoad;
