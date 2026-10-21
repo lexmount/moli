@@ -79,7 +79,7 @@ fn mutate_native_detached_parent<'s>(
     let values = (1..args.length())
         .map(|index| args.get(index))
         .collect::<Vec<_>>();
-    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values, true);
+    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values);
     // Once argument conversion begins, an exception must not fall through to
     // the legacy implementation and repeat conversions or partial mutations.
     true
@@ -257,7 +257,7 @@ fn mutate_native_detached_child<'s>(
     let values = (1..args.length())
         .map(|index| args.get(index))
         .collect::<Vec<_>>();
-    mutate_child_node(scope, runtime_ptr, handle, mutation, &values, true);
+    mutate_child_node(scope, runtime_ptr, handle, mutation, &values);
     true
 }
 

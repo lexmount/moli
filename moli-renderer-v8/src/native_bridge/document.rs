@@ -1365,10 +1365,6 @@ fn document_current_script_getter_function<'s>(
         rv.set_null();
         return;
     };
-    if detached_native_handle_for_runtime(scope, runtime_ptr, receiver).is_some() {
-        rv.set_null();
-        return;
-    }
     let runtime = unsafe { &mut *runtime_ptr };
     if !node_is_document(runtime, handle) {
         rv.set_null();
