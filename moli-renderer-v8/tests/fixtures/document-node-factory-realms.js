@@ -22,7 +22,7 @@
         for (const kind of kinds) {
           const ctor = owner[kind], proto = ctor.prototype;
           const make = () => {
-            const methods = callee.Document.prototype, data = '\u00e9a\u03a9';
+            const methods = callee.Document.prototype, data = '\ud800a\udfff';
             switch (kind) {
               case 'Text': return methods.createTextNode.call(doc, data);
               case 'Comment': return methods.createComment.call(doc, data);
@@ -63,15 +63,15 @@
             return inserted && node.parentNode === null;
           });
           if (kind !== 'DocumentFragment') {
-            check(`${prefix}/${kind}/unicode`, () => {
+            check(`${prefix}/${kind}/utf16`, () => {
               const node = make(), get = Object.getOwnPropertyDescriptor(callee.CharacterData.prototype, 'data').get;
-              return get.call(node) === '\u00e9a\u03a9' && node.length === 3;
+              return get.call(node) === '\ud800a\udfff' && node.length === 3;
             });
             check(`${prefix}/${kind}/mutate`, () => {
               const node = make();
-              callee.CharacterData.prototype.appendData.call(node, '\u{1D306}');
+              callee.CharacterData.prototype.appendData.call(node, '\ud800');
               callee.CharacterData.prototype.replaceData.call(node, 1, 1, 'x');
-              return node.data === '\u00e9x\u03a9\u{1D306}' && node.length === 5;
+              return node.data === '\ud800x\udfff\ud800' && node.length === 4;
             });
           }
           check(`${prefix}/${kind}/intrinsic`, () => {
