@@ -180,7 +180,7 @@ fn node_tree_mutations_preserve_registered_native_proxy_arguments_and_receiver_o
           check(methods.replaceChild.call(receiver, cc, aa) === aa && parent.lastChild === c, 'replace alias identity');
           check(methods.removeChild.call(receiver, bb) === bb && parent.firstChild === c, 'remove alias identity');
           check(a.parentNode === null && b.parentNode === null && c.parentNode === parent, 'native parent links');
-          check([a, b, c].every(node => node.ownerDocument === doc) && b.data === expectedData, 'native owner and character data');
+          check([a, b, c].every(node => node.ownerDocument === doc) && b.data === expectedData && b.data === '\ud800b\udfff', 'native owner and UTF-16');
         }
         check(nodeTreeProxyTraps === 0, 'no author traps');
       }
