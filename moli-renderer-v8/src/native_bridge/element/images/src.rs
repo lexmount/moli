@@ -11,7 +11,7 @@ use crate::protocol_types::EmulatedMediaOverrides;
 use crate::style_engine::{StyleViewport, media_list::evaluate_source_size_list};
 use crate::types::{ImageRequestCorsMode, ImageRequestKey, SubresourceRequestInitiatorType};
 use crate::util::{context_host_ptr_from_global_bridge, v8_string};
-use cssparser::{Parser, ParserInput};
+use cssparser::Parser;
 
 use crate::context_bootstrap::evaluate_match_media_query_list_with_viewport;
 
@@ -1042,8 +1042,7 @@ fn source_size_for_sizes_attribute(
 ) -> f64 {
     let sizes = sizes.unwrap_or_default();
     if allows_auto_sizes {
-        let mut input = ParserInput::new(sizes);
-        let mut parser = Parser::new(&mut input);
+        let mut parser = Parser::new(sizes);
         if parser.expect_ident_matching("auto").is_ok()
             && (parser.is_exhausted() || parser.expect_comma().is_ok())
         {

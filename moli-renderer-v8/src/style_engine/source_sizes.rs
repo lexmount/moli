@@ -1,7 +1,7 @@
 //! HTML source sizes need CSS component boundaries and media conditions, but
 //! must validate math before CSS property clamping or app-unit conversion.
 
-use cssparser::{Delimiter, Parser, ParserInput, SourcePosition, Token};
+use cssparser::{Delimiter, Parser, SourcePosition, Token};
 use style::{
     context::QuirksMode,
     device::Device,
@@ -14,7 +14,7 @@ use style::{
         generics::calc::CalcUnits,
         specified::{
             Length, NoCalcLength,
-            calc::{CalcNode, CalcParseFlags, Leaf},
+            calc::{CalcNode, CalcNodeParseInPlaceOperations, CalcParseFlags, Leaf},
             length::LengthUnit,
         },
     },
@@ -22,12 +22,11 @@ use style::{
 
 pub(super) fn evaluate(sizes: &str, parser_context: &ParserContext, device: &Device) -> f64 {
     Context::for_media_query_evaluation(device, QuirksMode::NoQuirks, |context| {
-        let mut input = ParserInput::new(sizes);
-        let mut parser = Parser::new(&mut input);
+        let mut parser = Parser::new(sizes);
         loop {
             let result = parser.parse_until_before(Delimiter::Comma, |component| {
                 source_size(component, parser_context, context)
-                    .ok_or_else(|| component.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
             });
             if let Ok(size) = result {
                 return size;
@@ -44,7 +43,7 @@ pub(super) fn evaluate(sizes: &str, parser_context: &ParserContext, device: &Dev
 }
 
 fn source_size<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     parser_context: &ParserContext,
     context: &Context,
 ) -> Option<f64> {
@@ -74,8 +73,7 @@ fn source_size<'i>(
     let size = source_length(input.slice(value_start..value_end), parser_context, context)?;
     let condition = input.slice(start..value_start);
     let normalized = normalize_zero_math(condition, parser_context, context)?;
-    let mut condition_input = ParserInput::new(&normalized);
-    let mut condition_parser = Parser::new(&mut condition_input);
+    let mut condition_parser = Parser::new(&normalized);
     if condition_parser.is_exhausted() {
         return Some(size);
     }
@@ -93,8 +91,7 @@ fn source_size<'i>(
 }
 
 fn source_length(raw: &str, parser_context: &ParserContext, context: &Context) -> Option<f64> {
-    let mut input = ParserInput::new(raw);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(raw);
     let state = parser.state();
     let function = matches!(parser.next().ok()?, Token::Function(_));
     parser.reset(&state);
@@ -114,20 +111,21 @@ fn source_length(raw: &str, parser_context: &ParserContext, context: &Context) -
 }
 
 fn math_value(raw: &str, parser_context: &ParserContext, context: &Context) -> Option<Leaf> {
-    let mut input = ParserInput::new(raw);
-    let mut parser = Parser::new(&mut input);
-    let location = parser.current_source_location();
+    let mut parser = Parser::new(raw);
     let Token::Function(name) = parser.next().ok()?.clone() else {
         return None;
     };
-    let function = CalcNode::math_function(parser_context, &name, location).ok()?;
+    let function = CalcNode::math_function(parser_context, &name).ok()?;
     let node = CalcNode::parse(
         parser_context,
         &mut parser,
         function,
         // Keep division and multiplication until after unit conversion, so
         // CSS property conversion cannot hide a non-finite math result.
-        CalcParseFlags::new(CalcUnits::LENGTH).new_without_in_place_operations(),
+        CalcParseFlags {
+            in_place_operations: CalcNodeParseInPlaceOperations::No,
+            ..CalcParseFlags::new(CalcUnits::LENGTH)
+        },
     )
     .ok()?;
     parser.expect_exhausted().ok()?;
@@ -144,8 +142,7 @@ fn normalize_zero_math(
     parser_context: &ParserContext,
     context: &Context,
 ) -> Option<String> {
-    let mut input = ParserInput::new(raw);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(raw);
     let mut copied = parser.position();
     let mut replacements = Vec::new();
     zero_math_ranges(&mut parser, parser_context, context, &mut replacements)?;
@@ -160,7 +157,7 @@ fn normalize_zero_math(
 }
 
 fn zero_math_ranges<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     parser_context: &ParserContext,
     context: &Context,
     replacements: &mut Vec<(SourcePosition, SourcePosition)>,
@@ -186,7 +183,7 @@ fn zero_math_ranges<'i>(
                 input
                     .parse_nested_block::<_, _, ()>(|block| {
                         zero_math_ranges(block, parser_context, context, replacements)
-                            .ok_or_else(|| block.new_custom_error::<(), ()>(()))
+                            .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                     })
                     .ok()?;
             }

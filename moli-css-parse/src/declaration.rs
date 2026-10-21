@@ -108,16 +108,12 @@ fn serialized_declaration_suffix_matches(suffix: &str, important: bool) -> bool 
 
 fn eof_open_curly_block_starts(css_text: &str) -> Vec<usize> {
     let mut open_blocks = Vec::new();
-    let mut input = ParserInput::new(css_text);
-    let mut input = Parser::new(&mut input);
+    let mut input = Parser::new(css_text);
     collect_eof_open_curly_block_starts(&mut input, &mut open_blocks);
     open_blocks
 }
 
-fn collect_eof_open_curly_block_starts<'i, 't>(
-    input: &mut Parser<'i, 't>,
-    open_blocks: &mut Vec<usize>,
-) {
+fn collect_eof_open_curly_block_starts<'i>(input: &mut Parser<'i>, open_blocks: &mut Vec<usize>) {
     loop {
         let token_start = input.position();
         let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
@@ -135,7 +131,7 @@ fn collect_eof_open_curly_block_starts<'i, 't>(
         }
 
         let mut nested_end = None;
-        let nested: Result<(), ParseError<'i, ()>> = input.parse_nested_block(|input| {
+        let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
             collect_eof_open_curly_block_starts(input, open_blocks);
             nested_end = Some(input.position());
             Ok(())
