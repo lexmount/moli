@@ -1260,7 +1260,6 @@ pub(in crate::native_bridge) fn set_inner_text_in_reaction_scope(
             runtime_ptr,
             handle,
             Some(fragment),
-            false,
         )
     })
 }
