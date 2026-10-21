@@ -278,8 +278,7 @@ pub fn parse_property_rule_view_with_stylo(css_text: &str) -> Option<CssProperty
 
 fn normalize_css_property_rule_view_name(mut view: CssPropertyRuleView) -> CssPropertyRuleView {
     let decoded_name = {
-        let input = &view.name;
-        let mut parser = Parser::new(input);
+        let mut parser = Parser::new(&view.name);
         parser
             .expect_ident_cloned()
             .ok()

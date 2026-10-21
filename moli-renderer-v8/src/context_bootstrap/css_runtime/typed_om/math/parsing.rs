@@ -1,7 +1,7 @@
 use super::graph::Unit;
 use super::*;
 use crate::context_bootstrap::exposed_interfaces::TemplateBuildProfile;
-use cssparser::{ParseError, ParseErrorKind};
+use cssparser::{BasicParseErrorKind, ParseError, ParseErrorKind};
 
 mod expression;
 use expression::Expression;
@@ -39,7 +39,7 @@ enum Error {
 
 // Bound parser recursion and native object creation independently of how much
 // eager algebraic simplification reduces the resulting expression.
-const MAX_DEPTH: usize = 128;
+const MAX_DEPTH: u8 = 128;
 const MAX_NODES: usize = 32_768;
 
 struct Budget(usize);
@@ -103,27 +103,28 @@ pub(in crate::context_bootstrap::css_runtime::typed_om) fn from_declared<'s>(
 }
 
 fn parse_expression(source: &str) -> Result<Expression, Error> {
-    let mut input = ParserInput::new(source);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(source);
+    parser.set_nested_block_limit(MAX_DEPTH);
     let mut budget = Budget(MAX_NODES);
     parser
         .parse_entirely(|p| parse_value(p, &mut budget, 0, false))
         .map_err(|error| match error.kind {
             ParseErrorKind::Custom(error) => error,
+            ParseErrorKind::Basic(BasicParseErrorKind::TooManyNestedBlocks) => Error::TooLarge,
             _ => Error::Syntax,
         })
 }
 
 fn parse_value<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     budget: &mut Budget,
     depth: usize,
     in_math: bool,
-) -> Result<Expression, ParseError<'i, Error>> {
-    if depth > MAX_DEPTH {
-        return Err(input.new_custom_error(Error::TooLarge));
+) -> Result<Expression, ParseError<Error>> {
+    if depth > usize::from(MAX_DEPTH) {
+        return Err(ParseError::custom(Error::TooLarge));
     }
-    budget.spend(1).map_err(|e| input.new_custom_error(e))?;
+    budget.spend(1).map_err(ParseError::custom)?;
     input.skip_whitespace();
     let start = input.position();
     let token = input.next()?.clone();
@@ -133,7 +134,7 @@ fn parse_value<'i>(
         Token::Dimension { unit, .. } => {
             let unit = values::normalize_unit_name(unit)
                 .filter(|name| name != "number" && name != "percent")
-                .ok_or_else(|| input.new_custom_error(Error::Syntax))?;
+                .ok_or_else(|| ParseError::custom(Error::Syntax))?;
             Some(unit)
         }
         _ => None,
@@ -142,7 +143,7 @@ fn parse_value<'i>(
         // cssparser identifies and unescapes tokens; recover the source number
         // as f64 rather than exposing the tokenizer's f32 rounding to WebIDL.
         let value = moli_css_parse::css_numeric_token_value(&token, input.slice_from(start))
-            .ok_or_else(|| input.new_custom_error(Error::Syntax))?;
+            .ok_or_else(|| ParseError::custom(Error::Syntax))?;
         return Ok(Expression::unit(Unit { value, unit }, in_math));
     }
     match token {
@@ -156,7 +157,7 @@ fn parse_value<'i>(
                 "infinity" => f64::INFINITY,
                 "-infinity" => f64::NEG_INFINITY,
                 "nan" => f64::NAN,
-                _ => return Err(input.new_custom_error(Error::Syntax)),
+                _ => return Err(ParseError::custom(Error::Syntax)),
             };
             Ok(Expression::unit(
                 Unit {
@@ -173,7 +174,7 @@ fn parse_value<'i>(
                 "min" | "max" => {
                     let children = p.parse_comma_separated(|p| parse_sum(p, budget, depth + 1))?;
                     let kind = if name == "min" { Kind::Min } else { Kind::Max };
-                    Expression::operation(kind, children, budget).map_err(|e| p.new_custom_error(e))
+                    Expression::operation(kind, children, budget).map_err(ParseError::custom)
                 }
                 "clamp" => {
                     let lower = optional_bound(p, budget, depth + 1)?;
@@ -187,28 +188,27 @@ fn parse_value<'i>(
                         (None, Some(b)) => (Kind::Min, vec![value, b]),
                         (None, None) => return Ok(value),
                     };
-                    Expression::operation(kind, children, budget).map_err(|e| p.new_custom_error(e))
+                    Expression::operation(kind, children, budget).map_err(ParseError::custom)
                 }
-                _ => Err(p.new_custom_error(Error::Syntax)),
+                _ => Err(ParseError::custom(Error::Syntax)),
             })?;
             // A calc() that reduces to a scalar still reifies as CSSMathSum;
             // internal calc/parentheses do not create redundant wrapper nodes.
             if name == "calc" && !in_math && expression.is_unit() {
-                Expression::unsimplified(Kind::Sum, vec![expression])
-                    .map_err(|e| input.new_custom_error(e))
+                Expression::unsimplified(Kind::Sum, vec![expression]).map_err(ParseError::custom)
             } else {
                 Ok(expression)
             }
         }
-        _ => Err(input.new_custom_error(Error::Syntax)),
+        _ => Err(ParseError::custom(Error::Syntax)),
     }
 }
 
 fn optional_bound<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     budget: &mut Budget,
     depth: usize,
-) -> Result<Option<Expression>, ParseError<'i, Error>> {
+) -> Result<Option<Expression>, ParseError<Error>> {
     if input.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
         Ok(None)
     } else {
@@ -217,10 +217,10 @@ fn optional_bound<'i>(
 }
 
 fn parse_sum<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     budget: &mut Budget,
     depth: usize,
-) -> Result<Expression, ParseError<'i, Error>> {
+) -> Result<Expression, ParseError<Error>> {
     let mut children = vec![parse_product(input, budget, depth)?];
     loop {
         let start = input.state();
@@ -238,23 +238,23 @@ fn parse_sum<'i>(
             }
         };
         if !matches!(input.next_including_whitespace(), Ok(Token::WhiteSpace(_))) {
-            return Err(input.new_custom_error(Error::Syntax));
+            return Err(ParseError::custom(Error::Syntax));
         }
         let mut child = parse_product(input, budget, depth)?;
         if subtract {
             child = Expression::operation(Kind::Negate, vec![child], budget)
-                .map_err(|e| input.new_custom_error(e))?;
+                .map_err(ParseError::custom)?;
         }
         children.push(child);
     }
-    Expression::operation(Kind::Sum, children, budget).map_err(|e| input.new_custom_error(e))
+    Expression::operation(Kind::Sum, children, budget).map_err(ParseError::custom)
 }
 
 fn parse_product<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     budget: &mut Budget,
     depth: usize,
-) -> Result<Expression, ParseError<'i, Error>> {
+) -> Result<Expression, ParseError<Error>> {
     let mut children = vec![parse_value(input, budget, depth, true)?];
     loop {
         let start = input.state();
@@ -269,9 +269,9 @@ fn parse_product<'i>(
         let mut child = parse_value(input, budget, depth, true)?;
         if divide {
             child = Expression::operation(Kind::Invert, vec![child], budget)
-                .map_err(|e| input.new_custom_error(e))?;
+                .map_err(ParseError::custom)?;
         }
         children.push(child);
     }
-    Expression::operation(Kind::Product, children, budget).map_err(|e| input.new_custom_error(e))
+    Expression::operation(Kind::Product, children, budget).map_err(ParseError::custom)
 }

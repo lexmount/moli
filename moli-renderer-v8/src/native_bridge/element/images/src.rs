@@ -12,7 +12,7 @@ use crate::style_engine::{StyleViewport, media_list::evaluate_source_size_list};
 use crate::types::{ImageRequestCorsMode, ImageRequestKey, SubresourceRequestInitiatorType};
 use crate::util::{context_host_ptr_from_global_bridge, v8_string};
 use crate::v8_execution_watchdog::V8ExecutionWatchdog;
-use cssparser::{Parser, ParserInput};
+use cssparser::Parser;
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::geometry::compute_mock_client_rect;
@@ -1070,8 +1070,7 @@ fn source_size_for_sizes_attribute(
 ) -> f64 {
     let sizes = sizes.unwrap_or_default();
     if allows_auto_sizes {
-        let mut input = ParserInput::new(sizes);
-        let mut parser = Parser::new(&mut input);
+        let mut parser = Parser::new(sizes);
         if parser.expect_ident_matching("auto").is_ok()
             && (parser.is_exhausted() || parser.expect_comma().is_ok())
         {
