@@ -72,7 +72,8 @@ pub(crate) struct WorkerGlobalState {
         Vec<ContentSecurityPolicy>,
     /// Enforce CSP policies parsed from the top-level worker script response.
     pub(in crate::worker) content_security_policies: Vec<ContentSecurityPolicy>,
-    pub(in crate::worker) content_security_policy_snapshot: Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
+    pub(in crate::worker) content_security_policy_snapshot:
+        Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     /// Report-only CSP policies parsed from the top-level worker script response.
     pub(in crate::worker) content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     /// Reporting API endpoints parsed from the top-level worker script response.

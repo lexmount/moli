@@ -6,7 +6,6 @@ edition = "2024"
 description = "Content Security Policy parsing, enforcement, and reporting for Moli"
 
 [dependencies]
-parking_lot = "0.12.5"
 base64 = "0.22"
 content-security-policy = "0.9.0"
 moli-crypto = { path = "../moli-crypto" }

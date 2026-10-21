@@ -190,7 +190,10 @@ mod tests {
             ("default-src 'none'", vec![], false),
         ] {
             let policy = IframeCspAttribute::parse(required).unwrap();
-            let returned = returned.into_iter().map(ContentSecurityPolicy::from).collect::<Vec<_>>();
+            let returned = returned
+                .into_iter()
+                .map(ContentSecurityPolicy::from)
+                .collect::<Vec<_>>();
             assert_eq!(
                 policy.subsumes(&returned, &origin),
                 expected,
