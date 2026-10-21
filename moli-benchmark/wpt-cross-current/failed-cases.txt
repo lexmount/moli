@@ -1,5 +1,4 @@
 FileAPI/url/sandboxed-iframe.html
-FileAPI/url/url-lifetime.html
 IndexedDB/idbindex-rename-abort.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbindex-rename-abort.any.js?moli-wpt-any=window
 IndexedDB/idbindex-rename-errors.any.js?moli-wpt-any=dedicatedworker
@@ -48,7 +47,6 @@ content-security-policy/inheritance/javascript-url-open-in-main-window.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inheritance/window.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
-content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
 content-security-policy/meta/sandbox-iframe.html
 content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
