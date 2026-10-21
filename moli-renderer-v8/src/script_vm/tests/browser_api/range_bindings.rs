@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn range_contextual_fragments_use_native_context_and_preserve_receiver_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://range-contextual-fragments.test/",
+        "<!doctype html><iframe id=child></iframe>",
+    );
+    let result = vm
+        .eval(include_str!(
+            "../../../../tests/fixtures/range-contextual-fragment-native-context.js"
+        ))
+        .expect("Contextual fragment context matrix should complete");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "420");
+    assert_eq!(
+        result,
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__uiEventResults.rows.filter(row => !row.passed))")
+            .unwrap(),
+    );
+}
+
+#[test]
 fn range_members_validate_native_receivers_before_argument_conversion() {
     let mut vm = new_parsed_test_vm(
         "https://range-native-receivers.test/",
@@ -126,6 +147,14 @@ fn range_registered_native_proxies_share_boundaries_and_selection_identity() {
           check(clone !== target && clone.startContainer === text && clone.startOffset === 2, 'cloneRange');
           const fragment = methods.cloneContents.call(proxy);
           check(fragment.textContent === 'c' && fragment.ownerDocument === text.ownerDocument, 'cloneContents');
+          if (flavor !== 'xml') {
+            for (const name of ['nodeType', 'parentNode', 'ownerDocument'])
+              Object.defineProperty(text, name, {configurable: true, get() {throw Error('public ' + name);}});
+            const parsed = methods.createContextualFragment.call(proxy, '<b>parsed</b>');
+            for (const name of ['nodeType', 'parentNode', 'ownerDocument']) delete text[name];
+            check(parsed.firstChild.localName === 'b' && parsed.textContent === 'parsed' &&
+              parsed.ownerDocument === text.ownerDocument, 'native contextual fragment');
+          }
           methods.collapse.call(proxy, false);
           check(get('collapsed') && get('startOffset') === 3 && target.startOffset === 3, 'collapse');
           if (selected) {
