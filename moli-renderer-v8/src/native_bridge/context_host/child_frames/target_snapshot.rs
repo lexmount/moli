@@ -76,9 +76,9 @@ impl JsContextHost {
         };
         let required_csp = required_csp
             .filter(|policy| {
-                inherited
-                    .as_ref()
-                    .is_none_or(|parent| parent.subsumes(&[policy.as_str().into()], target_url))
+                inherited.as_ref().is_none_or(|parent| {
+                    parent.subsumes(std::slice::from_ref(policy.policy()), target_url)
+                })
             })
             .or(inherited);
         ChildNavigationTargetSnapshot {

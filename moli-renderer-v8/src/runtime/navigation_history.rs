@@ -80,6 +80,7 @@ pub struct RendererNavigationHistory {
 #[cfg(test)]
 mod policy_history_tests {
     use super::*;
+    use crate::content_security_policy::ContentSecurityPolicy;
     use crate::document_runtime::DocumentPolicyContainer;
     use crate::runtime::RendererNavigationPolicy;
 
@@ -89,7 +90,9 @@ mod policy_history_tests {
         let history = RendererNavigationHistory::default();
         let seed = moli_page_types::initial_navigation_history_seed(true, url.as_str());
         let mut policy = DocumentPolicyContainer {
-            inherited_meta_content_security_policies: vec!["img-src 'none'".to_owned()],
+            inherited_meta_content_security_policies: vec![ContentSecurityPolicy::from_meta(
+                "img-src 'none'".to_owned(),
+            )],
             content_security_policy_self_url: Some(
                 Url::parse("https://creator.test/source").unwrap(),
             ),
@@ -99,7 +102,9 @@ mod policy_history_tests {
         history.publish(seed.clone(), None, Some(original.clone()));
         policy
             .inherited_meta_content_security_policies
-            .push("script-src 'none'".to_owned());
+            .push(ContentSecurityPolicy::from_meta(
+                "script-src 'none'".to_owned(),
+            ));
         history.publish(seed, None, Some(RendererNavigationPolicy::capture(&policy)));
         assert_eq!(
             history.reload().unwrap().history_policy_container(&url),
@@ -141,7 +146,9 @@ mod policy_history_tests {
     fn local_history_policy_precedes_initiator_without_copying_other_authority() {
         let url = Url::parse("blob:https://creator.test/policy").unwrap();
         let policy = RendererNavigationPolicy::capture(&DocumentPolicyContainer {
-            inherited_meta_content_security_policies: vec!["img-src 'none'".to_owned()],
+            inherited_meta_content_security_policies: vec![ContentSecurityPolicy::from_meta(
+                "img-src 'none'".to_owned(),
+            )],
             document_referrer: "https://secret.test/source".to_owned(),
             cross_origin_isolated: true,
             credentialless: true,
@@ -152,7 +159,9 @@ mod policy_history_tests {
             ..Default::default()
         });
         let initiator = RendererNavigationPolicy::capture(&DocumentPolicyContainer {
-            inherited_meta_content_security_policies: vec!["script-src 'none'".to_owned()],
+            inherited_meta_content_security_policies: vec![ContentSecurityPolicy::from_meta(
+                "script-src 'none'".to_owned(),
+            )],
             ..Default::default()
         });
         let result = DocumentPolicyContainer::for_navigation_response(
@@ -164,7 +173,9 @@ mod policy_history_tests {
         );
         assert_eq!(
             result.inherited_meta_content_security_policies,
-            vec!["img-src 'none'"]
+            vec![ContentSecurityPolicy::from_meta(
+                "img-src 'none'".to_owned()
+            )]
         );
         assert!(result.document_referrer.is_empty());
         assert!(

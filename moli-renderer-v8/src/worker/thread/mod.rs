@@ -426,7 +426,7 @@ impl WorkerSpawnOptions {
         mut self,
         policy: crate::content_security_policy::InheritedContentSecurityPolicy,
     ) -> Self {
-        self.content_security_policies = policy.enforced_strings();
+        self.content_security_policies = policy.enforced_policies();
         self.content_security_report_only_policies = policy.report_only_policies.clone();
         self.content_security_reporting_endpoints = policy.reporting_endpoints.clone();
         self.content_security_policy_snapshot = Some(policy);

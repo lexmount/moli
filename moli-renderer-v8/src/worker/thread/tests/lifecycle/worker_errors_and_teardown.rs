@@ -1679,7 +1679,7 @@ async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_glob
             .into(),
             "https://app.example/parent.js".into(),
         )
-        .with_content_security_policies(vec!["worker-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["worker-src 'none'".to_owned().into()]),
     );
 
     assert_eq!(
@@ -1724,7 +1724,7 @@ async fn nested_worker_constructor_report_only_csp_is_async_and_does_not_block()
             .into(),
             "https://app.example/parent.js".into(),
         )
-        .with_content_security_report_only_policies(vec!["worker-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["worker-src 'none'".to_owned().into()]),
     );
 
     assert_eq!(

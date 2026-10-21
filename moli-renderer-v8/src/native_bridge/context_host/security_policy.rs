@@ -367,8 +367,8 @@ impl JsContextHost {
                 crate::context_bootstrap::document_referrer_policy_for_native_document(
                     self, document,
                 );
-            policy.inherited_meta_content_security_policies = unsafe { &*self.runtime }
-                .meta_content_security_policy_strings_for_document(document);
+            policy.inherited_meta_content_security_policies =
+                unsafe { &*self.runtime }.meta_content_security_policies_for_document(document);
         }
         Some(policy)
     }
