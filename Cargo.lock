@@ -972,7 +972,6 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.91+curl-8.23.0"
-source = "git+https://github.com/lexmount/curl-rust?rev=0392e12475d8d1160d4cae07c172cac02797cc25#0392e12475d8d1160d4cae07c172cac02797cc25"
 dependencies = [
  "brotlic-sys",
  "cc",
