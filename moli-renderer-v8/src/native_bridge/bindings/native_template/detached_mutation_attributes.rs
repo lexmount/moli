@@ -41,18 +41,6 @@ struct NativeBridgeDetachedMutationAndAttributeHelpersDeclaration {
     detached_replace_with: (),
 
     #[webapi(
-        method = "__detachedAppendChild",
-        callback = document::bridge_detached_append_child_callback
-    )]
-    detached_append_child: (),
-
-    #[webapi(
-        method = "__detachedInsertBefore",
-        callback = document::bridge_detached_insert_before_callback
-    )]
-    detached_insert_before: (),
-
-    #[webapi(
         method = "__detachedMoveBefore",
         callback = document::bridge_detached_move_before_callback
     )]
@@ -63,12 +51,6 @@ struct NativeBridgeDetachedMutationAndAttributeHelpersDeclaration {
         callback = document::bridge_detached_remove_child_callback
     )]
     detached_remove_child: (),
-
-    #[webapi(
-        method = "__detachedReplaceChild",
-        callback = document::bridge_detached_replace_child_callback
-    )]
-    detached_replace_child: (),
 
     #[webapi(
         method = "__detachedGetAttribute",
