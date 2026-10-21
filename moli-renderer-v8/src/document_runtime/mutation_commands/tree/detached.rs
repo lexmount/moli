@@ -86,25 +86,6 @@ impl DocumentRuntime {
         )
     }
 
-    pub(crate) fn replace_detached_native_child_appending_to_current_reaction_queue(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        parent: DomHandle,
-        new_child: DomHandle,
-        old_child: DomHandle,
-    ) -> bool {
-        self.replace_child_with_reaction_policy(
-            scope,
-            host_ptr,
-            parent,
-            new_child,
-            old_child,
-            TreeReactionDispatchPolicy::AppendToCurrentQueue,
-            ConnectedScriptMutationPolicy::DeferToOwner,
-        )
-    }
-
     pub(crate) fn remove_detached_native_child(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

@@ -358,12 +358,6 @@ pub(crate) fn decide_runtime_script_start(
             )),
         };
     }
-    if options.scripting_disabled {
-        return RuntimeScriptStartDecision::Skip {
-            commit_start: true,
-            reason: Some(ScriptSkipReason::ScriptExecutionDisabled),
-        };
-    }
     let source = match script_src {
         Some(source) => source,
         None => {
@@ -386,19 +380,25 @@ pub(crate) fn decide_runtime_script_start(
         }
     };
 
-    if !dom_host.is_connected(node) {
+    if !dom_host.is_connected_to_document(node) {
         return RuntimeScriptStartDecision::Skip {
             commit_start: false,
             reason: Some(ScriptSkipReason::NotInMainDocument),
         };
     }
 
-    if classification.legacy_event_for_mismatch {
+    // These early bailouts leave the script available for a later preparation.
+    // Restore parser state only once a connected, supported, nonempty script
+    // reaches the step that commits its already-started state.
+    if was_parser_inserted {
+        let _ = dom_host.set_script_parser_inserted_for_prepare(node, true);
+        let _ = dom_host.set_script_force_async(node, false);
+    }
+
+    if options.scripting_disabled {
         return RuntimeScriptStartDecision::Skip {
-            commit_start: false,
-            reason: Some(ScriptSkipReason::UnsupportedType(
-                "legacy for/event script did not match window.onload".to_owned(),
-            )),
+            commit_start: true,
+            reason: Some(ScriptSkipReason::ScriptExecutionDisabled),
         };
     }
 
@@ -409,17 +409,21 @@ pub(crate) fn decide_runtime_script_start(
         };
     }
 
+    if classification.legacy_event_for_mismatch {
+        return RuntimeScriptStartDecision::Skip {
+            commit_start: true,
+            reason: Some(ScriptSkipReason::UnsupportedType(
+                "legacy for/event script did not match window.onload".to_owned(),
+            )),
+        };
+    }
+
     if disposition == ScriptPreparationDisposition::ImportMap {
         return if source_kind == ScriptSourceKind::External {
             RuntimeScriptStartDecision::RejectExternalImportMap
         } else {
             RuntimeScriptStartDecision::RegisterImportMap { source }
         };
-    }
-
-    if was_parser_inserted {
-        let _ = dom_host.set_script_parser_inserted_for_prepare(node, true);
-        let _ = dom_host.set_script_force_async(node, false);
     }
 
     let (kind, mode) = disposition

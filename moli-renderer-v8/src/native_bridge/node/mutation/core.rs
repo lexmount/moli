@@ -62,7 +62,6 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     };
-    let detached = node_runtime_and_handle_from_object(scope, receiver.object()).is_err();
     let (runtime_ptr, parent) = (parent.runtime_ptr, parent.handle);
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let Some(child) = required_tree_insertion_node_arg(
@@ -83,22 +82,12 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             let runtime = unsafe { &mut *runtime_ptr };
-            if detached {
-                runtime.insert_detached_native_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    child,
-                    None,
-                )
-            } else {
-                runtime.append_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    child,
-                )
-            }
+            runtime.append_child_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                parent,
+                child,
+            )
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
@@ -122,7 +111,6 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     };
-    let detached = node_runtime_and_handle_from_object(scope, receiver.object()).is_err();
     let (runtime_ptr, parent) = (parent.runtime_ptr, parent.handle);
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let Some(child) = required_tree_insertion_node_arg(
@@ -194,23 +182,13 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             let runtime = unsafe { &mut *runtime_ptr };
-            if detached {
-                runtime.insert_detached_native_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    child,
-                    reference_child,
-                )
-            } else {
-                runtime.insert_before_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    child,
-                    reference_child,
-                )
-            }
+            runtime.insert_before_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                parent,
+                child,
+                reference_child,
+            )
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
@@ -590,14 +568,12 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     };
-    let detached = node_runtime_and_handle_from_object(scope, receiver.object()).is_err();
     if replace_node_child(
         scope,
         parent.runtime_ptr,
         parent.handle,
         parsed.node,
         parsed.child,
-        detached,
     )
     .is_some()
     {
@@ -611,7 +587,6 @@ fn replace_node_child<'s>(
     parent: DomHandle,
     new_child_value: v8::Local<'s, v8::Object>,
     old_child_value: v8::Local<'s, v8::Object>,
-    detached: bool,
 ) -> Option<DomHandle> {
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let new_child = required_tree_insertion_node_arg(
@@ -678,23 +653,13 @@ fn replace_node_child<'s>(
     let replaced =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             let runtime = unsafe { &mut *runtime_ptr };
-            if detached {
-                runtime.replace_detached_native_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    new_child,
-                    old_child,
-                )
-            } else {
-                runtime.replace_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    new_child,
-                    old_child,
-                )
-            }
+            runtime.replace_child_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                parent,
+                new_child,
+                old_child,
+            )
         });
     if !replaced {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");

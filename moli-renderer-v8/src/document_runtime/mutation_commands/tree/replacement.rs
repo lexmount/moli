@@ -1,6 +1,5 @@
-use super::policy::{TreeMutationSourceProfile, TreeReactionDispatchPolicy};
+use super::policy::TreeMutationSourceProfile;
 use crate::{
-    custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
     mutation_coordinator::ConnectedScriptMutationPolicy,
@@ -16,7 +15,6 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
         node: Option<DomHandle>,
-        detached: bool,
     ) -> bool {
         let removed = self.dom_host.child_handles(parent).collect::<Vec<_>>();
         let added = node
@@ -40,14 +38,6 @@ impl DocumentRuntime {
             }
         }
         let inserted = match node {
-            Some(node) if detached => self.insert_detached_native_child_with_source_profile(
-                scope,
-                host_ptr,
-                parent,
-                node,
-                None,
-                source_profile,
-            ),
             Some(node) => self.insert_before_with_source_profile(
                 scope,
                 host_ptr,
@@ -82,40 +72,6 @@ impl DocumentRuntime {
         new_child: DomHandle,
         old_child: DomHandle,
     ) -> bool {
-        self.replace_child_with_reaction_policy(
-            scope,
-            host_ptr,
-            parent,
-            new_child,
-            old_child,
-            TreeReactionDispatchPolicy::AppendToCurrentQueue,
-            ConnectedScriptMutationPolicy::PrepareAndStart,
-        )
-    }
-
-    pub(super) fn replace_child_with_reaction_policy(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        parent: DomHandle,
-        new_child: DomHandle,
-        old_child: DomHandle,
-        reaction_policy: TreeReactionDispatchPolicy,
-        connected_script_policy: ConnectedScriptMutationPolicy,
-    ) -> bool {
-        if matches!(reaction_policy, TreeReactionDispatchPolicy::DispatchNow) {
-            return custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
-                self.replace_child_with_reaction_policy(
-                    scope,
-                    host_ptr,
-                    parent,
-                    new_child,
-                    old_child,
-                    TreeReactionDispatchPolicy::AppendToCurrentQueue,
-                    connected_script_policy,
-                )
-            });
-        }
         if self.dom_host.parent_node(old_child) != Some(parent) {
             return false;
         }
@@ -141,7 +97,7 @@ impl DocumentRuntime {
                 reference_child,
                 true,
                 false,
-                connected_script_policy,
+                ConnectedScriptMutationPolicy::PrepareAndStart,
                 source_profile,
             );
         }
@@ -196,7 +152,7 @@ impl DocumentRuntime {
             reference_child,
             true,
             false,
-            connected_script_policy,
+            ConnectedScriptMutationPolicy::PrepareAndStart,
             source_profile.replacing_child(old_child, previous_sibling, reference_child),
         ) {
             return false;
