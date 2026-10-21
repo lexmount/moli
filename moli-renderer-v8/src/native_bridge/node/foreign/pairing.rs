@@ -129,12 +129,27 @@ fn set_detached_live_delegate(
     foreign: v8::Local<'_, v8::Object>,
     live_wrapper: v8::Local<'_, v8::Object>,
 ) -> Option<()> {
+    let foreign = v8::Local::new(scope, foreign);
+    let live_wrapper = v8::Local::new(scope, live_wrapper);
     set_private_value(
         scope,
         foreign,
         DETACHED_LIVE_DELEGATE_SLOT,
         live_wrapper.into(),
     );
+    // Registered proxies expose their target to native receiver bindings.
+    // Adoption must update that backing as well as the canonical wrapper.
+    if let Some(target) = moli_webapi_declare::web_api_object_target(scope, foreign)
+        && target != foreign
+        && target != live_wrapper
+    {
+        set_private_value(
+            scope,
+            target,
+            DETACHED_LIVE_DELEGATE_SLOT,
+            live_wrapper.into(),
+        );
+    }
     Some(())
 }
 

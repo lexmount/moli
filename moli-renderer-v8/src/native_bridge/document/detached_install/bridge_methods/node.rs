@@ -51,15 +51,6 @@ struct DetachedNodeMethodsDeclaration {
     #[webapi(method, callback = detached_clone_node_method_callback)]
     clone_node: (),
 
-    #[webapi(method, callback = detached_append_method_callback)]
-    append: (),
-
-    #[webapi(method, callback = detached_prepend_method_callback)]
-    prepend: (),
-
-    #[webapi(method, callback = detached_replace_children_method_callback)]
-    replace_children: (),
-
     #[webapi(method, callback = detached_before_method_callback)]
     before: (),
 
@@ -71,22 +62,6 @@ struct DetachedNodeMethodsDeclaration {
 
     #[webapi(method, callback = detached_normalize_method_callback)]
     normalize: (),
-}
-
-pub(super) fn install_detached_parent_node_move_before<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    prototype: v8::Local<'s, v8::Object>,
-) {
-    #[derive(Default, WebApiObject)]
-    #[webapi(fragment, prototype = "ParentNode")]
-    struct DetachedParentNodeMoveBeforeDeclaration {
-        #[webapi(method, length = 2, callback = detached_move_before_method_callback)]
-        move_before: (),
-    }
-
-    DetachedParentNodeMoveBeforeDeclaration::default()
-        .initialize(scope, prototype)
-        .expect("detached ParentNode moveBefore declaration should initialize");
 }
 
 pub(super) fn install_detached_node_methods<'s>(

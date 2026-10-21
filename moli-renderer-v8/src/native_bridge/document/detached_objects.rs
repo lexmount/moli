@@ -36,8 +36,7 @@ pub(in crate::native_bridge::document) use self::document_state::*;
 pub(crate) use self::method_forwarders::ensure_detached_document_implementation;
 pub(in crate::native_bridge) use self::method_forwarders::{
     detached_after_method_callback, detached_append_child_method_callback,
-    detached_append_method_callback, detached_before_method_callback,
-    detached_blur_method_callback, detached_click_method_callback,
+    detached_before_method_callback, detached_blur_method_callback, detached_click_method_callback,
     detached_clone_node_method_callback, detached_create_cdata_section_method_callback,
     detached_create_comment_method_callback, detached_create_document_fragment_method_callback,
     detached_create_processing_instruction_method_callback,
@@ -50,11 +49,10 @@ pub(in crate::native_bridge) use self::method_forwarders::{
     detached_get_elements_by_tag_name_ns_method_callback, detached_has_attribute_method_callback,
     detached_has_attribute_ns_method_callback, detached_has_child_nodes_method_callback,
     detached_import_node_method_callback, detached_insert_before_method_callback,
-    detached_matches_method_callback, detached_prepend_method_callback,
-    detached_query_selector_all_method_callback, detached_query_selector_method_callback,
-    detached_remove_attribute_method_callback, detached_remove_attribute_ns_method_callback,
-    detached_remove_child_method_callback, detached_replace_child_method_callback,
-    detached_replace_children_method_callback, detached_replace_with_method_callback,
+    detached_matches_method_callback, detached_query_selector_all_method_callback,
+    detached_query_selector_method_callback, detached_remove_attribute_method_callback,
+    detached_remove_attribute_ns_method_callback, detached_remove_child_method_callback,
+    detached_replace_child_method_callback, detached_replace_with_method_callback,
     detached_set_attribute_method_callback, detached_set_attribute_ns_method_callback,
 };
 pub(in crate::native_bridge::document) use self::method_forwarders::{
@@ -63,8 +61,7 @@ pub(in crate::native_bridge::document) use self::method_forwarders::{
     detached_create_node_iterator_method_callback, detached_create_xml_element_method_callback,
     detached_create_xml_element_ns_method_callback, detached_document_implementation_getter,
     detached_get_root_node_method_callback, detached_lookup_namespace_uri_method_callback,
-    detached_move_before_method_callback, detached_normalize_method_callback,
-    detached_remove_method_callback,
+    detached_normalize_method_callback, detached_remove_method_callback,
 };
 pub(in crate::native_bridge::document) use self::mutation::*;
 pub(in crate::native_bridge::document) use self::object_access::*;
