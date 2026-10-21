@@ -53,11 +53,48 @@ struct FullscreenOptions {
     navigation_ui: FullscreenNavigationUi,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Element.requestFullscreen")]
+struct RequestFullscreenArgs {
+    #[webidl(dictionary)]
+    options: FullscreenOptions,
+}
+
+pub(crate) fn document_fullscreen_getter<'s>(
+    _scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    rv.set_bool(false);
+}
+
+pub(crate) fn fullscreen_element_getter<'s>(
+    _scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    rv.set_null();
+}
+
+pub(crate) fn fullscreen_lenient_setter<'s>(
+    _scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+}
+
 pub(crate) fn element_request_fullscreen_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<RequestFullscreenArgs>(scope, &args) else {
+        return;
+    };
+    // Dictionary conversion is observable even though this headless platform
+    // deliberately reports that fullscreen is unsupported.
+    let _ = (parsed.options.keyboard_lock, parsed.options.navigation_ui);
+
     let Ok((runtime_ptr, element)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         throw_incompatible_method_receiver(scope, "Element", "requestFullscreen");
@@ -71,17 +108,6 @@ pub(crate) fn element_request_fullscreen_callback<'s>(
         return;
     };
     rv.set(resolver.get_promise(scope).into());
-
-    let options = match fullscreen_options_for_promise(scope, &args) {
-        Ok(options) => options,
-        Err(reason) => {
-            let _ = resolver.reject(scope, reason);
-            return;
-        }
-    };
-    // Dictionary conversion is observable even though this headless platform
-    // deliberately reports that fullscreen is unsupported.
-    let _ = (options.keyboard_lock, options.navigation_ui);
 
     let active_document = runtime.document_handle();
     let Some(owner_document) = runtime.dom_host().owner_document_handle(element) else {
@@ -117,36 +143,6 @@ pub(crate) fn document_exit_fullscreen_callback<'s>(
     };
     rv.set(resolver.get_promise(scope).into());
     reject_fullscreen_promise(scope, resolver, "Document is not in fullscreen.");
-}
-
-fn fullscreen_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<FullscreenOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("Element.requestFullscreen", 1);
-    webidl::dictionary_arg(args, 0, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
-}
-
-fn fullscreen_options_for_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<FullscreenOptions, v8::Local<'s, v8::Value>> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-    match fullscreen_options(&mut scope, args) {
-        Ok(options) => Ok(options),
-        Err(error) if error.is_pending_exception() => Err(scope
-            .exception()
-            .unwrap_or_else(|| v8::undefined(&scope).into())),
-        Err(error) => {
-            let message =
-                v8_string(&scope, &error.to_string()).unwrap_or_else(|| v8::String::empty(&scope));
-            Err(v8::Exception::type_error(&scope, message))
-        }
-    }
 }
 
 fn queue_fullscreen_error_event(
