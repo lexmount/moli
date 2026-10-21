@@ -104,6 +104,7 @@ mod promise_rejection;
 mod request_init;
 mod rtc_dictionary_init;
 mod protocol_handlers;
+mod range_bindings;
 mod readable_algorithm_arrays;
 mod rtc_error;
 mod rtc_peer_dictionary;

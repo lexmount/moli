@@ -1558,9 +1558,9 @@ fn range_uses_native_record_storage_and_static_range_keeps_boundary_slots() {
                   accessorDescriptor(AbstractRange.prototype, "startOffset"),
                   accessorDescriptor(AbstractRange.prototype, "endContainer"),
                   accessorDescriptor(AbstractRange.prototype, "endOffset"),
-                  accessorDescriptor(AbstractRange.prototype, "collapsed"),
-                  accessorDescriptor(AbstractRange.prototype, "commonAncestorContainer")
-                ]
+                  accessorDescriptor(AbstractRange.prototype, "collapsed")
+                ],
+                rangeAccessor: accessorDescriptor(Range.prototype, "commonAncestorContainer")
               });
             })()
             "#,
@@ -1569,7 +1569,7 @@ fn range_uses_native_record_storage_and_static_range_keeps_boundary_slots() {
 
     assert_eq!(
         result,
-        r#"{"rangeTag":"[object Range]","rangeCtor":"Range","rangeKeys":"","rangeOwnInternalSlotCount":0,"rangeStartIsDocument":true,"rangeStartOffset":0,"rangeEndIsDocument":true,"rangeEndOffset":0,"rangeCollapsed":true,"rangeStartEnumerable":false,"createdTag":"[object Range]","createdStartIsDocument":true,"createdOwnInternalSlotCount":0,"staticTag":"[object StaticRange]","staticCtor":"StaticRange","staticAbstract":true,"staticKeys":"","staticOwnInternalSlotCount":0,"staticStartSame":true,"staticStartOffset":1,"staticEndSame":true,"staticEndOffset":2,"staticCollapsed":false,"staticStartEnumerable":false,"abstractAccessors":["startContainer:function:get startContainer:0:true:undefined:true","startOffset:function:get startOffset:0:true:undefined:true","endContainer:function:get endContainer:0:true:undefined:true","endOffset:function:get endOffset:0:true:undefined:true","collapsed:function:get collapsed:0:true:undefined:true","commonAncestorContainer:function:get commonAncestorContainer:0:true:undefined:true"]}"#
+        r#"{"rangeTag":"[object Range]","rangeCtor":"Range","rangeKeys":"","rangeOwnInternalSlotCount":0,"rangeStartIsDocument":true,"rangeStartOffset":0,"rangeEndIsDocument":true,"rangeEndOffset":0,"rangeCollapsed":true,"rangeStartEnumerable":false,"createdTag":"[object Range]","createdStartIsDocument":true,"createdOwnInternalSlotCount":0,"staticTag":"[object StaticRange]","staticCtor":"StaticRange","staticAbstract":true,"staticKeys":"","staticOwnInternalSlotCount":0,"staticStartSame":true,"staticStartOffset":1,"staticEndSame":true,"staticEndOffset":2,"staticCollapsed":false,"staticStartEnumerable":false,"abstractAccessors":["startContainer:function:get startContainer:0:true:undefined:true","startOffset:function:get startOffset:0:true:undefined:true","endContainer:function:get endContainer:0:true:undefined:true","endOffset:function:get endOffset:0:true:undefined:true","collapsed:function:get collapsed:0:true:undefined:true"],"rangeAccessor":"commonAncestorContainer:function:get commonAncestorContainer:0:true:undefined:true"}"#
     );
 }
 

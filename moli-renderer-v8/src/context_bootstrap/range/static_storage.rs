@@ -1,3 +1,4 @@
+use super::object::range_backing_object;
 use super::*;
 use crate::native_bridge::RangeBoundarySide;
 use crate::util::{get_private_value, set_private_value};
@@ -79,6 +80,9 @@ pub(in crate::context_bootstrap) fn set_static_range_boundary<'s>(
     container: v8::Local<'s, v8::Object>,
     offset: u32,
 ) {
+    let Some(range) = range_backing_object(scope, range) else {
+        return;
+    };
     set_private_value(
         scope,
         range,
@@ -93,6 +97,7 @@ pub(in crate::context_bootstrap) fn static_range_boundary_container_object<'s>(
     range: v8::Local<'s, v8::Object>,
     side: RangeBoundarySide,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let range = range_backing_object(scope, range)?;
     get_private_value(
         scope,
         range,
@@ -106,6 +111,9 @@ pub(in crate::context_bootstrap) fn static_range_boundary_offset<'s>(
     range: v8::Local<'s, v8::Object>,
     side: RangeBoundarySide,
 ) -> f64 {
+    let Some(range) = range_backing_object(scope, range) else {
+        return 0.0;
+    };
     get_private_value(
         scope,
         range,

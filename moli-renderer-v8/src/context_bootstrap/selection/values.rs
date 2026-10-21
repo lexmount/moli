@@ -33,6 +33,7 @@ impl SelectionObjectDeclaration {
 
 pub(in crate::context_bootstrap) struct SelectionRangeUpdateState<'s> {
     pub selection: v8::Local<'s, v8::Object>,
+    associated_range: v8::Local<'s, v8::Object>,
     pub old_composed_start_node: v8::Local<'s, v8::Object>,
     pub old_composed_start_offset: u32,
     pub old_composed_end_node: v8::Local<'s, v8::Object>,
@@ -349,7 +350,7 @@ pub(in crate::context_bootstrap) fn selection_range_update_state<'s>(
     let selection = get_private_value(scope, window, WINDOW_SELECTION_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
     let selected_range = selection_range(scope, selection)?;
-    if !selected_range.strict_equals(range.into()) {
+    if range_native_record_handle(scope, selected_range) != Some(range_handle) {
         return None;
     }
     let old_composed_start_node = selection_composed_start_node(scope, selection)
@@ -364,6 +365,7 @@ pub(in crate::context_bootstrap) fn selection_range_update_state<'s>(
         .unwrap_or_else(|| range_boundary_offset(scope, range, RangeBoundarySide::End) as u32);
     Some(SelectionRangeUpdateState {
         selection,
+        associated_range: selected_range,
         old_composed_start_node,
         old_composed_start_offset,
         old_composed_end_node,
@@ -416,7 +418,7 @@ pub(in crate::context_bootstrap) fn selection_sync_associated_range<'s>(
     selection_update_slots_with_composed_boundaries(
         scope,
         state.selection,
-        range,
+        state.associated_range,
         range_start_node,
         range_start_offset,
         range_end_node,
