@@ -56,7 +56,8 @@ fn parent_node_callback<'s>(
     let values = (0..args.length())
         .map(|index| args.get(index))
         .collect::<Vec<_>>();
-    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values, false);
+    let detached = receiver_has_detached_state(scope, args.this());
+    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values, detached);
 }
 
 pub(in crate::native_bridge) fn mutate_parent_node<'s>(
