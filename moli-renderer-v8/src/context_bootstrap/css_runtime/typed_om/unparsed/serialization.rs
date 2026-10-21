@@ -73,8 +73,7 @@ fn serialize_tokens(mut source: &str) -> String {
     // Read one raw token at a time, without a component-value parser consuming
     // nested blocks or synthesizing closing tokens for arbitrary string input.
     while !source.is_empty() {
-        let mut input = ParserInput::new(source);
-        let mut parser = Parser::new(&mut input);
+        let mut parser = Parser::new(source);
         let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
             break;
         };

@@ -49,12 +49,16 @@ fn reify_native<'s>(
             Work::Value(NumericValue::Math(value)) => {
                 let (kind, children): (_, &[NumericValue]) = match value {
                     MathValue::Sum(sum) => (Kind::Sum, &sum.values),
-                    MathValue::Product(children) => (Kind::Product, children),
-                    MathValue::Min(children) => (Kind::Min, children),
-                    MathValue::Max(children) => (Kind::Max, children),
-                    MathValue::Clamp(children) => (Kind::Clamp, children.as_ref()),
-                    MathValue::Negate(child) => (Kind::Negate, std::slice::from_ref(child)),
-                    MathValue::Invert(child) => (Kind::Invert, std::slice::from_ref(child)),
+                    MathValue::Product(product) => (Kind::Product, &product.values),
+                    MathValue::Min(min) => (Kind::Min, &min.values),
+                    MathValue::Max(max) => (Kind::Max, &max.values),
+                    MathValue::Clamp(clamp) => (Kind::Clamp, clamp.values.as_ref()),
+                    MathValue::Negate(negate) => {
+                        (Kind::Negate, std::slice::from_ref(&negate.value))
+                    }
+                    MathValue::Invert(invert) => {
+                        (Kind::Invert, std::slice::from_ref(&invert.value))
+                    }
                 };
                 // The style engine wraps a scalar calculation in a unary sum.
                 // At computed-value time it is the scalar CSSUnitValue.

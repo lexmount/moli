@@ -1,7 +1,4 @@
-use cssparser::{
-    BasicParseErrorKind, ParseError, Parser, ParserInput, Token, parse_nth, serialize_identifier,
-    serialize_string,
-};
+use cssparser::{ParseError, Parser, Token, parse_nth, serialize_identifier, serialize_string};
 use std::ops::Range;
 
 use moli_css_parse::serialize_component_values_single_line;
@@ -246,15 +243,14 @@ fn unused_forgiving_selector_marker(
 }
 
 fn outermost_forgiving_selector_argument_ranges(selector_text: &str) -> Option<Vec<Range<usize>>> {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(selector_text);
     let mut ranges = Vec::new();
     collect_outermost_forgiving_selector_argument_ranges(&mut parser, &mut ranges)?;
     Some(ranges)
 }
 
 fn collect_outermost_forgiving_selector_argument_ranges(
-    input: &mut Parser<'_, '_>,
+    input: &mut Parser<'_>,
     ranges: &mut Vec<Range<usize>>,
 ) -> Option<()> {
     let mut previous_was_colon = false;
@@ -270,14 +266,14 @@ fn collect_outermost_forgiving_selector_argument_ranges(
                     && (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where"));
                 let argument_start = input.position().byte_index();
                 let mut argument_end = None;
-                let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+                let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                     if is_forgiving_selector {
                         consume_component_values(input)?;
                         argument_end = Some(input.position().byte_index());
                         Ok(())
                     } else {
                         collect_outermost_forgiving_selector_argument_ranges(input, ranges)
-                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                            .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                     }
                 });
                 nested.ok()?;
@@ -287,9 +283,9 @@ fn collect_outermost_forgiving_selector_argument_ranges(
                 previous_was_colon = false;
             }
             Token::ParenthesisBlock | Token::CurlyBracketBlock => {
-                let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+                let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                     collect_outermost_forgiving_selector_argument_ranges(input, ranges)
-                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                        .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                 });
                 nested.ok()?;
                 previous_was_colon = false;
@@ -305,8 +301,7 @@ fn collect_outermost_forgiving_selector_argument_ranges(
 }
 
 fn top_level_comma_separated_selector_item_ranges(argument: &str) -> Option<Vec<Range<usize>>> {
-    let mut input = ParserInput::new(argument);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(argument);
     let mut ranges = Vec::new();
     let mut item_start = 0;
     while !parser.is_exhausted() {
@@ -857,8 +852,7 @@ pub(crate) fn dom_api_selector_list_contains_known_pseudo_element(selector_text:
 pub(crate) fn webkit_compat_pseudo_element_validation_selector(
     selector_text: &str,
 ) -> Option<String> {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(selector_text);
     let mut replacements = Vec::new();
 
     while !parser.is_exhausted() {

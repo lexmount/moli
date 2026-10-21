@@ -702,7 +702,7 @@ impl SelectorsElement for QueryElement<'_> {
         case_sensitivity: CaseSensitivity,
     ) -> bool {
         if let Some(actual_units) = self.element().attribute_utf16_units("id") {
-            let expected_units = id.as_ref().encode_utf16().collect::<Vec<_>>();
+            let expected_units = id.encode_utf16().collect::<Vec<_>>();
             return match case_sensitivity {
                 CaseSensitivity::CaseSensitive => actual_units == expected_units.as_slice(),
                 CaseSensitivity::AsciiCaseInsensitive => self
