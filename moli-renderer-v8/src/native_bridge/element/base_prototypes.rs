@@ -166,6 +166,7 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "requestFullscreen",
         length = 0,
         enumerable,
+        returns_promise,
         callback = crate::native_bridge::fullscreen::element_request_fullscreen_callback
     )]
     request_fullscreen: (),

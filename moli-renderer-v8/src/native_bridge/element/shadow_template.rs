@@ -49,6 +49,13 @@ pub(super) struct ShadowRootPrototypeReflectionDeclaration {
     )]
     active_element: (),
     #[webapi(
+        accessor_property = "fullscreenElement",
+        enumerable,
+        getter = crate::native_bridge::fullscreen::fullscreen_element_getter,
+        setter = crate::native_bridge::fullscreen::fullscreen_lenient_setter
+    )]
+    fullscreen_element: (),
+    #[webapi(
         accessor_property = "innerHTML",
         enumerable,
         getter = node_inner_html_getter_function,
