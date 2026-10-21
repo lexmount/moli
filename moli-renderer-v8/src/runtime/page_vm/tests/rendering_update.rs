@@ -1,5 +1,6 @@
 use super::*;
 
+mod image_dimensions;
 mod image_repeat;
 mod planar_transforms;
 mod print;
