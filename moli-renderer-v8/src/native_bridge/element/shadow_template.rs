@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ShadowRoot)]
+#[webapi(interface = web_api_interfaces::ShadowRoot, enumerable)]
 pub(super) struct ShadowRootPrototypeReflectionDeclaration {
     #[webapi(
         accessor_property = "onslotchange",
@@ -98,7 +98,7 @@ pub(super) struct TextPrototypeReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLSlotElement)]
+#[webapi(interface = web_api_interfaces::HTMLSlotElement, enumerable)]
 pub(super) struct HtmlSlotElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
