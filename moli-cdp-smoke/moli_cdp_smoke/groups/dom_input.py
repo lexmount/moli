@@ -12,6 +12,7 @@ from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..helpers import capture_layout
 from ..config import is_moli_browser
+from .drop_input import run_drop_input_workflow
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..progress import await_with_progress
 
@@ -246,6 +247,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
         run_keypress_dispatch_workflow(state),
         timeout_seconds=30,
     )
+    await run_drop_input_workflow(state)
     await run_cdp_control_key_name_workflow(state)
     await run_cdp_input_navigation_replacement_workflows(state)
     await run_mouse_event_workflows(state)
@@ -1054,10 +1056,17 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
             <input id="field">
             <script>
               window.__keyEvents = [];
+              window.__editEvents = [];
               window.__cancelAt = false;
               for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
                 document.getElementById('field').addEventListener(type, event => {
                   __keyEvents.push({type, trusted: event.isTrusted});
+                  if (type === 'beforeinput' || type === 'input') {
+                    __editEvents.push({type, data: event.data, inputType: event.inputType,
+                      isComposing: event.isComposing, native: event instanceof InputEvent,
+                      trusted: event.isTrusted, bubbles: event.bubbles,
+                      cancelable: event.cancelable, composed: event.composed});
+                  }
                   if (__cancelAt && type === 'keypress' && event.key === '@')
                     event.preventDefault();
                 });
@@ -1075,6 +1084,7 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
               field.value = '';
               field.focus();
               window.__keyEvents = [];
+              window.__editEvents = [];
               window.__cancelAt = cancelAt;
             }""", cancel_at)
 
@@ -1115,7 +1125,49 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
         await reset()
         await session.send("Input.insertText", {"text": "a"})
         await check("a", ["beforeinput", "input"], "insertText does not synthesize keyboard events")
+
+        async def check_edit(input_type: str, data: str | None) -> None:
+            assert_equal(
+                await page.evaluate("__editEvents"),
+                [{"type": kind, "data": data, "inputType": input_type,
+                  "isComposing": False, "native": True, "trusted": True,
+                  "bubbles": True, "cancelable": kind == "beforeinput", "composed": True}
+                 for kind in ["beforeinput", "input"]],
+                f"native InputEvent payload for {input_type}",
+            )
+
+        await check_edit("insertText", "a")
+        for key, input_type, expected in [
+            ("Backspace", "deleteContentBackward", "ac"),
+            ("Delete", "deleteContentForward", "ab"),
+        ]:
+            await reset()
+            await page.evaluate("field.value = 'abc'; field.setSelectionRange(2, 2)")
+            await page.keyboard.press(key)
+            await check(expected, ["keydown", "beforeinput", "input", "keyup"], f"{key} editing")
+            await check_edit(input_type, None)
+
+        for control in ['<textarea id="field"></textarea>', '<div id="field" contenteditable="true"></div>']:
+            await page.set_content(control)
+            await page.evaluate("""() => {
+              window.__editEvents = [];
+              for (const type of ['beforeinput', 'input']) field.addEventListener(type, event => {
+                __editEvents.push({type, data: event.data, inputType: event.inputType,
+                  isComposing: event.isComposing, native: event instanceof InputEvent,
+                  trusted: event.isTrusted, bubbles: event.bubbles,
+                  cancelable: event.cancelable, composed: event.composed});
+              });
+              field.focus();
+            }""")
+            await session.send("Input.insertText", {"text": "hello"})
+            await check_edit("insertText", "hello")
+            if control.startswith('<textarea'):
+                await page.evaluate("__editEvents = []")
+                await page.keyboard.press("Enter")
+                await check_edit("insertLineBreak", None)
+
         state.record("playwright_and_cdp_keypress_dispatch")
+        state.record("native_text_input_event_payloads")
     finally:
         if session is not None:
             await await_with_progress("keypress/detach", session.detach(), timeout_seconds=5)

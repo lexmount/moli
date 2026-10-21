@@ -154,6 +154,23 @@ or identical scenario counts:
 | Other capability boundaries | Stack timing privacy, unsupported drag/CPU throttling, PI rename extension | Observed stack timing, successful drag/throttling, rejected PI rename |
 | Response/manifest/idle details | Plaintext TextTrack bodies, document-relative data manifest URLs, same-site idle persistence | Base64 TextTrack bodies, data manifest URL fallbacks, cross-document idle reset |
 
+The `dom-input` text-editing checks were calibrated on 2026-09-12 against
+Debian `/usr/bin/chromium` 145.0.7632.116 under xvfb and run unchanged against
+Moli. `Input.insertText` on input, textarea and contenteditable elements emits
+trusted `InputEvent` instances with `data`, `inputType` and `isComposing`;
+textarea Enter and text-control Backspace/Delete have null data and distinct
+operation types. `beforeinput` is cancelable; `input` is not. Both bubble and
+are composed.
+
+The native drop checks use `Input.dispatchDragEvent` (dragEnter/dragOver/drop)
+and were also calibrated on that Chromium binary. Rich contenteditable edits
+carry null data and a read-only DataTransfer, shared by beforeinput/input and
+readable after dispatch. Text controls carry string data and null DataTransfer.
+For plaintext-only contenteditable, Chromium exposes text on beforeinput and
+the transfer on input. Cancellation and page-replaced InputEvent constructors
+are covered. These checks do not claim full drag-store lifecycle, IME or
+target-range support.
+
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the
 specification, Chromium source code, an existing Moli test, or intuition.
