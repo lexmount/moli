@@ -637,7 +637,7 @@ fn document_xpath_result_uses_browser_like_object_shape() {
 
     assert_eq!(
         result,
-        r#"{"constructorType":"function","constructorName":"XPathResult","constructorLength":0,"illegalConstructor":"throw:TypeError","tag":"[object XPathResult]","instanceofXPathResult":true,"prototypeMatch":true,"constructorOnPrototype":true,"ownKeys":[],"ownIterateNext":false,"ownResultType":false,"resultTypeValue":5,"invalidIteratorStateValue":false,"prototypeIterateNext":["function","iterateNext",0,true,true,true],"prototypeSnapshotItem":["function","snapshotItem",0,true,true,true],"prototypeToStringTag":["XPathResult",false,true,false],"prototypeResultTypePresent":true,"constructorConstantsEnumerable":true,"prototypeConstantsEnumerable":true,"prototypeMethodsEnumerable":[true,true],"constructorConstant":5,"prototypeConstant":5,"windowEnumerable":false}"#
+        r#"{"constructorType":"function","constructorName":"XPathResult","constructorLength":0,"illegalConstructor":"throw:TypeError","tag":"[object XPathResult]","instanceofXPathResult":true,"prototypeMatch":true,"constructorOnPrototype":true,"ownKeys":[],"ownIterateNext":false,"ownResultType":false,"resultTypeValue":5,"invalidIteratorStateValue":false,"prototypeIterateNext":["function","iterateNext",0,true,true,true],"prototypeSnapshotItem":["function","snapshotItem",1,true,true,true],"prototypeToStringTag":["XPathResult",false,true,false],"prototypeResultTypePresent":true,"constructorConstantsEnumerable":true,"prototypeConstantsEnumerable":true,"prototypeMethodsEnumerable":[true,true],"constructorConstant":5,"prototypeConstant":5,"windowEnumerable":false}"#
     );
 }
 
@@ -717,7 +717,7 @@ fn document_xpath_result_slots_ignore_reflection_and_spoofing() {
     snapshotLength: snapshot.snapshotLength,
     snapshotFirst: snapshot.snapshotItem(0).id,
     numberValue: number.numberValue,
-    fakeResultType: Object.getOwnPropertyDescriptor(proto, "resultType").get.call(fake),
+    fakeResultType: probe(() => Object.getOwnPropertyDescriptor(proto, "resultType").get.call(fake)),
     fakeStringValue: probe(() => Object.getOwnPropertyDescriptor(proto, "stringValue").get.call(fake)),
     fakeSnapshotItem: probe(() => proto.snapshotItem.call(fake, 0))
   });
@@ -728,7 +728,7 @@ fn document_xpath_result_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"internalNamesBefore":{"iterator":[],"snapshot":[],"number":[]},"iteratorType":5,"iteratorInvalid":false,"iteratorNext":"first","snapshotLength":2,"snapshotFirst":"first","numberValue":2,"fakeResultType":0,"fakeStringValue":"throw:TypeError","fakeSnapshotItem":"throw:TypeError"}"#
+        r#"{"internalNamesBefore":{"iterator":[],"snapshot":[],"number":[]},"iteratorType":5,"iteratorInvalid":false,"iteratorNext":"first","snapshotLength":2,"snapshotFirst":"first","numberValue":2,"fakeResultType":"throw:TypeError","fakeStringValue":"throw:TypeError","fakeSnapshotItem":"throw:TypeError"}"#
     );
 }
 
