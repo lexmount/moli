@@ -345,6 +345,31 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
     ) {
         let effects = construction.finish_children(self.runtime.dom_host_mut(), node_id);
         self.consume_parser_mutation_effects(effects);
+        if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::WindowlessDocument { .. }
+        ) && self.runtime.dom_host.is_script_element(node_id)
+        {
+            // Windowless document.write has no execution handoff. It must still
+            // prepare completed scripts so a later adoption cannot revive them.
+            // Empty or unsupported scripts retain the loader's early bailout.
+            let (_, decision) = crate::host::ScriptElementLoader::prepare(
+                &mut self.runtime.dom_host,
+                &self.runtime.document,
+                node_id,
+                crate::host::ScriptElementLoaderOptions::with_scripting_enabled(false),
+            )
+            .into_parts();
+            if let crate::host::RuntimeScriptStartDecision::Skip {
+                commit_start: true, ..
+            } = decision
+            {
+                let _ = self
+                    .runtime
+                    .dom_host
+                    .set_script_already_started(node_id, true);
+            }
+        }
     }
 
     fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: DomHandle) {

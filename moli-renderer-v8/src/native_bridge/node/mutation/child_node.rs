@@ -87,7 +87,7 @@ fn child_node_callback<'s>(
     let values = (0..args.length())
         .map(|index| args.get(index))
         .collect::<Vec<_>>();
-    mutate_child_node(scope, runtime_ptr, target, mutation, &values, false);
+    mutate_child_node(scope, runtime_ptr, target, mutation, &values);
 }
 
 pub(in crate::native_bridge) fn mutate_child_node<'s>(
@@ -96,7 +96,6 @@ pub(in crate::native_bridge) fn mutate_child_node<'s>(
     target: DomHandle,
     mutation: ChildNodeMutation,
     values: &[v8::Local<'s, v8::Value>],
-    detached: bool,
 ) {
     if !require_child_node_receiver(scope, unsafe { &*runtime_ptr }, target, mutation.name()) {
         return;
@@ -166,37 +165,22 @@ pub(in crate::native_bridge) fn mutate_child_node<'s>(
             return;
         }
         let runtime = unsafe { &mut *runtime_ptr };
-        let changed = match (replaces_target, detached) {
-            (true, true) => runtime
-                .replace_detached_native_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    node,
-                    target,
-                ),
-            (true, false) => runtime.replace_child_appending_to_current_reaction_queue(
+        let changed = if replaces_target {
+            runtime.replace_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 node,
                 target,
-            ),
-            (false, true) => runtime
-                .insert_detached_native_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    node,
-                    reference,
-                ),
-            (false, false) => runtime.insert_before_appending_to_current_reaction_queue(
+            )
+        } else {
+            runtime.insert_before_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 node,
                 reference,
-            ),
+            )
         };
         if !changed {
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");

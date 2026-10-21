@@ -350,7 +350,7 @@ impl DocumentRuntime {
                 Some(self.create_text_node_for_document(document, value))
             };
             let changed = self.replace_all_children_appending_to_current_reaction_queue(
-                scope, host_ptr, handle, node, false,
+                scope, host_ptr, handle, node,
             );
             record_dom_binding_timing("dom.setTextContent", started);
             return changed;

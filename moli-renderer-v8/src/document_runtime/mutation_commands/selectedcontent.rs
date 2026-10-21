@@ -461,7 +461,6 @@ impl DocumentRuntime {
             host_ptr,
             selectedcontent,
             Some(fragment),
-            false,
         )
     }
 }

@@ -56,8 +56,7 @@ fn parent_node_callback<'s>(
     let values = (0..args.length())
         .map(|index| args.get(index))
         .collect::<Vec<_>>();
-    let detached = receiver_has_detached_state(scope, args.this());
-    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values, detached);
+    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values);
 }
 
 pub(in crate::native_bridge) fn mutate_parent_node<'s>(
@@ -66,7 +65,6 @@ pub(in crate::native_bridge) fn mutate_parent_node<'s>(
     parent: DomHandle,
     mutation: ParentNodeMutation,
     values: &[v8::Local<'s, v8::Value>],
-    detached: bool,
 ) {
     if !require_parent_node_receiver(
         scope,
@@ -109,15 +107,6 @@ pub(in crate::native_bridge) fn mutate_parent_node<'s>(
                     runtime_ptr,
                     parent,
                     Some(node),
-                    detached,
-                ),
-            _ if detached => runtime
-                .insert_detached_native_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    node,
-                    reference,
                 ),
             _ => runtime.insert_before_appending_to_current_reaction_queue(
                 scope,
