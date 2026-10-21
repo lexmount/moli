@@ -1,21 +1,49 @@
 use super::*;
-use crate::util::{
-    call_script_visible_function, object_property_as_object, utf16_slice_lossy, v8_string, v8str,
-};
+use crate::util::utf16_slice_lossy;
 
 pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    context_node: v8::Local<'s, v8::Object>,
     html: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let start = native_range_boundary_point(scope, receiver, RangeBoundarySide::Start)?.container();
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *host_ptr };
-    let document = node_owner_document_or_self(scope, context_node)?;
-    let Some(context_handle) = range_tree_op_node_handle(scope, host_ptr, context_node) else {
-        return create_detached_contextual_fragment(scope, document, html);
+    let document_handle = runtime.dom_host().owner_document_handle(start)?;
+    let element = match runtime.dom_host().node(start)?.node_type() {
+        NodeType::Element => Some(start),
+        NodeType::Text | NodeType::CDataSection | NodeType::Comment => {
+            runtime.dom_host().parent_node(start).filter(|parent| {
+                runtime
+                    .dom_host()
+                    .node(*parent)
+                    .is_some_and(|node| node.is_element())
+            })
+        }
+        _ => None,
     };
-    let document_handle = range_tree_op_node_handle(scope, host_ptr, document)?;
+    let element = element.filter(|element| {
+        !(runtime
+            .dom_host()
+            .node_document_is_html_document(*element)
+            .unwrap_or(false)
+            && runtime
+                .dom_host()
+                .node(*element)
+                .is_some_and(|node| node.is_html_element_named("html")))
+    });
+    // Context selection uses the actual tree, including for windowless documents
+    // and registered native Proxies. Public Node properties are author-controlled.
+    let context_handle = element.unwrap_or_else(|| {
+        runtime
+            .dom_host_mut()
+            .create_element_without_attributes_for_document(
+                document_handle,
+                "body".to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            )
+    });
     let fragment = runtime.build_range_contextual_fragment_from_html(
         scope,
         host_ptr,
@@ -26,66 +54,6 @@ pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     runtime
         .native_bridge_mut()
         .wrap_handle_for_receiver(scope, host_ptr, receiver, fragment)
-}
-
-fn create_detached_contextual_fragment<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    html: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let implementation = object_property_as_object(scope, document, "implementation")?;
-    let create_html_document =
-        implementation.get(scope, v8str(scope, "createHTMLDocument").into())?;
-    let create_html_document = v8::Local::<v8::Function>::try_from(create_html_document).ok()?;
-    let empty_title = v8_string(scope, "")?;
-    let scratch = call_script_visible_function(
-        scope,
-        create_html_document,
-        implementation.into(),
-        &[empty_title.into()],
-        "Range.createContextualFragment detached createHTMLDocument fallback",
-    )?;
-    let scratch = v8::Local::<v8::Object>::try_from(scratch).ok()?;
-    let scratch_body = object_property_as_object(scope, scratch, "body")?;
-    let html = v8_string(scope, html)?;
-    let _ = scratch_body.set(scope, v8str(scope, "innerHTML").into(), html.into());
-
-    let create_fragment = document.get(scope, v8str(scope, "createDocumentFragment").into())?;
-    let create_fragment = v8::Local::<v8::Function>::try_from(create_fragment).ok()?;
-    let fragment = call_script_visible_function(
-        scope,
-        create_fragment,
-        document.into(),
-        &[],
-        "Range.createContextualFragment detached createDocumentFragment fallback",
-    )?;
-    let fragment = v8::Local::<v8::Object>::try_from(fragment).ok()?;
-    let import_node = document.get(scope, v8str(scope, "importNode").into())?;
-    let import_node = v8::Local::<v8::Function>::try_from(import_node).ok()?;
-    let append_child = fragment.get(scope, v8str(scope, "appendChild").into())?;
-    let append_child = v8::Local::<v8::Function>::try_from(append_child).ok()?;
-    let child_nodes = object_property_as_object(scope, scratch_body, "childNodes")?;
-    let length = child_nodes
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|length| length.uint32_value(scope))?;
-    for index in 0..length {
-        let child = child_nodes.get_index(scope, index)?;
-        let imported = call_script_visible_function(
-            scope,
-            import_node,
-            document.into(),
-            &[child, v8::Boolean::new(scope, true).into()],
-            "Range.createContextualFragment detached importNode fallback",
-        )?;
-        let _ = call_script_visible_function(
-            scope,
-            append_child,
-            fragment.into(),
-            &[imported],
-            "Range.createContextualFragment detached appendChild fallback",
-        );
-    }
-    Some(fragment)
 }
 
 pub(in crate::context_bootstrap::range_algorithms) fn create_document_fragment_handle(
