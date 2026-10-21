@@ -159,3 +159,4 @@ mod worker_options;
 mod video_codec_support;
 
 mod named_node_map_receivers;
+mod xpath_result_bindings;
