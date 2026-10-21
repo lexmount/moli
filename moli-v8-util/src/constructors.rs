@@ -8,6 +8,7 @@ use crate::symbols::{get_private_object, set_private_value};
 
 const ECMASCRIPT_CONSTRUCTORS_SLOT: &str = "__moliEcmascriptConstructors";
 const ECMASCRIPT_PROTOTYPES_SLOT: &str = "__moliEcmascriptPrototypes";
+const ECMASCRIPT_METHODS_SLOT: &str = "__moliEcmascriptMethods";
 
 #[derive(Clone, Copy)]
 pub enum WebApiIntrinsicKind {
@@ -65,6 +66,20 @@ pub fn initialize_ecmascript_intrinsic_registry<'s>(
 ) {
     let _ = intrinsic_registry_object(scope, global, ECMASCRIPT_CONSTRUCTORS_SLOT);
     let _ = intrinsic_registry_object(scope, global, ECMASCRIPT_PROTOTYPES_SLOT);
+    // Capture before author code runs, including before lazy Web API objects
+    // materialize. Reinitialization must never consult a replaced Reflect.
+    if get_private_object(scope, global, ECMASCRIPT_METHODS_SLOT).is_none() {
+        let methods = intrinsic_registry_object(scope, global, ECMASCRIPT_METHODS_SLOT);
+        if let Some(reflect) = global
+            .get(scope, v8str(scope, "Reflect").into())
+            .and_then(|value| Local::<Object>::try_from(value).ok())
+            && let Some(set) = reflect
+                .get(scope, v8str(scope, "set").into())
+                .and_then(|value| Local::<v8::Function>::try_from(value).ok())
+        {
+            let _ = define_intrinsic(scope, methods, "Reflect.set", set.into());
+        }
+    }
 }
 
 fn define_intrinsic<'s>(
@@ -156,6 +171,16 @@ pub fn registered_ecmascript_prototype<'s>(
     registered_intrinsic(scope, global, ECMASCRIPT_PROTOTYPES_SLOT, name)
 }
 
+/// The realm's original Reflect.set, captured during intrinsic bootstrap.
+/// Missing captures never fall back to author-controlled public properties.
+pub fn registered_ecmascript_reflect_set<'s>(
+    scope: &mut PinScope<'s, '_>,
+    global: Local<'s, Object>,
+) -> Option<Local<'s, v8::Function>> {
+    registered_intrinsic(scope, global, ECMASCRIPT_METHODS_SLOT, "Reflect.set")
+        .and_then(|value| Local::<v8::Function>::try_from(value).ok())
+}
+
 pub fn constructor_object<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
@@ -230,7 +255,7 @@ mod tests {
         ECMASCRIPT_CONSTRUCTORS_SLOT, ECMASCRIPT_PROTOTYPES_SLOT, global_constructor_object,
         global_constructor_prototype, initialize_ecmascript_intrinsic_registry,
         register_ecmascript_intrinsic, registered_ecmascript_constructor,
-        registered_ecmascript_prototype,
+        registered_ecmascript_prototype, registered_ecmascript_reflect_set,
     };
     use crate::strings::v8str;
 
@@ -289,6 +314,47 @@ mod tests {
         assert!(
             global_constructor_prototype(scope, "Sample")
                 .is_some_and(|value| value.strict_equals(intrinsic_prototype.into()))
+        );
+    }
+
+    #[test]
+    fn captured_reflect_set_survives_author_overrides_and_reinitialization() {
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let global = context.global(scope);
+
+        initialize_ecmascript_intrinsic_registry(scope, global);
+        let original = registered_ecmascript_reflect_set(scope, global).unwrap();
+        let source = v8str(
+            scope,
+            "Reflect.set = () => { throw new Error('author set'); }; globalThis.Reflect = new Proxy({}, { get() { throw new Error('author Reflect'); } });",
+        );
+        v8::Script::compile(scope, source, None)
+            .unwrap()
+            .run(scope)
+            .unwrap();
+        initialize_ecmascript_intrinsic_registry(scope, global);
+        let captured = registered_ecmascript_reflect_set(scope, global).unwrap();
+        assert!(captured.strict_equals(original.into()));
+
+        let target = v8::Object::new(scope);
+        let key = v8str(scope, "value");
+        let value = v8::Integer::new(scope, 42);
+        let result = captured
+            .call(
+                scope,
+                v8::undefined(scope).into(),
+                &[target.into(), key.into(), value.into()],
+            )
+            .unwrap();
+        assert!(result.is_true());
+        assert_eq!(
+            target.get(scope, key.into()).unwrap().int32_value(scope),
+            Some(42)
         );
     }
 

@@ -22,6 +22,16 @@ use crate::{
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+const WINDOW_NAMED_PROPERTIES_READY_SLOT: &str = "__moliWindowNamedPropertiesReady";
+
+pub(in crate::context_bootstrap) fn is_window_named_properties_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    crate::util::get_private_value(scope, object, WINDOW_NAMED_PROPERTIES_READY_SLOT)
+        .is_some_and(|value| value.is_true())
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowEarlyTemplateMethodsDeclaration {
@@ -416,6 +426,12 @@ pub(super) fn install_window_named_properties_object(
     let named_properties = named_properties_template
         .new_instance(scope)
         .ok_or_else(|| anyhow!("failed to create Window named properties object"))?;
+    crate::util::set_private_value(
+        scope,
+        named_properties,
+        WINDOW_NAMED_PROPERTIES_READY_SLOT,
+        v8::Boolean::new(scope, true).into(),
+    );
     if !named_properties
         .set_prototype(scope, event_target_prototype.into())
         .unwrap_or(false)
