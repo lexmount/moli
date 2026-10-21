@@ -111,7 +111,8 @@ pub(super) enum FormInvocationState {
     Filling,
     Ready,
     Submitting,
-    Responding(v8::Global<v8::Promise>),
+    ResponseQueued,
+    Responding,
     Invalidated,
     Navigating,
 }
