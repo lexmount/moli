@@ -1,3 +1,4 @@
+use super::custom::CustomEventInit;
 use super::super::{EventInit, ui::UiEventInit};
 use super::*;
 use crate::{web_api_interfaces, webidl};
@@ -19,15 +20,6 @@ pub(super) struct CompositionEventInit<'s> {
     ui: UiEventInit<'s>,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     data: webidl::DomString16,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "CustomEventInit", snapshot)]
-pub(super) struct CustomEventInit<'s> {
-    #[webidl(inherit)]
-    base: EventInit,
-    #[webidl(converter = "raw", snapshot_default = v8::null(scope).into())]
-    detail: Option<v8::Local<'s, v8::Value>>,
 }
 
 impl<'s> FocusEventInit<'s> {
@@ -55,20 +47,6 @@ impl<'s> CompositionEventInit<'s> {
     ) {
         self.initialize_snapshot(scope, event)
             .expect("CompositionEventInit state");
-    }
-}
-
-impl<'s> CustomEventInit<'s> {
-    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.base.bubbles, self.base.cancelable, self.base.composed)
-    }
-    pub(super) fn initialize(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) {
-        self.initialize_snapshot(scope, event)
-            .expect("CustomEventInit state");
     }
 }
 
