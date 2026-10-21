@@ -347,7 +347,12 @@ impl MutationCoordinator {
         root: NativeNodeId,
         requests: &mut ScriptStartRequests,
     ) {
-        for script_handle in dom_host.connected_script_handles(root) {
+        // Secondary Documents have DOM-connected descendants even though they
+        // are outside the host tree's internal lifecycle-connected set.
+        if !dom_host.is_connected_to_document(root) {
+            return;
+        }
+        for script_handle in dom_host.script_handles_in_subtree(root) {
             requests.queue(script_handle, false);
         }
     }

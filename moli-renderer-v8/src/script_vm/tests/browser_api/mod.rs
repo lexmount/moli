@@ -135,6 +135,7 @@ mod transferable_streams;
 mod traversal;
 mod traversal_coordinator;
 mod traversal_receivers;
+mod tree_script_preparation;
 mod trusted_types;
 mod trusted_types_attributes;
 mod value_event_init;
