@@ -4,9 +4,10 @@ use std::process::Command;
 
 const HTML: &str = include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html");
 fn assert_layout_table_dump(args: &[&str]) -> Result<()> {
+    // Computed block boxes retain the legacy center wrappers.
     assert_markdown_dump(
         HTML,
-        include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md"),
+        include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout-computed.md"),
         args,
     )
 }
