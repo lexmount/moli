@@ -162,7 +162,7 @@ fn dom_parser_uses_its_constructor_realm_associated_document() {
 }
 
 #[test]
-fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
+fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_object_prototype() {
     let mut vm = new_storage_test_vm("https://dom-parser-new-target.test/top.html");
 
     let result = vm
@@ -231,52 +231,52 @@ fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
   return JSON.stringify({
     directTop: check(
       Reflect.construct(child.DOMParser, [], TopBad),
-      DOMParser.prototype,
+      Object.prototype,
       childUrl
     ),
     directChild: check(
       Reflect.construct(DOMParser, [], ChildBad),
-      child.DOMParser.prototype,
+      child.Object.prototype,
       topUrl
     ),
     boundChild: check(
       Reflect.construct(DOMParser, [], BoundChild),
-      child.DOMParser.prototype,
+      child.Object.prototype,
       topUrl
     ),
     boundTop: check(
       Reflect.construct(child.DOMParser, [], BoundTop),
-      DOMParser.prototype,
+      Object.prototype,
       childUrl
     ),
     proxyChild: check(
       Reflect.construct(DOMParser, [], ProxyChild),
-      child.DOMParser.prototype,
+      child.Object.prototype,
       topUrl
     ),
     proxyTop: check(
       Reflect.construct(child.DOMParser, [], ProxyTop),
-      DOMParser.prototype,
+      Object.prototype,
       childUrl
     ),
     getterProxyChild: check(
       Reflect.construct(DOMParser, [], GetterProxyChild),
-      child.DOMParser.prototype,
+      child.Object.prototype,
       topUrl
     ),
     boundProxyChild: check(
       Reflect.construct(DOMParser, [], BoundProxyChild),
-      child.DOMParser.prototype,
+      child.Object.prototype,
       topUrl
     ),
     boundProxyTop: check(
       Reflect.construct(child.DOMParser, [], BoundProxyTop),
-      DOMParser.prototype,
+      Object.prototype,
       childUrl
     ),
     getterBoundProxyChild: check(
       Reflect.construct(DOMParser, [], GetterBoundProxyChild),
-      child.DOMParser.prototype,
+      child.Object.prototype,
       topUrl
     ),
     getterCount,

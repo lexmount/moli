@@ -2535,13 +2535,14 @@ fn html_legacy_factory_constructors_honor_new_target_prototypes() {
     ].join(':');
   }
 
-  function fallback(ctor, iface) {
+  function fallback(ctor, iface, localName) {
     function BadNewTarget() {}
     BadNewTarget.prototype = 1;
     const instance = Reflect.construct(ctor, [], BadNewTarget);
     return [
-      Object.getPrototypeOf(instance) === iface.prototype,
-      instance instanceof iface
+      Object.getPrototypeOf(instance) === Object.prototype,
+      instance instanceof iface,
+      Object.getOwnPropertyDescriptor(Element.prototype, 'localName').get.call(instance) === localName
     ].join(':');
   }
 
@@ -2562,9 +2563,9 @@ fn html_legacy_factory_constructors_honor_new_target_prototypes() {
     check(Audio, HTMLAudioElement, 'audio', ['clip.mp3']),
     check(Image, HTMLImageElement, 'img', [4, 5]),
     check(Option, HTMLOptionElement, 'option', ['label', 'value']),
-    fallback(Audio, HTMLAudioElement),
-    fallback(Image, HTMLImageElement),
-    fallback(Option, HTMLOptionElement),
+    fallback(Audio, HTMLAudioElement, 'audio'),
+    fallback(Image, HTMLImageElement, 'img'),
+    fallback(Option, HTMLOptionElement, 'option'),
     prototypeGets,
     Object.getPrototypeOf(proxyImage) === proxyPrototype
   ].join('|');
@@ -2577,7 +2578,7 @@ fn html_legacy_factory_constructors_honor_new_target_prototypes() {
         result,
         concat!(
             "true:true:true:true|true:true:true:true|true:true:true:true|",
-            "true:true|true:true|true:true|1|true"
+            "true:false:true|true:false:true|true:false:true|1|true"
         )
     );
 }

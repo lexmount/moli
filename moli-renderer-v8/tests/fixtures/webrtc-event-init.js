@@ -66,7 +66,7 @@
       const init = new Proxy({bubbles: true, cancelable: true, composed: true, tone: {toString() { reads.push('string'); return '\ud800'; }}},
         {get(object, key) { reads.push(key); return object[key]; }});
       const event = Reflect.construct(C, [type, init], target);
-      assert(reads.join() === 'type,bubbles,cancelable,composed,tone,string,prototype' && Object.getPrototypeOf(event) === prototype && event.tone === '\ud800', 'conversion before allocation');
+      assert(reads.join() === 'prototype,type,bubbles,cancelable,composed,tone,string' && Object.getPrototypeOf(event) === prototype && event.tone === '\ud800', 'native allocation before conversion');
     });
     check(`${realm} tone constructor arity before conversions`, () => {
       throws(w.TypeError, () => new C());
@@ -88,7 +88,7 @@
       const target = new Proxy(function Target() {}, {get(object, key) { if (key === 'prototype') throw marker; return object[key]; }});
       try { Reflect.construct(C, ['x', {tone: {toString() { reads.push('tone'); return ''; }}}], target); }
       catch (caught) { error = caught; }
-      assert(error === marker && reads.join() === 'bubbles,tone', 'newTarget exception after conversion');
+      assert(error === marker && reads.join() === 'bubbles', 'newTarget exception prevents conversion');
     });
     check(`${realm} tone author and revoked Proxy receiver`, () => {
       const event = new C('x', {tone: '1'}), get = Object.getOwnPropertyDescriptor(C.prototype, 'tone').get;
