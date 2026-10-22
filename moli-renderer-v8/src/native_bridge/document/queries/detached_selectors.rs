@@ -13,6 +13,7 @@ use crate::native_bridge::document::{
     detached_native_handle_for_runtime, detached_native_object_for_handle, detached_node_type,
     detached_owner_document_object, detached_parent_node_object,
 };
+use crate::native_bridge::element::selector_validity_states;
 use crate::native_bridge::node::throw_native_selector_error_for_selector;
 use crate::native_bridge::{
     collections,
@@ -330,14 +331,7 @@ fn detached_native_query_selector_objects<'s>(
     find_all: bool,
 ) -> Option<Result<Vec<v8::Local<'s, v8::Object>>, crate::selector::SelectorError>> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let root_handle = detached_native_handle_for_runtime(scope, runtime_ptr, root)?;
-    let handles = if find_all {
-        unsafe { &*runtime_ptr }.query_selector_all(Some(root_handle), selector)
-    } else {
-        unsafe { &*runtime_ptr }
-            .query_selector(Some(root_handle), selector)
-            .map(|handle| handle.into_iter().collect())
-    };
+    let handles = detached_native_query_selector_handles(scope, root, selector, find_all)?;
     Some(handles.map(|handles: Vec<DomHandle>| {
         handles
             .into_iter()
@@ -350,10 +344,27 @@ fn detached_native_query_selector_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     root: v8::Local<'s, v8::Object>,
     selector: &str,
+    find_all: bool,
 ) -> Option<Result<Vec<DomHandle>, crate::selector::SelectorError>> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let root_handle = detached_native_handle_for_runtime(scope, runtime_ptr, root)?;
-    Some(unsafe { &*runtime_ptr }.query_selector_all(Some(root_handle), selector))
+    let validity_states = selector_validity_states(scope, runtime_ptr, selector);
+    let runtime = unsafe { &*runtime_ptr };
+    Some(if find_all {
+        runtime.query_selector_all_with_optional_validity_states(
+            Some(root_handle),
+            selector,
+            validity_states.as_ref(),
+        )
+    } else {
+        runtime
+            .query_selector_with_optional_validity_states(
+                Some(root_handle),
+                selector,
+                validity_states.as_ref(),
+            )
+            .map(|handle| handle.into_iter().collect())
+    })
 }
 
 fn detached_native_matches_selector<'s>(
@@ -363,7 +374,14 @@ fn detached_native_matches_selector<'s>(
 ) -> Option<Result<bool, crate::selector::SelectorError>> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
-    Some(unsafe { &*runtime_ptr }.matches(handle, selector))
+    let validity_states = selector_validity_states(scope, runtime_ptr, selector);
+    Some(
+        unsafe { &*runtime_ptr }.matches_with_optional_validity_states(
+            handle,
+            selector,
+            validity_states.as_ref(),
+        ),
+    )
 }
 
 fn detached_native_element_by_id_object<'s>(
@@ -539,7 +557,9 @@ pub(in crate::native_bridge) fn bridge_detached_query_selector_all_callback<'a>(
     else {
         return;
     };
-    if let Some(result) = detached_native_query_selector_handles(scope, root, &parsed.selectors) {
+    if let Some(result) =
+        detached_native_query_selector_handles(scope, root, &parsed.selectors, true)
+    {
         match result {
             Ok(handles) => {
                 let context = root
@@ -606,6 +626,17 @@ pub(in crate::native_bridge) fn bridge_detached_matches_callback<'a>(
         rv.set(value);
         return;
     }
+    // Native nodes use the same computed state for every selector, including
+    // combinations of :defined with constraint-validation pseudo-classes.
+    if let Some(result) = detached_native_matches_selector(scope, node, &parsed.selectors) {
+        match result {
+            Ok(is_match) => rv.set_bool(is_match),
+            Err(error) => {
+                throw_native_selector_error_for_selector(scope, &parsed.selectors, &error)
+            }
+        }
+        return;
+    }
     match detached_stylo_matches_selector_if_uses_defined_pseudo(scope, node, &parsed.selectors) {
         Ok(Some(is_match)) => {
             rv.set_bool(is_match);
@@ -616,15 +647,6 @@ pub(in crate::native_bridge) fn bridge_detached_matches_callback<'a>(
             throw_native_selector_error_for_selector(scope, &parsed.selectors, &error);
             return;
         }
-    }
-    if let Some(result) = detached_native_matches_selector(scope, node, &parsed.selectors) {
-        match result {
-            Ok(is_match) => rv.set_bool(is_match),
-            Err(error) => {
-                throw_native_selector_error_for_selector(scope, &parsed.selectors, &error)
-            }
-        }
-        return;
     }
     match detached_stylo_matches_selector(scope, node, &parsed.selectors) {
         Ok(is_match) => rv.set_bool(is_match),
