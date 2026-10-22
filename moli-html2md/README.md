@@ -4,7 +4,8 @@ Convert an existing DOM to Markdown through a small read-only interface. This
 is an independent implementation without an HTML parser or intermediate DOM.
 Unicode character classification uses `icu_properties`, with an ASCII fast path.
 MathML escaping stays fused with Markdown protection and whitespace handling.
-`moli-dom::native::NativeDom` implements the interface directly.
+`moli-dom::native::NativeDom` implements the source-only interface; the browser
+wraps it in a read-only view with computed CSS and live control values.
 
 ```rust
 let root = dom.body_node_id().unwrap_or(dom.document_node_id());
@@ -18,11 +19,13 @@ let markdown = moli_html2md::Converter::new(moli_html2md::Options {
 
 ## DOM interface
 
-Implement `Dom` with a copyable node ID and four borrowed queries:
+Implement `Dom` with a copyable node ID and four required borrowed queries and four optional hooks:
 
 - `node_kind`: document/fragment, lowercase element tag, decoded text, or ignored node.
 - `first_child` and `next_sibling`: ordered traversal of a stable, acyclic tree.
 - `attribute`: decoded attribute value, borrowed from the DOM.
+- Optional hooks: `control_value`, `has_block_layout`, `has_text_boundary`,
+  and `may_have_fragment_links`.
 
 Browser adapters can provide `control_value` for current input and textarea values,
 including an empty string after a user clears it. Without that optional query,
@@ -44,7 +47,7 @@ their children as ordinary content. Comments and doctypes produce no output.
 - Lists, quotes, headings, and table cells have output buffers finalized by exit
   tasks. Raw code text uses the same iterative traversal with formatting disabled.
 - Tables inspect their direct sections, rows and cells before conversion. Nested
-  content uses the task stack; eligibility checks never rescan cell descendants.
+  content uses the task stack; structural pre-scans stop at nested table boundaries.
 - Finished blocks and table cells form an owned fragment tree. Fallback joins
   and writes to parent buffers move fragment roots without copying descendant
   text; the final output is flattened in one iterative pass. Fragment destruction
@@ -107,9 +110,10 @@ spaces and blank lines. Empty blocks still separate surrounding text.
 This is a structural content dump. It omits non-rendered serialized state blobs
 but retains content in collapsed panels and inactive tabs. It does not evaluate
 stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
-through the optional DOM query. Moli's browser exporter also uses current CSS
+through the optional boundary hooks. Moli's browser exporter also uses current CSS
 visibility, retaining disclosure panels and collapsed lines in visible source
-blocks while excluding hidden UI templates. The converter cannot preserve all HTML presentation (for example, arbitrary ordered-list numbering).
+blocks while excluding hidden UI templates. The converter cannot preserve all
+HTML presentation (for example, arbitrary ordered-list numbering).
 DOM snapshots used by Moli's optional
 strip/base/frame transformations remain the responsibility of the caller.
 
@@ -175,3 +179,11 @@ positions. Its language marker and physical newlines are preserved; a standalone
 cell boundaries without blank lines. Plain heading wrappers remain Markdown
 headings. Captured headings, list items and quotations contain their own fragment
 targets rather than appending them to the preceding block.
+
+Moli's browser export retains explicit disclosure targets, content tabpanels,
+searchable hidden content and collapsed lines inside visible preformatted source.
+Hidden navigation, menus, dialogs and popovers do not become disclosure content.
+A root visibility veil can be inherited without discarding the document; explicit
+hidden descendants remain excluded. Hidden table cells retain their positions.
+Computed boundaries supplement ordinary document structure; they do not turn
+native lists into loose lists or inline form controls into separate paragraphs.

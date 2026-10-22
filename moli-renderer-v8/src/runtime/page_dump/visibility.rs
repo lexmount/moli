@@ -55,7 +55,10 @@ impl<'a> MarkdownDom<'a> {
                 && matches!(values.visibility.as_str(), "hidden" | "collapse")
         });
         let fragment_links = styles.iter().any(|(node, _)| {
-            Dom::attribute(dom, *node, "href").is_some_and(|href| href.starts_with('#'))
+            Dom::attribute(dom, *node, "href").is_some_and(|href| {
+                href.strip_prefix('#')
+                    .is_some_and(|fragment| !fragment.is_empty())
+            })
         });
         let mut disclosures = HashSet::new();
         let mut targets = HashMap::new();
@@ -207,7 +210,13 @@ impl<'a> MarkdownDom<'a> {
             }
             let display = values.display.as_str();
             if !matches!(display, "" | "none" | "contents" | "inline" | "inline flow") {
-                if display.starts_with("inline") {
+                let native_control = matches!(
+                    Dom::node_kind(dom, node),
+                    NodeKind::Element("input" | "textarea" | "select" | "button")
+                );
+                if native_control && display == "inline-block" {
+                    // Their inline control semantics already separate readable values.
+                } else if display.starts_with("inline") {
                     inline_boundaries.insert(node);
                 } else {
                     blocks.insert(node);
@@ -222,11 +231,11 @@ impl<'a> MarkdownDom<'a> {
                 }
             }
             if let Some(base_url) = base_url {
-                let names = match Dom::node_kind(dom, node) {
+                let tag = match Dom::node_kind(dom, node) {
                     NodeKind::Element(tag) => tag,
                     _ => "",
                 };
-                for name in moli_html2md::resource_url_attributes(names) {
+                for name in moli_html2md::resource_url_attributes(tag) {
                     let Some(value) = Dom::attribute(dom, node, name)
                         .map(str::trim)
                         .filter(|value| !value.is_empty() && !value.starts_with('#'))
@@ -279,19 +288,21 @@ fn content_context(dom: &NativeDom, mut node: NativeNodeId) -> bool {
     loop {
         if matches!(
             Dom::node_kind(dom, node),
-            NodeKind::Element("nav" | "header" | "footer")
-        ) || Dom::attribute(dom, node, "role").is_some_and(|role| {
-            [
-                "navigation",
-                "banner",
-                "contentinfo",
-                "menu",
-                "dialog",
-                "alertdialog",
-            ]
-            .iter()
-            .any(|excluded| has_role(role, excluded))
-        }) {
+            NodeKind::Element("nav" | "header" | "footer" | "dialog")
+        ) || Dom::attribute(dom, node, "popover").is_some()
+            || Dom::attribute(dom, node, "role").is_some_and(|role| {
+                [
+                    "navigation",
+                    "banner",
+                    "contentinfo",
+                    "menu",
+                    "dialog",
+                    "alertdialog",
+                ]
+                .iter()
+                .any(|excluded| has_role(role, excluded))
+            })
+        {
             return false;
         }
         let Some(parent) = dom.parent_node(node) else {
@@ -344,7 +355,27 @@ impl Dom for MarkdownDom<'_> {
             return NodeKind::Other;
         }
         let kind = Dom::node_kind(self.dom, node);
-        if self.invisible.contains(&node) {
+        if self.invisible.contains(&node)
+            && !matches!(
+                kind,
+                NodeKind::Element(
+                    "table"
+                        | "thead"
+                        | "tbody"
+                        | "tfoot"
+                        | "tr"
+                        | "td"
+                        | "th"
+                        | "caption"
+                        | "ul"
+                        | "ol"
+                        | "li"
+                        | "dl"
+                        | "dt"
+                        | "dd"
+                )
+            )
+        {
             // Visibility can be overridden by a descendant. Keep traversing
             // without emitting this element's own image, link or formatting.
             return NodeKind::Document;
