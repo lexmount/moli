@@ -349,6 +349,15 @@ fn image_selected_picture_source(
         {
             continue;
         }
+        if let Some(type_hint) = source.attribute_ns("", "type")
+            // An empty HTML hint leaves the format unconstrained. Nonempty
+            // hints use the same MIME parser and codec capabilities as preload.
+            && !type_hint.chars().all(|ch| matches!(ch, '\t' | '\n' | '\x0c' | '\r' | ' '))
+            && !moli_web_mime::mime_essence(type_hint)
+                .is_some_and(|essence| moli_image::supports_image_mime_essence(&essence))
+        {
+            continue;
+        }
         if let Some(srcset) = source.attribute("srcset")
             && let Some(candidate) = selected_srcset_candidate(
                 srcset,
@@ -506,7 +515,23 @@ pub(crate) fn apply_image_attribute_mutation_plan(
     {
         let runtime = unsafe { &mut *runtime_ptr };
         for &target in &plan.targets {
-            reset_image_load_dispatch(runtime, target);
+            let keeps_pending_request =
+                runtime
+                    .pending_image_load_event(target)
+                    .is_some_and(|pending| {
+                        runtime.pending_image_load_event_is_current(target, pending)
+                            && pending.terminal_source().is_none()
+                            && image_selected_request_key(runtime, target)
+                                .as_ref()
+                                .is_some_and(|request| {
+                                    runtime.pending_image_resource_matches_request(
+                                        target, pending, request,
+                                    )
+                                })
+                    });
+            if !keeps_pending_request {
+                reset_image_load_dispatch(runtime, target);
+            }
         }
     }
     for target in plan.targets {
