@@ -35,7 +35,7 @@ use super::navigation_seed::history_entry_seed_for_reload;
 use super::navigation_serialize::serialize_history_entries;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_disabled_entries,
-    navigation_document_is_active, navigation_unload_event_active, runtime_window_is_global,
+    navigation_document_is_live, navigation_unload_event_active, runtime_window_is_global,
     runtime_window_owner, window_history_for_holder, window_location_for_holder,
 };
 use super::*;
@@ -685,7 +685,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         // no such callback, and a popup's retained Document can still accept a
         // fragment change before its queued close task retires the Document.
         if !location_has_relevant_document(scope, location)
-            || (navigate_outcome.is_some() && !navigation_document_is_active(scope, owner))
+            || (navigate_outcome.is_some() && !navigation_document_is_live(scope, owner))
         {
             return;
         }
@@ -799,7 +799,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             if !location_has_relevant_document(scope, location)
-                || !navigation_document_is_active(scope, owner)
+                || !navigation_document_is_live(scope, owner)
             {
                 return;
             }
@@ -814,7 +814,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 .unwrap_or_else(|| v8::null(scope).into());
             dispatch_popstate_event(scope, host_ptr, owner, state);
             if !location_has_relevant_document(scope, location)
-                || !navigation_document_is_active(scope, owner)
+                || !navigation_document_is_live(scope, owner)
             {
                 return;
             }

@@ -15,9 +15,9 @@ use super::super::navigation_lifecycle::{
     settle_navigation_finished_resolved_immediately, settle_navigation_transition_finished_local,
 };
 use super::super::navigation_window::{
-    navigation_can_update_current_entry, navigation_document_is_active,
-    navigation_document_is_initial_empty, navigation_has_current_document,
-    navigation_has_disabled_entries, navigation_unload_event_active,
+    navigation_can_update_current_entry, navigation_document_is_initial_empty,
+    navigation_document_is_live, navigation_has_current_document, navigation_has_disabled_entries,
+    navigation_unload_event_active, runtime_window_document_is_fully_active,
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
@@ -51,7 +51,7 @@ pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
 ) {
     let navigation = args.this();
     let owner = runtime_window_owner(scope, navigation);
-    if !navigation_document_is_active(scope, owner) {
+    if !runtime_window_document_is_fully_active(scope, owner) {
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
@@ -162,7 +162,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         }
     };
     if !navigation_has_current_document(scope, args.this())
-        || !navigation_document_is_active(scope, owner)
+        || !navigation_document_is_live(scope, owner)
     {
         rv.set(
             navigation_rejected_dom_exception_result(
@@ -313,7 +313,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             );
             return;
         }
-        if !navigation_document_is_active(scope, owner) {
+        if !navigation_document_is_live(scope, owner) {
             if let Some(navigation) = navigation_for_event
                 && let Some(outcome) = navigate_outcome.as_ref()
             {
@@ -550,7 +550,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             );
             return;
         }
-        if !navigation_document_is_active(scope, owner) {
+        if !navigation_document_is_live(scope, owner) {
             rv.set(
                 navigation_canceled_after_dispatch_result(
                     scope,

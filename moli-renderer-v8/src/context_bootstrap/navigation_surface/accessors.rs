@@ -95,7 +95,7 @@ fn navigation_can_go_back_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let owner = runtime_window_owner(scope, args.this());
-    if !navigation_document_is_active(scope, owner) {
+    if !runtime_window_document_is_fully_active(scope, owner) {
         rv.set_bool(false);
         return;
     }
@@ -118,7 +118,7 @@ fn navigation_can_go_forward_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let owner = runtime_window_owner(scope, args.this());
-    if !navigation_document_is_active(scope, owner) {
+    if !runtime_window_document_is_fully_active(scope, owner) {
         rv.set_bool(false);
         return;
     }
@@ -175,7 +175,7 @@ fn navigation_current_entry_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let owner = runtime_window_owner(scope, args.this());
-    if !navigation_document_is_active(scope, owner)
+    if !runtime_window_document_is_fully_active(scope, owner)
         && !navigation_error_event_active(scope, args.this())
     {
         rv.set(v8::null(scope).into());

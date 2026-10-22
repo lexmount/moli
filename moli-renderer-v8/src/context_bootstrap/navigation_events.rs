@@ -24,9 +24,9 @@ use super::navigation_lifecycle::{
 };
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
-    navigation_has_disabled_entries, replace_navigation_unload_event_active,
-    runtime_window_dispatch_scope, runtime_window_is_global, runtime_window_owner,
+    child_browsing_context_handle_for_runtime_owner, navigation_has_disabled_entries,
+    replace_navigation_unload_event_active, runtime_window_dispatch_scope,
+    runtime_window_document_is_fully_active, runtime_window_is_global, runtime_window_owner,
     should_dispatch_hash_change, window_history_for_holder, window_location_for_holder,
     window_task_target_for_runtime_owner,
 };
@@ -1484,7 +1484,7 @@ fn navigation_destination_entry_is_active<'s>(
     entry: v8::Local<'s, v8::Object>,
 ) -> bool {
     let owner = runtime_window_owner(scope, entry);
-    navigation_document_is_active(scope, owner)
+    runtime_window_document_is_fully_active(scope, owner)
 }
 
 pub(super) fn set_navigation_destination_url<'s>(
