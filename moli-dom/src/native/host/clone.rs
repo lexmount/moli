@@ -528,19 +528,15 @@ impl DomHost {
             }
             super::NodeData::DocumentFragment(_) => self.create_document_fragment(),
             super::NodeData::Element(element) => {
-                let clone = if element.namespace() == "http://www.w3.org/1999/xhtml"
-                    && element.prefix().is_none()
-                {
-                    self.create_element(element.local_name())
-                } else {
-                    let qualified_name = match element.prefix() {
-                        Some(prefix) if !prefix.is_empty() => {
-                            format!("{prefix}:{}", element.local_name())
-                        }
-                        _ => element.local_name().to_owned(),
-                    };
-                    self.create_element_ns(Some(element.namespace()), &qualified_name)?
-                };
+                // Copy an existing identity without HTML name normalization or
+                // reparsing it as a new qualified name. Template contents must
+                // also be created for the receiving Document from the outset.
+                let clone = self.create_element_without_attributes_for_document(
+                    document_handle,
+                    element.local_name().to_owned(),
+                    element.namespace().to_owned(),
+                    element.prefix().map(str::to_owned),
+                );
                 self.copy_element_state(node, clone);
                 clone
             }
@@ -615,6 +611,57 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://clone.test/").expect("test URL"),
         ))
+    }
+
+    #[test]
+    fn element_copies_preserve_native_identity_and_target_template_document() {
+        const HTML: &str = "http://www.w3.org/1999/xhtml";
+        let mut source = test_host();
+        let xml_document = source.create_detached_xml_document();
+        let mut target = test_host();
+        let target_xml = target.create_detached_xml_document();
+        for (namespace, local_name, prefix) in [
+            (HTML, "MiXeD", None),
+            (HTML, "MiXeD", Some("p")),
+            ("", "a:b", None),
+            (HTML, "template", None),
+        ] {
+            let original = source.create_element_without_attributes_for_document(
+                xml_document,
+                local_name.into(),
+                namespace.into(),
+                prefix.map(str::to_owned),
+            );
+            let cloned = source.clone_node(original, true).unwrap();
+            let imported = source
+                .import_node(source.document_handle(), original, true)
+                .unwrap();
+            let foreign_html = target
+                .import_foreign_node(target.document_handle(), source.dom(), original, true)
+                .unwrap();
+            let foreign_xml = target
+                .import_foreign_node(target_xml, source.dom(), original, true)
+                .unwrap();
+            for (host, handle, document, is_html_document) in [
+                (&source, cloned, xml_document, false),
+                (&source, imported, source.document_handle(), true),
+                (&target, foreign_html, target.document_handle(), true),
+                (&target, foreign_xml, target_xml, false),
+            ] {
+                let node = host.node(handle).unwrap();
+                let element = node.as_element().unwrap();
+                assert_eq!(node.owner_document(), Some(document));
+                assert_eq!(element.local_name(), local_name);
+                assert_eq!(element.namespace(), namespace);
+                assert_eq!(element.prefix(), prefix);
+                if local_name == "template" {
+                    assert_eq!(
+                        host.node_document_is_html_document(element.template_contents().unwrap()),
+                        Some(is_html_document),
+                    );
+                }
+            }
+        }
     }
 
     #[test]
