@@ -181,6 +181,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn font_shorthand_remains_usable_without_optional_size_adjust_support() {
+        assert!(!crate::stylo_style_rule_property_name_is_enabled(
+            "font-size-adjust"
+        ));
+        let mut block = parse_declaration_block("font: 16px serif");
+        assert_eq!(block.property_value("font").as_deref(), Some("16px serif"));
+        assert_ne!(
+            block.set_property("font", "12px sans-serif", false),
+            CssSetResult::ParseError
+        );
+        assert_eq!(
+            block.property_value("font").as_deref(),
+            Some("12px sans-serif")
+        );
+    }
+
+    #[test]
     fn typed_units_follow_native_declaration_mutations() {
         let mut block = parse_declaration_block("opacity: 25%; margin-left: 1px");
         let percent = CssDeclaredUnitValue {

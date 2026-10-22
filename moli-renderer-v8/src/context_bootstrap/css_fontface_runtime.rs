@@ -52,9 +52,7 @@ pub(in crate::context_bootstrap) use events::{
 pub(super) use font_face::{
     font_face_constructor_callback, font_face_load_callback, install_font_face_template_accessors,
 };
-pub(crate) use font_face::{
-    font_face_raw_family, mark_font_face_css_connected,
-};
+pub(crate) use font_face::{font_face_raw_family, mark_font_face_css_connected};
 pub(super) use font_face_set::{
     font_face_set_add_callback, font_face_set_check_callback, font_face_set_clear_callback,
     font_face_set_delete_callback, font_face_set_entries_callback, font_face_set_for_each_callback,

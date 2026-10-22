@@ -2,7 +2,7 @@ use super::subresource::{PreparedSubresourceFetch, SubresourceFetchOptions};
 use super::*;
 use crate::{
     native_bridge::{JsContextHost, WindowExecutionContextIdentity},
-    types::{AsyncSubresourceFetchCompletion, PendingFontFaceFetch, SubresourceResourceType},
+    types::{AsyncSubresourceFetchCompletion, PendingFontFaceFetch},
 };
 use anyhow::{Context, Result, anyhow};
 
@@ -49,9 +49,9 @@ pub(crate) fn resolve_font_face_sources(
 
 /// Explicit CSS Font Loading requests share document ownership, CORS and the
 /// renderer network queue with other resources. Never call page-defined fetch.
-pub(crate) fn start_font_face_fetch(
-    scope: &mut v8::PinScope<'_, '_>,
-    face: v8::Local<'_, v8::Object>,
+pub(crate) fn start_font_face_fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
     request_context: Option<WindowExecutionContextIdentity>,
     source: &str,
 ) -> Result<()> {
@@ -70,6 +70,15 @@ pub(crate) fn start_font_face_fetch(
         .filter(|identity| host.window_execution_context_identity_is_current(*identity))
         .context("FontFace creation Window is no longer available")?;
     let owner = identity.dispatch_scope();
+    let context = face
+        .get_creation_context(scope)
+        .context("FontFace creation realm is unavailable")?;
+    let binding = crate::native_bridge::WindowExecutionContextBinding::new(
+        identity.owner(),
+        owner,
+        identity.realm_token(),
+        v8::Global::new(scope, context),
+    );
     let resource_loader = host
         .document_resource_loader_for_dispatch_scope(owner)
         .context("Font request has no live document resource loader")?;
@@ -114,15 +123,6 @@ pub(crate) fn start_font_face_fetch(
     moli_fetch::FetchUrlList::new(&request_url, &[])
         .validate_request_mode(moli_fetch::RequestMode::Cors, &environment.request_origin)
         .map_err(anyhow::Error::msg)?;
-    if matches!(request_url.scheme(), "http" | "https")
-        && !resource_loader
-            .request_client()
-            .optional_resource_fetch_enabled(SubresourceResourceType::Font)
-    {
-        return Err(anyhow!(
-            "FontFace requests are disabled by the resource policy"
-        ));
-    }
     let font = PendingFontFaceFetch {
         face: v8::Global::new(scope, face),
         redirect_state: FetchCspRedirectState::new(&policy),
@@ -138,15 +138,17 @@ pub(crate) fn start_font_face_fetch(
         request_url.clone(),
         SubresourceFetchOptions::FONT,
     )?;
-    let internal_id = host.record_async_font_face_fetch(
-        v8::Global::new(scope, scope.get_current_context()),
-        font,
-        owner,
-        prepared.cancel_handle.clone(),
-        prepared.network_partition_key.clone(),
-        prepared.network_context.policy_context,
-        prepared.pending_info.clone(),
-    );
+    let internal_id = host
+        .record_async_font_face_fetch(
+            binding,
+            &resource_loader,
+            font,
+            prepared.cancel_handle.clone(),
+            prepared.network_partition_key.clone(),
+            prepared.network_context.policy_context,
+            prepared.pending_info.clone(),
+        )
+        .context("FontFace Document was retired")?;
     // Local URL responses use the same resource completion task as network
     // responses, preserving the observable loading state before settlement.
     let blob = CapturedBlobUrl::capture(&request_url);

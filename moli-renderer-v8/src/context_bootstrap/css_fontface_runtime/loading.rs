@@ -201,30 +201,44 @@ pub(super) fn initialize<'s>(
     publish_state(scope, face);
 }
 
+/// Observing .loaded creates its stable promise in the FontFace realm. Native
+/// status and CSS loading remain independent of whether the promise is read.
 pub(super) fn loaded_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
+    let context = face.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(promise) = get_private_value(scope, face, FONT_FACE_LOADED_SLOT)
         .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())
     {
         return Some(promise);
     }
-    let load = super::state::get(scope, face)?;
-    let context = face.get_creation_context(scope)?;
-    let scope = &mut v8::ContextScope::new(scope, context);
-    // Native errors can exist before page code observes .loaded. Creating a
-    // rejected promise in the constructor would report an unhandled rejection
-    // even when the page never obtains that promise.
-    let resolver = v8::PromiseResolver::new(scope).expect("FontFace loaded resolver");
+    let resource = super::state::get(scope, face)?;
+    let (status, error) = {
+        let resource = resource.borrow();
+        (resource.status(), resource.error())
+    };
+    let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     set_private_value(scope, face, FONT_FACE_LOADED_SLOT, promise.into());
-    set_private_value(scope, face, RESOLVER, resolver.into());
-    // A retained pending .loaded promise also retains its settlement endpoint.
-    // Loading faces have a Window-owned native root, released on completion
-    // or retirement; unloaded JS-only cycles remain collectible.
-    set_private_value(scope, promise.into(), PROMISE_OWNER, face.into());
-    settle_loaded_promise(scope, face, &load);
+    match status {
+        FontFaceStatus::Loaded => {
+            let _ = resolver.resolve(scope, face.into());
+        }
+        FontFaceStatus::Error => {
+            let error = error.expect("native failed font has an error");
+            let exception = new_dom_exception_value(scope, error.message, error.name);
+            let _ = resolver.reject(scope, exception);
+        }
+        FontFaceStatus::Unloaded | FontFaceStatus::Loading => {
+            set_private_value(scope, face, RESOLVER, resolver.into());
+            // Retaining a pending promise keeps its native settlement endpoint
+            // alive, including CSS-started loads. The JS heap owns this edge,
+            // allowing an otherwise unreachable cycle to be collected.
+            set_private_value(scope, promise.into(), PROMISE_OWNER, face.into());
+        }
+    }
     Some(promise)
 }
 
