@@ -66,3 +66,5 @@ Implications:
 `serde_v8 0.320.0` depends on `deno_v8 0.3.0`, whose published manifest still
 selects V8 150. The adjacent slim `vendor/deno_v8-0.3.0` patch changes only that
 dependency constraint to V8 152 so serde_v8 and Moli share one V8 type universe.
+
+- `src/function_ext.cc` exposes bound-function targets for WebIDL NewTarget realm lookup through bound-function and Proxy chains.

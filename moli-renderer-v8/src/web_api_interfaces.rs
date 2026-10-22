@@ -330,6 +330,9 @@ interfaces! {
     MediaSourceHandle;
     SourceBuffer: EventTarget;
     SourceBufferList: EventTarget;
+
+    MediaMetadata;
+    ChapterInformation;
     MediaSource: EventTarget;
     MemoryInfo;
     MIDIPort: EventTarget;
