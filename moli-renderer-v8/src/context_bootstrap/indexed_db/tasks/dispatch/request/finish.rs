@@ -18,6 +18,9 @@ pub(super) fn finish_request_dispatch<'s>(
 ) {
     request_finished(scope, request);
     release_request_dispatch_refs(scope, request);
+    crate::context_bootstrap::indexed_db::connection_queue::finish_connection_request(
+        scope, request,
+    );
 }
 
 fn request_finished<'s>(scope: &mut v8::PinScope<'s, '_>, request: v8::Local<'s, v8::Object>) {

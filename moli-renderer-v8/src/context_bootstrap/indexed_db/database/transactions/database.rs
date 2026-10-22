@@ -136,7 +136,9 @@ pub(in crate::context_bootstrap::indexed_db) fn close_indexed_db_database_connec
     if let Some(handle) = database_handle_from_value(scope, database.into()) {
         let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
     }
-    if !coordinated {
-        enqueue_drain_blocked_open_requests_task(scope);
+    if !coordinated
+        && let Some(key) = object_string_property(scope, database, INDEXED_DB_DATABASE_KEY_SLOT)
+    {
+        wake_connection_requests(scope, &key);
     }
 }

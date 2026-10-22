@@ -25,6 +25,12 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_open_request<'s>(
         })
     }) {
         Ok(opened) => {
+            crate::context_bootstrap::indexed_db::connection_queue::retain_provisional_connection(
+                scope,
+                request,
+                opened.database,
+                opened.upgrade_transaction,
+            );
             let info = match info::opened_database_info(scope, &database_name, &opened) {
                 Ok(info) => info,
                 Err(error) => {
