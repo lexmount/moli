@@ -267,6 +267,48 @@ mod tests {
     }
 
     #[test]
+    fn markdown_computed_outer_display_preserves_text_boundaries() {
+        for (display, expected) in [
+            ("flow-root list-item", "Before\n\nItem\n\nAfter"),
+            ("inline list-item", "Before\nItem\nAfter"),
+            ("inline flow-root list-item", "Before\nItem\nAfter"),
+            ("inline-block", "Before\nItem\nAfter"),
+            ("inline flow", "BeforeItemAfter"),
+            ("contents", "BeforeItemAfter"),
+        ] {
+            let mut dom = NativeDom::new_html(test_url());
+            let body = dom.create_element("body");
+            assert!(dom.append_child(dom.document_node_id(), body));
+            append_text(&mut dom, body, "Before");
+            let item = dom.create_element("span");
+            assert!(dom.append_child(body, item));
+            append_text(&mut dom, item, "Item");
+            append_text(&mut dom, body, "After");
+            let styles = vec![
+                (
+                    body,
+                    visibility::ExportStyle {
+                        display: "block".into(),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    item,
+                    visibility::ExportStyle {
+                        display: display.into(),
+                        ..Default::default()
+                    },
+                ),
+            ];
+            assert_eq!(
+                render_markdown_document_with_styles(&dom, styles, None),
+                expected,
+                "{display}"
+            );
+        }
+    }
+
+    #[test]
     fn markdown_renderer_preserves_common_inline_and_list_shape() {
         let mut dom = NativeDom::new_html(test_url());
         let body = dom.create_element("body");
