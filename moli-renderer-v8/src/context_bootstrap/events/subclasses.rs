@@ -12,6 +12,7 @@ mod custom;
 mod data;
 mod error;
 mod keyboard;
+mod navigation_init;
 mod pointer;
 mod security_policy;
 

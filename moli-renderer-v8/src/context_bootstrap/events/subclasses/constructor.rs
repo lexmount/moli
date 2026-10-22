@@ -11,6 +11,8 @@ fn event_subclass_kind_from_callback_data(
 
 enum EventSubclassInit<'s> {
     Custom(custom::CustomEventInit<'s>),
+    Navigate(navigation_init::NavigateEventInitMembers<'s>),
+    CurrentEntryChange(navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>),
     Keyboard(keyboard::KeyboardEventInit<'s>),
     Storage(data::StorageEventInitMembers<'s>),
     SecurityPolicy(security_policy::SecurityPolicyViolationEventInit),
@@ -30,6 +32,12 @@ impl<'s> EventSubclassInit<'s> {
         kind: EventSubclassKind,
     ) -> Option<Self> {
         Some(match kind {
+            EventSubclassKind::NavigateEvent => {
+                Self::Navigate(navigation_init::parse_navigate_event_init(scope, args)?)
+            }
+            EventSubclassKind::NavigationCurrentEntryChangeEvent => Self::CurrentEntryChange(
+                navigation_init::parse_current_entry_change_event_init(scope, args)?,
+            ),
             EventSubclassKind::CustomEvent => Self::Custom(super::super::parse_event_dictionary(
                 scope,
                 args,
@@ -64,6 +72,8 @@ impl<'s> EventSubclassInit<'s> {
     fn event_flags(&self) -> (bool, bool, bool) {
         match self {
             Self::Custom(init) => init.event_flags(),
+            Self::Navigate(init) => init.event_flags(),
+            Self::CurrentEntryChange(init) => init.event_flags(),
             Self::Keyboard(init) => init.event_flags(),
             Self::Storage(init) => init.event_flags(),
             Self::SecurityPolicy(init) => init.event_flags(),
@@ -86,6 +96,10 @@ impl<'s> EventSubclassInit<'s> {
     ) -> bool {
         match self {
             Self::Custom(parsed) => parsed.initialize(scope, event),
+            Self::Navigate(parsed) => data::initialize_navigate_event(scope, event, parsed),
+            Self::CurrentEntryChange(parsed) => {
+                data::initialize_navigation_current_entry_change_event(scope, event, parsed)
+            }
             Self::Keyboard(parsed) => keyboard::initialize_keyboard_event(scope, event, parsed),
             Self::Storage(parsed) => data::initialize_storage_event(scope, event, parsed),
             Self::SecurityPolicy(parsed) => parsed.initialize(scope, event),
@@ -161,16 +175,6 @@ fn initialize_legacy_event<'s>(
                 return false;
             }
         }
-        EventSubclassKind::NavigationCurrentEntryChangeEvent => {
-            if !data::initialize_navigation_current_entry_change_event(scope, event, init) {
-                return false;
-            }
-        }
-        EventSubclassKind::NavigateEvent => {
-            if !data::initialize_navigate_event(scope, event, init) {
-                return false;
-            }
-        }
         EventSubclassKind::CloseEvent => data::initialize_close_event(scope, event, init),
         EventSubclassKind::SubmitEvent => {
             if !data::initialize_submit_event(scope, event, init) {
@@ -206,7 +210,9 @@ fn initialize_legacy_event<'s>(
                 return false;
             }
         }
-        EventSubclassKind::CustomEvent
+        EventSubclassKind::NavigateEvent
+        | EventSubclassKind::NavigationCurrentEntryChangeEvent
+        | EventSubclassKind::CustomEvent
         | EventSubclassKind::KeyboardEvent
         | EventSubclassKind::StorageEvent
         | EventSubclassKind::SecurityPolicyViolationEvent
@@ -232,6 +238,21 @@ fn event_subclass_constructor_callback<'s>(
             scope,
             &format!(
                 "Failed to construct '{}': Please use the 'new' operator.",
+                kind.constructor_name()
+            ),
+        );
+        return;
+    }
+
+    if matches!(
+        kind,
+        EventSubclassKind::NavigateEvent | EventSubclassKind::NavigationCurrentEntryChangeEvent
+    ) && args.length() < 2
+    {
+        throw_type_error(
+            scope,
+            &format!(
+                "Failed to construct '{}': 2 arguments required.",
                 kind.constructor_name()
             ),
         );
@@ -286,7 +307,10 @@ pub(in crate::context_bootstrap) fn build_event_subclass_template<'s>(
     kind: EventSubclassKind,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     let data: v8::Local<'s, v8::Value> = v8::Integer::new(scope, kind as i32).into();
-    let length = if matches!(kind, EventSubclassKind::NavigateEvent) {
+    let length = if matches!(
+        kind,
+        EventSubclassKind::NavigateEvent | EventSubclassKind::NavigationCurrentEntryChangeEvent
+    ) {
         2
     } else {
         1

@@ -204,30 +204,6 @@ struct PromiseRejectionEventInitMembers<'s> {
     reason: Option<v8::Local<'s, v8::Value>>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct NavigationCurrentEntryChangeEventInitDeclaration<'scope> {
-    from: v8::Local<'scope, v8::Value>,
-    navigation_type: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct NavigateEventInitDeclaration<'scope> {
-    navigation_type: v8::Local<'scope, v8::String>,
-    destination: v8::Local<'scope, v8::Value>,
-    can_intercept: bool,
-    user_initiated: bool,
-    hash_change: bool,
-    signal: v8::Local<'scope, v8::Value>,
-    form_data: v8::Local<'scope, v8::Value>,
-    download_request: v8::Local<'scope, v8::Value>,
-    info: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property = "hasUAVisualTransition")]
-    has_ua_visual_transition: bool,
-    source_element: v8::Local<'scope, v8::Value>,
-}
-
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ToggleEventInit", snapshot)]
 struct ToggleEventInitMembers<'s> {
@@ -541,92 +517,20 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_navigation_cu
 >(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let Some(init) = init else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'NavigationCurrentEntryChangeEvent': NavigationCurrentEntryChangeEventInit.from is required.",
-        );
-        return false;
-    };
-    let Some(from) = init_value_property(scope, Some(init), "from") else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'NavigationCurrentEntryChangeEvent': NavigationCurrentEntryChangeEventInit.from is required.",
-        );
-        return false;
-    };
-    let navigation_type = init_value_property(scope, Some(init), "navigationType")
-        .unwrap_or_else(|| v8::null(scope).into());
-    NavigationCurrentEntryChangeEventInitDeclaration::new(from, navigation_type)
-        .initialize(scope, event)
-        .expect("NavigationCurrentEntryChangeEvent init declaration should initialize");
-    true
+    init: super::navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>,
+) {
+    init.initialize_snapshot(scope, event)
+        .expect("NavigationCurrentEntryChangeEvent state should initialize");
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_navigate_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let Some(init) = init else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'NavigateEvent': NavigateEventInit.destination is required.",
-        );
-        return false;
-    };
-    let Some(destination) = init_value_property(scope, Some(init), "destination") else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'NavigateEvent': NavigateEventInit.destination is required.",
-        );
-        return false;
-    };
-    let Some(signal) = init_value_property(scope, Some(init), "signal") else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'NavigateEvent': NavigateEventInit.signal is required.",
-        );
-        return false;
-    };
-
-    let navigation_type = init_string_property(scope, Some(init), "navigationType", "push");
-    let can_intercept = init_bool_property(scope, Some(init), "canIntercept", false);
-    let user_initiated = init_bool_property(scope, Some(init), "userInitiated", false);
-    let hash_change = init_bool_property(scope, Some(init), "hashChange", false);
-    let has_ua_visual_transition =
-        init_bool_property(scope, Some(init), "hasUAVisualTransition", false);
-    let form_data = init_value_property(scope, Some(init), "formData")
-        .unwrap_or_else(|| v8::null(scope).into());
-    let download_request = init_value_property(scope, Some(init), "downloadRequest")
-        .unwrap_or_else(|| v8::null(scope).into());
-    let info = init
-        .get(scope, v8str(scope, "info").into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let source_element = init_value_property(scope, Some(init), "sourceElement")
-        .unwrap_or_else(|| v8::null(scope).into());
-
-    let navigation_type = v8_string(scope, &navigation_type).expect("NavigateEvent navigationType");
-    NavigateEventInitDeclaration::new(
-        navigation_type,
-        destination,
-        can_intercept,
-        user_initiated,
-        hash_change,
-        signal,
-        form_data,
-        download_request,
-        info,
-        has_ua_visual_transition,
-        source_element,
-    )
-    .initialize(scope, event)
-    .expect("NavigateEvent init declaration should initialize");
+    init: super::navigation_init::NavigateEventInitMembers<'s>,
+) {
+    init.initialize_snapshot(scope, event)
+        .expect("NavigateEvent state should initialize");
     define_navigate_event_internal_flag(scope, event, true);
-
-    true
 }
 
 fn define_navigate_event_internal_flag(
