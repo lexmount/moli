@@ -409,51 +409,60 @@ impl NativeDom {
         handle
     }
 
-    pub fn create_text_node(&mut self, data: &str) -> NativeNodeId {
+    pub fn create_text_node(
+        &mut self,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> NativeNodeId {
         self.create_text_node_for_document(self.document_node_id, data)
     }
 
     pub fn create_text_node_for_document(
         &mut self,
         owner_document: NativeNodeId,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::Text(Text::new(data.to_owned())),
+            NodeData::Text(Text::new(data)),
             Some(owner_document),
             false,
             false,
         )
     }
 
-    pub fn create_cdata_section(&mut self, data: &str) -> NativeNodeId {
+    pub fn create_cdata_section(
+        &mut self,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> NativeNodeId {
         self.create_cdata_section_for_document(self.document_node_id, data)
     }
 
     pub fn create_cdata_section_for_document(
         &mut self,
         owner_document: NativeNodeId,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::CDataSection(CDataSection::new(data.to_owned())),
+            NodeData::CDataSection(CDataSection::new(data)),
             Some(owner_document),
             false,
             false,
         )
     }
 
-    pub fn create_comment(&mut self, data: &str) -> NativeNodeId {
+    pub fn create_comment(
+        &mut self,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> NativeNodeId {
         self.create_comment_for_document(self.document_node_id, data)
     }
 
     pub fn create_comment_for_document(
         &mut self,
         owner_document: NativeNodeId,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::Comment(Comment::new(data.to_owned())),
+            NodeData::Comment(Comment::new(data)),
             Some(owner_document),
             false,
             false,
@@ -555,7 +564,11 @@ impl NativeDom {
         true
     }
 
-    pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NativeNodeId {
+    pub fn create_processing_instruction(
+        &mut self,
+        target: &str,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> NativeNodeId {
         self.create_processing_instruction_for_document(self.document_node_id, target, data)
     }
 
@@ -563,13 +576,10 @@ impl NativeDom {
         &mut self,
         owner_document: NativeNodeId,
         target: &str,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::ProcessingInstruction(ProcessingInstruction::new(
-                target.to_owned(),
-                data.to_owned(),
-            )),
+            NodeData::ProcessingInstruction(ProcessingInstruction::new(target.to_owned(), data)),
             Some(owner_document),
             false,
             false,
@@ -1039,11 +1049,12 @@ mod tests {
             "DocumentType grew to {} bytes",
             size_of::<DocumentType>()
         );
-        // Growing text fits within the existing NodeData/Node size limits below.
-        assert_eq!(size_of::<Text>(), size_of::<String>());
-        assert_eq!(size_of::<CDataSection>(), 16);
-        assert_eq!(size_of::<Comment>(), 16);
-        assert_eq!(size_of::<ProcessingInstruction>(), 32);
+        // Growable lossless strings retain one thin pointer for rare unpaired
+        // units; the full NodeData and Node arena bounds below remain unchanged.
+        assert_eq!(size_of::<Text>(), 32);
+        assert_eq!(size_of::<CDataSection>(), 32);
+        assert_eq!(size_of::<Comment>(), 32);
+        assert_eq!(size_of::<ProcessingInstruction>(), 48);
         assert!(
             size_of::<Attribute>() <= 40,
             "Attribute common record grew to {} bytes",

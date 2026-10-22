@@ -446,15 +446,29 @@ fn set_cloned_native_element_attribute<'s>(
 fn clone_character_data_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> String {
-    if detached_has_native_handle(scope, node) {
-        return read_detached_native_text_content(scope, node).unwrap_or_default();
+) -> moli_dom::native::DomStringValue {
+    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, node)
+    {
+        return unsafe { &*runtime_ptr }
+            .dom_host()
+            .node(handle)
+            .and_then(moli_dom::native::Node::character_data_value)
+            .cloned()
+            .unwrap_or_default();
     }
-    if detached_is_node(scope, node) {
-        return detached_state_string(scope, node, "data").unwrap_or_default();
-    }
-    object_string_property(scope, node, "data")
-        .or_else(|| object_string_property(scope, node, "nodeValue"))
+    let source = if detached_is_node(scope, node) {
+        detached_state_object(scope, node).unwrap_or(node)
+    } else {
+        node
+    };
+    source
+        .get(scope, v8str(scope, "data").into())
+        .and_then(|value| value.to_string(scope))
+        .map(|value| {
+            moli_dom::native::DomStringValue::from_utf16(
+                crate::util::v8_string_to_u16_string(scope, value).as_slice(),
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -985,20 +999,20 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
         }
         3 => {
             let data = clone_character_data_value(scope, node);
-            build_detached_text_object(scope, document, &data)
+            build_detached_text_object(scope, document, data)
         }
         4 => {
             let data = clone_character_data_value(scope, node);
-            build_detached_cdata_section_object(scope, document, &data)
+            build_detached_cdata_section_object(scope, document, data)
         }
         7 => {
             let target = clone_processing_instruction_target(scope, node);
             let data = clone_character_data_value(scope, node);
-            build_detached_processing_instruction_object(scope, document, &target, &data)
+            build_detached_processing_instruction_object(scope, document, &target, data)
         }
         8 => {
             let data = clone_character_data_value(scope, node);
-            build_detached_comment_object(scope, document, &data)
+            build_detached_comment_object(scope, document, data)
         }
         10 => {
             let CloneDocumentTypeMetadata {

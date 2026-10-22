@@ -43,9 +43,6 @@ use crate::{
             RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
             StreamingSubresourceFetchState, SubresourceResourceType,
         },
-        util::{
-            string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,
-        },
     },
 };
 #[cfg(test)]
@@ -67,7 +64,6 @@ use std::{
     rc::{Rc, Weak},
 };
 use url::Url;
-use widestring::U16String;
 
 pub(crate) use self::resource_timing::SharedResourceTimingBufferRegistry;
 
@@ -962,7 +958,6 @@ pub(crate) struct JsContextHost {
     pending_child_modulepreload_work_awaiting_realm:
         VecDeque<crate::frame_owner_model::FrameDocumentModulepreloadWorkAwaitingRealm>,
     active_child_browsing_context_host_loads: Vec<DomHandle>,
-    character_data_utf16_overrides: HashMap<DomHandle, U16String>,
     child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshNavigationTask>,
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,
