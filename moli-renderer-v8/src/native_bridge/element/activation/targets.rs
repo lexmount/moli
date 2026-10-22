@@ -291,12 +291,7 @@ fn navigate_hyperlink_popup_target(
     };
     let opener = (!relations.suppress_opener).then_some(creator.opener);
     let runtime = unsafe { &mut *runtime_ptr };
-    if runtime.has_browser_owned_auxiliary_page_factory()
-        && (!relations.suppress_opener
-            || moli_url::is_about_blank(
-                &url::Url::parse(resolved_url).expect("resolved hyperlink URL"),
-            ))
-    {
+    if runtime.has_browser_owned_auxiliary_page_factory() {
         let child_handle = match dispatch_scope {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
             _ => None,

@@ -335,9 +335,7 @@ pub(crate) fn window_open_callback<'s>(
         _ if parsed_features.is_popup() => crate::RendererPopupDisposition::NewWindow,
         _ => crate::RendererPopupDisposition::Foreground,
     };
-    if host.has_browser_owned_auxiliary_page_factory()
-        && (!suppress_opener || Url::parse(&url).is_ok_and(|url| moli_url::is_about_blank(&url)))
-    {
+    if host.has_browser_owned_auxiliary_page_factory() {
         let creator_child_handle = window_receiver_child_handle(scope, entered_window);
         match host.open_renderer_owned_auxiliary_window(
             scope,
