@@ -11,7 +11,7 @@ use super::{
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
     build_mutation_records_array,
     callback::ObserverCallback,
-    intersection, invoke_intersection_delivery, invoke_mutation_deliveries,
+    intersection, invoke_intersection_delivery, invoke_mutation_delivery,
     node_is_intersection_root, node_is_intersection_target,
     schedule::{self, ObserverTask},
 };
@@ -230,16 +230,22 @@ pub(super) fn flush_mutation_observers(
     host_ptr: *mut JsContextHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
-    let deliveries = access.mutate(|host| {
+    let observers = access.mutate(|host| {
         host.begin_mutation_observer_delivery();
         let store = host.observers_mut(&OBSERVER_STORE_ACCESS);
         store.begin_task(ObserverTask::MutationDelivery);
-        store.collect_mutation_deliveries(scope, host_ptr)
+        store.take_mutation_notification_observers()
     });
 
-    // `access` holds no host reference here. The callback can safely call
-    // observe(), disconnect(), takeRecords(), or mutate the DOM reentrantly.
-    invoke_mutation_deliveries(scope, host_ptr, deliveries);
+    for id in observers {
+        // Earlier callbacks can mutate, drain, or disconnect a later observer.
+        // Only the observer list is frozen at the start of the microtask.
+        let delivery = access.store(|store| store.take_mutation_delivery(scope, host_ptr, id));
+        if let Some(delivery) = delivery {
+            // No host reference is live while page JavaScript executes.
+            invoke_mutation_delivery(scope, host_ptr, delivery);
+        }
+    }
 
     access.mutate(JsContextHost::end_mutation_observer_delivery);
     dispatch_pending_slotchange_events(&mut access, scope, host_ptr);
