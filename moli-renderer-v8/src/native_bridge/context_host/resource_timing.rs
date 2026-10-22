@@ -141,6 +141,22 @@ impl SharedResourceTimingBufferRegistry {
 }
 
 impl SharedResourceTimingBufferRegistry {
+    pub(crate) fn note_resource_timing_entry_queued(&self, id: ResourceTimingBufferId) {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id)
+            && !state.can_add_to_primary()
+        {
+            state.dropped_entries_count = state.dropped_entries_count.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn resource_timing_dropped_entries_count(&self, id: ResourceTimingBufferId) -> u64 {
+        self.0
+            .borrow()
+            .buffers
+            .get(&id)
+            .map_or(0, |state| state.dropped_entries_count)
+    }
+
     pub(crate) fn resource_timing_buffer_can_add_immediately(
         &self,
         id: ResourceTimingBufferId,
@@ -248,51 +264,22 @@ mod tests {
         let registry = SharedResourceTimingBufferRegistry::new();
         let (id, finalizer) = registry.create_resource_timing_buffer(1);
         registry.note_resource_timing_entry_queued(id);
-        registry
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-            .unwrap()
-            .current_size += 1;
+        registry.note_resource_timing_primary_entry_added(id);
         assert_eq!(registry.resource_timing_dropped_entries_count(id), 0);
 
         registry.note_resource_timing_entry_queued(id);
-        {
-            let mut buffers = registry.0.borrow_mut();
-            let state = buffers.buffers.get_mut(&id).unwrap();
-            assert!(!state.full_task_pending);
-            state.full_task_pending = true;
-        }
+        assert!(registry.mark_resource_timing_buffer_full_task_pending(id));
         assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
 
         // A full-event handler can make room while its task remains pending.
         // New entries still use secondary, but that alone is not a drop.
         registry.set_resource_timing_buffer_size_limit(id, 3);
         registry.note_resource_timing_entry_queued(id);
-        registry
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-            .unwrap()
-            .current_size += 1;
-        registry
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-            .unwrap()
-            .current_size += 1;
+        registry.note_resource_timing_primary_entry_added(id);
+        registry.note_resource_timing_primary_entry_added(id);
         assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
         registry.clear_resource_timing_primary_buffer(id);
-        registry
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-            .unwrap()
-            .full_task_pending = false;
+        registry.finish_resource_timing_buffer_full_task(id);
         assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
 
         registry.set_resource_timing_buffer_size_limit(id, 0);
