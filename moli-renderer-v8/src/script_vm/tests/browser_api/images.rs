@@ -1,3 +1,4 @@
+mod source_sizes;
 use super::*;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
