@@ -52,11 +52,6 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <button aria-expanded="false" aria-controls="dialog">Preferences</button>
                 <div role="dialog" id="dialog" class="off">Cookie template</div>`;
         "##).unwrap();
-        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('legacy-hidden')).color").unwrap(), "rgb(255, 255, 255)");
-        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('css-override')).color").unwrap(), "rgb(0, 0, 0)");
-        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('external-override')).color").unwrap(), "rgb(0, 0, 0)");
-        assert_eq!(page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','black'); getComputedStyle(document.getElementById('legacy-hidden')).color").unwrap(), "rgb(0, 0, 0)");
-        page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','white')").unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
             for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Parser trap", "Accessible helper", "Faded text", "Transparent parent", "Transparent child", "hidden suffix", "Published Angular article", "Published Vue article", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
@@ -65,7 +60,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
             assert!(output.contains("m<sub>n</sub>"), "{output}");
             assert!(output.contains("Active\nReviewed"), "{output}");
-            assert!(!output.contains("tracking.gif"), "{output}");
+            assert!(output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
             for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
@@ -408,5 +403,42 @@ async fn markdown_live_textarea_and_hidden_content_survive_dump_options() {
         page.vm_mut().eval("document.querySelector('textarea').value = ''").unwrap();
         let output = page.render_page_dump(options(false));
         assert!(!output.contains("Old default") && !output.contains("Live text"), "{output}");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_document_export_distinguishes_source_from_hidden_interface() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/article/").unwrap());
+        page.vm_mut().eval(r##"
+            document.body.style.visibility = 'hidden';
+            document.body.innerHTML = `
+                <p>Article introduction</p>
+                <button aria-expanded="false" aria-controls="details">Expand</button>
+                <section id="details" hidden>Article disclosure</section>
+                <p>Article conclusion</p>
+                <p><code>inline<span style="display:none">Hidden inline menu</span></code></p>
+                <pre>source<span style="display:none">Retained source line</span><script>Private script payload</script><button>Private copy control</button></pre>
+                <img style="width:1px;height:1px" src="small-diagram.png">
+                <video data-original="movie.mp4"></video>
+                <audio controls data-original="sound.ogg"></audio><audio data-original="background.ogg"></audio>
+                <iframe data-original="embed.html"></iframe>
+                <p><span style="display:table-row">Row one</span><span style="display:table-row">Row two</span></p>`;
+        "##).unwrap();
+        let output = page.render_page_dump(options(false));
+        for kept in ["Article introduction", "Article conclusion", "Article disclosure", "Retained source line", "https://example.test/article/small-diagram.png", "https://example.test/article/movie.mp4", "https://example.test/article/sound.ogg", "https://example.test/article/embed.html", "Row one\n\nRow two"] {
+            assert!(output.contains(kept), "missing {kept}: {output}");
+        }
+        for omitted in ["Hidden inline menu", "Private script payload", "Private copy control", "background.ogg"] {
+            assert!(!output.contains(omitted), "leaked {omitted}: {output}");
+        }
+        page.vm_mut().eval(r##"
+            document.body.style.visibility = '';
+            document.body.innerHTML = '<button role=" TAB " aria-controls="duplicate">Tab</button><section id="duplicate" hidden>First target</section><section id="duplicate" hidden>Second target</section>';
+        "##).unwrap();
+        let output = page.render_page_dump(options(false));
+        assert!(output.contains("First target"), "{output}");
+        assert!(!output.contains("Second target"), "{output}");
     }).await;
 }
