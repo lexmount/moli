@@ -1,5 +1,5 @@
 use super::*;
-use moli_webapi_declare::{BindError, WebApiObject};
+use moli_webapi_declare::{BindError, WebApiObject, WebApiValue};
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default, WebApiObject)]
@@ -18,6 +18,34 @@ pub(crate) fn initialize_console_namespace<'s>(
     console: v8::Local<'s, v8::Object>,
 ) -> Result<(), BindError> {
     ConsoleNamespaceDeclaration::default().initialize(scope, console)
+}
+
+#[derive(crate::webidl::WebIdlArgs)]
+#[webidl(prefix = "console")]
+struct ConsoleLabelArgs {
+    #[webidl(
+        default = crate::webidl::DomString16("default".encode_utf16().collect()),
+        converter = "raw"
+    )]
+    label: crate::webidl::DomString16,
+}
+
+pub(crate) fn console_label_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<(v8::Local<'s, v8::String>, Vec<v8::Local<'s, v8::Value>>)> {
+    let method = v8::Local::<v8::String>::try_from(args.data()).ok()?;
+    let parsed = crate::webidl::parse_args::<ConsoleLabelArgs>(scope, args)?;
+    let label = parsed.label.to_v8_value(scope)?;
+    let mut arguments = vec![label];
+    // Only timeLog has a variadic data argument. Conversion occurs once at
+    // the WebIDL boundary; the native console receives the resulting string.
+    if method.strict_equals(crate::util::v8str(scope, "timeLog").into()) {
+        for index in 1..args.length() {
+            arguments.push(args.get(index));
+        }
+    }
+    Some((method, arguments))
 }
 
 #[derive(Debug, Default)]

@@ -455,15 +455,15 @@ struct ConsoleObjectDeclaration {
     dir: (),
     #[webapi(method, callback = console_dirxml_callback)]
     dirxml: (),
-    #[webapi(method, callback = console_noop_callback)]
+    #[webapi(method, callback = console_label_callback, data = v8str(scope, "time"))]
     time: (),
-    #[webapi(method, callback = console_noop_callback)]
+    #[webapi(method, callback = console_label_callback, data = v8str(scope, "timeLog"))]
     time_log: (),
-    #[webapi(method, callback = console_noop_callback)]
+    #[webapi(method, callback = console_label_callback, data = v8str(scope, "timeEnd"))]
     time_end: (),
-    #[webapi(method, callback = console_noop_callback)]
+    #[webapi(method, callback = console_label_callback, data = v8str(scope, "count"))]
     count: (),
-    #[webapi(method, callback = console_noop_callback)]
+    #[webapi(method, callback = console_label_callback, data = v8str(scope, "countReset"))]
     count_reset: (),
     #[webapi(method, callback = console_group_callback)]
     group: (),
