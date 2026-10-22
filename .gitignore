@@ -16,6 +16,8 @@
 !/vendor/html5ever-0.40.1/**
 !/vendor/url-2.5.8/
 !/vendor/url-2.5.8/**
+!/vendor/urlpattern-0.6.0/
+!/vendor/urlpattern-0.6.0/**
 /.moli
 __pycache__
 *.pyc
