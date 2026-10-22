@@ -2149,6 +2149,7 @@ dependencies = [
  "image-webp",
  "moxcms",
  "num-traits",
+ "png",
 ]
 
 [[package]]
