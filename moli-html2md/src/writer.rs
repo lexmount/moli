@@ -275,8 +275,16 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn boundary(&mut self, lines: usize) {
+        self.request_boundary(lines, true);
+    }
+
+    pub(crate) fn layout_boundary(&mut self) {
+        self.request_boundary(2, false);
+    }
+
+    fn request_boundary(&mut self, lines: usize, structural: bool) {
         self.flush_pending_text();
-        self.has_blocks |= lines > 1;
+        self.has_blocks |= structural && lines > 1;
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -499,6 +507,7 @@ impl<'a> Writer<'a> {
     fn flush_breaks(&mut self) {
         if self.breaks > 0 {
             if !self.is_empty() {
+                self.has_blocks |= self.breaks > 1;
                 let mut existing = self.output.len() - self.output.trim_end_matches('\n').len();
                 if existing == self.output.len() {
                     existing += self.prefix.trailing_newlines();

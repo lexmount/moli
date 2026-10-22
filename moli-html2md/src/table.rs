@@ -3,6 +3,7 @@ use crate::{Dom, NodeKind, output::Output, writer::is_space};
 pub(crate) struct Cell<Id> {
     pub(crate) node: Id,
     pub(crate) depth: usize,
+    pub(crate) row: Option<Id>,
 }
 
 pub(crate) struct Table<Id> {
@@ -10,7 +11,6 @@ pub(crate) struct Table<Id> {
     cells: std::vec::IntoIter<Cell<Id>>,
     content: Vec<Output>,
     in_cell: bool,
-    has_complex_content: bool,
     rows: Vec<usize>,
     separators: Vec<&'static str>,
     has_header: bool,
@@ -37,7 +37,6 @@ impl<Id: Copy> Table<Id> {
             cells: Vec::new().into_iter(),
             content: Vec::new(),
             in_cell: false,
-            has_complex_content: false,
             rows: Vec::new(),
             separators: Vec::new(),
             has_header: false,
@@ -51,6 +50,7 @@ impl<Id: Copy> Table<Id> {
                     table.captions.push(Cell {
                         node,
                         depth: depth + 1,
+                        row: None,
                     });
                 }
                 NodeKind::Element("tr") => {
@@ -90,6 +90,7 @@ impl<Id: Copy> Table<Id> {
         section: &str,
         cells: &mut Vec<Cell<Id>>,
     ) -> Option<()> {
+        let row_node = node;
         let start = cells.len();
         let mut all_headers = true;
         let mut child = dom.first_child(node);
@@ -101,7 +102,7 @@ impl<Id: Copy> Table<Id> {
                     // a grid or silently shift the following cells left.
                     if ["colspan", "rowspan"].iter().any(|name| {
                         dom.attribute(node, name)
-                            .is_some_and(|span| span.trim().parse::<u32>() != Ok(1))
+                            .is_some_and(|span| has_cell_span(name, span))
                     }) {
                         return None;
                     }
@@ -109,6 +110,7 @@ impl<Id: Copy> Table<Id> {
                     cells.push(Cell {
                         node,
                         depth: depth + 1,
+                        row: (cells.len() == start).then_some(row_node),
                     });
                     // The first cell encountered in each column supplies its
                     // alignment. A synthetic header can grow to fit later rows.
@@ -166,39 +168,9 @@ impl<Id: Copy> Table<Id> {
         self.in_cell = false;
     }
 
-    pub(crate) fn visit_element(&mut self, tag: &str) {
-        if self.in_cell
-            && matches!(
-                tag,
-                "table"
-                    | "pre"
-                    | "blockquote"
-                    | "ul"
-                    | "ol"
-                    | "li"
-                    | "hr"
-                    | "h1"
-                    | "h2"
-                    | "h3"
-                    | "h4"
-                    | "h5"
-                    | "h6"
-            )
-        {
-            self.has_complex_content = true;
-        }
-    }
-
     pub(crate) fn finish(self) -> Output {
-        if self.has_complex_content {
-            let mut output = Output::default();
-            for cell in self.content.into_iter().filter(|cell| !cell.is_empty()) {
-                if !output.is_empty() {
-                    output.push_text("\n\n".into());
-                }
-                output.append(cell);
-            }
-            return output;
+        if self.content.iter().all(Output::is_empty) {
+            return Output::default();
         }
         let mut output = String::new();
         if !self.has_header {
@@ -260,4 +232,21 @@ fn ignorable(kind: NodeKind<'_>) -> bool {
         NodeKind::Text(text) => text.chars().all(is_space),
         _ => false,
     }
+}
+
+/// HTML non-negative-integer parsing: invalid spans default to one; rowspan
+/// zero extends to the end of the row group. Do not allocate from this value.
+pub(crate) fn has_cell_span(name: &str, value: &str) -> bool {
+    let value = value.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let value = value.strip_prefix('+').unwrap_or(value);
+    let mut digits = value.bytes().take_while(u8::is_ascii_digit).peekable();
+    if digits.peek().is_none() {
+        return false;
+    }
+    let count = digits.fold(0u32, |count, digit| {
+        count
+            .saturating_mul(10)
+            .saturating_add(u32::from(digit - b'0'))
+    });
+    count > 1 || (name == "rowspan" && count == 0)
 }

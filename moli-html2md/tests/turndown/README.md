@@ -30,9 +30,11 @@ These preserve bare pre blocks and avoid upstream losses of literal characters,
 emphasis, whitespace, and list boundaries. They remain active assertions; no
 case is skipped. A reference change that makes a difference obsolete also fails
 the test. Separate converter tests cover GFM tables and strikethrough as Moli
-extensions. Explicit table headers follow Turndown's GFM plugin; simple headerless
-tables receive empty headings. Complex tables retain the core's block expansion
-rather than the plugin's raw HTML fallback.
+extensions. Explicit table headers follow Turndown's GFM plugin; simple
+headerless tables receive empty headings. Complex tables retain content-only
+HTML so merged cells and nested tables keep their associations. Presentational
+and layout-only containing tables expand into blocks; their simple inner tables
+can use GFM.
 
 ## Findings tracked outside the reference corpus
 

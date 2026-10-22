@@ -393,9 +393,11 @@ mod tests {
             include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html").to_owned(),
         );
         let before = dom.serialize_document();
+        let markdown = render_markdown_document(&dom);
         assert_eq!(
-            render_markdown_document(&dom),
-            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md").trim_end()
+            markdown,
+            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md")
+                .trim_end_matches('\n')
         );
         assert_eq!(dom.serialize_document(), before);
     }

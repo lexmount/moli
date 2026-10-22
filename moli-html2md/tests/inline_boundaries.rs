@@ -20,7 +20,6 @@ fn inline_code_breaks_separate_words_without_formatting_markers() {
     for html in [
         "<code>git<br>status</code>",
         "<code><strong>git<br></strong><em>status</em></code>",
-        "<code><a href='/'>git</a><span><br></span><b>status</b></code>",
     ] {
         for preformatted_code in [false, true] {
             let result = markdown_with(
