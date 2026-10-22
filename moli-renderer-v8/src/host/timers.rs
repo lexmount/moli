@@ -90,9 +90,9 @@ enum ScheduledTimerCallback {
 impl ScheduledTimerCallback {
     fn context<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Context> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) | Self::Networking(function) => {
-                v8::Local::new(scope, &function.relevant_context)
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => v8::Local::new(scope, &function.relevant_context),
             Self::WindowWebIdl(callback) => callback
                 .relevant_context(scope)
                 .expect("a scheduled Window Web IDL callback must retain its relevant context"),
@@ -104,9 +104,9 @@ impl ScheduledTimerCallback {
 
     fn realm_token(&self) -> Option<RuntimeObservableContextToken> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) | Self::Networking(function) => {
-                Some(function.realm_token)
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => Some(function.realm_token),
             Self::WindowWebIdl(callback) => callback.realm_token(),
             Self::Source(source) => source.realm_token,
             Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => None,
@@ -115,9 +115,9 @@ impl ScheduledTimerCallback {
 
     fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) | Self::Networking(function) => {
-                function.relevant_identity
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => function.relevant_identity,
             Self::WindowWebIdl(callback) => callback.relevant_identity(),
             Self::Source(_)
             | Self::ResourceTimingBufferFull { .. }
@@ -143,9 +143,9 @@ impl ScheduledTimerCallback {
         target_binding: Option<&WindowExecutionContextBinding>,
     ) -> Option<OwnerDispatchScope> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) | Self::Networking(function) => {
-                Some(function.relevant_dispatch_scope)
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => Some(function.relevant_dispatch_scope),
             Self::WindowWebIdl(_) => {
                 target_binding.map(WindowExecutionContextBinding::dispatch_scope)
             }
@@ -170,7 +170,9 @@ impl ScheduledTimerCallback {
                 .map(|binding| binding.context(scope))
                 .unwrap_or_else(|| self.context(scope)),
             Self::Source(_) => self.context(scope),
-            Self::Function(_) | Self::InternalFunction(_) | Self::Networking(_) => self.context(scope),
+            Self::Function(_) | Self::InternalFunction(_) | Self::Networking(_) => {
+                self.context(scope)
+            }
             Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => {
                 self.context(scope)
             }
@@ -959,7 +961,9 @@ impl HostTimeoutScheduler {
             id: timer_id,
             internal: matches!(
                 timer.payload.callback,
-                ScheduledTimerCallback::InternalFunction(_) | ScheduledTimerCallback::AnimationFrameWake { .. } | ScheduledTimerCallback::Networking(_)
+                ScheduledTimerCallback::InternalFunction(_)
+                    | ScheduledTimerCallback::AnimationFrameWake { .. }
+                    | ScheduledTimerCallback::Networking(_)
             ),
             window_owner: target_binding.map(WindowExecutionContextBinding::owner),
             target_realm_token: target_binding.map(WindowExecutionContextBinding::realm_token),

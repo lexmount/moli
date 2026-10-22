@@ -2087,15 +2087,6 @@ pub(super) fn finish_runtime_mutation_effects(
             .pending_connected_style_load_prime_result
             .extend(prime_result);
     }
-    // Connecting an element or changing its inline font style can start a
-    // FontFace load without changing any stylesheet owner.
-    if changed && !document_followups_deferred_to_parser_owner && !font_face_use_roots.is_empty() {
-        crate::native_bridge::document::load_font_faces_used_by_subtrees(
-            scope,
-            unsafe { &*host_ptr },
-            &font_face_use_roots,
-        );
-    }
     changed
 }
 

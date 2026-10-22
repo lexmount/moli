@@ -48,9 +48,31 @@ document.fonts.load('12px "Missing Face"').then(() => fontResult.push('WRONG set
     );
 }
 
+fn complete_local_font_resources(
+    vm: &mut ScriptVm,
+    completions: &mut RendererResourceCompletionTestHarness,
+) {
+    for _ in 0..16 {
+        let Some(completion) = completions.pop_next_async_subresource_event() else {
+            run_font_tasks(vm);
+            return;
+        };
+        let activity = vm
+            .complete_async_subresource_fetch_event_body(completion)
+            .unwrap();
+        vm.finish_async_subresource_body_checkpoint_for_test(activity)
+            .unwrap();
+    }
+    panic!("local font resource tasks did not become idle");
+}
+
 #[test]
 fn font_face_valid_data_sources_register_and_unregister_real_font_bytes() {
-    let mut vm = new_storage_test_vm("https://font-sources.test/");
+    let mut completions = RendererResourceCompletionTestHarness::new();
+    let mut vm = new_storage_test_vm_with_completion_sender(
+        "https://font-sources.test/",
+        completions.sender(),
+    );
     let url = fixture_font_url();
     vm.eval(&format!(r#"
 globalThis.fontResult = [];
@@ -59,6 +81,7 @@ document.fonts.add(face);
 fontResult.push(face.status, document.fonts.check('italic 12px "Actual Face", serif'));
 document.fonts.load('12px "Actual Face", serif').then(faces => fontResult.push(faces.length, faces[0] === face, face.status, document.fonts.check('12px "Actual Face"')));
 "#)).unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(fontResult)").unwrap(),
         r#"["unloaded",false,1,true,"loaded",true]"#

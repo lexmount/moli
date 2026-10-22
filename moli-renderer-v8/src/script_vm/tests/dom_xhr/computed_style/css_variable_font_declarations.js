@@ -1,11 +1,11 @@
 (() => {
     const check = (ok, message) => { if (!ok) throw new Error(message); };
     const properties = [
-        ['font-optical-sizing', 'fontOpticalSizing', 'none'],
-        ['font-variation-settings', 'fontVariationSettings', '"wght" 700, "wdth" 90, "wght" 600'],
+        ['font-optical-sizing', 'fontOpticalSizing', 'none', CSSKeywordValue],
+        ['font-variation-settings', 'fontVariationSettings', '"wght" 700, "wdth" 90, "wght" 600', CSSStyleValue],
     ];
     const documents = [document, document.implementation.createHTMLDocument('')];
-    for (const [property, alias, value] of properties) {
+    for (const [property, alias, value, constructor] of properties) {
         check(CSS.supports(property, value), property + ': native grammar');
         check(CSS.supports(property, 'var(--font-value)'), property + ': pending substitution');
         for (const doc of documents) {
@@ -36,7 +36,10 @@
             check(CSS.supports(property, '/**/IN\\69 TIAL/**/'), property + ': tokenized support');
             check(CSS.supports(`(not (${property}: unsupported-value)) and (${property}: inherit)`), property + ': condition evaluation');
         }
-
+        const parsed = CSSStyleValue.parse(property, value);
+        check(Object.getPrototypeOf(parsed) === constructor.prototype, property + ': Typed OM projection');
+        check(String(parsed) === value, property + ': specified order and duplicates');
+        check(CSSStyleValue.parseAll(property, value).length === 1, property + ': one property value');
     }
     return true;
 })()
