@@ -22,7 +22,8 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test, is_text_control,
+    contenteditable_editing_host, dispatch_public_event, input_frame_projections,
+    input_surface_hit_test, input_target_frame_projection, is_text_control,
     observable_input_hit_test, perform_auxiliary_link_default_action, perform_drop_default_action,
     perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
@@ -579,7 +580,19 @@ impl ScriptVm {
         let hit = surface_hit.input;
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
+        // Down/up callbacks can remove the target and redirect compatibility
+        // mouse events to an ancestor. Like raw-update capture transfers,
+        // those targets need the frame geometry selected before any JS runs.
+        let frame_projections = if pointer_event_name.is_some() {
+            input_frame_projections(
+                &self._context_host.borrow(),
+                self.document_runtime.document_handle(),
+            )
+        } else {
+            Default::default()
+        };
         let mut pending_pointer_capture_events = Vec::new();
+        let mut capture_projection = None;
         if pointer_event_name.is_some() {
             let mut context_host = self._context_host.borrow_mut();
             if event_name == "mousemove" && buttons == 0 {
@@ -589,6 +602,16 @@ impl ScriptVm {
                 MOUSE_POINTER_ID,
                 activates_pointer_capture_for_mouse_event(event_name, buttons),
             );
+            // The raw hit already selected this input's layout snapshot.
+            // Resolve pending capture before consuming its transitions or
+            // calling JS; a callback cannot resample this event's coordinates.
+            if let Some(target) = context_host.pending_pointer_capture_target(MOUSE_POINTER_ID) {
+                capture_projection = input_target_frame_projection(
+                    &context_host,
+                    self.document_runtime.document_handle(),
+                    target,
+                )?;
+            }
             pending_pointer_capture_events =
                 context_host.process_pending_pointer_capture(MOUSE_POINTER_ID);
         }
@@ -637,9 +660,19 @@ impl ScriptVm {
                 .borrow_mut()
                 .set_mouse_event_target(handle);
         }
-        let root_to_frame = hit
-            .filter(|hit| hit.handle == handle)
-            .map(|hit| hit.root_to_frame)
+        // Keep the pre-callback affine map for this same captured target.
+        // Pending-capture callbacks can move or adopt it; those changes do
+        // not resample coordinates for the input already being dispatched.
+        // Target selection and retired/disconnected-target handling remain
+        // with the existing capture and public-event dispatch paths.
+        let root_to_frame = capture_handle
+            .and_then(|target| {
+                capture_projection.and_then(|projection| projection.for_target(target))
+            })
+            .or_else(|| {
+                hit.filter(|hit| hit.handle == handle)
+                    .map(|hit| hit.root_to_frame)
+            })
             .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
         let client_point = root_to_frame.map_point(root_point);
         let client_x = f64::from(client_point.x);
@@ -841,12 +874,26 @@ impl ScriptVm {
                     let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                 }
             }
+            let final_root_to_frame = if pointer_dispatch_handle == handle {
+                root_to_frame
+            } else {
+                hit.filter(|hit| hit.handle == pointer_dispatch_handle)
+                    .map(|hit| hit.root_to_frame)
+                    .or_else(|| {
+                        frame_projections
+                            .for_target(unsafe { &*runtime_ptr }, pointer_dispatch_handle)
+                    })
+                    .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY)
+            };
+            let final_point = final_root_to_frame.map_point(root_point);
+            let final_client_x = f64::from(final_point.x);
+            let final_client_y = f64::from(final_point.y);
             if let Some(pointer_event_name) = pointer_event_name_for_mouse_event(event_name)
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     pointer_event_name,
-                    client_x,
-                    client_y,
+                    final_client_x,
+                    final_client_y,
                     button,
                     buttons,
                     &pointer,
@@ -869,14 +916,43 @@ impl ScriptVm {
             if !suppress_current_mouse_event
                 && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
             {
+                let mouse_transform = if mouse_dispatch_handle == pointer_dispatch_handle {
+                    final_root_to_frame
+                } else if mouse_dispatch_handle == handle {
+                    root_to_frame
+                } else {
+                    hit.filter(|hit| hit.handle == mouse_dispatch_handle)
+                        .map(|hit| hit.root_to_frame)
+                        .or_else(|| {
+                            frame_projections
+                                .for_target(unsafe { &*runtime_ptr }, mouse_dispatch_handle)
+                        })
+                        .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY)
+                };
+                let mouse_point = mouse_transform.map_point(root_point);
+                let mouse_client_x = f64::from(mouse_point.x);
+                let mouse_client_y = f64::from(mouse_point.y);
                 let event = if event_name == "wheel" {
                     construct_wheel_event(
-                        scope, event_name, client_x, client_y, delta_x, delta_y, button, buttons,
+                        scope,
+                        event_name,
+                        mouse_client_x,
+                        mouse_client_y,
+                        delta_x,
+                        delta_y,
+                        button,
+                        buttons,
                         modifiers,
                     )
                 } else {
                     construct_mouse_event_with_modifiers(
-                        scope, event_name, client_x, client_y, button, buttons, modifiers,
+                        scope,
+                        event_name,
+                        mouse_client_x,
+                        mouse_client_y,
+                        button,
+                        buttons,
+                        modifiers,
                     )
                 };
                 if let Some(event) = event {

@@ -9,7 +9,13 @@ use moli_layout::LayoutScrollbarHit;
 use super::provider::{
     observable_geometry_batch, observable_hit_test_all, provider_contract_error,
 };
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{
+    document_runtime::DomHandle,
+    native_bridge::{
+        JsContextHost,
+        context_host::{OwnerDispatchScope, WindowDocumentTaskTarget},
+    },
+};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
@@ -26,6 +32,238 @@ pub(crate) struct InputHit {
 pub(crate) struct InputSurfaceHit {
     pub(crate) input: Option<InputHit>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+}
+
+/// One event's capture projection, sampled before capture callbacks run.
+/// It owns only the sampled target handle and a matrix; no layout or Host
+/// borrow crosses JS. A callback may adopt the same target into another
+/// Document without changing coordinates already prepared for this event.
+#[derive(Clone, Copy)]
+pub(crate) struct InputTargetFrameProjection {
+    target: DomHandle,
+    root_to_frame: LayoutTransform2D,
+}
+
+impl InputTargetFrameProjection {
+    pub(crate) fn for_target(self, target: DomHandle) -> Option<LayoutTransform2D> {
+        (target == self.target).then_some(self.root_to_frame)
+    }
+}
+
+/// Owned frame transforms from the input's selected snapshot. Pointer
+/// callbacks can redirect compatibility mouse events or transfer capture to
+/// another frame. Copy only frame matrices before JS, not a layout tree.
+#[derive(Default)]
+pub(crate) struct InputFrameProjections {
+    root_owner: Option<WindowDocumentTaskTarget>,
+    children: Vec<(WindowDocumentTaskTarget, LayoutTransform2D)>,
+}
+
+impl InputFrameProjections {
+    pub(crate) fn for_target(
+        &self,
+        runtime: &JsContextHost,
+        target: DomHandle,
+    ) -> Option<LayoutTransform2D> {
+        let document = runtime.layout_document_for_source(target)?;
+        let owner = input_document_owner(runtime, document)?;
+        if self.root_owner == Some(owner) {
+            return Some(LayoutTransform2D::IDENTITY);
+        }
+        self.children
+            .iter()
+            .find_map(|(sampled, transform)| (*sampled == owner).then_some(*transform))
+    }
+}
+
+pub(crate) fn input_frame_projections(
+    runtime: &JsContextHost,
+    root_document: DomHandle,
+) -> InputFrameProjections {
+    fn collect(
+        runtime: &JsContextHost,
+        tree: &FrozenLayoutTree<DomHandle>,
+        root_to_frame: LayoutTransform2D,
+        depth: usize,
+        output: &mut Vec<(WindowDocumentTaskTarget, LayoutTransform2D)>,
+    ) {
+        if depth >= CHILD_FRAME_DEPTH_LIMIT {
+            return;
+        }
+        for frame in tree.embedded_frames() {
+            let Some(document) = runtime.layout_document_for_source(frame.tree.source_root())
+            else {
+                continue;
+            };
+            let Some(owner) = input_document_owner(runtime, document) else {
+                continue;
+            };
+            let Some(geometry) = tree
+                .source_output(frame.source)
+                .and_then(|source| source.principal_box)
+                .and_then(|id| tree.box_geometry(id))
+            else {
+                continue;
+            };
+            let Some(viewport_to_local) = tree
+                .coordinate_space(geometry.coordinate_space)
+                .and_then(|space| space.local_to_viewport.inverse())
+            else {
+                continue;
+            };
+            let transform =
+                LayoutTransform2D::translation(-geometry.content_box.x, -geometry.content_box.y)
+                    .concatenate(viewport_to_local)
+                    .concatenate(root_to_frame);
+            output.push((owner, transform));
+            collect(runtime, &frame.tree, transform, depth + 1, output);
+        }
+    }
+    if !runtime.layout_policy().uses_real_layout() {
+        return InputFrameProjections::default();
+    }
+    let root_owner = input_document_owner(runtime, root_document);
+    let mut result = InputFrameProjections {
+        root_owner,
+        children: Vec::new(),
+    };
+    if root_owner.is_some() {
+        runtime.with_latest_layout_tree_for_document(root_document, |tree| {
+            collect(
+                runtime,
+                tree,
+                LayoutTransform2D::IDENTITY,
+                0,
+                &mut result.children,
+            );
+        });
+    }
+    result
+}
+
+fn input_document_owner(
+    runtime: &JsContextHost,
+    document: DomHandle,
+) -> Option<WindowDocumentTaskTarget> {
+    let scope = runtime.owner_dispatch_scope_for_node(document)?;
+    if let OwnerDispatchScope::Child(frame) = scope
+        && (!runtime.child_browsing_context_host_is_active(frame)
+            || runtime.child_browsing_context_document_handle(frame) != Some(document))
+    {
+        return None;
+    }
+    runtime.current_window_document_task_target_for_dispatch_scope(scope)
+}
+
+/// Samples the target Document's entire ancestor-frame transform from the
+/// snapshot already selected by coordinate input. This deliberately does not
+/// refresh after pending-capture callbacks, hit-test the captured element, or
+/// require the input point to be inside the frame's content/clip bounds.
+/// Mock keeps its existing approximate coordinates without creating layout.
+pub(crate) fn input_target_frame_projection(
+    runtime: &JsContextHost,
+    root_document: DomHandle,
+    target: DomHandle,
+) -> Result<Option<InputTargetFrameProjection>, LayoutError> {
+    if !runtime.layout_policy().uses_real_layout() {
+        return Ok(None);
+    }
+    if input_document_owner(runtime, root_document).is_none() {
+        return Ok(None);
+    }
+    let Some(target_document) = runtime.layout_document_for_source(target) else {
+        return Ok(None);
+    };
+    if input_document_owner(runtime, target_document).is_none() {
+        return Ok(None);
+    }
+
+    let mut ancestors = Vec::new();
+    let mut document = target_document;
+    while document != root_document {
+        if ancestors.len() >= CHILD_FRAME_DEPTH_LIMIT {
+            return Err(LayoutError::source_contract(
+                "input capture projection",
+                "target is outside the supported input frame ancestry",
+            ));
+        }
+        let Some(frame) = runtime
+            .child_browsing_context_host_for_document_handle(document)
+            .filter(|frame| runtime.child_browsing_context_host_is_active(*frame))
+        else {
+            return Ok(None);
+        };
+        if input_document_owner(runtime, document).is_none() {
+            return Ok(None);
+        }
+        let child_root = runtime
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        ancestors.push((frame, child_root));
+        let Some(parent_document) = runtime.layout_document_for_source(frame) else {
+            return Ok(None);
+        };
+        document = parent_document;
+    }
+
+    let root_to_frame = runtime
+        .with_latest_layout_tree_for_document(root_document, |mut tree| {
+            let mut root_to_frame = LayoutTransform2D::IDENTITY;
+            let mut ancestors = ancestors.into_iter().rev().peekable();
+            while let Some((frame, child_root)) = ancestors.next() {
+                let Some(principal) = tree
+                    .source_output(frame)
+                    .and_then(|output| output.principal_box)
+                else {
+                    // A connected iframe can have no box in this snapshot,
+                    // for example under display:none. There is then no frame
+                    // transform to sample; keep the existing input fallback.
+                    return Ok(None);
+                };
+                let geometry = tree
+                    .box_geometry(principal)
+                    .ok_or(LayoutError::NoLayoutSnapshot)?;
+                let space = tree
+                    .coordinate_space(geometry.coordinate_space)
+                    .ok_or_else(|| {
+                        LayoutError::source_contract(
+                            "input capture projection",
+                            "frame coordinate space is missing",
+                        )
+                    })?;
+                let Some(viewport_to_local) = space.local_to_viewport.inverse() else {
+                    // A legal zero-scale frame has no inverse projection.
+                    // Keep capture delivery's existing coordinate fallback,
+                    // as with a connected frame that has no principal box.
+                    return Ok(None);
+                };
+                let content = geometry.content_box;
+                // This is the same affine composition used by ordinary frame
+                // hit recursion, without its point-containment requirement.
+                root_to_frame = LayoutTransform2D::translation(-content.x, -content.y)
+                    .concatenate(viewport_to_local)
+                    .concatenate(root_to_frame);
+                if ancestors.peek().is_some() {
+                    // The parent box already maps into this child's viewport.
+                    // Enter its tree only to project another descendant frame;
+                    // the final target viewport needs no child layout member.
+                    tree = tree
+                        .embedded_frame_tree(frame)
+                        .filter(|child| child.source_root() == child_root)
+                        .ok_or(LayoutError::NoLayoutSnapshot)?;
+                }
+            }
+            Ok::<_, LayoutError>(Some(root_to_frame))
+        })
+        .ok_or(LayoutError::NoLayoutSnapshot)??;
+    Ok(
+        root_to_frame.map(|root_to_frame| InputTargetFrameProjection {
+            target,
+            root_to_frame,
+        }),
+    )
 }
 
 #[derive(Clone, Copy)]
