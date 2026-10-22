@@ -7,7 +7,6 @@ use moli_v8_util::{callback_data_index_value, callback_data_item, throw_type_err
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiInterfaceDescriptor};
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
-use moli_webapi_declare::initialize_web_api_constructor_receiver;
 
 const ICE_EVENT_CANDIDATE_SLOT: &str = "__moliRtcIceEventCandidate";
 const ICE_EVENT_URL_SLOT: &str = "__moliRtcIceEventUrl";
@@ -209,9 +208,6 @@ fn initialize_event<'s, T: WebIdlDictionarySerialize<'s>>(
     payload: &T,
     interface: WebApiInterfaceDescriptor,
 ) -> Option<()> {
-    if !initialize_web_api_constructor_receiver(scope, wrapper, interface.name()) {
-        return None;
-    }
     let event_type =
         v8::String::new_from_two_byte(scope, &event_type.0, v8::NewStringType::Normal)?;
     let state = new_event_state(scope);

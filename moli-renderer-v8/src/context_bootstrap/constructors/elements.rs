@@ -1,6 +1,6 @@
 use super::*;
 use crate::webidl;
-use moli_webapi_declare::{WebApiObject, initialize_web_api_constructor_receiver};
+use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -50,9 +50,6 @@ pub(in crate::context_bootstrap) fn image_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "HTMLImageElement") {
-        return;
-    }
     let global = scope.get_current_context().global(scope);
     let Some(document) = global.get(scope, v8str(scope, "document").into()) else {
         rv.set_undefined();
@@ -107,9 +104,6 @@ pub(in crate::context_bootstrap) fn audio_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "HTMLAudioElement") {
-        return;
-    }
     let global = scope.get_current_context().global(scope);
     let Some(document) = global.get(scope, v8str(scope, "document").into()) else {
         rv.set_undefined();
@@ -180,9 +174,6 @@ pub(in crate::context_bootstrap) fn option_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "HTMLOptionElement") {
-        return;
-    }
     let global = scope.get_current_context().global(scope);
     let Some(document) = global.get(scope, v8str(scope, "document").into()) else {
         rv.set_undefined();

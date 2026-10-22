@@ -1,9 +1,7 @@
 //! MediaStream track sets and track lifecycle, independent of capture devices.
 //! Capture producers and media consumers still need a backend.
 
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::{exposed_interfaces, media_queries};
 use crate::{
@@ -226,9 +224,6 @@ pub(super) fn constructor<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "MediaStream") {
-        return;
-    }
     if initialize_stream(scope, args.this(), parsed.tracks).is_some() {
         rv.set(args.this().into());
     }

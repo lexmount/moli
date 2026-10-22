@@ -1,7 +1,6 @@
 use crate::web_api_interfaces;
 use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime, is_xml_document_mime};
 use moli_webapi_declare::WebApiFunctionTemplate;
-use moli_webapi_declare::initialize_web_api_constructor_receiver;
 use url::Url;
 
 use crate::{
@@ -107,9 +106,6 @@ pub(super) fn dom_parser_constructor_callback<'s>(
     }
     let parser = args.this();
     moli_webapi::dom_parser_values::initialize_dom_parser_object(scope, parser);
-    if !initialize_web_api_constructor_receiver(scope, parser, "DOMParser") {
-        return;
-    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         throw_type_error(scope, "DOMParser constructor has no associated Document");
         return;
