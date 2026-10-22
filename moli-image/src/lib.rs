@@ -10,6 +10,9 @@ mod color;
 #[cfg(test)]
 mod color_tests;
 mod jpeg;
+mod orientation;
+#[cfg(test)]
+mod orientation_tests;
 mod png;
 mod raster;
 mod rgba;
