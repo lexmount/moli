@@ -31,11 +31,11 @@ pub(crate) use stylesheet_candidates::{StylesheetCandidateChanges, StylesheetCan
 
 pub use self::mutation::{
     DomAttributeMutation, DomAttributeMutationOutcome, DomChildListMutation, DomMutationEffects,
-    DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind, DomScriptMutationEffects,
-    DomSlotAssignmentChange, DomSlotMutationEffects, DomStyleInvalidationInputs,
-    DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions,
-    DomStylesheetOwnerTreeScopes, DomTextNormalizationStep, DomTextareaValueChange,
-    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    DomMutationObserverEffect, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
+    DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
+    DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
+    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTextNormalizationStep,
+    DomTextareaValueChange, DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
 };
 
 use self::query_index::ElementQueryIndex;
