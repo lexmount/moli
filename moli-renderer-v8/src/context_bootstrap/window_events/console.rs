@@ -64,6 +64,24 @@ pub(in crate::context_bootstrap) fn console_table_callback<'s>(
     rv.set_undefined();
 }
 
+pub(in crate::context_bootstrap) fn console_dir_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    append_and_forward_console_message(scope, &args, "dir");
+    rv.set_undefined();
+}
+
+pub(in crate::context_bootstrap) fn console_dirxml_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    append_and_forward_console_message(scope, &args, "dirxml");
+    rv.set_undefined();
+}
+
 pub(in crate::context_bootstrap) fn console_group_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
