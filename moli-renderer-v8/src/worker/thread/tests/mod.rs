@@ -1,4 +1,5 @@
 mod callback_execution;
+mod console;
 mod error_reporting_guard;
 mod geometry_matrix_constructor_union;
 mod indexed_db_gc;

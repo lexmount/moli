@@ -1,5 +1,24 @@
 use super::*;
+use moli_webapi_declare::{BindError, WebApiObject};
 use std::{cell::RefCell, rc::Rc};
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain)]
+struct ConsoleNamespaceDeclaration {
+    // The Console standard requires an extra empty object between the
+    // namespace and this realm's intrinsic Object.prototype.
+    #[webapi(prototype, init = "object")]
+    prototype: (),
+    #[webapi(to_string_tag, readonly, init = string("console"))]
+    tag: (),
+}
+
+pub(crate) fn initialize_console_namespace<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    console: v8::Local<'s, v8::Object>,
+) -> Result<(), BindError> {
+    ConsoleNamespaceDeclaration::default().initialize(scope, console)
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct ConsoleMessageBuffers {
