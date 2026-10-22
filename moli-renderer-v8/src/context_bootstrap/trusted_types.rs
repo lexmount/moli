@@ -344,6 +344,25 @@ pub(crate) fn trusted_html_string_or_throw<'s>(
     )
 }
 
+pub(crate) fn trusted_html_dom_string_or_throw<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    requirements: TrustedTypesForScriptRequirements,
+    sink: &str,
+    api_name: &'static str,
+) -> Option<DomStringValue> {
+    trusted_type_string16_or_throw(
+        scope,
+        value,
+        TrustedTypeKind::Html,
+        requirements,
+        sink,
+        api_name,
+        None,
+    )
+    .map(|units| DomStringValue::from_utf16(&units))
+}
+
 pub(crate) fn trusted_html_value_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,

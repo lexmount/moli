@@ -3,6 +3,7 @@ use super::*;
 use crate::document_script_scheduler::{
     DocumentScriptExecutionLane, MainParserAsyncModuleAdmission, PageOwnedDocumentScriptWork,
 };
+use crate::dom::native::DomStringValue;
 use crate::frame_owner_model::MainDocumentScriptLoadDelayKind;
 use crate::host::{ScriptEventKind, ScriptEventTask};
 use crate::live_document_parser::LiveDocumentParserOwner;
@@ -17,7 +18,7 @@ use html5ever::tree_builder::QuirksMode;
 use moli_parser::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
     ParserElementCreationConsumer, ParserElementCreationRequest, ParserMutationEffectConsumer,
-    ParserPumpOutcome,
+    ParserPumpOutcome, XmlFragmentParseError, XmlParser,
 };
 use std::collections::HashSet;
 use tracing::debug;
@@ -33,12 +34,6 @@ enum DocumentWriteParserPumpInput<'a> {
     Inserted(&'a str),
     Ordinary(&'a str),
     QueuedOrBuffered,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum HtmlFragmentParserContextMode {
-    Standard,
-    SiblingInsertion,
 }
 
 struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
@@ -588,7 +583,7 @@ impl DocumentRuntime {
         }
     }
 
-    fn build_fragment_from_html_with_context_mode(
+    fn build_html_fragment(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -597,7 +592,6 @@ impl DocumentRuntime {
         html: &str,
         scripts_already_started: bool,
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
-        context_mode: HtmlFragmentParserContextMode,
         scripting_enabled: bool,
         allow_declarative_shadow_roots: bool,
     ) -> Option<DomHandle> {
@@ -608,16 +602,10 @@ impl DocumentRuntime {
             .and_then(Node::namespace)
             .unwrap_or("http://www.w3.org/1999/xhtml")
             .to_owned();
-        let mut context_local_name = context_node
+        let context_local_name = context_node
             .and_then(Node::local_name)
             .unwrap_or("body")
             .to_owned();
-        if context_mode == HtmlFragmentParserContextMode::SiblingInsertion
-            && context_namespace == "http://www.w3.org/1999/xhtml"
-            && context_local_name.eq_ignore_ascii_case("html")
-        {
-            context_local_name = "body".to_owned();
-        }
         let is_frameset_context = context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("frameset");
         let registry_association =
@@ -683,6 +671,25 @@ impl DocumentRuntime {
             host_ptr,
             &finish_signals.parser_created_null_registry_elements,
         );
+        self.finish_fragment_parsing(
+            scope,
+            host_ptr,
+            fragment,
+            fragment_roots,
+            custom_element_upgrade_timing,
+            first_node_index,
+        )
+    }
+
+    fn finish_fragment_parsing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        fragment: DomHandle,
+        fragment_roots: Vec<DomHandle>,
+        custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
+        first_node_index: usize,
+    ) -> Option<DomHandle> {
         if custom_element_upgrade_timing
             == HtmlFragmentCustomElementUpgradeTiming::InReturnedFragment
         {
@@ -703,52 +710,110 @@ impl DocumentRuntime {
         Some(fragment)
     }
 
-    pub(crate) fn build_range_contextual_fragment_from_html(
+    pub(crate) fn build_range_contextual_fragment(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
-        html: &str,
-    ) -> Option<DomHandle> {
-        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_with_context_mode(
+        markup: &DomStringValue,
+    ) -> Result<Option<DomHandle>, XmlFragmentParseError> {
+        self.build_fragment_from_markup(
             scope,
             host_ptr,
             document_handle,
             context_handle,
-            html,
+            markup,
             false,
             HtmlFragmentCustomElementUpgradeTiming::InReturnedFragment,
-            HtmlFragmentParserContextMode::Standard,
-            scripting_enabled,
-            false,
         )
     }
 
-    pub(crate) fn build_fragment_from_html(
+    fn build_fragment_from_markup(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
-        html: &str,
+        markup: &DomStringValue,
         scripts_already_started: bool,
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
-    ) -> Option<DomHandle> {
+    ) -> Result<Option<DomHandle>, XmlFragmentParseError> {
+        let Some(is_html_document) = self
+            .dom_host()
+            .node_document_is_html_document(document_handle)
+        else {
+            return Ok(None);
+        };
+        if !is_html_document {
+            return self.build_xml_fragment(
+                scope,
+                host_ptr,
+                document_handle,
+                context_handle,
+                markup,
+                custom_element_upgrade_timing,
+            );
+        }
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_with_context_mode(
+        Ok(self.build_html_fragment(
             scope,
             host_ptr,
             document_handle,
             context_handle,
-            html,
+            markup.as_str_lossy(),
             scripts_already_started,
             custom_element_upgrade_timing,
-            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             false,
-        )
+        ))
+    }
+
+    fn build_xml_fragment(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        document_handle: DomHandle,
+        context_handle: DomHandle,
+        markup: &DomStringValue,
+        custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
+    ) -> Result<Option<DomHandle>, XmlFragmentParseError> {
+        let parsed = XmlParser.parse_fragment(self.dom_host(), context_handle, markup)?;
+        let first_node_index = self.dom_host().dom().len();
+        let registry_association =
+            self.fragment_context_custom_element_registry_association(host_ptr, context_handle);
+        let fragment = self.create_document_fragment_for_document(document_handle);
+        let mut roots = Vec::with_capacity(parsed.children().len());
+        for &source in parsed.children() {
+            let Some(child) = self.dom_host_mut().import_foreign_node(
+                document_handle,
+                parsed.document(),
+                source,
+                true,
+            ) else {
+                return Ok(None);
+            };
+            if !self
+                .dom_host_mut()
+                .append_child_without_mutation_effects(fragment, child)
+            {
+                return Ok(None);
+            }
+            self.set_fragment_root_custom_element_registry_association(
+                host_ptr,
+                child,
+                registry_association,
+            );
+            roots.push(child);
+        }
+        Ok(self.finish_fragment_parsing(
+            scope,
+            host_ptr,
+            fragment,
+            roots,
+            custom_element_upgrade_timing,
+            first_node_index,
+        ))
     }
 
     pub(crate) fn build_unsafe_fragment_from_html(
@@ -761,7 +826,7 @@ impl DocumentRuntime {
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_with_context_mode(
+        self.build_html_fragment(
             scope,
             host_ptr,
             document_handle,
@@ -769,7 +834,6 @@ impl DocumentRuntime {
             html,
             true,
             custom_element_upgrade_timing,
-            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             true,
         )
@@ -810,9 +874,9 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        html: &str,
-    ) -> bool {
-        let context = handle;
+        html: &DomStringValue,
+    ) -> Result<bool, XmlFragmentParseError> {
+        let context = self.dom_host().shadow_root_host(handle).unwrap_or(handle);
         let target = self
             .dom_host()
             .node(handle)
@@ -820,7 +884,7 @@ impl DocumentRuntime {
             .and_then(|element| element.template_contents())
             .unwrap_or(handle);
         let Some(document_handle) = self.inner_html_document_handle(target) else {
-            return false;
+            return Ok(false);
         };
         let existing_children = self
             .dom_host()
@@ -831,13 +895,17 @@ impl DocumentRuntime {
             .dom_host()
             .node(context)
             .is_some_and(|node| node.is_html_element_named("html"));
-        if html.is_empty()
+        if self
+            .dom_host()
+            .node_document_is_html_document(document_handle)
+            == Some(true)
+            && html.is_empty()
             && existing_children.is_empty()
             && !empty_html_context_creates_document_wrappers
         {
-            return false;
+            return Ok(false);
         }
-        let Some(fragment) = self.build_fragment_from_html(
+        let Some(fragment) = self.build_fragment_from_markup(
             scope,
             host_ptr,
             document_handle,
@@ -845,8 +913,9 @@ impl DocumentRuntime {
             html,
             true,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
-        ) else {
-            return false;
+        )?
+        else {
+            return Ok(false);
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
         let records_enabled = self.dom_host().mutation_records_enabled();
@@ -866,7 +935,7 @@ impl DocumentRuntime {
                 &added_children,
             )
         {
-            return false;
+            return Ok(false);
         }
         if changed && records_enabled {
             crate::observer_runtime::coalesce_child_list_replacement_records(
@@ -878,7 +947,7 @@ impl DocumentRuntime {
                 None,
             );
         }
-        changed
+        Ok(changed)
     }
 
     pub(crate) fn set_html_unsafe(
@@ -939,37 +1008,53 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        html: &str,
-    ) -> bool {
-        let Some(parent) = self.dom_host().node(handle).and_then(Node::parent_node) else {
-            return false;
+        markup: &DomStringValue,
+    ) -> Result<bool, XmlFragmentParseError> {
+        let Some(parent) = self.dom_host().parent_node(handle) else {
+            return Ok(false);
         };
         let Some(document_handle) = self.inner_html_document_handle(handle) else {
-            return false;
+            return Ok(false);
         };
-        let previous_sibling = self.dom_host().node(handle).and_then(Node::prev_sibling);
-        let next_sibling = self.dom_host().node(handle).and_then(Node::next_sibling);
-        let records_enabled = self.dom_host().mutation_records_enabled();
-        let removed =
-            self.remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, handle);
-        if !removed {
-            return false;
+        if markup.is_empty()
+            && self
+                .dom_host()
+                .node_document_is_html_document(document_handle)
+                == Some(true)
+        {
+            return Ok(self.remove_child_appending_to_current_reaction_queue(
+                scope, host_ptr, parent, handle,
+            ));
         }
-        if html.is_empty() {
-            return true;
-        }
-        let Some(fragment) = self.build_fragment_from_html(
+        let context = if self.dom_host().node(parent).is_some_and(Node::is_element) {
+            parent
+        } else {
+            self.create_fragment_body_context(document_handle)
+        };
+        // Parsing can fail without disconnecting the old node or invoking its
+        // lifecycle callbacks. Replacement begins only after a complete fragment.
+        let Some(fragment) = self.build_fragment_from_markup(
             scope,
             host_ptr,
             document_handle,
-            parent,
-            html,
+            context,
+            markup,
             true,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
-        ) else {
-            return false;
+        )?
+        else {
+            return Ok(false);
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
+        let previous_sibling = self.dom_host().node(handle).and_then(Node::prev_sibling);
+        let next_sibling = self.dom_host().node(handle).and_then(Node::next_sibling);
+        let records_enabled = self.dom_host().mutation_records_enabled();
+        if !self.remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, handle) {
+            return Ok(false);
+        }
+        if added_children.is_empty() {
+            return Ok(true);
+        }
         let changed = self.insert_html_fragment_child_appending_to_current_reaction_queue(
             scope,
             host_ptr,
@@ -985,7 +1070,7 @@ impl DocumentRuntime {
                 &added_children,
             )
         {
-            return false;
+            return Ok(false);
         }
         if changed && records_enabled {
             crate::observer_runtime::coalesce_child_list_replacement_records(
@@ -997,38 +1082,56 @@ impl DocumentRuntime {
                 next_sibling,
             );
         }
-        changed
+        Ok(changed)
+    }
+
+    pub(crate) fn create_fragment_body_context(&mut self, document_handle: DomHandle) -> DomHandle {
+        self.dom_host_mut()
+            .create_element_without_attributes_for_document(
+                document_handle,
+                "body".into(),
+                "http://www.w3.org/1999/xhtml".into(),
+                None,
+            )
     }
 
     pub(crate) fn insert_adjacent_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
-        target: DomHandle,
         document_handle: DomHandle,
         context_handle: DomHandle,
-        html: &str,
+        markup: &DomStringValue,
         insert: impl FnOnce(&mut Self, &mut v8::PinScope<'_, '_>, *mut JsContextHost, DomHandle) -> bool,
-    ) -> bool {
-        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        let context_mode = if context_handle == target {
-            HtmlFragmentParserContextMode::Standard
+    ) -> Result<bool, XmlFragmentParseError> {
+        let context_is_element = self
+            .dom_host()
+            .node(context_handle)
+            .is_some_and(Node::is_element);
+        let context_is_html_root = self
+            .dom_host()
+            .node_document_is_html_document(document_handle)
+            == Some(true)
+            && self
+                .dom_host()
+                .node(context_handle)
+                .is_some_and(|node| node.is_html_element_named("html"));
+        let context_handle = if !context_is_element || context_is_html_root {
+            self.create_fragment_body_context(document_handle)
         } else {
-            HtmlFragmentParserContextMode::SiblingInsertion
+            context_handle
         };
-        let Some(fragment) = self.build_fragment_from_html_with_context_mode(
+        let Some(fragment) = self.build_fragment_from_markup(
             scope,
             host_ptr,
             document_handle,
             context_handle,
-            html,
+            markup,
             true,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
-            context_mode,
-            scripting_enabled,
-            false,
-        ) else {
-            return false;
+        )?
+        else {
+            return Ok(false);
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
         let changed = insert(self, scope, host_ptr, fragment);
@@ -1040,9 +1143,9 @@ impl DocumentRuntime {
                 &added_children,
             )
         {
-            return false;
+            return Ok(false);
         }
-        changed
+        Ok(changed)
     }
 
     pub(crate) fn has_pending_document_write_external_script_load(&self) -> bool {

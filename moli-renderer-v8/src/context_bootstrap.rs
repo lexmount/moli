@@ -591,7 +591,8 @@ pub(crate) use self::time_ranges::new_time_ranges_value;
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
     TrustedTypeKind, TrustedTypesCodeGenerationCheck, check_javascript_url_trusted_types,
-    install_trusted_types_runtime_state, trusted_html_string_or_throw, trusted_html_value_string,
+    install_trusted_types_runtime_state, trusted_html_dom_string_or_throw,
+    trusted_html_string_or_throw, trusted_html_value_string,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
     trusted_script_url_string_or_throw, trusted_type_kind, trusted_type_string_or_throw,
     trusted_type_string16, trusted_type_string16_or_throw, trusted_types_code_generation_check,
