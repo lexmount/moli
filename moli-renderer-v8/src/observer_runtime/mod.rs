@@ -28,7 +28,8 @@ use std::{
 
 use crate::css_style::parse_css_declaration_list;
 use crate::dom::native::{
-    DomHost, DomMutationEffects, DomMutationRecord, DomMutationRecordKind, NativeNodeId,
+    DomHost, DomMutationEffects, DomMutationObserverEffect, DomMutationRecord,
+    DomMutationRecordKind, NativeNodeId,
 };
 use crate::webidl;
 use indexmap::IndexSet;
@@ -149,6 +150,7 @@ struct IntersectionObserverEntryPrototypeAccessorsDeclaration {
 pub(super) struct ObserverStore {
     next_mutation_observer_id: u32,
     mutation_observers: HashMap<u32, MutationObserverState>,
+    pending_mutation_observers: HashSet<u32>,
     mutation_delivery_scheduled: bool,
     next_intersection_observer_id: u32,
     intersection_observers: HashMap<u32, IntersectionObserverState>,
@@ -278,6 +280,7 @@ struct MutationObserverState {
     observer: v8::Global<v8::Object>,
     callback: callback::ObserverCallback,
     registrations: Vec<MutationObserverRegistration>,
+    transient_registrations: Vec<TransientMutationObserverRegistration>,
     queued_records: Vec<QueuedMutationRecord>,
 }
 
@@ -285,6 +288,14 @@ struct MutationObserverState {
 struct MutationObserverRegistration {
     target: NativeNodeId,
     options: MutationObserverOptions,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TransientMutationObserverRegistration {
+    target: NativeNodeId,
+    // Ordinary registrations are unique per target within one observer.
+    // Updating that registration removes all transients with this source.
+    source: NativeNodeId,
 }
 
 #[derive(Clone, Default)]
@@ -528,6 +539,7 @@ impl ObserverStore {
                 observer: v8::Global::new(scope, observer),
                 callback,
                 registrations: Vec::new(),
+                transient_registrations: Vec::new(),
                 queued_records: Vec::new(),
             },
         );
@@ -557,6 +569,9 @@ impl ObserverStore {
             .iter_mut()
             .find(|registration| registration.target == target)
         {
+            state
+                .transient_registrations
+                .retain(|registration| registration.source != target);
             existing.options = options;
         } else {
             state
@@ -588,6 +603,7 @@ impl ObserverStore {
             return;
         };
         state.registrations.clear();
+        state.transient_registrations.clear();
         state.queued_records.clear();
     }
 
@@ -613,12 +629,24 @@ impl ObserverStore {
         if effects.did_change() {
             self.rootless_geometry_cache.clear();
         }
-        let records = effects.observer_records().records();
         let mut queued_any = false;
-        for record in records {
-            for state in self.mutation_observers.values_mut() {
-                if let Some(queued) = state.matching_record(dom_host, record) {
-                    state.queued_records.push(queued);
+        for effect in effects.observer_records().effects() {
+            for (&id, state) in &mut self.mutation_observers {
+                let pending = match effect {
+                    DomMutationObserverEffect::Record(record) => {
+                        if let Some(queued) = state.matching_record(dom_host, record) {
+                            state.queued_records.push(queued);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    DomMutationObserverEffect::SubtreeRemoval { node, ancestors } => {
+                        state.add_transient_registrations(node, ancestors)
+                    }
+                };
+                if pending {
+                    self.pending_mutation_observers.insert(id);
                     queued_any = true;
                 }
             }
@@ -764,33 +792,31 @@ impl ObserverStore {
         self.next_intersection_observer_id
     }
 
-    fn collect_mutation_deliveries<'s>(
+    fn take_mutation_notification_observers(&mut self) -> Vec<u32> {
+        let mut ids: Vec<_> = self.pending_mutation_observers.drain().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn take_mutation_delivery<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
-    ) -> Vec<MutationObserverDelivery<'s>> {
-        let mut deliveries = Vec::new();
-        let mut ids: Vec<_> = self.mutation_observers.keys().copied().collect();
-        ids.sort_unstable();
-        for id in ids {
-            let Some(state) = self.mutation_observers.get_mut(&id) else {
-                continue;
-            };
-            if state.queued_records.is_empty() {
-                continue;
-            }
-            let records = mem::take(&mut state.queued_records);
-            let Some(callback) = state.callback.prepare(scope, host_ptr) else {
-                continue;
-            };
-            let observer = v8::Local::new(scope, &state.observer);
-            deliveries.push(MutationObserverDelivery {
-                observer,
-                callback,
-                records,
-            });
+        id: u32,
+    ) -> Option<MutationObserverDelivery<'s>> {
+        let state = self.mutation_observers.get_mut(&id)?;
+        // Cleanup also runs when takeRecords() drained the queue or the
+        // observer did not request childList records for the removal.
+        state.transient_registrations.clear();
+        if state.queued_records.is_empty() {
+            return None;
         }
-        deliveries
+        let records = mem::take(&mut state.queued_records);
+        Some(MutationObserverDelivery {
+            observer: v8::Local::new(scope, &state.observer),
+            callback: state.callback.prepare(scope, host_ptr)?,
+            records,
+        })
     }
 
     fn intersection_notification_observers(
@@ -871,31 +897,29 @@ struct IntersectionObserverDelivery<'s> {
     options: IntersectionObserverOptions,
 }
 
-fn invoke_mutation_deliveries<'s>(
+fn invoke_mutation_delivery<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    deliveries: Vec<MutationObserverDelivery<'s>>,
+    delivery: MutationObserverDelivery<'s>,
 ) {
-    for delivery in deliveries {
-        if !delivery.callback.is_current(scope) {
-            continue;
-        }
-        // Convert callback arguments in the callback function's Realm, which
-        // can differ from the observer's construction Realm.
-        let callback_context = delivery.callback.relevant_context(scope);
-        let records_array = {
-            let scope = &mut v8::ContextScope::new(scope, callback_context);
-            build_mutation_records_array(scope, host_ptr, &delivery.records)
-        };
-        let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
-        delivery.callback.invoke_and_report(
-            scope,
-            "mutationobserver",
-            "MutationObserver callback",
-            observer_value,
-            &[records_array.into(), observer_value],
-        );
+    if !delivery.callback.is_current(scope) {
+        return;
     }
+    // Convert callback arguments in the callback function's Realm, which
+    // can differ from the observer's construction Realm.
+    let callback_context = delivery.callback.relevant_context(scope);
+    let records_array = {
+        let scope = &mut v8::ContextScope::new(scope, callback_context);
+        build_mutation_records_array(scope, host_ptr, &delivery.records)
+    };
+    let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
+    delivery.callback.invoke_and_report(
+        scope,
+        "mutationobserver",
+        "MutationObserver callback",
+        observer_value,
+        &[records_array.into(), observer_value],
+    );
 }
 
 fn invoke_intersection_delivery<'s>(
@@ -926,17 +950,70 @@ fn invoke_intersection_delivery<'s>(
 }
 
 impl MutationObserverState {
+    fn effective_registrations(
+        &self,
+    ) -> impl Iterator<Item = (NativeNodeId, NativeNodeId, &MutationObserverOptions)> {
+        self.registrations
+            .iter()
+            .map(|registration| {
+                (
+                    registration.target,
+                    registration.target,
+                    &registration.options,
+                )
+            })
+            .chain(
+                self.transient_registrations
+                    .iter()
+                    .filter_map(move |transient| {
+                        self.registrations
+                            .iter()
+                            .find(|registration| registration.target == transient.source)
+                            .map(|source| (transient.target, transient.source, &source.options))
+                    }),
+            )
+    }
+
+    fn add_transient_registrations(
+        &mut self,
+        target: NativeNodeId,
+        ancestors: &[NativeNodeId],
+    ) -> bool {
+        let sources = self
+            .effective_registrations()
+            .filter_map(|(root, source, options)| {
+                (options.subtree && ancestors.contains(&root)).then_some(source)
+            })
+            .collect::<Vec<_>>();
+        let previous_count = self.transient_registrations.len();
+        for source in sources {
+            let registration = TransientMutationObserverRegistration { target, source };
+            if !self.transient_registrations.contains(&registration) {
+                self.transient_registrations.push(registration);
+            }
+        }
+        self.transient_registrations.len() != previous_count
+    }
+
     fn matching_record(
         &self,
         dom_host: &DomHost,
         record: &DomMutationRecord,
     ) -> Option<QueuedMutationRecord> {
-        let registration = self
-            .registrations
-            .iter()
-            .rev()
-            .find(|registration| registration.matches(dom_host, record))?;
-        Some(registration.project_record(record))
+        let mut matched = false;
+        let mut include_old_value = false;
+        for (root, _, options) in self.effective_registrations() {
+            if !options.matches(dom_host, root, record) {
+                continue;
+            }
+            matched = true;
+            include_old_value |= match record.kind() {
+                DomMutationRecordKind::Attributes(_) => options.attribute_old_value,
+                DomMutationRecordKind::CharacterData { .. } => options.character_data_old_value,
+                DomMutationRecordKind::ChildList(_) => false,
+            };
+        }
+        matched.then(|| QueuedMutationRecord::project_record(record, include_old_value))
     }
 
     fn coalesce_child_list_replacement_records(
@@ -1005,47 +1082,42 @@ fn child_list_record_belongs_to_replacement(
             .all(|node| removed_nodes.contains(node))
 }
 
-impl MutationObserverRegistration {
-    fn matches(&self, dom_host: &DomHost, record: &DomMutationRecord) -> bool {
-        if self.target != record.target()
-            && (!self.options.subtree
-                || !is_ancestor_or_self(dom_host, self.target, record.target()))
+impl MutationObserverOptions {
+    fn matches(&self, dom_host: &DomHost, root: NativeNodeId, record: &DomMutationRecord) -> bool {
+        if root != record.target()
+            && (!self.subtree || !is_ancestor_or_self(dom_host, root, record.target()))
         {
             return false;
         }
 
         match record.kind() {
             DomMutationRecordKind::Attributes(mutation) => {
-                if !self.options.attributes {
+                if !self.attributes {
                     return false;
                 }
-                self.options.attribute_filter.as_ref().is_none_or(|filter| {
+                self.attribute_filter.as_ref().is_none_or(|filter| {
                     mutation.namespace().is_none() && filter.contains(mutation.local_name())
                 })
             }
-            DomMutationRecordKind::CharacterData { .. } => self.options.character_data,
-            DomMutationRecordKind::ChildList(_) => self.options.child_list,
+            DomMutationRecordKind::CharacterData { .. } => self.character_data,
+            DomMutationRecordKind::ChildList(_) => self.child_list,
         }
     }
+}
 
-    fn project_record(&self, record: &DomMutationRecord) -> QueuedMutationRecord {
+impl QueuedMutationRecord {
+    fn project_record(record: &DomMutationRecord, include_old_value: bool) -> Self {
         let kind = match record.kind() {
             DomMutationRecordKind::Attributes(mutation) => QueuedMutationRecordKind::Attributes {
                 attribute_name: mutation.local_name().to_owned(),
                 attribute_namespace: mutation.namespace().map(str::to_owned),
-                old_value: self
-                    .options
-                    .attribute_old_value
+                old_value: include_old_value
                     .then(|| mutation.shared_old_value())
                     .flatten(),
             },
             DomMutationRecordKind::CharacterData { old_value } => {
                 QueuedMutationRecordKind::CharacterData {
-                    old_value: self
-                        .options
-                        .character_data_old_value
-                        .then(|| old_value.clone())
-                        .flatten(),
+                    old_value: include_old_value.then(|| old_value.clone()).flatten(),
                 }
             }
             DomMutationRecordKind::ChildList(mutation) => QueuedMutationRecordKind::ChildList {
