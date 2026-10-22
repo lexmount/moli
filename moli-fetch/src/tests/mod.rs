@@ -1,4 +1,5 @@
 mod cache_request_controls;
+mod connection_timing;
 mod cookie_context;
 mod cookie_store;
 mod header_bytes;

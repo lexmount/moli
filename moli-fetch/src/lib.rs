@@ -10,6 +10,7 @@ mod cancellation;
 mod client;
 mod client_hints;
 mod config;
+mod connection_timing;
 mod cors;
 mod dns;
 mod error;
@@ -41,6 +42,7 @@ pub use blocking::{
 pub use cancellation::{FetchCancelHandle, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
+pub use connection_timing::{FetchConnectionTiming, FetchCurlTiming};
 pub use cors::validate_cors_response_for_origin;
 pub use error::{
     FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success, is_fetch_cancelled,

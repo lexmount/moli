@@ -1396,6 +1396,16 @@ impl RuntimeOwner {
     }
 
     fn finish_active_transfer(&self, state: &mut OwnerState, completion: RuntimeCurlCompletion) {
+        completion
+            .context
+            .response_progress()
+            .record_connection_timing(
+                completion.dns_timing,
+                completion
+                    .easy
+                    .as_ref()
+                    .map(crate::FetchCurlTiming::from_easy),
+            );
         state.active_transfers = state.active_transfers.saturating_sub(1);
         match completion.context {
             ActiveTransferContext::Buffered(context) => {
@@ -1842,7 +1852,8 @@ impl RuntimeOwner {
             )
         };
         let negotiated_http_version = negotiated_http_version.or(collector_http_version);
-        let transfer_metrics = transfer_metrics_from_easy(&easy, &headers);
+        let transfer_metrics =
+            transfer_metrics_from_easy(&easy, &headers, easy.get_ref().curl_timing());
         log_request_completion(
             &job.request.method,
             &job.current_url,
@@ -2167,7 +2178,8 @@ impl RuntimeOwner {
             )
         };
         let negotiated_http_version = negotiated_http_version.or(collector_http_version);
-        let transfer_metrics = transfer_metrics_from_easy(&easy, &headers);
+        let transfer_metrics =
+            transfer_metrics_from_easy(&easy, &headers, easy.get_ref().curl_timing());
         log_request_completion(
             &job.request.method,
             &job.current_url,
@@ -2671,6 +2683,14 @@ enum ActiveTransferContext {
 }
 
 impl ActiveTransferContext {
+    fn response_progress(&self) -> &ResponseProgress {
+        match self {
+            Self::Buffered(context) => &context.job.response_progress,
+            Self::Streaming(context) => &context.job.response_progress,
+            Self::StreamingRaw(context) => &context.job.response_progress,
+        }
+    }
+
     fn into_buffered(self) -> Option<ActiveBufferedTransferContext> {
         match self {
             Self::Buffered(context) => Some(*context),
@@ -2732,6 +2752,11 @@ enum FetchResponseCollector {
 }
 
 impl FetchTransferHandler {
+    fn curl_timing(&self) -> Option<crate::FetchCurlTiming> {
+        self.response_progress()
+            .and_then(ResponseProgress::curl_timing)
+    }
+
     fn mark_response_body_received(&mut self) {
         if !self.response_body_observed
             && let Some(timing) = self.response_progress()
@@ -2840,6 +2865,18 @@ impl FetchTransferHandler {
 }
 
 impl Handler for FetchTransferHandler {
+    fn ssl_ctx(&mut self, context: *mut std::ffi::c_void) -> Result<(), curl::Error> {
+        if let Some(timing) = self.response_progress() {
+            timing.mark_tls_context_started();
+        }
+        // Preserve curl-rust's platform certificate-store initialization.
+        match &mut self.response {
+            FetchResponseCollector::Buffered(collector) => collector.ssl_ctx(context),
+            FetchResponseCollector::Streaming(collector) => collector.ssl_ctx(context),
+            FetchResponseCollector::StreamingRaw(collector) => collector.ssl_ctx(context),
+        }
+    }
+
     fn prereq(
         &mut self,
         _primary_ip: &str,
@@ -3697,7 +3734,7 @@ fn collect_buffered_response(
     let status_text = collector.status_text().map(str::to_owned);
     let headers = collector.headers().to_vec();
     let body = collector.body().to_vec();
-    let transfer_metrics = transfer_metrics_from_easy(easy, &headers);
+    let transfer_metrics = transfer_metrics_from_easy(easy, &headers, easy.get_ref().curl_timing());
 
     Ok((
         RawResponse::from_head_and_body(
