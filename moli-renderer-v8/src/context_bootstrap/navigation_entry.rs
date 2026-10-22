@@ -8,7 +8,7 @@ use super::navigation_activation::set_navigation_current_entry;
 use super::navigation_entry_state::navigation_entry_state_snapshot;
 use super::navigation_projection::visible_navigation_index_for_entry;
 use super::navigation_window::{
-    navigation_document_is_active, runtime_window_owner, window_history_for_holder,
+    runtime_window_document_is_fully_active, runtime_window_owner, window_history_for_holder,
     window_navigation_for_holder,
 };
 use super::*;
@@ -317,7 +317,7 @@ fn navigation_entry_is_active<'s>(
     entry: v8::Local<'s, v8::Object>,
 ) -> bool {
     let owner = runtime_window_owner(scope, entry);
-    navigation_document_is_active(scope, owner)
+    runtime_window_document_is_fully_active(scope, owner)
 }
 
 fn navigation_entry_stored_string<'s>(

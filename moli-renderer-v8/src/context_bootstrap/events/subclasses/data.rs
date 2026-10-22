@@ -5,7 +5,9 @@ use moli_webapi::navigation_values::options::{
 use super::*;
 use crate::context_bootstrap::history_mutation::document_can_have_url_rewritten;
 use crate::context_bootstrap::location_runtime::location_href_slot;
-use crate::context_bootstrap::navigation_activation::{NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition};
+use crate::context_bootstrap::navigation_activation::{
+    NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition,
+};
 use crate::context_bootstrap::navigation_events::{
     NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT, navigation_destination_url_value,
     navigation_scroll_event_is_active, set_navigation_destination_url,
@@ -17,7 +19,7 @@ use crate::context_bootstrap::navigation_handler_callbacks::{
 };
 use crate::context_bootstrap::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_base_url,
-    navigation_document_is_active, runtime_window_is_global, runtime_window_owner,
+    navigation_document_is_live, runtime_window_is_global, runtime_window_owner,
     window_location_for_holder,
 };
 use crate::native_bridge::element::scroll_to_url_fragment_or_top;
@@ -402,7 +404,7 @@ fn precommit_controller_event<'s>(
     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     .is_some_and(|navigation| {
         let owner = runtime_window_owner(scope, navigation);
-        navigation_document_is_active(scope, owner)
+        navigation_document_is_live(scope, owner)
     });
     if !owner_is_active
         || !navigate_event_target_is_connected(scope, event)
