@@ -13,7 +13,7 @@ pub(crate) use overconstrained_error::{
 };
 pub(crate) use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub(crate) use web_transport_error::{
-    WebTransportErrorClonePayload, WebTransportErrorSource,
+    WebTransportErrorClonePayload, WebTransportErrorSource, build_web_transport_error,
     build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
     web_transport_error_constructor_callback,
 };
@@ -475,7 +475,6 @@ fn initialize_dom_exception<'s>(
     dom_exception_declaration(scope, message, name)
         .initialize(scope, exception)
         .expect("DOMException declaration should initialize");
-    capture_dom_exception_stack(scope, exception);
 }
 
 pub(super) fn capture_dom_exception_stack(
@@ -522,7 +521,6 @@ fn initialize_quota_exceeded_error<'s>(
     QuotaExceededErrorOptions { quota, requested }
         .initialize_snapshot(scope, exception)
         .expect("QuotaExceededError options");
-    capture_dom_exception_stack(scope, exception);
 }
 
 fn websocket_error_declaration<'s>(
@@ -536,11 +534,12 @@ fn websocket_error_declaration<'s>(
     WebSocketErrorObjectDeclaration::new(v8_string(scope, message), close_code, reason)
 }
 
-pub(crate) fn new_dom_exception_value<'s>(
+/// Create exception data without inventing a construction or deserialization stack.
+pub(crate) fn build_dom_exception_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,
-) -> v8::Local<'s, v8::Value> {
+) -> v8::Local<'s, v8::Object> {
     // Retained native methods can throw after their WindowProxy is detached,
     // before DOMException was first exposed in that realm.
     if let Ok(prototype) =
@@ -552,11 +551,19 @@ pub(crate) fn new_dom_exception_value<'s>(
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
         let _ = exception.set_prototype(scope, prototype.into());
-        return exception.into();
+        return exception;
     }
-    let exception = dom_exception_declaration(scope, message, name)
+    dom_exception_declaration(scope, message, name)
         .bind(scope)
-        .expect("DOMException declaration should bind");
+        .expect("DOMException declaration should bind")
+}
+
+pub(crate) fn new_dom_exception_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    message: &str,
+    name: &str,
+) -> v8::Local<'s, v8::Value> {
+    let exception = build_dom_exception_object(scope, message, name);
     capture_dom_exception_stack(scope, exception);
     exception.into()
 }
@@ -673,18 +680,28 @@ pub(crate) fn quota_exceeded_error_constructor_callback<'s>(
     rv.set(exception.into());
 }
 
-pub(crate) fn new_quota_exceeded_error_value<'s>(
+pub(crate) fn build_quota_exceeded_error_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     quota: Option<f64>,
     requested: Option<f64>,
-) -> v8::Local<'s, v8::Value> {
+) -> v8::Local<'s, v8::Object> {
     let exception = QuotaExceededErrorObjectDeclaration::new(v8_string(scope, message))
         .bind(scope)
         .expect("QuotaExceededError declaration should bind");
     QuotaExceededErrorOptions { quota, requested }
         .initialize_snapshot(scope, exception)
         .expect("QuotaExceededError options");
+    exception
+}
+
+pub(crate) fn new_quota_exceeded_error_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    message: &str,
+    quota: Option<f64>,
+    requested: Option<f64>,
+) -> v8::Local<'s, v8::Value> {
+    let exception = build_quota_exceeded_error_object(scope, message, quota, requested);
     capture_dom_exception_stack(scope, exception);
     exception.into()
 }
@@ -699,7 +716,6 @@ pub(crate) fn initialize_websocket_error<'s>(
     websocket_error_declaration(scope, message, close_code, reason)
         .initialize(scope, exception)
         .expect("WebSocketError declaration should initialize");
-    capture_dom_exception_stack(scope, exception);
 }
 
 pub(crate) fn new_websocket_error_value<'s>(

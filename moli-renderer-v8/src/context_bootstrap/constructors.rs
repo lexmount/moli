@@ -33,8 +33,9 @@ pub(super) use document_nodes::{
     document_fragment_constructor_callback, text_constructor_callback,
 };
 pub(crate) use dom_exception::{
-    WebTransportErrorClonePayload, WebTransportErrorSource, build_overconstrained_error,
-    build_rtc_sdp_error, build_web_transport_error_from_clone_payload,
+    WebTransportErrorClonePayload, WebTransportErrorSource, build_dom_exception_object,
+    build_overconstrained_error, build_quota_exceeded_error_object, build_rtc_sdp_error,
+    build_web_transport_error, build_web_transport_error_from_clone_payload,
     dom_error_constructor_callback, dom_exception_clone_fields, dom_exception_constructor_callback,
     initialize_websocket_error, install_dom_exception_template_bindings, new_dom_error_value,
     new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,

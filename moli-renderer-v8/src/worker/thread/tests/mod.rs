@@ -1,5 +1,6 @@
 mod callback_execution;
 mod console;
+mod dom_exception_stacks;
 mod error_reporting_guard;
 mod event_target_prototype;
 mod notification_init;

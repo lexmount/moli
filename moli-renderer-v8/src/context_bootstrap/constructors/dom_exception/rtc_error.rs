@@ -102,7 +102,6 @@ pub(crate) fn rtc_error_constructor_callback<'s>(
         .is_some()
         && declaration.initialize(scope, args.this()).is_ok()
     {
-        capture_dom_exception_stack(scope, args.this());
         rv.set(args.this().into());
     }
 }

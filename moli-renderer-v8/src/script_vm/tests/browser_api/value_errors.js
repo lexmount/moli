@@ -131,11 +131,12 @@
       test('WebTransportError structured clone ' + source + ' ' + code, () => {
         const e = createWT(utf16, {source, streamErrorCode:code});
         const sentinel = {};
-        for (const name of ['name','message','source','streamErrorCode']) Object.defineProperty(e, name, {enumerable:true, get() {throw sentinel;}});
+        for (const name of ['name','message','source','streamErrorCode','stack']) Object.defineProperty(e, name, {enumerable:true, get() {throw sentinel;}});
         const cloned = realm.structuredClone({a:e, b:e});
         return cloned.a === cloned.b && cloned.a !== e && Object.getPrototypeOf(cloned.a) === realm.WebTransportError.prototype &&
           cloned.a.name === 'WebTransportError' && cloned.a.message === utf16 && cloned.a.source === source &&
-          cloned.a.streamErrorCode === code && cloned.a.code === 0 && !Object.hasOwn(cloned.a, 'name');
+          cloned.a.streamErrorCode === code && cloned.a.code === 0 && !Object.hasOwn(cloned.a, 'name') &&
+          !Object.hasOwn(cloned.a, 'stack') && typeof cloned.a.stack === 'undefined';
       });
     }
     test('WebTransportError author Proxy clone rejects without traps', () => {

@@ -13,23 +13,23 @@ use crate::{
         GeometryClonePayload, ImageBitmapClonePayload, ImageDataClonePayload,
         OffscreenCanvasTransferPayload, ReadableStreamClonePayload, TransformStreamClonePayload,
         WebTransportErrorClonePayload, WebTransportErrorSource, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload,
+        attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
         build_encoded_video_chunk_from_clone_payload, build_file_list_object, build_file_object,
         build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
         build_image_bitmap_from_clone_payload, build_image_data_object_from_clone_payload,
-        build_image_data_object_from_legacy_bytes, build_readable_stream_clone_shell,
-        build_transform_stream_clone_shell, build_web_transport_error_from_clone_payload,
-        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
-        crypto_key_object_from_clone_payload, detach_image_bitmap,
-        detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, encoded_video_chunk_clone_payload_from_object,
-        ensure_message_port_wrapper_for_id, file_list_files_from_object,
-        file_system_file_snapshot_clone_payload_from_object,
+        build_image_data_object_from_legacy_bytes, build_quota_exceeded_error_object,
+        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
+        build_web_transport_error_from_clone_payload, build_writable_stream_clone_shell,
+        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
+        detach_image_bitmap, detach_message_port_owner_for_transfer,
+        detach_transferred_message_port, dom_exception_clone_fields,
+        encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
+        file_list_files_from_object, file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         image_bitmap_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
         initialize_writable_stream_clone_shell, message_port_id_from_object,
-        new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
+        new_dom_exception_value, prepare_readable_stream_transfer,
         prepare_transform_stream_transfer, prepare_writable_stream_transfer,
         quota_exceeded_error_clone_fields, require_internal_stream_value,
         selected_file_from_object, transfer_offscreen_canvas,
@@ -1058,17 +1058,15 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
             HOST_OBJECT_TAG_DOM_EXCEPTION => {
                 let message = read_string(deserializer)?;
                 let name = read_string(deserializer)?;
-                v8::Local::<v8::Object>::try_from(new_dom_exception_value(scope, &message, &name))
-                    .ok()
+                Some(build_dom_exception_object(scope, &message, &name))
             }
             HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
                 let message = read_string(deserializer)?;
                 let quota = read_optional_double(deserializer)?;
                 let requested = read_optional_double(deserializer)?;
-                v8::Local::<v8::Object>::try_from(new_quota_exceeded_error_value(
+                Some(build_quota_exceeded_error_object(
                     scope, &message, quota, requested,
                 ))
-                .ok()
             }
             _ => {
                 throw_data_clone_exception(scope, "Unsupported structured clone host object.");
