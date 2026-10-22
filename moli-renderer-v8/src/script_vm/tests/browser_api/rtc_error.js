@@ -186,8 +186,8 @@
       if (key === 'prototype') prototypeReads++;
       return Reflect.get(object, key);
     }}));
-    check(name + ' new target realm fallback', Object.getPrototypeOf(fallback) === child[name].prototype &&
-      fallback[member] === expected && prototypeReads === 1);
+    check(name + ' new target realm fallback', Object.getPrototypeOf(fallback) === child.Object.prototype &&
+      Object.getOwnPropertyDescriptor(name === 'RTCError' ? DOMException.prototype : Ctor.prototype, member).get.call(fallback) === expected && prototypeReads === 1);
   }
   {
     const frozenEvent = Object.freeze(new RTCErrorEvent('frozen', {

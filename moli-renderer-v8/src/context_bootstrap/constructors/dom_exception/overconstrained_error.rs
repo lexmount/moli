@@ -1,5 +1,4 @@
 use super::*;
-use moli_webapi_declare::initialize_web_api_constructor_receiver;
 
 const CONSTRAINT_SLOT: &str = "__moliOverconstrainedErrorConstraint";
 
@@ -51,9 +50,6 @@ pub(crate) fn overconstrained_error_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "OverconstrainedError") {
-        return;
-    }
     let Some(constraint) =
         v8::String::new_from_two_byte(scope, &parsed.constraint.0, v8::NewStringType::Normal)
     else {

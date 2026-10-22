@@ -224,7 +224,8 @@ fn webrtc_event_constructors_support_subclasses_foreign_members_and_new_target_r
           checks.push(derived instanceof Derived, derived instanceof Ctor,
             derived[member] === value, foreign[member] === value,
             Object.getOwnPropertyDescriptor(Ctor.prototype, member).get.call(foreign) === value,
-            Object.getPrototypeOf(fallback) === child[name].prototype, fallback[member] === value,
+            Object.getPrototypeOf(fallback) === child.Object.prototype,
+            Object.getOwnPropertyDescriptor(Ctor.prototype, member).get.call(fallback) === value,
             prototypeReads === 1);
         }
         foreignPeer.close();

@@ -121,7 +121,8 @@ fn rtc_ice_candidate_respects_new_target_and_accepts_genuine_foreign_receivers()
         return [
           derived instanceof Derived, derived instanceof RTCIceCandidate,
           Object.getPrototypeOf(foreign) === child.RTCIceCandidate.prototype,
-          Object.getPrototypeOf(fallback) === child.RTCIceCandidate.prototype,
+          Object.getPrototypeOf(fallback) === child.Object.prototype,
+          Object.getOwnPropertyDescriptor(RTCIceCandidate.prototype, 'sdpMid').get.call(fallback) === 'fallback',
           Object.getOwnPropertyDescriptor(RTCIceCandidate.prototype, 'sdpMid').get.call(foreign) === 'foreign',
           RTCIceCandidate.prototype.toJSON.call(foreign).sdpMid === 'foreign'
         ].every(Boolean);

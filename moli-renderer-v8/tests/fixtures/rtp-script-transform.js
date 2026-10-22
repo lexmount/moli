@@ -8,7 +8,7 @@
     assert(error instanceof C && (!name || error.name === name), 'expected '+(name || C.name)+', got '+error);
   };
   function workerProgram() {
-    const exposure = [typeof RTCRtpScriptTransformer, typeof RTCTransformEvent, typeof KeyFrameRequestEvent, typeof RTCRtpScriptTransform, 'onrtctransform' in self];
+    const exposure = [typeof RTCRtpScriptTransformer, typeof RTCTransformEvent, typeof KeyFrameRequestEvent, typeof RTCRtpScriptTransform, 'onrtctransform' in self, Function.prototype.toString.call(KeyFrameRequestEvent)];
     const held = new Map();
     const assert = ok => { if (!ok) throw Error('worker assertion'); };
     const rejectName = async (action, C, name) => {
@@ -109,7 +109,7 @@
           const other = index === 0 ? document.querySelector('iframe').contentWindow : window;
           await create({}, [], other.RTCRtpScriptTransform);
         });
-        await check('Dedicated Worker exposure', async () => equal((await wait('ready:ready')).exposed, ['function','function','function','undefined',true]));
+        await check('Dedicated Worker exposure', async () => equal((await wait('ready:ready')).exposed, ['function','function','function','undefined',true,'function KeyFrameRequestEvent() { [native code] }']));
         await check('Window exposure and arity', () => assert(T.length === 1 && T.name === 'RTCRtpScriptTransform' && !('RTCRtpScriptTransformer' in w) && !('RTCTransformEvent' in w) && !('KeyFrameRequestEvent' in w)));
         await check('requires construct and Worker', () => { raises(() => T(worker), w.TypeError); raises(() => new T(), w.TypeError); });
         await check('rejects forged Worker brands', () => {
@@ -181,14 +181,14 @@
         await check('dictionary invalid type before worker getter', () => {
           let reads=0; raises(() => new T({type:'invalid',get worker(){reads++;return worker;}}),w.TypeError); assert(reads===0);
         });
-        await check('NewTarget prototype follows conversion and precedes serialization', () => {
+        await check('native NewTarget prototype precedes conversion and serialization', () => {
           const order=[], marker={}, bytes=new w.ArrayBuffer(1);
           const argument={get type(){order.push('type');return undefined;},get worker(){order.push('worker');return worker;}};
           const options={get option(){order.push('clone');return 1;}};
           const transfer={[Symbol.iterator](){order.push('iterator');let done=false;return {next(){order.push('next');if(done)return {done:true};done=true;return {done:false,value:bytes};}};}};
           const newTarget=new Proxy(function(){},{get(target,key,receiver){if(key==='prototype'){order.push('prototype');throw marker;}return Reflect.get(target,key,receiver);}});
           let error;try {Reflect.construct(T,[argument,options,transfer],newTarget);}catch(e){error=e;}
-          assert(error===marker && bytes.byteLength===1);equal(order,['type','worker','iterator','next','next','prototype']);
+          assert(error===marker && bytes.byteLength===1);equal(order,['prototype']);
         });
         await check('SFrame mode is fixed by first synchronous assignment', () => {
           const scoped = new w.RTCPeerConnection();

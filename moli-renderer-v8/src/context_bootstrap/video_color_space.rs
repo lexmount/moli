@@ -5,9 +5,7 @@ use crate::{
     web_api_interfaces,
     webidl::{self, WebIdlDictionarySerialize},
 };
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const PRIMARIES_SLOT: &str = "__moliVideoColorSpacePrimaries";
 const TRANSFER_SLOT: &str = "__moliVideoColorSpaceTransfer";
@@ -130,9 +128,6 @@ pub(in crate::context_bootstrap) fn video_color_space_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<VideoColorSpaceConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "VideoColorSpace") {
-        return;
-    }
     parsed
         .init
         .initialize_snapshot(scope, args.this())

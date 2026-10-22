@@ -1,5 +1,4 @@
 use super::*;
-use moli_webapi_declare::initialize_web_api_constructor_receiver;
 use webidl::WebIdlDictionarySerialize;
 
 const ERROR_DETAIL: &str = "__moliRtcErrorDetail";
@@ -91,9 +90,6 @@ pub(crate) fn rtc_error_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "RTCError") {
-        return;
-    }
     let Some(message) =
         v8::String::new_from_two_byte(scope, &parsed.message.0, v8::NewStringType::Normal)
     else {

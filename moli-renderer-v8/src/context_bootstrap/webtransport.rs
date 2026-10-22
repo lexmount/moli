@@ -163,13 +163,6 @@ pub(super) fn constructor<'s>(
     let Some(parsed) = webidl::parse_args::<schema::ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !moli_webapi_declare::initialize_web_api_constructor_receiver(
-        scope,
-        args.this(),
-        "WebTransport",
-    ) {
-        return;
-    }
     let owner = args.this();
     let context = owner
         .get_creation_context(scope)

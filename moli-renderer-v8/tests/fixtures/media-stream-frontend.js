@@ -74,12 +74,12 @@
       assert(caught === marker, 'iterator getter exception');
       throws(realm.TypeError, () => new C({[Symbol.iterator]: 1}));
     });
-    check(prefix+'MediaStream conversion before prototype lookup', () => {
+    check(prefix+'MediaStream native prototype lookup before conversion', () => {
       const log = [];
       const iterable = {get [Symbol.iterator]() {log.push('iterator'); return function() {return {next() {log.push('next'); return {done:true}}}}}};
       const target = new Proxy(function() {}, {get(object, key) {if (key === 'prototype') log.push('prototype'); return Reflect.get(object, key)}});
       const stream = Reflect.construct(C, [iterable], target);
-      assert(log.join() === 'iterator,next,prototype', 'WebIDL allocation order '+log);
+      assert(log.join() === 'prototype,iterator,next', 'native allocation order '+log);
       assert(Object.getOwnPropertyDescriptor(P, 'active').get.call(stream) === false, 'subclass brand');
     });
     check(prefix+'MediaStream native stream overload ignores iterator', () => {

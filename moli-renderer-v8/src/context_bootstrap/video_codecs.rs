@@ -2,9 +2,7 @@
 //! conversion are implemented independently of support; all codecs currently
 //! report unsupported and configure closes asynchronously with NotSupportedError.
 
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::{
     events::initialize_event_object, media_queries, new_dom_exception_value,
@@ -175,20 +173,19 @@ pub(super) fn decoder_constructor<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    constructor(scope, args, rv, "VideoDecoder");
+    constructor(scope, args, rv);
 }
 pub(super) fn encoder_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    constructor(scope, args, rv, "VideoEncoder");
+    constructor(scope, args, rv);
 }
 fn constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
-    name: &'static str,
 ) {
     if !args.is_construct_call() {
         throw_type_error(scope, "A VideoCodec constructor requires 'new'.");
@@ -197,9 +194,6 @@ fn constructor<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), name) {
-        return;
-    }
     let error = V8TracedWebIdlCallbackFunction::new(scope, parsed.init.error).into_object();
     let output = V8TracedWebIdlCallbackFunction::new(scope, parsed.init.output).into_object();
     CodecSlots::new(
