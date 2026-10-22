@@ -414,6 +414,8 @@ interfaces! {
     RTCErrorEvent: Event;
     RTCIceCandidate;
     RTCIceTransport: EventTarget;
+    RTCEncodedAudioFrame;
+    RTCEncodedVideoFrame;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;
