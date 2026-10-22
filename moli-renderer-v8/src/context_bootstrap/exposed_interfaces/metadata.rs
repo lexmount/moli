@@ -183,6 +183,7 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "PerformanceMeasure",
     "PerformanceResourceTiming",
     "URL",
+    "URLPattern",
     "URLSearchParams",
     "FormData",
 ];

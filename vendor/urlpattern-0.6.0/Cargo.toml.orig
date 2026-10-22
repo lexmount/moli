@@ -1,0 +1,22 @@
+[package]
+name = "urlpattern"
+version = "0.6.0"
+authors = ["the Deno authors", "crowlKats <crowlkats@toaxl.com>"]
+edition = "2024"
+description = "rust-urlpattern is a Rust implementation of the URLPattern standard"
+repository = "https://github.com/denoland/rust-urlpattern"
+license = "MIT"
+
+[dependencies]
+url = "2.5.6"
+regex = "1.10.5"
+serde = { version = "1.0.127", features = ["derive"] }
+icu_properties = "2"
+
+[dev-dependencies]
+serde_json = "1.0.66"
+criterion = "0.5"
+
+[[bench]]
+name = "parse_patterns"
+harness = false

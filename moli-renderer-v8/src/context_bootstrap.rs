@@ -302,6 +302,7 @@ mod url_form;
 use moli_webapi::url_search_params as url_search_params_runtime;
 pub(crate) mod rtc_certificate;
 mod rtc_rtp;
+mod url_pattern;
 mod video_codecs;
 mod view_transition_runtime;
 mod web_audio_runtime;
