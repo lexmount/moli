@@ -115,14 +115,15 @@ but retains content in collapsed panels and inactive tabs. It does not evaluate
 stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
 through the optional boundary hooks.
 
-Moli's browser export uses current CSS visibility. It retains explicit disclosure
-targets, content tabpanels, searchable hidden content and collapsed lines inside
-visible preformatted source. Hidden navigation, menus, dialogs and popovers do
-not become disclosure content. An inherited root visibility veil does not discard
-the document; explicitly hidden descendants remain excluded. Hidden table cells
-retain their positions, while wholly invisible tables and collapsed rows are
-omitted. Computed boxes supplement document structure without changing a tight
-list into a loose one merely because each item contains a single block box.
+Moli's browser export uses current CSS visibility. It retains explicit
+disclosure targets, content tabpanels, searchable hidden content and collapsed
+lines inside visible preformatted source. Hidden navigation, menus, dialogs and
+popovers do not become disclosure content. An inherited root visibility veil
+does not discard the document; explicitly hidden descendants remain excluded.
+Hidden table cells retain their positions, while wholly invisible tables and
+lists and collapsed rows are omitted. Computed boxes supplement document
+structure without changing a tight list into a loose one merely because each
+item contains a single block box.
 
 The converter cannot preserve all HTML presentation (for example, arbitrary
 ordered-list numbering). DOM snapshots used by Moli's optional strip/base/frame
