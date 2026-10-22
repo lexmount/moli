@@ -1260,23 +1260,22 @@ impl PageScriptHost {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_font_face_fetch(
         &mut self,
-        context: v8::Global<v8::Context>,
+        execution_context: super::WindowExecutionContextBinding,
+        resource_loader: &crate::network::context::DocumentResourceLoader,
         font: crate::types::PendingFontFaceFetch,
-        owner: OwnerDispatchScope,
         registration: SubresourceFetchRegistration,
         dispatch: &crate::network_host::SubresourceRequestDispatch,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
-    ) -> u64 {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        let internal_id = info.internal_id;
-        let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
-            owner,
-            info.resource_type,
+    ) -> Option<u64> {
+        let load = resource_loader.register_load(
+            ResourceLoadKind::Font,
             ResourceLoadDisposition::Ordinary,
             registration.cancel_handle(),
-        );
+        )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
         let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
             .then(|| Box::new(dispatch.clone()));
         self.record_subresource_admission(
@@ -1293,20 +1292,18 @@ impl PageScriptHost {
                 dispatch,
                 info,
                 load,
-                execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
+                execution_context: PendingSubresourceExecutionContext::window(execution_context),
                 credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
                 continuation: PendingSubresourceContinuation::FontFace(Box::new(font)),
-                request_origin,
-                redirect_headers: None,
                 deferred_request_started: false,
                 blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
-        internal_id
+        Some(internal_id)
     }
 
     pub(crate) fn record_async_dictionary_fetch(
