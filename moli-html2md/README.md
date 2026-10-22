@@ -19,7 +19,8 @@ let markdown = moli_html2md::Converter::new(moli_html2md::Options {
 
 ## DOM interface
 
-Implement `Dom` with a copyable node ID and four required borrowed queries and four optional hooks:
+Implement `Dom` with a copyable node ID, four required borrowed queries and four
+optional hooks:
 
 - `node_kind`: document/fragment, lowercase element tag, decoded text, or ignored node.
 - `first_child` and `next_sibling`: ordered traversal of a stable, acyclic tree.
@@ -107,15 +108,25 @@ default is `false`, which collapses ordinary HTML whitespace and moves boundary
 spaces outside code delimiters. Fenced blocks always preserve nonempty code's
 spaces and blank lines. Empty blocks still separate surrounding text.
 
+## Content policy
+
 This is a structural content dump. It omits non-rendered serialized state blobs
 but retains content in collapsed panels and inactive tabs. It does not evaluate
 stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
-through the optional boundary hooks. Moli's browser exporter also uses current CSS
-visibility, retaining disclosure panels and collapsed lines in visible source
-blocks while excluding hidden UI templates. The converter cannot preserve all
-HTML presentation (for example, arbitrary ordered-list numbering).
-DOM snapshots used by Moli's optional
-strip/base/frame transformations remain the responsibility of the caller.
+through the optional boundary hooks.
+
+Moli's browser export uses current CSS visibility. It retains explicit disclosure
+targets, content tabpanels, searchable hidden content and collapsed lines inside
+visible preformatted source. Hidden navigation, menus, dialogs and popovers do
+not become disclosure content. An inherited root visibility veil does not discard
+the document; explicitly hidden descendants remain excluded. Hidden table cells
+retain their positions, while wholly invisible tables and collapsed rows are
+omitted. Computed boxes supplement document structure without changing a tight
+list into a loose one merely because each item contains a single block box.
+
+The converter cannot preserve all HTML presentation (for example, arbitrary
+ordered-list numbering). DOM snapshots used by Moli's optional strip/base/frame
+transformations remain the responsibility of the caller.
 
 ## Verification
 
@@ -150,12 +161,12 @@ file input values are omitted.
 
 Plain DOM attributes describe the supplied snapshot, including default form
 values and checked state. Browser adapters can expose live attributes and
-`control_value` instead. Placeholder hints are not field values.
-Empty text-entry controls emit no value; button-like
-controls may use accessible labels; generic containers do not acquire text
-from tooltip titles or prohibited names. Child output takes precedence over
-any fallback label. Links retain application protocols while executable
-JavaScript and inline HTML document URLs are excluded.
+`control_value` instead. Placeholder hints are not field values. Empty
+text-entry controls emit no value; button-like controls may use accessible
+labels. Generic containers do not acquire text from tooltip titles or prohibited
+names. Child output takes precedence over any fallback label. Links retain
+application protocols while executable JavaScript and inline HTML document URLs
+are excluded.
 
 SVG title children are tooltip metadata, not body text. They supply a name only
 when an SVG has no emitted content; title elements outside SVG are omitted.
@@ -179,11 +190,3 @@ positions. Its language marker and physical newlines are preserved; a standalone
 cell boundaries without blank lines. Plain heading wrappers remain Markdown
 headings. Captured headings, list items and quotations contain their own fragment
 targets rather than appending them to the preceding block.
-
-Moli's browser export retains explicit disclosure targets, content tabpanels,
-searchable hidden content and collapsed lines inside visible preformatted source.
-Hidden navigation, menus, dialogs and popovers do not become disclosure content.
-A root visibility veil can be inherited without discarding the document; explicit
-hidden descendants remain excluded. Hidden table cells retain their positions.
-Computed boundaries supplement ordinary document structure; they do not turn
-native lists into loose lists or inline form controls into separate paragraphs.
