@@ -17,7 +17,7 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     for (const name of Object.keys(event)) getters.add(own(event, name).get);
     if (event.type !== String(i) || event.detail.value !== i) throw new Error('captured instance');
   }
-  const type = own(Event.prototype, 'type'), detail = own(first, 'detail');
+  const type = own(Event.prototype, 'type'), detail = own(CustomEvent.prototype, 'detail');
   const childType = own(other.Event.prototype, 'type');
   let illegal = false;
   try { childType.get.call({}); }

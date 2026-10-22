@@ -26,12 +26,6 @@ struct TextEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::String>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct CustomEventInitDeclaration<'scope> {
-    detail: v8::Local<'scope, v8::Value>,
-}
-
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_ui_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -97,16 +91,4 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_composition_e
         .initialize(scope, event)
         .expect("CompositionEvent init declaration should initialize");
     true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_custom_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let detail =
-        init_value_property(scope, init, "detail").unwrap_or_else(|| v8::null(scope).into());
-    CustomEventInitDeclaration::new(detail)
-        .initialize(scope, event)
-        .expect("CustomEvent init declaration should initialize");
 }

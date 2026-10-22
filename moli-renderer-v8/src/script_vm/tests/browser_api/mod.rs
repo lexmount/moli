@@ -82,6 +82,7 @@ mod window_current_event_private;
 
 mod video_codec_support;
 
+mod custom_event_init;
 mod event_prototype_attributes;
 
 mod named_node_map_receivers;
