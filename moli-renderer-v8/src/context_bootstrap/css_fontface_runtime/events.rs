@@ -251,9 +251,6 @@ fn queue_font_face_set_task<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
     let data = v8::Array::new_with_elements(
         scope,
         &[owner.into(), v8::Boolean::new(scope, finish).into()],

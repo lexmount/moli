@@ -836,6 +836,12 @@ impl ScriptVm {
                             ),
                         ),
                         PendingSubresourceContinuation::FontFace(face) => {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
+                                    pending.info.url.as_str(), "css", None, &observable_response,
+                                ),
+                            );
                             let face = v8::Local::new(scope, &face.face);
                             let bytes = ((200..300).contains(&response_status) && !opaque_response_blocked)
                                 .then(|| observable_response.body_bytes());

@@ -640,9 +640,22 @@ async fn font_set_finish_task_rechecks_fonts_started_before_dispatch() {
         firstReady.then(()=>readyResolved=true);
         globalThis.doneEvents=[];
         fonts.addEventListener('loadingdone',event=>doneEvents.push(event.fontfaces.map(face=>face.family).sort()));
+    "#)).unwrap();
+    // Complete the first source, leaving its FontFaceSet finish task queued.
+    // Starting another face before dispatch must make that task recheck idle.
+    let completion = completions.pop_next_async_subresource_event().unwrap();
+    let activity = vm
+        .complete_async_subresource_fetch_event_body(completion)
+        .unwrap();
+    vm.finish_async_subresource_body_checkpoint_for_test(activity)
+        .unwrap();
+    vm.eval(&format!(
+        r#"
         globalThis.slow=new FontFace('Slow','url("{origin}/slow.woff2")');
         fonts.add(slow);slow.load();
-    "#)).unwrap();
+    "#
+    ))
+    .unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), requests.recv())
             .await
