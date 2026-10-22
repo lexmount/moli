@@ -91,7 +91,6 @@ pub fn web_transport_error_constructor_callback<'s>(
         return;
     };
     if declaration.initialize(scope, args.this()).is_ok() {
-        capture_dom_exception_stack(scope, args.this());
         rv.set(args.this().into());
     }
 }
@@ -161,7 +160,14 @@ pub fn build_web_transport_error_from_clone_payload<'s>(
     payload: &WebTransportErrorClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
     global_constructor_prototype(scope, "WebTransportError")?;
-    let object = declaration(scope, payload)?.bind(scope).ok()?;
+    declaration(scope, payload)?.bind(scope).ok()
+}
+
+pub fn build_web_transport_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    payload: &WebTransportErrorClonePayload,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = build_web_transport_error_from_clone_payload(scope, payload)?;
     capture_dom_exception_stack(scope, object);
     Some(object)
 }

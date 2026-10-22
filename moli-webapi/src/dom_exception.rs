@@ -10,10 +10,13 @@ use webidl::WebIdlDictionarySerialize;
 mod overconstrained_error;
 mod rtc_error;
 mod web_transport_error;
-pub use overconstrained_error::{build_overconstrained_error, overconstrained_error_constructor_callback};
+pub use overconstrained_error::{
+    build_overconstrained_error, overconstrained_error_constructor_callback,
+};
 pub use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub use web_transport_error::{
-    WebTransportErrorClonePayload, WebTransportErrorSource,
+    WebTransportErrorClonePayload, WebTransportErrorSource, build_web_transport_error,
+
     build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
     web_transport_error_constructor_callback,
 };
@@ -529,7 +532,9 @@ fn websocket_error_declaration<'s>(
     WebSocketErrorObjectDeclaration::new(message, close_code, reason)
 }
 
+/// Create exception data without inventing a construction or deserialization stack.
 pub fn build_dom_exception_object<'s>(
+
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,

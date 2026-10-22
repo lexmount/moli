@@ -296,6 +296,10 @@
     wt.close({closeCode: 33, reason: 'bye'});
     const e = await rejected(wt.closed);
     assert(e instanceof WebTransportError && e.source === 'session' && e.streamErrorCode === null);
+    assert(Object.hasOwn(e, 'stack') && typeof e.stack === 'string');
+    const copy = structuredClone(e);
+    assert(copy instanceof WebTransportError && copy.source === 'session' && copy.streamErrorCode === null);
+    assert(!Object.hasOwn(copy, 'stack') && typeof copy.stack === 'undefined');
     assert(await rejected(wt.ready) === e && await rejected(read) === e);
     throws(() => wt.createSendGroup(), 'InvalidStateError');
   });
@@ -384,7 +388,7 @@
     assert(await rejected(wt.ready) instanceof WebTransportError);
   });
   await check('dedicated workers own failure tasks and stream promises', async () => {
-    const source = `onmessage=async()=>{try{const wt=new WebTransport('https://web-platform.localhost:0/',{datagramsReadableType:'bytes'});const reader=wt.datagrams.readable.getReader({mode:'byob'});const read=reader.read(new Uint8Array(16)).catch(e=>e);const stats=wt.getStats().catch(e=>e);let before=true;wt.ready.catch(()=>{before=false});await Promise.resolve();const pending=before;const e=await wt.ready.catch(e=>e);const closed=await wt.closed.catch(e=>e);const result=await stats;postMessage({ok:pending&&e instanceof WebTransportError&&e===closed&&await read===e&&result.name==='InvalidStateError'&&wt.reliability==='pending'});}catch(e){postMessage({ok:false,error:String(e.stack||e)})}};`;
+    const source = `onmessage=async()=>{try{const wt=new WebTransport('https://web-platform.localhost:0/',{datagramsReadableType:'bytes'});const reader=wt.datagrams.readable.getReader({mode:'byob'});const read=reader.read(new Uint8Array(16)).catch(e=>e);const stats=wt.getStats().catch(e=>e);let before=true;wt.ready.catch(()=>{before=false});await Promise.resolve();const pending=before;const e=await wt.ready.catch(e=>e);const closed=await wt.closed.catch(e=>e);const result=await stats;postMessage({ok:pending&&e instanceof WebTransportError&&Object.hasOwn(e,'stack')&&typeof e.stack==='string'&&e===closed&&await read===e&&result.name==='InvalidStateError'&&wt.reliability==='pending'});}catch(e){postMessage({ok:false,error:String(e.stack||e)})}};`;
     const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
     const worker = new Worker(url);
     try {

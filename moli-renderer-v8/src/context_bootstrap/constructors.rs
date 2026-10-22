@@ -33,14 +33,15 @@ pub(super) use document_nodes::{
 };
 pub(crate) use dom_exception::{
     WebTransportErrorClonePayload, WebTransportErrorSource, build_dom_exception_object,
-    build_overconstrained_error,
-    build_quota_exceeded_error_object, dom_error_constructor_callback, dom_exception_clone_fields,
-    dom_exception_constructor_callback, install_dom_exception_template_bindings,
-    new_dom_error_value, new_dom_exception_value, new_most_derived_dom_exception_value,
-    new_quota_exceeded_error_value, new_websocket_error_value, overconstrained_error_constructor_callback, quota_exceeded_error_clone_fields,
-    quota_exceeded_error_constructor_callback, rtc_error_constructor_callback,
-    throw_dom_exception_value, web_transport_error_clone_payload_from_object,
-    web_transport_error_constructor_callback, websocket_error_close_info,
+    build_overconstrained_error, build_quota_exceeded_error_object,
+    dom_error_constructor_callback, dom_exception_clone_fields, dom_exception_constructor_callback,
+    install_dom_exception_template_bindings, new_dom_error_value,
+    new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
+    new_websocket_error_value, overconstrained_error_constructor_callback,
+    quota_exceeded_error_clone_fields, quota_exceeded_error_constructor_callback,
+    rtc_error_constructor_callback, throw_dom_exception_value,
+    web_transport_error_clone_payload_from_object, web_transport_error_constructor_callback,
+    websocket_error_close_info,
 };
 pub(crate) use dom_implementation::ensure_dom_implementation_singleton;
 pub(super) use dom_implementation::install_dom_implementation_template_bindings;
@@ -68,4 +69,19 @@ pub(crate) fn build_web_transport_error_from_clone_payload<'s>(
         return None;
     }
     dom_exception::build_web_transport_error_from_clone_payload(scope, payload)
+}
+
+pub(crate) fn build_web_transport_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    payload: &WebTransportErrorClonePayload,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !super::exposed_interfaces::is_realm_interface_exposed(scope, "WebTransportError") {
+        throw_dom_exception_value(
+            scope,
+            "WebTransportError is not exposed in this realm.",
+            "DataCloneError",
+        );
+        return None;
+    }
+    dom_exception::build_web_transport_error(scope, payload)
 }
