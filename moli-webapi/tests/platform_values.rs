@@ -438,7 +438,11 @@ fn native_error_and_transport_clone_builders_use_destination_intrinsics_after_gl
     assert!(dom_exception::dom_exception_clone_fields(scope, native).is_some());
     let not_an_error = v8_string(scope, "not a native error").unwrap();
     assert!(dom_exception::websocket_error_close_info(scope, not_an_error.into()).is_none());
-    assert!(eval(scope, "Object.hasOwn(transportClone, 'stack')").is_true());
+    assert!(eval(scope, "!Object.hasOwn(transportClone, 'stack')").is_true());
+    assert!(eval(scope, "Object.hasOwn(nativeError, 'stack')").is_true());
+    let failure = dom_exception::build_web_transport_error(scope, &payload).unwrap();
+    publish(scope, "transportFailure", failure);
+    assert!(eval(scope, "transportFailure instanceof nativeTransport && Object.hasOwn(transportFailure, 'stack')").is_true());
 }
 
 #[test]

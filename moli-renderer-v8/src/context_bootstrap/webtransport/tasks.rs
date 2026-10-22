@@ -100,7 +100,7 @@ pub(super) fn fail<'s>(
         .get_creation_context(scope)
         .expect("WebTransport cleanup realm");
     let scope = &mut v8::ContextScope::new(scope, context);
-    let error = super::super::build_web_transport_error_from_clone_payload(
+    let error = super::super::build_web_transport_error(
         scope,
         &super::super::WebTransportErrorClonePayload {
             message: message.encode_utf16().collect(),

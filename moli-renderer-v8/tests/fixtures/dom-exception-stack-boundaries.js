@@ -8,8 +8,9 @@ function domExceptionStackBoundariesProbe(realm) {
     ['DOMException', ['message', 'AbortError']],
     ['QuotaExceededError', ['full', {quota: 10, requested: 12}]],
     ['WebSocketError', ['closed']],
+    ['WebTransportError', []],
   ];
-  if (realm.document) entries.push(['RTCError', [{errorDetail: 'dtls-failure'}, 'rtc']]);
+  if (realm.document) entries.push(['RTCError', [{errorDetail: 'dtls-failure'}, 'rtc']], ['OverconstrainedError', ['width', 'constraint']]);
   const descriptor = Object.getOwnPropertyDescriptor(realm.Error, 'captureStackTrace');
   let captureReads = 0;
   Object.defineProperty(realm.Error, 'captureStackTrace', {configurable: true, get() {captureReads++; throw new Error('author capture lookup');}});

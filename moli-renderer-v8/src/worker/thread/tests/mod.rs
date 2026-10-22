@@ -1,5 +1,6 @@
 mod callback_execution;
 mod console;
+mod dom_exception_stacks;
 mod error_reporting_guard;
 mod geometry_matrix_constructor_union;
 #[cfg(feature = "devtools")]
