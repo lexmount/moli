@@ -267,7 +267,7 @@ enabled by default:
 | Mode or option | Behavior |
 | --- | --- |
 | Default | `LayoutPolicy::Mock` — deterministic geometry in a compatible format, with no real layout or paint |
-| `--layout` | `LayoutPolicy::OnDemand` — real layout, geometry, hit-testing, coordinate input, screenshots, screencast |
+| `--layout` | `LayoutPolicy::OnDemand` — real layout, geometry, hit-testing, coordinate input, screenshots, screencast. Also fetches `@font-face` fonts so text is measured with the page's fonts |
 | `--resource` | Fetch all optional visual/media resource families |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Enable one specific optional resource family |
 | `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Selectively enable the persistence required by the workload |

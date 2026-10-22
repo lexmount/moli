@@ -23,6 +23,14 @@ These three files are licensed under the repository's MIT OR Apache-2.0 terms.
 | `moli-ahem.woff` | `17b7bee15b40e764d785d69412ec4fdc87715a5c107d46e31664fb6393f29f85` |
 | `moli-ahem.woff2` | `c054d1e545d4c234c8c4bfea2bf903d8304fad3b20a51dab60338cea29c793d2` |
 
+## Wide-x test face
+
+`moli-wide-x.ttf` is a 640-byte TrueType font with one glyph, `x`, and a
+1000-unit advance on a 1000-unit em, so ten `x` at 16px are 160px wide. No
+common system monospace font has that advance, which makes it a fixture that
+tells a loaded web font from the fallback font. It is original project test
+data under the repository's MIT OR Apache-2.0 terms. SHA-256 `a52c88b448d28e1fbfdddaba534a2d99cc9119013aa9ca5dccb355221b44504b`.
+
 ## Subset fallback faces
 
 | Fixture | Included code points | Source and source SHA-256 | License | Fixture SHA-256 |
