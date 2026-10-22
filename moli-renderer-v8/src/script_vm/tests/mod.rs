@@ -2534,6 +2534,7 @@ mod url_components;
 
 mod idb_database_native_receivers;
 
+mod url_pattern;
 mod video_codecs;
 mod video_codecs_shell;
 mod video_color_space;
