@@ -1245,7 +1245,10 @@ impl ScriptVm {
         let hit = surface_hit.input;
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
-        let frame_projections = if pointer_event_name == Some("pointermove") {
+        // Down/up callbacks can remove the target and redirect compatibility
+        // mouse events to an ancestor. Like raw-update capture transfers,
+        // those targets need the frame geometry selected before any JS runs.
+        let frame_projections = if pointer_event_name.is_some() {
             input_frame_projections(
                 &self._context_host.borrow(),
                 self.document_runtime.document_handle(),
@@ -1631,9 +1634,7 @@ impl ScriptVm {
             if !suppress_current_mouse_event
                 && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
             {
-                let mouse_coordinates = if pointer_event_name != Some("pointermove")
-                    || mouse_dispatch_handle == pointer_dispatch_handle
-                {
+                let mouse_coordinates = if mouse_dispatch_handle == pointer_dispatch_handle {
                     pointer_coordinates
                 } else {
                     coordinates_for_target(mouse_dispatch_handle)
