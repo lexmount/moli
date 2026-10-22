@@ -231,7 +231,14 @@ Moli は、Chromium を外から操作するだけの仕組みではなく、独
 
 ## 検証結果
 
-以下の実測値は、Moli が現在対応できる範囲を示しています。検証対象には、実在する Web サイト、自動操作クライアント、Chromium/WPT の動作、大規模な nextest 回帰テストを含みます。
+### 公開テストセット
+
+| 評価方法 | テストセット | 指標 |
+| --- | --- | --- |
+| Web 標準・回帰テスト | 選定した [WPT](https://github.com/web-platform-tests/wpt) テストと [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) 回帰テスト | 合格件数・不具合の再発 |
+| ブラウザの自動操作 | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · ブラウザ操作・Web 機能テスト 1,308 件 | 操作・機能テストの合格率 |
+| CPU・メモリ使用量 | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · CDP/Web の 557 タスク中、ローカル 4 ブラウザが完了した処理 | CPU 時間・ピークメモリ |
+| HTML スナップショットからの本文抽出 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · HTML スナップショット 545 件と本文の参照データ | 本文・コード・数式・表の保持 |
 
 ### 公開 Web サイトの横断取得試験
 
@@ -274,6 +281,20 @@ Moli のエージェント向けブラウザとしての対応範囲を検証す
 </picture>
 
 Kitesurf はリモートサービスのため、CPU、メモリ、プロセス数を測定できません。リソース比較は 4 つのローカルエンジンのみを対象とします。別に実施した 557 タスクの測定では、4 エンジンすべてが完了した処理だけを集計しています。Moli のタスクあたり中央値は **CPU 100.6 ms**、**ピークメモリ 92 MiB** でした。Chrome はそれぞれ **687 ms**、**697 MiB** でした。Moli の CPU 時間は Chrome の約 15%、ピークメモリは約 13% です。測定方法と全データはベンチマークの[リソースカード](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)を参照してください。
+
+### WebMainBench：545 ページのスナップショットからの抽出
+
+以下は Moli のコンテンツ修正用開発ビルドの過去の測定値であり、リリース版の結果ではありません。同じ 545 ページの HTML スナップショットを人手の本文参照と比較しました。このビルドは全ページから本文を抽出し、総合類似度（5 指標の平均）39.27% とコード類似度 91.06% は、5 手法中で最高でした。
+
+| 方式 | 本文を生成 | 総合 | 全文 | コード | 数式 | 表の内容 | 表の構造 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda 0.4.1 | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura 0.2.2 | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf (ホスト型サービス) | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+[browser-eval で再現](https://github.com/lexmount/browser-eval)。Moli の測定コミット：[`721bd2e`](https://github.com/lexmount/moli/commit/721bd2e329f96c06573db6e6b257a149cf17a6fe)。[固定した測定設定](https://github.com/lexmount/browser-eval/blob/345ea09370a633e871670fde2de4ec25b53a4d05/evaluation/webmainbench-full/moli-content-fixed-report.json)。
 
 ## 対応範囲
 

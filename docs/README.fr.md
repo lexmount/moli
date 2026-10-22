@@ -233,7 +233,14 @@ Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, 
 
 ## Données de test
 
-Les mesures ci-dessous illustrent les capacités actuelles de Moli. Elles couvrent des sites réels, des clients d'automatisation, des vérifications du comportement Chromium/WPT et une large suite de régression nextest.
+### Jeux de tests publics
+
+| Évaluation | Jeu de tests | Mesures |
+| --- | --- | --- |
+| Standards et régressions | Sélection de tests [WPT](https://github.com/web-platform-tests/wpt) ; tests de régression [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) | Tests réussis et régressions |
+| Automatisation du navigateur | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · 1 308 tests d’actions et de fonctions Web | Taux de réussite des tests d’actions et de fonctions |
+| CPU et mémoire | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · travail terminé par tous sur 557 tâches CDP/Web | Temps CPU et mémoire maximale |
+| Extraction de pages figées | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 instantanés HTML et références du contenu principal | Fidélité du texte, du code, des formules et des tableaux |
 
 ### Test d'exploration mixte du Web public
 
@@ -276,6 +283,20 @@ Le corpus complet de [Lexbench-Headless-Browser](https://github.com/lexmount/Lex
 </picture>
 
 Kitesurf est un service distant, dont le CPU, la mémoire et le nombre de processus ne sont pas mesurables. La comparaison des ressources ne couvre donc que les quatre moteurs locaux. Une exécution distincte de 557 tâches ne comptabilise que le travail terminé par les quatre. La médiane de Moli par tâche était de **100,6 ms de CPU** et **92 MiB de mémoire de pointe** ; Chrome a enregistré respectivement **687 ms** et **697 MiB**. Moli a utilisé environ 15 % du temps CPU et 13 % de la mémoire de pointe de Chrome. La méthodologie et les données complètes figurent dans la [fiche de ressources](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) du benchmark.
+
+### WebMainBench : extraction de 545 pages figées
+
+Ces mesures historiques portent sur une version de développement de Moli avec des corrections de contenu, et non sur une version publiée. Sur les mêmes 545 pages HTML figées, cette version a produit du contenu pour chaque page et obtenu les meilleurs scores parmi les cinq méthodes : 39,27 % de similarité globale (moyenne de cinq indicateurs) et 91,06 % pour le code. Les sorties sont comparées à des références de contenu principal rédigées manuellement.
+
+| Méthode | Contenu principal produit | Global | Texte | Code | Formules | Contenu des tableaux | Structure des tableaux |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39,27 %** | 40,73 % | **91,06 %** | 28,20 % | 22,62 % | 13,75 % |
+| Lightpanda 0.4.1 | 545/545 | 35,00 % | 41,52 % | 84,71 % | 12,97 % | 21,81 % | **14,00 %** |
+| Obscura 0.2.2 | 543/545 | 31,03 % | **41,88 %** | 81,82 % | **31,39 %** | 0,03 % | 0,00 % |
+| Chrome for Testing 154.0.8037.57 | 545/545 | 27,02 % | 39,40 % | 35,86 % | 21,12 % | **25,01 %** | 13,73 % |
+| Kitesurf (service hébergé) | 524/545 | 33,43 % | 36,99 % | 80,70 % | 19,32 % | 18,25 % | 11,87 % |
+
+[Reproduire avec browser-eval](https://github.com/lexmount/browser-eval). Commit Moli mesuré : [`721bd2e`](https://github.com/lexmount/moli/commit/721bd2e329f96c06573db6e6b257a149cf17a6fe). [Configuration de mesure figée](https://github.com/lexmount/browser-eval/blob/345ea09370a633e871670fde2de4ec25b53a4d05/evaluation/webmainbench-full/moli-content-fixed-report.json).
 
 ## Périmètre du projet
 

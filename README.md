@@ -303,11 +303,16 @@ Source lookup and hit-test candidates are derived from the frozen tree when
 queried. The system has no incrementally maintained layout tree, damage graph,
 retained display list, GPU compositor, or persistent window.
 
-## Benchmark
+## Benchmarks
 
-The following measurements show Moli's current capability envelope. They cover
-real websites, automation clients, Chromium/WPT behavior checks, and a large
-nextest regression suite.
+### Public test suites
+
+| Evaluation | Test suite | Measures |
+| --- | --- | --- |
+| Standards and regressions | Selected [WPT](https://github.com/web-platform-tests/wpt) tests; [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) regression tests | Tests passed and functional regressions |
+| Browser automation | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 browser-operation and Web tests | Operation and feature test pass rate |
+| CPU and memory use | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · work completed by all four local browsers in 557 CDP/Web tasks | CPU time and peak memory |
+| Frozen-page extraction | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 HTML snapshots and main-content references | Text, code, formula and table fidelity |
 
 ### Mixed public-web crawl test
 
@@ -371,6 +376,20 @@ Moli's median CPU time per task was **100.6 ms** and its median peak memory was
 about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
+
+### WebMainBench · extraction from 545 frozen pages
+
+These are historical measurements of Moli’s content-repair development build, not a released binary. On the same 545 saved HTML pages, it produced body content for every page and led the five methods in overall similarity (39.27%, the mean of five metrics) and code similarity (91.06%). Outputs were compared with human main-content references.
+
+| Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda 0.4.1 | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura 0.2.2 | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf (hosted) | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+[Reproduce with browser-eval](https://github.com/lexmount/browser-eval). Moli was measured at commit [`721bd2e`](https://github.com/lexmount/moli/commit/721bd2e329f96c06573db6e6b257a149cf17a6fe). [Frozen measurement profile](https://github.com/lexmount/browser-eval/blob/345ea09370a633e871670fde2de4ec25b53a4d05/evaluation/webmainbench-full/moli-content-fixed-report.json).
 
 ## Project scope
 
