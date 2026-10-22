@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 impl DomHost {
     pub fn append_child(&mut self, parent: DomHandle, child: DomHandle) -> bool {
@@ -76,6 +77,10 @@ impl DomHost {
     ) -> DomMutationEffects {
         let owner_document = self.owner_document_handle(parent);
         let records_enabled = self.mutation_records_enabled();
+        let observer_ancestors = self
+            .mutation_observer_records_enabled
+            .get()
+            .then(|| self.observer_removal_ancestors(parent));
         let removed_tree_was_connected = self.is_connected(child);
         let parser_form_owner_resets = self.parser_form_owner_resets_for_removed_subtrees(&[child]);
         let removal_context = self.subtree_removal_context(child);
@@ -124,6 +129,9 @@ impl DomHost {
                 self.update_document_target_from_url(document);
             }
             effects.mark_disconnected_root(child);
+            if let Some(ancestors) = observer_ancestors {
+                effects.mark_observer_subtree_removal(child, ancestors);
+            }
             if records_enabled {
                 effects.mark_child_list_mutation(
                     parent,
@@ -157,6 +165,16 @@ impl DomHost {
             return effects;
         }
         DomMutationEffects::default()
+    }
+
+    fn observer_removal_ancestors(&self, parent: DomHandle) -> Arc<[DomHandle]> {
+        let mut ancestors = Vec::new();
+        let mut current = Some(parent);
+        while let Some(node) = current {
+            ancestors.push(node);
+            current = self.parent_node(node);
+        }
+        ancestors.into()
     }
 
     fn clear_popover_open_states(
@@ -271,6 +289,15 @@ impl DomHost {
                 next_sibling,
             ))
         };
+        let observer_ancestors = self
+            .mutation_observer_records_enabled
+            .get()
+            .then(|| {
+                removal_record
+                    .as_ref()
+                    .map(|(parent, ..)| self.observer_removal_ancestors(*parent))
+            })
+            .flatten();
         let insertion_slot_assignment_snapshots = if self.shadow_root_handle(parent).is_none() {
             Vec::new()
         } else if inserted_fragment_children.is_empty() {
@@ -402,6 +429,11 @@ impl DomHost {
             if let Some((old_parent, removed_nodes, previous_sibling, next_sibling)) =
                 removal_record
             {
+                if let Some(ancestors) = observer_ancestors {
+                    for &node in &removed_nodes {
+                        effects.mark_observer_subtree_removal(node, Arc::clone(&ancestors));
+                    }
+                }
                 if records_enabled {
                     effects.mark_child_list_mutation(
                         old_parent,

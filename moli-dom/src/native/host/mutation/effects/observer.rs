@@ -1,13 +1,77 @@
 use super::{DomAttributeMutation, DomChildListMutation, DomHandle, DomMutationEffects};
+use std::sync::Arc;
+
+/// Observer work in mutation order. Subtree removal is independent of the
+/// suppress-observers flag and must survive child-list record coalescing.
+#[derive(Debug, Clone, Copy)]
+pub enum DomMutationObserverEffect<'a> {
+    Record(&'a DomMutationRecord),
+    SubtreeRemoval {
+        node: DomHandle,
+        ancestors: &'a [DomHandle],
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ObserverStep {
+    Record(usize),
+    SubtreeRemoval {
+        node: DomHandle,
+        ancestors: Arc<[DomHandle]>,
+    },
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DomMutationRecordBatch {
     pub(super) records: Vec<DomMutationRecord>,
+    steps: Vec<ObserverStep>,
 }
 
 impl DomMutationRecordBatch {
     pub fn records(&self) -> &[DomMutationRecord] {
         &self.records
+    }
+
+    pub fn effects(&self) -> impl Iterator<Item = DomMutationObserverEffect<'_>> {
+        self.steps.iter().map(|step| match step {
+            ObserverStep::Record(index) => DomMutationObserverEffect::Record(&self.records[*index]),
+            ObserverStep::SubtreeRemoval { node, ancestors } => {
+                DomMutationObserverEffect::SubtreeRemoval {
+                    node: *node,
+                    ancestors,
+                }
+            }
+        })
+    }
+
+    fn push(&mut self, record: DomMutationRecord) {
+        self.steps.push(ObserverStep::Record(self.records.len()));
+        self.records.push(record);
+    }
+
+    fn retain_records(&mut self, mut retain: impl FnMut(&DomMutationRecord) -> bool) {
+        let mut indices = Vec::with_capacity(self.records.len());
+        let mut next_index = 0;
+        self.records.retain(|record| {
+            let keep = retain(record);
+            indices.push(keep.then(|| {
+                let index = next_index;
+                next_index += 1;
+                index
+            }));
+            keep
+        });
+        self.steps.retain_mut(|step| match step {
+            ObserverStep::Record(index) => {
+                if let Some(new_index) = indices[*index] {
+                    *index = new_index;
+                    true
+                } else {
+                    false
+                }
+            }
+            ObserverStep::SubtreeRemoval { .. } => true,
+        });
     }
 
     pub(super) fn remove_replacement_parts(
@@ -16,7 +80,7 @@ impl DomMutationRecordBatch {
         added_nodes: &[DomHandle],
         removed_node: DomHandle,
     ) {
-        self.records.retain(|record| {
+        self.retain_records(|record| {
             if record.target != target {
                 return true;
             }
@@ -35,6 +99,12 @@ impl DomMutationRecordBatch {
     }
 
     pub(super) fn merge(&mut self, other: Self) {
+        let offset = self.records.len();
+        self.steps
+            .extend(other.steps.into_iter().map(|step| match step {
+                ObserverStep::Record(index) => ObserverStep::Record(index + offset),
+                removal @ ObserverStep::SubtreeRemoval { .. } => removal,
+            }));
         self.records.extend(other.records);
     }
 
@@ -48,7 +118,7 @@ impl DomMutationRecordBatch {
         }
 
         let mut coalesced_nodes = Vec::new();
-        self.records.retain(|record| {
+        self.retain_records(|record| {
             if record.target != target {
                 return true;
             }
@@ -74,7 +144,7 @@ impl DomMutationRecordBatch {
             coalesced_nodes, removed_nodes,
             "all-children removal records must retain tree order"
         );
-        self.records.push(DomMutationRecord {
+        self.push(DomMutationRecord {
             target,
             kind: DomMutationRecordKind::ChildList(DomChildListMutation::new(
                 target,
@@ -98,7 +168,7 @@ impl DomMutationRecordBatch {
         }
 
         let mut coalesced_nodes = Vec::new();
-        self.records.retain(|record| {
+        self.retain_records(|record| {
             if record.target != target {
                 return true;
             }
@@ -124,7 +194,7 @@ impl DomMutationRecordBatch {
             coalesced_nodes, added_nodes,
             "batched insertion records must retain tree order"
         );
-        self.records.push(DomMutationRecord {
+        self.push(DomMutationRecord {
             target,
             kind: DomMutationRecordKind::ChildList(DomChildListMutation::new(
                 target,
@@ -137,7 +207,7 @@ impl DomMutationRecordBatch {
     }
 
     pub(super) fn push_attribute_mutation_record(&mut self, mutation: DomAttributeMutation) {
-        self.records.push(DomMutationRecord {
+        self.push(DomMutationRecord {
             target: mutation.target,
             kind: DomMutationRecordKind::Attributes(mutation),
         });
@@ -172,17 +242,27 @@ impl DomMutationRecord {
 impl DomMutationEffects {
     pub(super) fn push_mutation_record(&mut self, record: DomMutationRecord) {
         self.changed = true;
-        self.observer_records.records.push(record);
+        self.observer_records.push(record);
     }
 
     pub(in crate::native::host::mutation) fn clear_mutation_records(&mut self) {
-        self.observer_records.records.clear();
+        self.observer_records.retain_records(|_| false);
+    }
+
+    pub(in crate::native::host::mutation) fn mark_observer_subtree_removal(
+        &mut self,
+        node: DomHandle,
+        ancestors: Arc<[DomHandle]>,
+    ) {
+        self.observer_records
+            .steps
+            .push(ObserverStep::SubtreeRemoval { node, ancestors });
     }
 
     /// Apply the DOM suppress-observers flag to this operation's target. Source
     /// removals and non-observer mutation effects must remain observable.
     pub fn suppress_child_list_mutations_for_target(&mut self, target: DomHandle) {
-        self.observer_records.records.retain(|record| {
+        self.observer_records.retain_records(|record| {
             record.target != target || !matches!(record.kind, DomMutationRecordKind::ChildList(_))
         });
     }
@@ -276,6 +356,46 @@ impl DomMutationEffects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtree_removals_keep_their_order_when_record_batches_merge_and_coalesce() {
+        let parent = DomHandle::new(1);
+        let first = DomHandle::new(2);
+        let second = DomHandle::new(3);
+        let text = DomHandle::new(4);
+        let ancestors: Arc<[DomHandle]> = Arc::from([parent]);
+        let mut effects = DomMutationEffects::default();
+        effects.queue_character_data_mutation(text, None);
+        effects.mark_observer_subtree_removal(first, Arc::clone(&ancestors));
+        effects.queue_child_list_mutation(parent, &[], &[first], None, Some(second));
+        let mut next = DomMutationEffects::default();
+        next.mark_observer_subtree_removal(second, ancestors);
+        next.queue_child_list_mutation(parent, &[], &[second], None, None);
+        effects.merge(next);
+        effects.coalesce_child_list_removals(parent, &[first, second]);
+
+        let steps = effects.observer_records().effects().collect::<Vec<_>>();
+        assert_eq!(steps.len(), 4);
+        assert!(
+            matches!(steps[0], DomMutationObserverEffect::Record(record) if record.target() == text)
+        );
+        assert!(
+            matches!(steps[1], DomMutationObserverEffect::SubtreeRemoval { node, ancestors } if node == first && ancestors == [parent])
+        );
+        assert!(
+            matches!(steps[2], DomMutationObserverEffect::SubtreeRemoval { node, ancestors } if node == second && ancestors == [parent])
+        );
+        assert!(
+            matches!(steps[3], DomMutationObserverEffect::Record(record) if record.target() == parent)
+        );
+
+        effects.suppress_child_list_mutations_for_target(parent);
+        assert_eq!(effects.observer_records().records().len(), 1);
+        assert_eq!(effects.observer_records().effects().count(), 3);
+        effects.clear_mutation_records();
+        assert!(effects.observer_records().records().is_empty());
+        assert_eq!(effects.observer_records().effects().count(), 2);
+    }
 
     #[test]
     fn coalesces_insertion_batch_without_discarding_other_records() {
