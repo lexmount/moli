@@ -423,8 +423,8 @@ fn navigation_transition_object_keeps_declared_brand_and_members() {
                       .filter(name => name.startsWith("__lmNavigationTransition"))
                       .join(","),
                     Object.hasOwn(transition, "from"),
-                    Object.getOwnPropertyDescriptor(transition, "from").enumerable,
-                    Object.getOwnPropertyDescriptor(transition, Symbol.toStringTag).writable,
+                    Object.getOwnPropertyDescriptor(NavigationTransition.prototype, "from").enumerable,
+                    Object.getOwnPropertyDescriptor(NavigationTransition.prototype, Symbol.toStringTag).writable,
                     transition.from === from,
                     transition.to !== null && typeof transition.to === "object",
                     transition.navigationType,
@@ -442,7 +442,7 @@ fn navigation_transition_object_keeps_declared_brand_and_members() {
 
     assert_eq!(
         result,
-        "true|[object NavigationTransition]|||true|false|false|true|true|push|true|true"
+        "true|[object NavigationTransition]|||false|true|false|true|true|push|true|true"
     );
 }
 
@@ -1657,4 +1657,45 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         settled,
         "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
     );
+}
+
+#[test]
+fn isolated_transition_views_ignore_owner_shadows_and_keep_promise_realms() {
+    let mut vm = new_storage_html_test_vm("https://navigation-private-world.test/");
+    vm.eval(r##"
+      globalThis.nativeReads=0;
+      navigation.addEventListener('navigate',e=>e.intercept({handler(){return new Promise(resolve=>globalThis.finishTransition=resolve);}}),{once:true});
+      globalThis.navigationResult=navigation.navigate('#private');
+      globalThis.ownerTransition=navigation.transition;
+      globalThis.ownerFrom=ownerTransition.from;
+      globalThis.ownerFinished=ownerTransition.finished;
+      for(const name of ['from','to','navigationType','committed','finished']) {
+        Object.defineProperty(ownerTransition,name,{configurable:true,get(){nativeReads++;throw Error('owner public '+name);}});
+      }
+    "##).unwrap();
+    let world = vm
+        .create_isolated_world("native-transition-state", false)
+        .unwrap();
+    vm.exec_in_execution_context(world, r#"
+      globalThis.transition=navigation.transition;
+      if(!transition || transition!==navigation.transition || Object.getPrototypeOf(transition)!==NavigationTransition.prototype)throw Error('world identity');
+      if(Object.getOwnPropertyNames(transition).length!==0 || Object.hasOwn(transition,Symbol.toStringTag))throw Error('own fields');
+      if(!(transition.from instanceof NavigationHistoryEntry))throw Error('projected history entry');
+      if(!(transition.to instanceof Object) || transition.to!==navigation.transition.to || transition.to.url!==location.href || transition.to.sameDocument!==true)throw Error('projected destination data and realm');
+      if(!(transition.committed instanceof Promise) || !(transition.finished instanceof Promise))throw Error('promise realm');
+      if(transition.navigationType!=='push')throw Error('native type');
+      globalThis.worldFinished=transition.finished;
+      globalThis.worldSettled=false;
+      worldFinished.then(()=>worldSettled=true);
+    "#).unwrap();
+    vm.eval("finishTransition()").unwrap();
+    assert_eq!(
+        vm.eval("String(navigation.transition===null && nativeReads===0)")
+            .unwrap(),
+        "true"
+    );
+    vm.exec_in_execution_context(world, r#"
+      if(!worldSettled || navigation.transition!==null || transition.finished!==worldFinished)throw Error('world settlement');
+    "#).unwrap();
+    vm.destroy_isolated_world_context(world);
 }
