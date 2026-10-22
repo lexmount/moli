@@ -24,12 +24,12 @@ impl DocumentRuntime {
         self.preserve_selectedness_for_options_removed_from_select(
             scope,
             host_ptr,
-            &removal_plan.option_selectedness_before_remove,
+            &removal_plan.form_state.option_selectedness,
         );
         self.queue_selectedcontent_updates_after_tree_removal(
             scope,
             host_ptr,
-            &removal_plan.selected_option_owners_before_remove,
+            &removal_plan.form_state.selected_option_owners,
         );
         self.dispatch_tree_removal_pre_reaction_followups_after_change(
             scope,

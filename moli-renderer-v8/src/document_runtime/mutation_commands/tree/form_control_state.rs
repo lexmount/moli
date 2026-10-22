@@ -5,7 +5,20 @@ use crate::{
     native_bridge::JsContextHost,
 };
 
+pub(super) struct TreeRemovalFormState {
+    pub(super) option_selectedness: Vec<(DomHandle, bool)>,
+    pub(super) selected_option_owners: Vec<(DomHandle, DomHandle)>,
+}
+
 impl DocumentRuntime {
+    pub(super) fn tree_removal_form_state(&self, root: DomHandle) -> TreeRemovalFormState {
+        let roots = std::slice::from_ref(&root);
+        TreeRemovalFormState {
+            option_selectedness: self.option_selectedness_before_insert(roots),
+            selected_option_owners: self.selected_option_owners_in_subtrees(roots),
+        }
+    }
+
     pub(super) fn option_selectedness_before_insert(
         &self,
         roots: &[DomHandle],

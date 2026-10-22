@@ -1,6 +1,7 @@
 use super::super::{dom_binding_timing_started, record_dom_binding_timing};
 use super::{
     focus::TreeFocusRemovalPlan,
+    form_control_state::TreeRemovalFormState,
     node_iterators::NodeIteratorRemovalPlan,
     policy::{TreeMutationObserverPolicy, TreeMutationSourceProfile},
     resources::ImageRelevantMutationPlan,
@@ -23,8 +24,7 @@ pub(super) struct TreeRemovalPlan {
     pub(super) node_iterator_plan: Option<NodeIteratorRemovalPlan>,
     pub(super) registry_retargets: Vec<custom_elements::RegistryAssociationRetarget>,
     pub(super) image_relevant_mutation_plan: ImageRelevantMutationPlan,
-    pub(super) option_selectedness_before_remove: Vec<(DomHandle, bool)>,
-    pub(super) selected_option_owners_before_remove: Vec<(DomHandle, DomHandle)>,
+    pub(super) form_state: TreeRemovalFormState,
 }
 
 impl DocumentRuntime {
@@ -33,6 +33,17 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
         root: DomHandle,
+    ) -> TreeRemovalPlan {
+        let form_state = self.tree_removal_form_state(root);
+        self.tree_removal_plan_with_form_state(host_ptr, parent, root, form_state)
+    }
+
+    fn tree_removal_plan_with_form_state(
+        &self,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        root: DomHandle,
+        form_state: TreeRemovalFormState,
     ) -> TreeRemovalPlan {
         let roots = std::slice::from_ref(&root);
         let lifecycle_connected_roots_before_remove = roots
@@ -60,9 +71,6 @@ impl DocumentRuntime {
             custom_elements::registry_association_retargets_before_removal(host_ptr, root);
         let image_relevant_mutation_plan =
             self.image_relevant_mutation_plan_before_remove(parent, root);
-        let option_selectedness_before_remove = self.option_selectedness_before_insert(roots);
-        let selected_option_owners_before_remove =
-            self.selected_option_owners_in_subtrees(std::slice::from_ref(&root));
         TreeRemovalPlan {
             parent,
             root,
@@ -73,8 +81,7 @@ impl DocumentRuntime {
             node_iterator_plan,
             registry_retargets,
             image_relevant_mutation_plan,
-            option_selectedness_before_remove,
-            selected_option_owners_before_remove,
+            form_state,
         }
     }
 
@@ -123,29 +130,47 @@ impl DocumentRuntime {
         )
     }
 
-    /// Implements the DOM all-children removal used by `Document::open()`.
-    ///
-    /// The structural work still runs through the ordinary removal owner so
-    /// ranges, focus, stylesheet candidates, child browsing contexts, and
-    /// custom-element reactions cannot drift from `removeChild()`. Applying
-    /// the collected effects once also preserves the DOM replace-all observer
-    /// contract: one record containing every removed document child.
     pub(crate) fn remove_all_children_for_document_replacement(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
     ) -> bool {
+        self.remove_all_children_with_source_profile(
+            scope,
+            host_ptr,
+            parent,
+            TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue(),
+        )
+    }
+
+    /// Remove all children before applying runtime effects. In particular,
+    /// select fallback selection must not run between these removals.
+    /// Positional plans still advance in tree order for ranges and iterators.
+    pub(super) fn remove_all_children_with_source_profile(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        profile: TreeMutationSourceProfile,
+    ) -> bool {
         let removed_children = self.dom_host.child_handles(parent).collect::<Vec<_>>();
         if removed_children.is_empty() {
             return false;
         }
 
+        // Capture form state before any splice: even a read-only selectedness
+        // query can choose a fallback from a partially removed select.
+        let form_states = removed_children
+            .iter()
+            .map(|&child| self.tree_removal_form_state(child))
+            .collect::<Vec<_>>();
         let mut removal_plans = Vec::with_capacity(removed_children.len());
         let mut combined_effects = DomMutationEffects::default();
         let mut prepublished_removals = Vec::new();
-        for &child in &removed_children {
-            let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
+        for (&child, form_state) in removed_children.iter().zip(form_states) {
+            let removal_plan =
+                self.tree_removal_plan_with_form_state(host_ptr, parent, child, form_state);
             prepublished_removals
                 .extend(self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child));
             let effects = self.remove_child_effects_in_structural_scope(parent, child);
@@ -161,6 +186,9 @@ impl DocumentRuntime {
             removal_plans.push(removal_plan);
         }
         combined_effects.coalesce_child_list_removals(parent, &removed_children);
+        if profile.suppresses_observers() {
+            combined_effects.suppress_child_list_mutations_for_target(parent);
+        }
 
         let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
             scope,
@@ -170,8 +198,6 @@ impl DocumentRuntime {
             prepublished_removals,
         );
         if changed {
-            let profile =
-                TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue();
             for removal_plan in &removal_plans {
                 self.dispatch_tree_removal_side_effects_after_change(
                     scope,
