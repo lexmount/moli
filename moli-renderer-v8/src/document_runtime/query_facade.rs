@@ -33,7 +33,7 @@ impl DocumentRuntime {
         self.query_selector_with_optional_validity_states(root, selector, Some(validity_states))
     }
 
-    fn query_selector_with_optional_validity_states(
+    pub(crate) fn query_selector_with_optional_validity_states(
         &self,
         root: Option<DomHandle>,
         selector: &str,
@@ -106,7 +106,7 @@ impl DocumentRuntime {
         self.query_selector_all_with_optional_validity_states(root, selector, Some(validity_states))
     }
 
-    fn query_selector_all_with_optional_validity_states(
+    pub(crate) fn query_selector_all_with_optional_validity_states(
         &self,
         root: Option<DomHandle>,
         selector: &str,
@@ -153,7 +153,7 @@ impl DocumentRuntime {
         self.matches_with_optional_validity_states(node, selector, Some(validity_states))
     }
 
-    fn matches_with_optional_validity_states(
+    pub(crate) fn matches_with_optional_validity_states(
         &self,
         node: DomHandle,
         selector: &str,
