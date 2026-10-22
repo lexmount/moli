@@ -6,14 +6,76 @@ use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
 
 use super::page_vm::PageVm;
 
+mod visibility;
+
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
+        let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
+            .then(|| self.vm().document_runtime.dom_host().document_base_url())
+            .flatten();
+        let styles = if options.format == RendererPageDumpFormat::Markdown {
+            let dom = self.vm().document_runtime.dom_host().dom();
+            let mut nodes = Vec::new();
+            if let Some(body) = dom.body_node_id() {
+                // The root style carries inherited visibility into the body.
+                if let Some(html) = dom.document_element_node_id() {
+                    nodes.push(html);
+                }
+                collect_node_ids(dom, body, &mut nodes);
+            } else {
+                collect_node_ids(dom, dom.document_node_id(), &mut nodes);
+            }
+            nodes.retain(|node| {
+                dom.node(*node)
+                    .is_some_and(|node| node.as_element().is_some())
+            });
+            let values = self
+                .vm()
+                .computed_style_export_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &[
+                        "display",
+                        "visibility",
+                        "baseline-shift",
+                        "position",
+                        "float",
+                        "flex-direction",
+                    ]
+                    .map(str::to_owned),
+                );
+            nodes
+                .into_iter()
+                .zip(values)
+                .map(|(node, (values, own_visibility, original_display))| {
+                    let mut values = values.into_iter();
+                    (
+                        node,
+                        visibility::ExportStyle {
+                            display: values.next().unwrap_or_default(),
+                            visibility: values.next().unwrap_or_default(),
+                            baseline_shift: values.next().unwrap_or_default(),
+                            position: values.next().unwrap_or_default(),
+                            float: values.next().unwrap_or_default(),
+                            flex_direction: values.next().unwrap_or_default(),
+                            original_display,
+                            own_visibility,
+                        },
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         if options.format == RendererPageDumpFormat::Markdown
             && !options.with_base
             && !options.with_frames
             && options.strip == RendererPageDumpStripOptions::default()
         {
-            return render_markdown_document(self.vm().document_runtime.dom_host().dom());
+            return render_markdown_document_with_styles(
+                self.vm().document_runtime.dom_host().dom(),
+                styles,
+                markdown_base_url.as_ref(),
+            );
         }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
@@ -33,7 +95,9 @@ impl PageVm {
 
         match options.format {
             RendererPageDumpFormat::Html => dom.serialize_document(),
-            RendererPageDumpFormat::Markdown => render_markdown_document(&dom),
+            RendererPageDumpFormat::Markdown => {
+                render_markdown_document_with_styles(&dom, styles, markdown_base_url.as_ref())
+            }
         }
     }
 
@@ -181,14 +245,24 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
     }
 }
 
+#[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
+    render_markdown_document_with_styles(dom, Vec::new(), None)
+}
+
+fn render_markdown_document_with_styles(
+    dom: &NativeDom,
+    styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
+    base_url: Option<&url::Url>,
+) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
+    let visible = visibility::MarkdownDom::new(dom, styles, base_url);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),
         ..Default::default()
     })
-    .convert(dom, root)
+    .convert(&visible, root)
 }
 
 #[cfg(test)]
@@ -210,6 +284,48 @@ mod tests {
     fn markdown_from_html(html: &str) -> String {
         let dom = HtmlParser::SCRIPTING_DISABLED.parse(test_url(), html.to_owned());
         render_markdown_document(&dom)
+    }
+
+    #[test]
+    fn markdown_computed_outer_display_preserves_text_boundaries() {
+        for (display, expected) in [
+            ("flow-root list-item", "Before\n\nItem\n\nAfter"),
+            ("inline list-item", "Before Item After"),
+            ("inline flow-root list-item", "Before Item After"),
+            ("inline-block", "BeforeItemAfter"),
+            ("inline flow", "BeforeItemAfter"),
+            ("contents", "BeforeItemAfter"),
+        ] {
+            let mut dom = NativeDom::new_html(test_url());
+            let body = dom.create_element("body");
+            assert!(dom.append_child(dom.document_node_id(), body));
+            append_text(&mut dom, body, "Before");
+            let item = dom.create_element("span");
+            assert!(dom.append_child(body, item));
+            append_text(&mut dom, item, "Item");
+            append_text(&mut dom, body, "After");
+            let styles = vec![
+                (
+                    body,
+                    visibility::ExportStyle {
+                        display: "block".into(),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    item,
+                    visibility::ExportStyle {
+                        display: display.into(),
+                        ..Default::default()
+                    },
+                ),
+            ];
+            assert_eq!(
+                render_markdown_document_with_styles(&dom, styles, None),
+                expected,
+                "{display}"
+            );
+        }
     }
 
     #[test]
