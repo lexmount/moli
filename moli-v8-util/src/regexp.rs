@@ -25,6 +25,20 @@ pub struct NativeRegExp<'s> {
 }
 
 impl<'s> NativeRegExp<'s> {
+    /// Retain the compiled expression in private platform-object state. It must
+    /// not be exposed to author code or have its lastIndex/properties modified.
+    pub fn compiled(&self) -> Local<'s, RegExp> {
+        self.regexp
+    }
+
+    /// Restore an expression previously compiled by `NativeRegExp::new`.
+    pub fn from_compiled(scope: &mut PinScope<'s, '_>, regexp: Local<'s, RegExp>) -> Self {
+        Self {
+            context: native_regexp_context(scope),
+            regexp,
+        }
+    }
+
     /// Compile without exposing syntax errors to the surrounding script.
     pub fn new(
         scope: &mut PinScope<'s, '_>,
@@ -50,6 +64,17 @@ impl<'s> NativeRegExp<'s> {
         scope: &mut PinScope<'_, '_>,
         subject: Local<v8::String>,
     ) -> Option<bool> {
+        self.exec(scope, subject).map(|value| !value.is_null())
+    }
+
+    /// Execute in the private realm, preserving captures without invoking
+    /// author RegExp methods or updating author realms' legacy RegExp statics.
+    /// Null represents a failed match (including an exhausted budget).
+    pub fn exec<'t>(
+        &self,
+        scope: &mut PinScope<'t, '_>,
+        subject: Local<v8::String>,
+    ) -> Option<Local<'t, v8::Value>> {
         let scope = &mut v8::ContextScope::new(scope, self.context);
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let mut scope = try_catch.init();
@@ -57,7 +82,7 @@ impl<'s> NativeRegExp<'s> {
         if result.is_none() {
             scope.reset();
         }
-        result.map(|value| !value.is_null())
+        result.map(Into::into)
     }
 }
 

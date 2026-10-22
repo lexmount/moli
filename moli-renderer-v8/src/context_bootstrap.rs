@@ -284,6 +284,7 @@ use moli_webapi::touch as touch_runtime;
 mod trusted_types;
 mod url_form;
 use moli_webapi::url_search_params as url_search_params_runtime;
+mod url_pattern;
 mod video_codecs;
 mod view_transition_runtime;
 mod web_audio_runtime;

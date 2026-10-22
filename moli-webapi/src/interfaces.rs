@@ -681,6 +681,7 @@ interfaces! {
     TrustedTypePolicyFactory;
     UIEvent: Event;
     URL;
+    URLPattern;
     URLSearchParams;
     URLSearchParamsIterator = "URLSearchParams Iterator";
     UserActivation;
