@@ -10,6 +10,7 @@ mod bar_prop;
 mod basic_event_init;
 mod broadcast_channel;
 mod cache_query_init;
+mod bulk_child_removal;
 mod cache_add;
 mod cache_array_results;
 mod cache_query;
