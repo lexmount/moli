@@ -4,6 +4,11 @@
 //! `runtime`, `page`, `network`, and `protocol_types`, while the heavier
 //! implementation now lives in the split internal crates.
 
+// The facade's Send/Sync assertions traverse typed renderer resource routes,
+// including recursive SVG trees. Use the same type recursion budget as the
+// renderer without changing the assertions or runtime ownership.
+#![recursion_limit = "256"]
+
 mod config;
 mod dom;
 pub mod network;

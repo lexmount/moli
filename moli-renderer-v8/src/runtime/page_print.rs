@@ -21,6 +21,18 @@ pub enum RendererPrintToPdfReply {
 }
 
 impl PageVm {
+    pub(super) fn print_style_environment_override(
+        &self,
+    ) -> Option<crate::style_engine::StyloStyleEnvironment> {
+        if self.document_settings.emulated_media.media.is_none() {
+            let mut print = self.document_settings.emulated_media.clone();
+            print.media = Some("print".to_owned());
+            Some(crate::style_engine::StyloStyleEnvironment::from_emulated_media(&print))
+        } else {
+            None
+        }
+    }
+
     /// Projects print media and encodes PDF without allocating a full-document
     /// bitmap or publishing interactive screen geometry. Both output clients
     /// use this lifecycle, including restoration before any encoding error.
@@ -33,13 +45,7 @@ impl PageVm {
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(Reply::LayoutDisabled);
         }
-        let environment_override = if self.document_settings.emulated_media.media.is_none() {
-            let mut print = self.document_settings.emulated_media.clone();
-            print.media = Some("print".to_owned());
-            Some(crate::style_engine::StyloStyleEnvironment::from_emulated_media(&print))
-        } else {
-            None
-        };
+        let environment_override = self.print_style_environment_override();
         let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,

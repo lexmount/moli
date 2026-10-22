@@ -52,9 +52,9 @@ pub use error::LayoutError;
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
-    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
-    LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
-    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
+    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImagePurpose,
+    LayoutCssImageReference, LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason,
+    LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
     LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
