@@ -1956,6 +1956,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Url,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::URLPattern::DESCRIPTOR,
+        kind: ConstructorKind::UrlPattern,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::URLSearchParams::DESCRIPTOR,
         kind: ConstructorKind::UrlSearchParams,
     },

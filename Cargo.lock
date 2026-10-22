@@ -3505,6 +3505,7 @@ dependencies = [
  "tracing",
  "typed-num",
  "url",
+ "urlpattern",
  "uuid",
  "v8",
  "v_xmlescape",
@@ -6459,8 +6460,6 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "urlpattern"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df16f50ef4cc145211879a3867ba757076b25dfee812040dcb0658bd9ae7904b"
 dependencies = [
  "icu_properties",
  "regex",

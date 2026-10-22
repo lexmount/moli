@@ -274,6 +274,7 @@ pub(crate) mod svg_runtime;
 mod touch_runtime;
 mod trusted_types;
 mod url_form;
+mod url_pattern;
 mod url_search_params_runtime;
 mod video_codecs;
 mod view_transition_runtime;

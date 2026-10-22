@@ -2,6 +2,46 @@ use super::*;
 use crate::worker::WorkerGlobalKind;
 
 #[tokio::test]
+async fn worker_url_pattern_shares_native_window_semantics() {
+    ensure_v8();
+    let fixture = include_str!("../../../../tests/fixtures/urlpattern-native.js");
+    for kind in [
+        WorkerGlobalKind::Dedicated {
+            name: String::new(),
+        },
+        WorkerGlobalKind::Shared {
+            name: String::new(),
+            storage_key: moli_storage_key::MoliStorageKey::first_party_from_url(
+                &url::Url::parse("https://url-pattern.test/worker.js").unwrap(),
+                None,
+            ),
+        },
+        WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url: url::Url::parse("https://url-pattern.test/").unwrap(),
+        },
+    ] {
+        let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                format!("({fixture})(globalThis)"),
+                "https://url-pattern.test/worker.js".into(),
+            )
+            .with_global_kind(kind.clone())
+            .with_bootstrap_completion_sender(bootstrap_tx),
+        );
+        let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv()).await;
+        handle.terminate_and_join();
+        bootstrap
+            .expect("URLPattern worker bootstrap timed out")
+            .expect("URLPattern worker bootstrap channel closed")
+            .result
+            .unwrap_or_else(|error| panic!("{kind:?}: URLPattern semantics failed: {error:?}"));
+    }
+}
+
+#[tokio::test]
 async fn worker_indexed_db_first_use_ignores_public_constructor_overrides() {
     ensure_v8();
     let script_url = url::Url::parse("https://indexeddb-first-use.test/worker.js").unwrap();
