@@ -1,7 +1,10 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
+    util::{
+        callback_data_index_value, callback_data_item, get_private_value, set_private_value,
+        v8_string_from_utf16_units, v8_string_to_u16_string,
+    },
     webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -13,7 +16,9 @@ use descriptors::{FONT_FACE_WRITABLE_ATTRIBUTES, parse_font_face_descriptors};
 #[webapi(interface = web_api_interfaces::FontFace)]
 struct FontFaceObjectDeclaration<'s> {
     #[webapi(slot = FONT_FACE_FAMILY_SLOT)]
-    family: String,
+    family: webidl::DomString16,
+    #[webapi(slot = FONT_FACE_FAMILY_CSS_TEXT_SLOT)]
+    family_css_text: bool,
     #[webapi(slot = FONT_FACE_SOURCE_SLOT)]
     source: String,
     #[webapi(slot = FONT_FACE_STYLE_SLOT)]
@@ -53,7 +58,7 @@ struct FontFaceObjectDeclaration<'s> {
 struct FontFacePrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
-        getter = font_face_writable_attribute_getter_callback,
+        getter = font_face_family_getter_callback,
         setter = font_face_attribute_setter_callback,
         data = callback_data_index_value(scope, 0),
         enumerable
@@ -182,8 +187,8 @@ struct FontFacePrototypeAccessorsDeclaration {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "FontFace")]
 struct FontFaceConstructorArgs<'s> {
-    #[webidl(required)]
-    family: String,
+    #[webidl(required, converter = "raw")]
+    family: webidl::DomString16,
     #[webidl(required, with = font_face_constructor_source_arg)]
     source: FontFaceConstructorSource<'s>,
 }
@@ -199,6 +204,27 @@ pub(in crate::context_bootstrap) fn install_font_face_template_accessors<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     FontFacePrototypeAccessorsDeclaration::initialize_prototype_template(scope, prototype);
+}
+
+fn font_face_family_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let value = font_face_slot_value(scope, args.this(), FONT_FACE_FAMILY_SLOT)
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    if font_face_slot_value(scope, args.this(), FONT_FACE_FAMILY_CSS_TEXT_SLOT)
+        .is_some_and(|value| value.is_true())
+        && let Ok(name) = v8::Local::<v8::String>::try_from(value)
+    {
+        let name = v8_string_to_u16_string(scope, name);
+        let serialized = moli_css_parse::serialize_font_family_name_utf16(name.as_slice());
+        if let Some(value) = v8_string_from_utf16_units(scope, &serialized) {
+            rv.set(value.into());
+        }
+        return;
+    }
+    rv.set(value);
 }
 
 fn font_face_writable_attribute_getter_callback<'s>(
@@ -318,6 +344,8 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         size_adjust,
     ] = descriptors;
     let this = args.this();
+    let family_css_text = matches!(&parsed.source, FontFaceConstructorSource::Css(_))
+        && moli_css_parse::font_family_name_needs_quotes(&parsed.family.0);
     let (source, sources, binary) = match parsed.source {
         FontFaceConstructorSource::Css(source) => {
             let sources = moli_css_parse::parse_font_face_sources(&source).map(|sources| {
@@ -348,6 +376,7 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
     };
     FontFaceObjectDeclaration::new(
         parsed.family,
+        family_css_text,
         source,
         style,
         weight,
@@ -443,4 +472,24 @@ fn set_font_face_slot_value<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     set_private_value(scope, object, slot, value);
+}
+
+pub(crate) fn mark_font_face_css_connected<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+) {
+    let value = v8::Boolean::new(scope, false);
+    set_font_face_slot_value(scope, face, FONT_FACE_FAMILY_CSS_TEXT_SLOT, value.into());
+}
+
+pub(crate) fn font_face_raw_family<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+) -> Option<moli_dom::native::DomStringValue> {
+    let name = font_face_slot_value(scope, face, FONT_FACE_FAMILY_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())?;
+    let units = v8_string_to_u16_string(scope, name);
+    Some(moli_dom::native::DomStringValue::from_utf16(
+        units.as_slice(),
+    ))
 }
