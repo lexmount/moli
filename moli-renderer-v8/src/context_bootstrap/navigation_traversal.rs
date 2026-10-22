@@ -37,7 +37,7 @@ use super::navigation_traversal_plan::{
     navigation_delta_traversal_plan, navigation_index_traversal_plan,
 };
 use super::navigation_window::{
-    navigation_can_update_current_entry, navigation_document_is_active,
+    navigation_can_update_current_entry, navigation_document_is_live,
     navigation_has_current_document, navigation_unload_event_active, runtime_window_dispatch_scope,
     runtime_window_owner, window_history_for_holder, window_location_for_holder,
     window_navigation_for_holder,
@@ -245,7 +245,7 @@ pub(super) fn navigation_reload_callback<'s>(
         }
     };
     if !navigation_has_current_document(scope, args.this())
-        || !navigation_document_is_active(scope, owner)
+        || !navigation_document_is_live(scope, owner)
     {
         rv.set(
             navigation_rejected_invalid_state_result(
@@ -323,7 +323,7 @@ pub(super) fn navigation_reload_callback<'s>(
             );
             return;
         }
-        if !navigation_document_is_active(scope, owner) {
+        if !navigation_document_is_live(scope, owner) {
             rv.set(
                 reload_canceled_after_dispatch_result(scope, navigation, &outcome, &current_href)
                     .into(),
