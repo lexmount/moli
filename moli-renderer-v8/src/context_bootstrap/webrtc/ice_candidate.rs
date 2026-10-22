@@ -2,7 +2,7 @@ use super::{dictionary_string::DictionaryDomString, ice_candidate_parser::parse_
 use crate::web_api_interfaces;
 use crate::{
     util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
+        callback_data_index_value, get_private_value,
         throw_type_error, v8str,
     },
     webidl,
@@ -177,12 +177,6 @@ pub(in crate::context_bootstrap) fn rtc_ice_candidate_constructor_callback<'s>(
     {
         return;
     }
-    apply_webidl_constructor_prototype_fallback(
-        scope,
-        args.this(),
-        args.new_target(),
-        "RTCIceCandidate",
-    );
     rv.set(args.this().into());
 }
 

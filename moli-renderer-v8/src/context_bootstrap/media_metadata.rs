@@ -3,9 +3,7 @@
 //! The MediaSession association is retained independently of author properties.
 //! Platform playback controls and artwork fetching require a media UI backend.
 
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use crate::{
     util::{
@@ -132,9 +130,6 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     let Some(MetadataArgs { init }) = webidl::parse_args(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "MediaMetadata") {
-        return;
-    }
     let Some(artwork) = convert_artwork(scope, init.artwork) else {
         return;
     };

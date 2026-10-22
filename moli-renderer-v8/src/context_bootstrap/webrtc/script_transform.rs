@@ -15,9 +15,7 @@ use crate::{
         rtp_tasks::{RtpTransformTask, TransformLease, TransformerEntry},
     },
 };
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(super) const TRANSFORM: &str = "__moliRtpTransform";
 pub(super) const SFRAME: &str = "__moliRtpUseSFrame";
@@ -221,9 +219,6 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "RTCRtpScriptTransform") {
-        return;
-    }
     let objects = parsed.transfer.into_iter().map(|o| o.0).collect();
     let Some(options) = shared::structured_serialize_with_transfer_objects(
         scope,
@@ -627,9 +622,6 @@ pub(in crate::context_bootstrap) fn keyframe_event_constructor<'s>(
     let Some(parsed) = webidl::parse_args::<KeyFrameEventArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "KeyFrameRequestEvent") {
-        return;
-    }
     let event_type =
         v8::String::new_from_two_byte(scope, &parsed.event_type.0, v8::NewStringType::Normal)
             .expect("event type");

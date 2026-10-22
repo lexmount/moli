@@ -1,5 +1,4 @@
 use super::*;
-use moli_webapi_declare::initialize_web_api_constructor_receiver;
 use webidl::WebIdlEnum;
 
 const SOURCE_SLOT: &str = "__moliWebTransportErrorSource";
@@ -82,9 +81,6 @@ pub(crate) fn web_transport_error_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "WebTransportError") {
-        return;
-    }
     let payload = WebTransportErrorClonePayload {
         message: parsed.message.0,
         source: parsed.options.source,

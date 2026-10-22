@@ -12,10 +12,7 @@ use crate::{
     web_api_interfaces, webidl,
 };
 use layout::{Layout, PixelFormat, PlaneLayout, Rect, orientation};
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-    web_api_object_target,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 
 const INFO: &str = "__moliVideoFrameInfo";
 const DATA: &str = "__moliVideoFrameData";
@@ -355,9 +352,6 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     let Some(parsed) = parse_constructor_args(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "VideoFrame") {
-        return;
-    }
     let Some((info, data)) = construct(scope, parsed) else {
         return;
     };

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn video_codec_constructors_validate_before_prototype_lookup_and_use_native_brands() {
+fn video_codec_constructors_use_v8_prototype_order_and_native_brands() {
     let mut vm = new_storage_page_task_executor_test_vm("https://video-codecs.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
         .unwrap();
@@ -16,7 +16,7 @@ fn video_codec_constructors_validate_before_prototype_lookup_and_use_native_bran
                 return Reflect.get(object, key);
             }});
             const codec = Reflect.construct(C, [init], target);
-            if (log.join(',') !== 'error,output,prototype') throw Error(log);
+            if (log.join(',') !== 'prototype,error,output') throw Error(log);
             const state = Object.getOwnPropertyDescriptor(C.prototype, 'state').get;
             const foreignState = Object.getOwnPropertyDescriptor(O.prototype, 'state').get;
             if (state.call(codec) !== 'unconfigured' || foreignState.call(codec) !== 'unconfigured') throw Error('cross-realm brand');
