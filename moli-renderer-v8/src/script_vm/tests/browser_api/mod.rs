@@ -114,3 +114,4 @@ mod range_bindings;
 mod window_focus;
 
 mod web_transport_error_values;
+mod xpath_result_bindings;
