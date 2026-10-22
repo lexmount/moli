@@ -28,10 +28,14 @@ pub fn font_family_name_needs_quotes(name: &[u16]) -> bool {
     ]
     .iter()
     .any(|keyword| text.eq_ignore_ascii_case(keyword))
-        || matches!(
-            text.as_str(),
-            "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui" | "math"
-        )
+        || is_generic_font_family_keyword(&text)
+}
+
+pub(crate) fn is_generic_font_family_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui" | "math"
+    )
 }
 
 /// Serialize a literal FontFace family without interpreting it as CSS input.

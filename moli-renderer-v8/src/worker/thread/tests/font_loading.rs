@@ -3,6 +3,41 @@ use super::*;
 const FONT: &[u8] = include_bytes!("../../../../../moli-layout/tests/fixtures/moli-ahem.ttf");
 
 #[tokio::test]
+async fn worker_font_set_queries_distinguish_generic_families_from_literal_names() {
+    ensure_v8();
+    for kind in [WorkerScriptKind::Classic, WorkerScriptKind::Module] {
+        let source = format!(
+            "{}\n{}fontFaceSetFamilyQueriesProbe(globalThis, fonts, {}).then(value => {{ postMessage(value); close(); }}, error => {{ postMessage({{error: String(error.stack || error)}}); close(); }});",
+            include_str!("../../../../tests/fixtures/fontfaceset-family-queries.js"),
+            if kind == WorkerScriptKind::Module {
+                "await "
+            } else {
+                ""
+            },
+            serde_json::to_string(FONT).unwrap(),
+        );
+        let mut handle = spawn_worker_with_request_client_and_kind(
+            source,
+            "https://fonts.test/worker.js".to_owned(),
+            worker_test_request_client(),
+            kind,
+        );
+        let result: serde_json::Value =
+            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        assert_eq!(
+            result["failures"],
+            serde_json::json!([]),
+            "{kind:?}: {result}"
+        );
+        assert_eq!(
+            result["rows"].as_array().unwrap().len(),
+            69,
+            "{kind:?}: {result}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn worker_font_face_descriptors_parse_css_and_convert_dictionaries() {
     ensure_v8();
     for kind in [WorkerScriptKind::Classic, WorkerScriptKind::Module] {

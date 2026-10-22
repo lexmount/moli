@@ -56,10 +56,7 @@ pub(super) fn font_face_set_matching_faces_array<'s>(
     }
     let text = text.chars().collect::<Vec<_>>();
     let mut matching = Vec::new();
-    for family in query.families {
-        let moli_css_parse::CssFontFamily::Named(family) = family else {
-            continue;
-        };
+    for family in query.named_families {
         let family = moli_css_parse::font_family_name_key(&family);
         let family_faces = candidates
             .iter()
