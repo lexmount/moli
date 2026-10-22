@@ -76,10 +76,17 @@ impl<'a> MarkdownDom<'a> {
                 );
             }
         }
-        let disclosure_roots: HashSet<_> = disclosures
+        let mut disclosure_roots: HashSet<_> = disclosures
             .iter()
             .filter_map(|id| targets.get(id).copied())
             .collect();
+        disclosure_roots.extend(styles.iter().filter_map(|(node, _)| {
+            let panel =
+                Dom::attribute(dom, *node, "role").is_some_and(|role| has_role(role, "tabpanel"));
+            let searchable = Dom::attribute(dom, *node, "hidden")
+                .is_some_and(|value| value.eq_ignore_ascii_case("until-found"));
+            ((panel || searchable) && content_context(dom, *node)).then_some(*node)
+        }));
         let hidden_nodes: HashSet<_> = styles
             .iter()
             .filter_map(|(node, values)| (values.display == "none").then_some(*node))
@@ -120,7 +127,6 @@ impl<'a> MarkdownDom<'a> {
                 .parent_node(node)
                 .is_some_and(|parent| source_regions.contains(&parent));
 
-            let role = Dom::attribute(dom, node, "role").unwrap_or_default();
             if matches!(
                 Dom::node_kind(dom, node),
                 NodeKind::Element("input" | "textarea")
@@ -146,9 +152,7 @@ impl<'a> MarkdownDom<'a> {
                     unchecked_controls.insert(node);
                 }
             }
-            let disclosure_root = disclosure_roots.contains(&node)
-                || (has_role(role, "tabpanel") && content_context(dom, node))
-                || Dom::attribute(dom, node, "hidden") == Some("until-found");
+            let disclosure_root = disclosure_roots.contains(&node);
             let disclosure_path = disclosure_paths.contains(&node);
             let parent_is_disclosure_path = dom
                 .parent_node(node)
@@ -201,33 +205,13 @@ impl<'a> MarkdownDom<'a> {
             {
                 source_regions.insert(node);
             }
-            if matches!(
-                values.display.as_str(),
-                "block"
-                    | "flow-root"
-                    | "flex"
-                    | "grid"
-                    | "list-item"
-                    | "table"
-                    | "table-row-group"
-                    | "table-header-group"
-                    | "table-footer-group"
-                    | "table-row"
-                    | "table-cell"
-                    | "table-caption"
-            ) {
-                blocks.insert(node);
-            } else if matches!(
-                values.display.as_str(),
-                "inline-block"
-                    | "inline-flex"
-                    | "inline-grid"
-                    | "inline-table"
-                    | "ruby"
-                    | "ruby-base"
-                    | "ruby-text"
-            ) {
-                inline_boundaries.insert(node);
+            let display = values.display.as_str();
+            if !matches!(display, "" | "none" | "contents" | "inline" | "inline flow") {
+                if display.starts_with("inline") {
+                    inline_boundaries.insert(node);
+                } else {
+                    blocks.insert(node);
+                }
             }
             if matches!(Dom::node_kind(dom, node), NodeKind::Element("span")) {
                 let vertical_align = values.baseline_shift.as_str();
@@ -239,10 +223,10 @@ impl<'a> MarkdownDom<'a> {
             }
             if let Some(base_url) = base_url {
                 let names = match Dom::node_kind(dom, node) {
-                    NodeKind::Element(tag) => moli_html2md::resource_url_attributes(tag),
-                    _ => &[],
+                    NodeKind::Element(tag) => tag,
+                    _ => "",
                 };
-                for &name in names {
+                for name in moli_html2md::resource_url_attributes(names) {
                     let Some(value) = Dom::attribute(dom, node, name)
                         .map(str::trim)
                         .filter(|value| !value.is_empty() && !value.starts_with('#'))

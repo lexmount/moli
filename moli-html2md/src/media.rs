@@ -6,27 +6,23 @@ const LAZY_SOURCE_ATTRIBUTES: [&str; 3] = ["data-src", "data-lazy-src", "data-or
 /// URL-bearing inputs consumed by Markdown conversion. Browser adapters use
 /// this inventory to resolve the same inputs against the document base URL.
 #[doc(hidden)]
-pub fn resource_url_attributes(tag: &str) -> &'static [&'static str] {
-    match tag {
+pub fn resource_url_attributes(tag: &str) -> impl Iterator<Item = &'static str> {
+    let standard: &[&str] = match tag {
         "a" => &["href"],
-        "img" | "source" => &[
-            "src",
-            "data-src",
-            "data-lazy-src",
-            "data-original",
-            "srcset",
-            "data-srcset",
-        ],
-        "video" => &[
-            "src",
-            "data-src",
-            "data-lazy-src",
-            "data-original",
-            "poster",
-        ],
-        "audio" | "iframe" => &["src", "data-src", "data-lazy-src", "data-original"],
+        "img" | "source" => &["src", "srcset", "data-srcset"],
+        "video" => &["src", "poster"],
+        "audio" | "iframe" => &["src"],
         _ => &[],
-    }
+    };
+    let lazy_count = if matches!(tag, "img" | "source" | "video" | "audio" | "iframe") {
+        LAZY_SOURCE_ATTRIBUTES.len()
+    } else {
+        0
+    };
+    standard
+        .iter()
+        .copied()
+        .chain(LAZY_SOURCE_ATTRIBUTES.into_iter().take(lazy_count))
 }
 
 /// Frozen DOMs can still carry lazy-loading placeholders. These conventional

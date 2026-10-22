@@ -442,3 +442,28 @@ async fn markdown_document_export_distinguishes_source_from_hidden_interface() {
         assert!(!output.contains("Second target"), "{output}");
     }).await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_nested_disclosures_and_resource_urls() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <div style="display:none">Private sibling<section role="tabpanel">Nested specifications</section></div>
+                <div style="display:none">Private ancestor<div hidden="until-found">Searchable article</div></div>
+                <nav style="display:none"><section role="tabpanel">Private navigation panel</section><div hidden="until-found">Private navigation search</div></nav>
+                <img data-lazy-src="../photo.png" alt="Lazy photograph">
+                <video data-original="../movie.mp4"></video>`;
+        "#).unwrap();
+        for strip_css in [false, true] {
+            let result = page.render_page_dump(options(strip_css));
+            for kept in ["Nested specifications", "Searchable article", "https://example.test/photo.png", "https://example.test/movie.mp4"] {
+                assert!(result.contains(kept), "missing {kept}: {result}");
+            }
+            for omitted in ["Private sibling", "Private ancestor", "Private navigation panel", "Private navigation search"] {
+                assert!(!result.contains(omitted), "unexpected {omitted}: {result}");
+            }
+        }
+    }).await;
+}
