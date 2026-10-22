@@ -4,10 +4,9 @@ use std::process::Command;
 
 const HTML: &str = include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html");
 fn assert_layout_table_dump(args: &[&str]) -> Result<()> {
-    // Computed block boxes retain the legacy center wrappers.
     assert_markdown_dump(
         HTML,
-        include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout-computed.md"),
+        include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md"),
         args,
     )
 }
@@ -70,5 +69,27 @@ fn headerless_tables_dump_gfm_markdown_with_and_without_layout() -> Result<()> {
             args,
         )?;
     }
+    Ok(())
+}
+
+#[test]
+fn http_markdown_dump_resolves_resource_urls() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(moli_test_support::FixtureServer::spawn())?;
+    let output = Command::new(env!("CARGO_BIN_EXE_moli"))
+        .args(["fetch", "--http-no-proxy", "*", "--dump", "markdown", "--wait-until", "load", "--eval", "document.body.innerHTML='<a href=\"/docs\">Docs</a><img src=\"/image.png\" alt=\"Photo\">'"])
+        .arg(server.url("/static")).output()?;
+    let expected = format!(
+        "[Docs]({})![Photo]({})",
+        server.url("/docs"),
+        server.url("/image.png")
+    );
+    runtime.block_on(server.shutdown());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout)?, expected);
     Ok(())
 }

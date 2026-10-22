@@ -7,14 +7,14 @@ const LAZY_SOURCE_ATTRIBUTES: [&str; 3] = ["data-src", "data-lazy-src", "data-or
 /// this inventory to resolve the same inputs against the document base URL.
 #[doc(hidden)]
 pub fn resource_url_attributes(tag: &str) -> impl Iterator<Item = &'static str> {
-    let standard: &[&str] = match tag {
-        "a" => &["href"],
-        "img" | "source" => &["src", "srcset", "data-srcset"],
-        "video" => &["src", "poster"],
-        "audio" | "iframe" => &["src"],
-        _ => &[],
+    let (standard, lazy): (&[&str], bool) = match tag {
+        "a" => (&["href"], false),
+        "img" => (&["src", "srcset", "data-srcset"], true),
+        "source" | "audio" | "iframe" => (&["src"], true),
+        "video" => (&["src", "poster"], true),
+        _ => (&[], false),
     };
-    let lazy_count = if matches!(tag, "img" | "source" | "video" | "audio" | "iframe") {
+    let lazy_count = if lazy {
         LAZY_SOURCE_ATTRIBUTES.len()
     } else {
         0

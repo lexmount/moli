@@ -16,7 +16,15 @@ impl PageVm {
         let styles = if options.format == RendererPageDumpFormat::Markdown {
             let dom = self.vm().document_runtime.dom_host().dom();
             let mut nodes = Vec::new();
-            collect_node_ids(dom, dom.document_node_id(), &mut nodes);
+            if let Some(body) = dom.body_node_id() {
+                // The root style carries inherited visibility into the body.
+                if let Some(html) = dom.document_element_node_id() {
+                    nodes.push(html);
+                }
+                collect_node_ids(dom, body, &mut nodes);
+            } else {
+                collect_node_ids(dom, dom.document_node_id(), &mut nodes);
+            }
             nodes.retain(|node| {
                 dom.node(*node)
                     .is_some_and(|node| node.as_element().is_some())
@@ -270,9 +278,9 @@ mod tests {
     fn markdown_computed_outer_display_preserves_text_boundaries() {
         for (display, expected) in [
             ("flow-root list-item", "Before\n\nItem\n\nAfter"),
-            ("inline list-item", "Before\nItem\nAfter"),
-            ("inline flow-root list-item", "Before\nItem\nAfter"),
-            ("inline-block", "Before\nItem\nAfter"),
+            ("inline list-item", "Before Item After"),
+            ("inline flow-root list-item", "Before Item After"),
+            ("inline-block", "Before Item After"),
             ("inline flow", "BeforeItemAfter"),
             ("contents", "BeforeItemAfter"),
         ] {
