@@ -222,7 +222,7 @@ pub(crate) use crypto::{
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
 pub(crate) use css_fontface_runtime::{
-    new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
+    font_face_raw_family, mark_font_face_css_connected, new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
 };
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;

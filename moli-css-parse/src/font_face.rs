@@ -1,7 +1,5 @@
 use cssparser::{Parser, Token};
 
-use crate::unquote_css_string;
-
 pub use style::moli_font_face::{CssFontFace, normalize_font_face_src, parse_font_faces};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,24 +202,46 @@ pub fn font_load_query_is_valid(query: &str) -> bool {
 }
 
 pub fn font_load_query_family(query: &str) -> Option<String> {
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut quote = None;
-    let mut last_ws = None;
-    for (index, ch) in trimmed.char_indices() {
-        match ch {
-            '\'' | '"' if quote == Some(ch) => quote = None,
-            '\'' | '"' if quote.is_none() => quote = Some(ch),
-            _ if quote.is_none() && ch.is_whitespace() => last_ws = Some(index),
-            _ => {}
-        }
-    }
-    let family = last_ws
-        .map(|index| trimmed[index..].trim())
-        .unwrap_or(trimmed);
-    Some(unquote_css_string(family))
+    font_load_query_families(query)
+        .or_else(|| parse_font_family_list(query))?
+        .pop()
+}
+
+/// Extract literal family names from a font shorthand.
+/// Stylo expands the shorthand; CSS tokens decode quoted names and escapes.
+/// Unquoted generic families do not identify a user-provided FontFace.
+pub fn font_load_query_families(query: &str) -> Option<Vec<String>> {
+    let mut block = crate::CssDeclarationBlock::default();
+    let projection = block.set_property_with_projection("font", query, false);
+    let family_text = (projection.set_result != crate::CssSetResult::ParseError
+        && !projection.has_unresolved_value)
+        .then(|| block.property_value("font-family"))
+        .flatten()?;
+    parse_font_family_list(&family_text)
+}
+
+fn parse_font_family_list(input: &str) -> Option<Vec<String>> {
+    let mut parser = Parser::new(input);
+    let families = parser
+        .parse_comma_separated::<_, _, ()>(|input| {
+            if let Ok(name) = input.try_parse(|input| input.expect_string_cloned()) {
+                input.expect_exhausted()?;
+                return Ok(Some(name.to_string()));
+            }
+            let start = input.position();
+            let mut parts = vec![input.expect_ident_cloned()?.to_string()];
+            while !input.is_exhausted() {
+                parts.push(input.expect_ident_cloned()?.to_string());
+            }
+            let named = crate::parse_font_face_descriptor_entry_with_stylo(
+                "font-family",
+                input.slice_from(start),
+            )
+            .is_some();
+            Ok(named.then(|| parts.join(" ")))
+        })
+        .ok()?;
+    Some(families.into_iter().flatten().collect())
 }
 
 fn is_css_wide_keyword(value: &str) -> bool {
@@ -488,11 +508,30 @@ mod tests {
         ));
         assert_eq!(
             font_load_query_family(r#"italic small-caps bold 16px/2 "A B", serif"#).as_deref(),
-            Some("serif")
+            Some("A B")
         );
         assert_eq!(
             font_load_query_family(r#""Standalone Family""#).as_deref(),
             Some("Standalone Family")
         );
+        assert_eq!(
+            super::font_load_query_families(
+                r#"italic bold 16px/2 "A, B", Literal\ Family, "Literal\"Quote", serif"#
+            ),
+            Some(vec![
+                "A, B".to_owned(),
+                "Literal Family".to_owned(),
+                "Literal\"Quote".to_owned(),
+            ])
+        );
+        assert_eq!(
+            super::font_load_query_families(r#"16px "sans-serif", sans-serif"#),
+            Some(vec!["sans-serif".to_owned()])
+        );
+        assert_eq!(
+            super::font_load_query_families(r#"16px "a\0 b""#),
+            Some(vec!["a\u{fffd}b".to_owned()])
+        );
+        assert_eq!(super::font_load_query_families("caption"), None);
     }
 }

@@ -117,8 +117,9 @@ fn construct_font_face_from_parts<'s>(
             );
         }
     }
-    ctor.new_instance(scope, &[family.into(), source.into(), descriptors.into()])
-        .map(Into::into)
+    let face = ctor.new_instance(scope, &[family.into(), source.into(), descriptors.into()])?;
+    crate::context_bootstrap::mark_font_face_css_connected(scope, face);
+    Some(face.into())
 }
 
 fn construct_font_face<'s>(
@@ -145,12 +146,13 @@ fn collect_font_face_objects<'s>(
     values
 }
 
-fn font_face_matches_descriptor(
-    scope: &mut v8::PinScope<'_, '_>,
-    face: v8::Local<'_, v8::Object>,
+fn font_face_matches_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
     descriptor: &StylesheetFontFaceDescriptor,
 ) -> bool {
-    object_string_property(scope, face, "family").as_deref() == Some(descriptor.family())
+    crate::context_bootstrap::font_face_raw_family(scope, face)
+        .is_some_and(|family| family.as_str() == Some(descriptor.family()))
         && object_string_property(scope, face, "source").as_deref() == Some(descriptor.source())
 }
 

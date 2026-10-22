@@ -10,6 +10,7 @@ fn apply_pending_stylesheet_source_css_projections(scope: &mut v8::PinScope<'_, 
 
 const FONT_FACE_SET_FACES_SLOT: &str = "__moliFontFaceSetFaces";
 pub(super) const FONT_FACE_FAMILY_SLOT: &str = "__moliFontFaceFamily";
+pub(super) const FONT_FACE_FAMILY_CSS_TEXT_SLOT: &str = "__moliFontFaceFamilyCssText";
 pub(super) const FONT_FACE_SOURCE_SLOT: &str = "__moliFontFaceSource";
 pub(super) const FONT_FACE_STYLE_SLOT: &str = "__moliFontFaceStyle";
 pub(super) const FONT_FACE_WEIGHT_SLOT: &str = "__moliFontFaceWeight";
@@ -50,6 +51,9 @@ pub(in crate::context_bootstrap) use events::{
 };
 pub(super) use font_face::{
     font_face_constructor_callback, font_face_load_callback, install_font_face_template_accessors,
+};
+pub(crate) use font_face::{
+    font_face_raw_family, mark_font_face_css_connected,
 };
 pub(super) use font_face_set::{
     font_face_set_add_callback, font_face_set_check_callback, font_face_set_clear_callback,
