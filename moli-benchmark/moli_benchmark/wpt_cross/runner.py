@@ -430,7 +430,11 @@ async def _attach_page(
             target_id=target,
             session_id=session_id,
             baseline_target_ids=baseline_target_ids,
-            native_input=await NativeInput.attach(input_endpoint, target) if input_endpoint else None,
+            native_input=(
+                await NativeInput.attach(input_endpoint, target, browser_context_id)
+                if input_endpoint
+                else None
+            ),
         )
     except BaseException:
         if target is not None:

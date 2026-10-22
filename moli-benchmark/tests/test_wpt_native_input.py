@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from moli_benchmark.raw_cdp import RawCdpConnectionClosed, RawCdpError
 from moli_benchmark.wpt_cross.__main__ import _case_references_testdriver
 from moli_benchmark.wpt_cross.case_set import WptCase
 from moli_benchmark.wpt_cross.native_input import NativeInput, Pointer, key_description, permission_origin
-from moli_benchmark.wpt_cross.runner import _AttachedPage, _close_page, _close_target
+from moli_benchmark.wpt_cross.runner import _AttachedPage, _attach_page, _close_page, _close_target
 
 
 class RecordingClient:
@@ -23,6 +23,60 @@ class RecordingClient:
     async def command(self, method, params=None, **kwargs):
         self.commands.append((method, params, kwargs))
         return SimpleNamespace(response={"result": {}})
+
+
+class NativeInputAttachmentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_case_context_reaches_permission_updates_and_cleanup(self):
+        for context_id in ("isolated-case", None):
+            with self.subTest(context_id=context_id):
+                class PageClient:
+                    def __init__(self):
+                        self.commands = []
+
+                    async def send(self, method, params=None, **kwargs):
+                        self.commands.append((method, params))
+                        return len(self.commands)
+
+                    async def recv_until_id(self, command_id, **kwargs):
+                        method, _ = self.commands[command_id - 1]
+                        if method == "Target.createBrowserContext" and context_id is None:
+                            raise RawCdpError("BrowserContext isolation is unavailable")
+                        result = {
+                            "Target.getTargets": {"targetInfos": []},
+                            "Target.createBrowserContext": {"browserContextId": context_id},
+                            "Target.createTarget": {"targetId": "case-target"},
+                            "Target.attachToTarget": {"sessionId": "case-session"},
+                        }.get(method, {})
+                        return {"result": result}, []
+
+                input_client = RecordingClient()
+
+                async def attach(endpoint, target_id, browser_context_id=None):
+                    driver = NativeInput(input_client, "input-session", browser_context_id)
+                    driver.evaluate = AsyncMock(return_value=[])
+                    driver.command = AsyncMock(return_value={
+                        "frameTree": {"frame": {"securityOrigin": "https://case.test"}},
+                    })
+                    return driver
+
+                with patch.object(NativeInput, "attach", new=AsyncMock(side_effect=attach)):
+                    page = await _attach_page(PageClient(), input_endpoint="ws://input.test/")
+                self.assertEqual(page.browser_context_id, context_id)
+                self.assertIsNotNone(page.native_input)
+                try:
+                    await page.native_input.perform(1, {
+                        "id": 1, "token": "case", "kind": "set_permission",
+                        "descriptor": {"name": "geolocation"}, "state": "granted",
+                    })
+                finally:
+                    await page.native_input.close()
+                for method in ("Browser.setPermission", "Browser.resetPermissions"):
+                    params = next(params for name, params, _ in input_client.commands if name == method)
+                    if context_id is None:
+                        self.assertNotIn("browserContextId", params)
+                    else:
+                        self.assertEqual(params.get("browserContextId"), context_id)
+                input_client.close.assert_awaited_once()
 
 
 class NativeInputTests(unittest.IsolatedAsyncioTestCase):
