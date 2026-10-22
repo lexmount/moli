@@ -27,6 +27,7 @@ mod tests_control_plane;
 mod tests_patchright;
 mod tests_patchright_runtimeless;
 mod tests_playwright_cdp;
+mod tests_popup_document_location;
 mod tests_popup_response_ownership;
 mod tests_same_context_bindings;
 mod tests_same_context_overrides;

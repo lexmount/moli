@@ -84,16 +84,7 @@ pub(in crate::context_bootstrap) fn document_location_getter<'s>(
         );
         return;
     }
-    let Ok((host, document)) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-    else {
-        return;
-    };
-    if !unsafe { &*host }.document_is_fully_active(document) {
-        rv.set_null();
-        return;
-    }
-    match object_location_slot_value(scope, receiver).filter(|value| !value.is_undefined()) {
+    match super::super::location_runtime::document_location_value(scope, receiver) {
         Some(value) => rv.set(value),
         None => rv.set_null(),
     }
@@ -112,15 +103,7 @@ pub(in crate::context_bootstrap) fn document_location_setter<'s>(
         );
         return;
     }
-    let Ok((host, document)) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-    else {
-        return;
-    };
-    let location = unsafe { &*host }
-        .document_is_fully_active(document)
-        .then(|| object_location_slot_value(scope, receiver))
-        .flatten()
+    let location = super::super::location_runtime::document_location_value(scope, receiver)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
     let Some(location) = location else {
         webidl::throw_type_error(scope, "Cannot assign href to a null Location.");
