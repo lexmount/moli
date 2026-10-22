@@ -13,7 +13,10 @@ use parley::{
     TextWrapMode, WordBreak,
 };
 use style::{
-    computed_values::text_decoration_style::T as StyloTextDecorationStyle,
+    computed_values::{
+        font_optical_sizing::T as FontOpticalSizing,
+        text_decoration_style::T as StyloTextDecorationStyle,
+    },
     properties::ComputedValues,
     values::{
         computed::font::{
@@ -112,7 +115,9 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         .iter()
         .map(font_family_name)
         .collect::<Vec<_>>();
-    let variations = font_variations(&font.font_variation_settings);
+    let optical_size =
+        (computed.clone_font_optical_sizing() == FontOpticalSizing::Auto).then_some(font_size);
+    let variations = font_variations(&font.font_variation_settings, optical_size);
     let features = font_features(font);
     let decoration_line = computed.clone_text_decoration_line();
     let current_color = computed.clone_color();
@@ -279,15 +284,27 @@ fn font_style(style: StyloFontStyle) -> FontStyle {
     }
 }
 
-fn font_variations(settings: &FontVariationSettings) -> Vec<FontVariation> {
-    settings
+/// Applies `font-variation-settings` and, for `font-optical-sizing: auto`, an
+/// `opsz` value equal to the font size in CSS pixels, as Chromium does. An
+/// explicit `opsz` setting wins. Fonts without an `opsz` axis ignore it.
+/// This is what makes `system-ui` pick the SF Text design at body sizes.
+fn font_variations(
+    settings: &FontVariationSettings,
+    optical_size: Option<f32>,
+) -> Vec<FontVariation> {
+    let opsz = Tag::from_bytes(*b"opsz");
+    let mut variations = settings
         .0
         .iter()
         .map(|variation| FontVariation {
             tag: Tag::from_bytes(variation.tag.0.to_be_bytes()),
             value: variation.value,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if let Some(value) = optical_size.filter(|_| variations.iter().all(|v| v.tag != opsz)) {
+        variations.insert(0, FontVariation { tag: opsz, value });
+    }
+    variations
 }
 
 fn feature(tag: &[u8; 4], value: u16) -> FontFeature {
@@ -404,4 +421,19 @@ fn font_features(font: &style::properties::style_structs::Font) -> Vec<FontFeatu
     output.sort_by_key(|value| value.tag);
     output.dedup_by_key(|value| value.tag);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optical_size_is_the_font_size_unless_opsz_is_set_explicitly() {
+        let none = FontVariationSettings::normal();
+        let auto = font_variations(&none, Some(16.0));
+        assert_eq!(auto.len(), 1);
+        assert_eq!(auto[0].tag, Tag::from_bytes(*b"opsz"));
+        assert_eq!(auto[0].value, 16.0);
+        assert!(font_variations(&none, None).is_empty());
+    }
 }
