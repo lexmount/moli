@@ -376,7 +376,7 @@ pub(in crate::native_bridge) fn node_closest_callback<'s>(
     }
 }
 
-fn selector_validity_states(
+pub(in crate::native_bridge) fn selector_validity_states(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     selector: &str,
