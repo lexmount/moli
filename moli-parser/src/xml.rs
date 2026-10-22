@@ -26,6 +26,12 @@ use moli_dom::native::{
     Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node, ParserConstruction,
 };
 
+mod fragment;
+pub use fragment::{ParsedXmlFragment, XmlFragmentParseError};
+
+const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";
+
 #[derive(Debug, Clone, Default)]
 pub struct XmlParser;
 
@@ -168,12 +174,15 @@ impl XmlParser {
     }
 }
 
+type XmlNamespaceBindings = HashMap<String, Vec<String>>;
+
 fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
     let mut pending_start_name = None;
     let mut pending_used_prefixes = Vec::new();
     let mut pending_declared_prefixes = Vec::new();
+    let mut pending_attributes = Vec::new();
     let mut open_elements = Vec::new();
-    let mut active_prefixes = HashMap::from([("xml".to_owned(), 1usize)]);
+    let mut active_prefixes = HashMap::from([("xml".to_owned(), vec![XML_NAMESPACE.to_owned()])]);
 
     for token in XmlTokenizer::from(xml) {
         match token {
@@ -191,53 +200,61 @@ fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
                 ..
             }) => {
                 let prefix = prefix.as_str();
-                if prefix == "xmlns" {
-                    if !value.as_str().is_empty() {
-                        pending_declared_prefixes.push(local.as_str().to_owned());
+                if prefix == "xmlns" || (prefix.is_empty() && local.as_str() == "xmlns") {
+                    let Some(namespace) = xml_namespace_attribute_value(value.as_str()) else {
+                        return Some(XmlPrepassError::namespace("Invalid XML namespace value"));
+                    };
+                    let declared_prefix = if prefix == "xmlns" {
+                        local.as_str()
+                    } else {
+                        ""
+                    };
+                    if !xml_namespace_declaration_is_valid(declared_prefix, &namespace) {
+                        return Some(XmlPrepassError::namespace(
+                            "Invalid XML namespace declaration",
+                        ));
                     }
+                    pending_declared_prefixes.push((declared_prefix.to_owned(), namespace));
                 } else if !prefix.is_empty() {
                     pending_used_prefixes.push(prefix.to_owned());
+                    pending_attributes.push((prefix.to_owned(), local.as_str().to_owned()));
                 }
             }
             Ok(XmlTokenizerToken::ElementEnd { end, .. }) => match end {
-                XmlElementEnd::Open => {
+                end @ (XmlElementEnd::Open | XmlElementEnd::Empty) => {
+                    let is_open = matches!(end, XmlElementEnd::Open);
                     let Some(name) = pending_start_name.take() else {
-                        return Some(XmlPrepassError::tree("XML start tag is missing a name"));
+                        return Some(XmlPrepassError::tree(if is_open {
+                            "XML start tag is missing a name"
+                        } else {
+                            "XML empty-element tag is missing a name"
+                        }));
                     };
-                    for prefix in &pending_declared_prefixes {
-                        *active_prefixes.entry(prefix.clone()).or_default() += 1;
+                    for (prefix, namespace) in &pending_declared_prefixes {
+                        active_prefixes
+                            .entry(prefix.clone())
+                            .or_default()
+                            .push(namespace.clone());
                     }
-                    if let Some(prefix) = pending_used_prefixes
-                        .iter()
-                        .find(|prefix| !active_prefixes.contains_key(*prefix))
-                    {
-                        return Some(XmlPrepassError::namespace(format!(
-                            "XML namespace prefix `{prefix}` is not declared"
-                        )));
-                    }
-                    pending_used_prefixes.clear();
-                    open_elements.push((name, std::mem::take(&mut pending_declared_prefixes)));
-                }
-                XmlElementEnd::Empty => {
-                    if pending_start_name.take().is_none() {
-                        return Some(XmlPrepassError::tree(
-                            "XML empty-element tag is missing a name",
-                        ));
-                    }
-                    for prefix in &pending_declared_prefixes {
-                        *active_prefixes.entry(prefix.clone()).or_default() += 1;
-                    }
-                    if let Some(prefix) = pending_used_prefixes
-                        .iter()
-                        .find(|prefix| !active_prefixes.contains_key(*prefix))
-                    {
-                        return Some(XmlPrepassError::namespace(format!(
-                            "XML namespace prefix `{prefix}` is not declared"
-                        )));
+                    if let Some(error) = xml_start_namespace_error(
+                        &active_prefixes,
+                        &pending_used_prefixes,
+                        &pending_attributes,
+                    ) {
+                        return Some(error);
                     }
                     pending_used_prefixes.clear();
-                    for prefix in pending_declared_prefixes.drain(..) {
-                        decrement_xml_prefix_count(&mut active_prefixes, &prefix);
+                    pending_attributes.clear();
+                    if is_open {
+                        let prefixes = pending_declared_prefixes
+                            .drain(..)
+                            .map(|(prefix, _)| prefix)
+                            .collect::<Vec<_>>();
+                        open_elements.push((name, prefixes));
+                    } else {
+                        for (prefix, _) in pending_declared_prefixes.drain(..) {
+                            pop_xml_namespace_binding(&mut active_prefixes, &prefix);
+                        }
                     }
                 }
                 XmlElementEnd::Close(prefix, local) => {
@@ -253,7 +270,7 @@ fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
                         )));
                     }
                     for prefix in declared_prefixes {
-                        decrement_xml_prefix_count(&mut active_prefixes, &prefix);
+                        pop_xml_namespace_binding(&mut active_prefixes, &prefix);
                     }
                 }
             },
@@ -273,14 +290,84 @@ fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
     }
 }
 
-fn decrement_xml_prefix_count(active_prefixes: &mut HashMap<String, usize>, prefix: &str) {
-    let Some(count) = active_prefixes.get_mut(prefix) else {
-        return;
-    };
-    *count -= 1;
-    if *count == 0 {
-        active_prefixes.remove(prefix);
+fn xml_namespace_declaration_is_valid(prefix: &str, namespace: &str) -> bool {
+    match prefix {
+        "xmlns" => false,
+        "xml" => namespace == XML_NAMESPACE,
+        _ => {
+            namespace != XML_NAMESPACE
+                && namespace != XMLNS_NAMESPACE
+                && (prefix.is_empty() || !namespace.is_empty())
+        }
     }
+}
+
+fn xml_start_namespace_error(
+    namespaces: &XmlNamespaceBindings,
+    used_prefixes: &[String],
+    attributes: &[(String, String)],
+) -> Option<XmlPrepassError> {
+    for prefix in used_prefixes {
+        if namespaces
+            .get(prefix)
+            .and_then(|values| values.last())
+            .is_none_or(String::is_empty)
+        {
+            return Some(XmlPrepassError::namespace(format!(
+                "XML namespace prefix `{prefix}` is not declared"
+            )));
+        }
+    }
+    // xml5ever drops attributes with duplicate expanded names without an
+    // error. Validate before that recovery loses their original identities.
+    let mut expanded_names = std::collections::HashSet::new();
+    for (prefix, local) in attributes {
+        let namespace = namespaces
+            .get(prefix)
+            .and_then(|values| values.last())
+            .map(String::as_str)
+            .unwrap_or("");
+        if !expanded_names.insert((namespace, local)) {
+            return Some(XmlPrepassError::namespace(format!(
+                "Duplicate XML attribute {{{namespace}}}{local}"
+            )));
+        }
+    }
+    None
+}
+
+fn pop_xml_namespace_binding(namespaces: &mut XmlNamespaceBindings, prefix: &str) {
+    if let Some(values) = namespaces.get_mut(prefix) {
+        values.pop();
+        if values.is_empty() {
+            namespaces.remove(prefix);
+        }
+    }
+}
+
+fn xml_namespace_attribute_value(mut input: &str) -> Option<String> {
+    let mut value = String::new();
+    while let Some(character) = input.chars().next() {
+        if character == '&' {
+            let mut stream = xmlparser::Stream::from(input);
+            let xmlparser::Reference::Char(character) = stream.consume_reference().ok()? else {
+                return None;
+            };
+            value.push(character);
+            input = &input[stream.pos()..];
+        } else {
+            input = &input[character.len_utf8()..];
+            match character {
+                '\r' => {
+                    input = input.strip_prefix('\n').unwrap_or(input);
+                    value.push(' ');
+                }
+                '\n' | '\t' => value.push(' '),
+                _ => value.push(character),
+            }
+        }
+    }
+    Some(value)
 }
 
 fn qualified_xml_name(prefix: &str, local_name: &str) -> String {

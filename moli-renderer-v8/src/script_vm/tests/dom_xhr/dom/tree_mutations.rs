@@ -497,18 +497,22 @@ fn insert_adjacent_html_enforces_sibling_context_rules() {
     sources.map(source => probe(() => root.insertAdjacentHTML(position, source)))
   );
 
-  while (root.firstChild) {
-    root.removeChild(root.firstChild);
-  }
-  root.insertAdjacentHTML(
-    'afterbegin',
-    '<head id="inside-head"></head><body id="inside-body"></body>'
-  );
-  const preservedInnerHtmlContext =
-    document.head?.id === 'inside-head' &&
-    document.body?.id === 'inside-body' &&
-    root.firstChild === document.head &&
-    root.lastChild === document.body;
+  const rootBodyContexts = ['afterbegin', 'beforeend'].map(position => {
+    while (root.firstChild) root.removeChild(root.firstChild);
+    root.insertAdjacentHTML(
+      position,
+      '<head id="inside-head"></head><body id="inside-body"></body>'
+    );
+    return root.childNodes.length === 0 && document.head === null && document.body === null;
+  });
+  const xml = document.implementation.createDocument('http://www.w3.org/1999/xhtml', 'html');
+  xml.documentElement.insertAdjacentHTML('afterbegin', '<head id="xml-head"/><body id="xml-body"/>');
+  const xmlRootContext =
+    xml.documentElement.childNodes.length === 2 &&
+    xml.documentElement.firstChild.localName === 'head' &&
+    xml.documentElement.firstChild.id === 'xml-head' &&
+    xml.documentElement.lastChild.localName === 'body' &&
+    xml.documentElement.lastChild.id === 'xml-body';
   const head = document.head ||
     root.insertBefore(document.createElement('head'), root.firstChild);
   const body = document.body || root.appendChild(document.createElement('body'));
@@ -520,7 +524,8 @@ fn insert_adjacent_html_enforces_sibling_context_rules() {
   return JSON.stringify({
     detachedErrors,
     documentErrors,
-    preservedInnerHtmlContext,
+    rootBodyContexts,
+    xmlRootContext,
     counts: [
       document.getElementsByTagName('html').length,
       document.getElementsByTagName('head').length,
@@ -540,7 +545,7 @@ fn insert_adjacent_html_enforces_sibling_context_rules() {
 
     assert_eq!(
         result,
-        r#"{"detachedErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"documentErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"preservedInnerHtmlContext":true,"counts":[1,1,1],"placement":[true,true,true,true]}"#
+        r#"{"detachedErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"documentErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"rootBodyContexts":[true,true],"xmlRootContext":true,"counts":[1,1,1],"placement":[true,true,true,true]}"#
     );
 }
 

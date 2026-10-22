@@ -1,10 +1,11 @@
 use super::*;
+use crate::dom::native::DomStringValue;
 use crate::util::utf16_slice_lossy;
 
 pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    html: &str,
+    markup: &DomStringValue,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let start = native_range_boundary_point(scope, receiver, RangeBoundarySide::Start)?.container();
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
@@ -34,13 +35,24 @@ pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     });
     // Context selection uses the actual tree, including for windowless documents
     // and registered native Proxies. Public Node properties are author-controlled.
-    let fragment = runtime.build_range_contextual_fragment_from_html(
+    let fragment = match runtime.build_range_contextual_fragment(
         scope,
         host_ptr,
         document_handle,
         element,
-        html,
-    )?;
+        markup,
+    ) {
+        Ok(Some(fragment)) => fragment,
+        Ok(None) => return None,
+        Err(error) => {
+            crate::context_bootstrap::throw_dom_exception_value(
+                scope,
+                &error.to_string(),
+                "SyntaxError",
+            );
+            return None;
+        }
+    };
     runtime
         .native_bridge_mut()
         .wrap_handle_for_receiver(scope, host_ptr, receiver, fragment)
