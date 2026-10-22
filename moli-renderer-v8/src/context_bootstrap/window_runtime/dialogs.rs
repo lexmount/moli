@@ -88,14 +88,17 @@ pub(crate) fn window_close_callback<'s>(
     if let Some(host_ptr) = receiver_context.and_then(context_host_ptr_from_context_slot) {
         let host = unsafe { &mut *host_ptr };
         if let Some(window) = host.auxiliary_window()
-            && host.request_auxiliary_window_close(window)
+            && let Some(close) = window.begin_close()
             && let Some(context) = receiver_context
         {
             // Closing has its own synchronous beforeunload check, including
-            // close() called from pagehide. The native close transition above
-            // rejects reentry; the queued close task owns final retirement.
+            // close() called from pagehide. The claim rejects reentry while
+            // keeping the current Document active throughout the callbacks.
             let scope = &mut v8::ContextScope::new(scope, context);
             host.dispatch_main_document_tree_beforeunload_for_close(scope);
+            if close.finish() {
+                host.request_auxiliary_window_close(window);
+            }
         }
     }
 }

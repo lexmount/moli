@@ -16,7 +16,7 @@ use crate::context_bootstrap::navigation_handler_callbacks::{
 };
 use crate::context_bootstrap::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_base_url,
-    navigation_document_is_active, runtime_window_is_global, runtime_window_owner,
+    navigation_document_is_live, runtime_window_is_global, runtime_window_owner,
     window_location_for_holder,
 };
 use crate::context_bootstrap::web_storage::StorageReference;
@@ -537,7 +537,7 @@ fn precommit_controller_event<'s>(
     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     .is_some_and(|navigation| {
         let owner = runtime_window_owner(scope, navigation);
-        navigation_document_is_active(scope, owner)
+        navigation_document_is_live(scope, owner)
     });
     if !owner_is_active
         || !navigate_event_target_is_connected(scope, event)
