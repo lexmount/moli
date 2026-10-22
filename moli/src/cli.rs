@@ -271,7 +271,8 @@ pub struct FetchArgs {
     /// Maximum total readiness time in milliseconds. Initial and HTTP-error
     /// replacement navigations, the selected lifecycle stage, response match,
     /// selector, and script waits share one absolute deadline. Network-idle and
-    /// DOM-stable return the current page with a warning when it expires.
+    /// DOM-stable return the current page when it expires. Pass `--log-level warn`
+    /// to see timeout warnings.
     #[arg(
         short,
         long,
