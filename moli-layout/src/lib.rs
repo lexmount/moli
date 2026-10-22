@@ -57,11 +57,12 @@ pub use layout_tree::{
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
-    LayoutResolvedGridTrackList, LayoutResolvedGridTracks, LayoutScrollContainerMetrics,
-    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
-    LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
-    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutQueryBatch, LayoutQuerySnapshot, LayoutQueryView, LayoutRect,
+    LayoutResizeObserverMetrics, LayoutResizeObserverSize, LayoutResolvedGridTrackList,
+    LayoutResolvedGridTracks, LayoutScrollContainerMetrics, LayoutScrollExtent,
+    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics,
+    LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
+    MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{

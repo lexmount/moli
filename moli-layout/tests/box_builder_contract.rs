@@ -1800,28 +1800,48 @@ fn positioned_inline_containing_block_lays_out_its_absolute_descendant() {
         .with_position(LayoutPosition::Absolute),
     );
 
-    let snapshot = build_screenshot_snapshot(
+    let pass = moli_layout::build_layout_pass(
         &source,
         &mut styles,
         &mut DocumentLayoutServices::new(),
-        ScreenshotLayoutRequest::new(PaintViewport::new(200, 100, 1.0)),
+        moli_layout::LayoutPassRequest::with_paint(
+            PaintViewport::new(200, 100, 1.0),
+            moli_layout::LayoutFlushReason::Screenshot,
+        ),
     )
     .unwrap();
-    assert!(snapshot.diagnostics.iter().all(|diagnostic| {
+    assert!(pass.diagnostics.iter().all(|diagnostic| {
         diagnostic.code != "positioned-inline-context-deferred"
             && diagnostic.code != "positioned-static-position-deferred"
     }));
-    assert!(snapshot.fragments.iter().any(|fragment| {
-        fragment
-            .solid_fill_in_surface()
-            .is_some_and(|(rect, color)| {
-                color == PaintColor::new(1.0, 0.0, 0.0, 1.0)
-                    && rect.width == 30.0
-                    && rect.height == 10.0
-                    && rect.x >= 10.0
-                    && rect.y >= 20.0
+    // Font metrics can put the inline's top above the line box. Check the
+    // insets against its padding box, allowing paint's pixel rounding at DPR 1.
+    let inline_padding = pass
+        .tree
+        .box_model_for_source(2)
+        .expect("positioned inline must have a box model")
+        .padding
+        .bounding_rect();
+    let snapshot = pass.paint_snapshot().unwrap();
+    let absolute = snapshot
+        .fragments
+        .iter()
+        .find_map(|fragment| {
+            fragment.solid_fill_in_surface().and_then(|(rect, color)| {
+                (color == PaintColor::new(1.0, 0.0, 0.0, 1.0)).then_some(rect)
             })
-    }));
+        })
+        .expect("absolute descendant must be painted");
+    assert_eq!(absolute.width, 30.0);
+    assert_eq!(absolute.height, 10.0);
+    assert!(
+        (absolute.x - inline_padding.x - 10.0).abs() < 1.0,
+        "{absolute:?} relative to {inline_padding:?}"
+    );
+    assert!(
+        (absolute.y - inline_padding.y - 20.0).abs() < 1.0,
+        "{absolute:?} relative to {inline_padding:?}"
+    );
 }
 
 #[test]
