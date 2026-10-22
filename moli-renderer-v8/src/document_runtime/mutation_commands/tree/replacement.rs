@@ -7,14 +7,49 @@ use crate::{
 };
 
 impl DocumentRuntime {
-    /// DOM replace-all: conversion has already completed. Suppress only this
-    /// operation's intermediate target records, then queue one replacement.
     pub(crate) fn replace_all_children_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
         node: Option<DomHandle>,
+    ) -> bool {
+        self.replace_all_children_with_source_profile(
+            scope,
+            host_ptr,
+            parent,
+            node,
+            TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue(),
+        )
+    }
+
+    pub(crate) fn replace_all_children_with_html_fragment(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        fragment: DomHandle,
+    ) -> bool {
+        self.replace_all_children_with_source_profile(
+            scope,
+            host_ptr,
+            parent,
+            Some(fragment),
+            TreeMutationSourceProfile::html_fragment_insertion_appending_to_current_reaction_queue(
+            ),
+        )
+    }
+
+    /// DOM replace-all: conversion and parsing have already completed. Suppress
+    /// only this operation's intermediate target records, then queue its own
+    /// replacement record without merging earlier, independent mutations.
+    fn replace_all_children_with_source_profile(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        node: Option<DomHandle>,
+        source_profile: TreeMutationSourceProfile,
     ) -> bool {
         let removed = self.dom_host.child_handles(parent).collect::<Vec<_>>();
         let added = node
@@ -23,19 +58,16 @@ impl DocumentRuntime {
                     .unwrap_or_else(|| vec![node])
             })
             .unwrap_or_default();
-        let source_profile =
-            TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue()
-                .suppressing_observers();
-        for &child in &removed {
-            if !self.remove_child_with_source_profile(
+        let source_profile = source_profile.suppressing_observers();
+        if !removed.is_empty()
+            && !self.remove_all_children_with_source_profile(
                 scope,
                 host_ptr,
                 parent,
-                child,
                 source_profile,
-            ) {
-                return false;
-            }
+            )
+        {
+            return false;
         }
         let inserted = match node {
             Some(node) => self.insert_before_with_source_profile(

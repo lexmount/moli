@@ -886,11 +886,6 @@ impl DocumentRuntime {
         let Some(document_handle) = self.inner_html_document_handle(target) else {
             return Ok(false);
         };
-        let existing_children = self
-            .dom_host()
-            .node(target)
-            .map(|node| node.child_ids(self.dom_host().dom()).collect::<Vec<_>>())
-            .unwrap_or_default();
         let empty_html_context_creates_document_wrappers = self
             .dom_host()
             .node(context)
@@ -900,7 +895,7 @@ impl DocumentRuntime {
             .node_document_is_html_document(document_handle)
             == Some(true)
             && html.is_empty()
-            && existing_children.is_empty()
+            && self.dom_host().child_handles(target).next().is_none()
             && !empty_html_context_creates_document_wrappers
         {
             return Ok(false);
@@ -917,37 +912,7 @@ impl DocumentRuntime {
         else {
             return Ok(false);
         };
-        let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
-        let records_enabled = self.dom_host().mutation_records_enabled();
-        let removes_existing_children = !existing_children.is_empty();
-        for &child in &existing_children {
-            let _ = self
-                .remove_child_appending_to_current_reaction_queue(scope, host_ptr, target, child);
-        }
-        let changed = self.append_html_fragment_child_appending_to_current_reaction_queue(
-            scope, host_ptr, target, fragment,
-        ) || removes_existing_children;
-        if changed
-            && !self.upgrade_inserted_html_fragment_custom_elements(
-                scope,
-                host_ptr,
-                target,
-                &added_children,
-            )
-        {
-            return Ok(false);
-        }
-        if changed && records_enabled {
-            crate::observer_runtime::coalesce_child_list_replacement_records(
-                host_ptr,
-                target,
-                &added_children,
-                &existing_children,
-                None,
-                None,
-            );
-        }
-        Ok(changed)
+        Ok(self.replace_children_with_parsed_fragment(scope, host_ptr, target, fragment))
     }
 
     pub(crate) fn set_html_unsafe(
@@ -977,30 +942,32 @@ impl DocumentRuntime {
         ) else {
             return false;
         };
+        self.replace_children_with_parsed_fragment(scope, host_ptr, target, fragment)
+    }
+
+    /// The fragment is complete before any existing children are removed.
+    /// Keep the HTML fragment insertion policy (inert scripts and deferred
+    /// upgrades), while treating removal and observer delivery as replace-all.
+    fn replace_children_with_parsed_fragment(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        target: DomHandle,
+        fragment: DomHandle,
+    ) -> bool {
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
-        let existing_children = self
-            .dom_host()
-            .node(target)
-            .map(|node| node.child_ids(self.dom_host().dom()).collect::<Vec<_>>())
-            .unwrap_or_default();
-        for child in existing_children {
-            let _ = self
-                .remove_child_appending_to_current_reaction_queue(scope, host_ptr, target, child);
-        }
-        let changed = self.append_html_fragment_child_appending_to_current_reaction_queue(
-            scope, host_ptr, target, fragment,
-        );
-        if changed
-            && !self.upgrade_inserted_html_fragment_custom_elements(
-                scope,
-                host_ptr,
-                target,
-                &added_children,
-            )
-        {
+        if added_children.is_empty() && self.dom_host().child_handles(target).next().is_none() {
             return false;
         }
-        changed
+        if !self.replace_all_children_with_html_fragment(scope, host_ptr, target, fragment) {
+            return false;
+        }
+        self.upgrade_inserted_html_fragment_custom_elements(
+            scope,
+            host_ptr,
+            target,
+            &added_children,
+        )
     }
 
     pub(crate) fn set_outer_html(
