@@ -33,12 +33,20 @@ impl PageVm {
                 .vm()
                 .computed_style_export_values_for_document_snapshot(
                     nodes.iter().copied(),
-                    &["display", "visibility", "baseline-shift"].map(str::to_owned),
+                    &[
+                        "display",
+                        "visibility",
+                        "baseline-shift",
+                        "position",
+                        "float",
+                        "flex-direction",
+                    ]
+                    .map(str::to_owned),
                 );
             nodes
                 .into_iter()
                 .zip(values)
-                .map(|(node, (values, own_visibility))| {
+                .map(|(node, (values, own_visibility, original_display))| {
                     let mut values = values.into_iter();
                     (
                         node,
@@ -46,6 +54,10 @@ impl PageVm {
                             display: values.next().unwrap_or_default(),
                             visibility: values.next().unwrap_or_default(),
                             baseline_shift: values.next().unwrap_or_default(),
+                            position: values.next().unwrap_or_default(),
+                            float: values.next().unwrap_or_default(),
+                            flex_direction: values.next().unwrap_or_default(),
+                            original_display,
                             own_visibility,
                         },
                     )
@@ -280,7 +292,7 @@ mod tests {
             ("flow-root list-item", "Before\n\nItem\n\nAfter"),
             ("inline list-item", "Before Item After"),
             ("inline flow-root list-item", "Before Item After"),
-            ("inline-block", "Before Item After"),
+            ("inline-block", "BeforeItemAfter"),
             ("inline flow", "BeforeItemAfter"),
             ("contents", "BeforeItemAfter"),
         ] {

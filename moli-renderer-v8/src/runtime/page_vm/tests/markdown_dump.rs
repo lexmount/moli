@@ -59,7 +59,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
             assert!(output.contains("m<sub>n</sub>"), "{output}");
-            assert!(output.contains("Active Reviewed"), "{output}");
+            assert!(output.contains("ActiveReviewed"), "{output}");
             assert!(output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
             for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template"] {
@@ -488,6 +488,22 @@ async fn markdown_live_structure_and_visibility_have_exact_outputs() {
             ("<label>Volume <input type=range></label> <input type=color>", "Volume"),
             ("<input type=range value=30><input type=color value='#ff0000'>", "30 #ff0000"),
             ("<table><colgroup><col><col></colgroup><tr><th colspan=2>H</th></tr><tr><td>a</td><td>b</td></tr></table>", "<table>\n<colgroup>\n<col>\n<col></colgroup>\n<tbody>\n<tr>\n<th colspan=\"2\">H</th>\n</tr>\n<tr>\n<td>a</td>\n<td>b</td>\n</tr>\n</tbody>\n</table>"),
+            ("<form role=search style='display:flex'><input name=q value=rust> <button>Search</button></form>", "rust Search"),
+            ("<p>Click <button style='display:inline-flex'><svg></svg><span>Save</span></button> to continue.</p>", "Click Save to continue."),
+            ("<a href='/p/1'>Read more<span style='position:absolute'> about Rust 2.0</span></a>", "[Read more about Rust 2.0](https://example.test/p/1)"),
+            ("<ul><li style='display:flex'><a href='/a'>Title</a><span>3 comments</span></li><li>Other</li></ul>", "- [Title](https://example.test/a) 3 comments\n- Other"),
+            ("<table><tr><th>Person</th></tr><tr><td><div style='display:flex'><span>Alice</span><button>Edit</button></div></td></tr></table>", "| Person |\n| --- |\n| Alice Edit |"),
+            ("<a href='/p/1'>Read <span style='float:left'>more</span></a>", "[Read more](https://example.test/p/1)"),
+            ("<div style='display:flex'><span style='float:left'>A</span><span>B</span></div>", "A B"),
+            ("<h1><span style='display:inline-block'>H</span><span style='display:inline-block'>i</span></h1>", "# Hi"),
+            ("<span style='display:inline-flex'>1</span><span style='display:inline-block'>2</span>", "12"),
+            ("<label>Volume <input type=range value=''></label> <input type=color value=''>", "Volume"),
+            ("<input type=range value='abc'> <input type=color value='invalid'>", "abc invalid"),
+            ("<div style='display:flex;flex-direction:column'><span>A</span><span>B</span></div>", "A\n\nB"),
+            ("<p><span style='display:block'>A</span><span style='display:block'>B</span></p>", "A\n\nB"),
+            ("<span style='display:inline-block'>Active</span> <span style='display:inline-block'>Reviewed</span>", "Active Reviewed"),
+            ("<div style='display:grid'><span>A</span><span>B</span></div>", "A\n\nB"),
+            ("<div style='display:inline-grid'><span>A</span><span>B</span></div>", "A B"),
         ] {
             page.vm_mut().eval(&format!("document.body.innerHTML={}", serde_json::to_string(source).unwrap())).unwrap();
             for strip_css in [false, true] {
@@ -502,10 +518,31 @@ async fn markdown_hidden_structure_keeps_restored_descendants_and_changed_contro
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
-        page.vm_mut().eval("document.body.innerHTML = `<table style='visibility:hidden'><tr><th style='visibility:visible'>Visible</th></tr><tr><td colspan=2>Hidden</td></tr></table><input id=r type=range><input id=c type=color>`; document.querySelector('#r').value='25'; document.querySelector('#c').value='#00ff00';").unwrap();
-        let result = page.render_page_dump(options(false));
-        assert!(result.contains("Visible"), "{result}");
-        assert!(!result.contains("Hidden"), "{result}");
-        assert!(result.contains("25 #00ff00"), "{result}");
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <table style='visibility:hidden'>
+                  <tr><th style='visibility:visible'>Visible</th></tr>
+                  <tr><td colspan=2>Hidden</td></tr>
+                </table><input id=r type=range><input id=c type=color>`;
+            document.querySelector('#r').value='25';
+            document.querySelector('#c').value='#00ff00';
+        "##).unwrap();
+        assert_eq!(page.render_page_dump(options(false)),
+            "<table>\n<tbody>\n<tr>\n<th>Visible</th>\n</tr>\n<tr>\n<td colspan=\"2\"></td>\n</tr>\n</tbody>\n</table>\n\n25 #00ff00");
+
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_export_preserves_cssom_display_and_the_dom() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval(r#"document.body.innerHTML = `<div style='display:flex'><a href='/x'><span>A</span> B</a></div>`"#).unwrap();
+        let snapshot = "JSON.stringify([document.body.innerHTML, getComputedStyle(document.querySelector('a')).display])";
+        let before = page.vm_mut().eval(snapshot).unwrap();
+        assert!(before.contains("block"), "{before}");
+        assert_eq!(page.render_page_dump(options(false)), "[A B](https://example.test/x)");
+        assert_eq!(page.vm_mut().eval(snapshot).unwrap(), before);
     }).await;
 }
