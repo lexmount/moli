@@ -201,17 +201,6 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     entry_wrappers::for_window(scope, owner, history_entry_from_snapshot(snapshot))
 }
 
-fn navigation_activation_entry_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    current_entry: v8::Local<'s, v8::Object>,
-    activation: &NavigationActivationSeed,
-) -> v8::Local<'s, v8::Object> {
-    if activation.from.is_none() && activation.navigation_type.as_deref() == Some("replace") {
-        return current_entry;
-    }
-    navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry)
-}
-
 pub(super) fn create_navigation_activation_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Context>,
@@ -222,7 +211,7 @@ pub(super) fn create_navigation_activation_object<'s>(
         return v8::null(scope).into();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let entry = navigation_activation_entry_object(scope, current_entry, activation);
+    let entry = navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry);
     let from = activation
         .from
         .as_ref()
