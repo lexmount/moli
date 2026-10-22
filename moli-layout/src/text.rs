@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 
-use moli_system_fonts::SystemFontFamilyResolver;
+use moli_system_fonts::{SystemFontFamilyResolver, register_last_resort_font};
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
     fontique::{
@@ -871,6 +871,11 @@ fn build_parley_services(
     let system_font_family_resolver = system_font_policy
         .is_enabled()
         .then(|| SystemFontFamilyResolver::new(&mut collection));
+    if system_font_policy.is_enabled() {
+        // After the resolver snapshot, so substitutions only see installed
+        // families. Without installed fonts, text would otherwise be blank.
+        register_last_resort_font(&mut collection);
+    }
     let mut font_context = FontContext {
         collection,
         source_cache: Default::default(),
@@ -1103,6 +1108,66 @@ mod tests {
                     as usize;
             corrupt[offset + 20..offset + 24].copy_from_slice(&u32::MAX.to_be_bytes());
             assert!(validate_test_font_bytes(&corrupt).is_err());
+        }
+    }
+
+    /// Glyph ids for `text`, shaped with no installed fonts.
+    fn glyph_ids_without_installed_fonts(
+        text: &str,
+        family: FontFamily<'static>,
+        with_last_resort_font: bool,
+    ) -> Vec<u32> {
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        if with_last_resort_font {
+            assert!(register_last_resort_font(&mut collection));
+        }
+        let mut font_context = FontContext {
+            collection,
+            source_cache: Default::default(),
+        };
+        let mut layout_context = LayoutContext::<TextBrush>::new();
+        let mut builder = layout_context.style_run_builder(&mut font_context, text, 1.0, true);
+        let style = builder.push_style(TextStyle {
+            font_family: family,
+            ..TextStyle::default()
+        });
+        builder.push_style_run(style, ..);
+        let mut layout = builder.build(text);
+        layout.break_all_lines(None);
+        layout
+            .lines()
+            .flat_map(|line| line.items().collect::<Vec<_>>())
+            .filter_map(|item| match item {
+                parley::PositionedLayoutItem::GlyphRun(run) => Some(run),
+                parley::PositionedLayoutItem::InlineBox(_) => None,
+            })
+            .flat_map(|run| run.glyphs().map(|glyph| glyph.id).collect::<Vec<_>>())
+            .collect()
+    }
+
+    #[test]
+    fn last_resort_font_shapes_text_when_no_fonts_are_installed() {
+        let text = "Hello, café!";
+        for family in [
+            FontFamily::Single(FontFamilyName::Generic(
+                parley::fontique::GenericFamily::SansSerif,
+            )),
+            FontFamily::Single(FontFamilyName::Named(Cow::Borrowed("Arial"))),
+        ] {
+            let without = glyph_ids_without_installed_fonts(text, family.clone(), false);
+            assert!(
+                without.iter().all(|id| *id == 0),
+                "without fonts every glyph is missing: {without:?}"
+            );
+            let with = glyph_ids_without_installed_fonts(text, family, true);
+            assert_eq!(with.len(), text.chars().count());
+            assert!(
+                with.iter().all(|id| *id != 0),
+                "the bundled font covers every character: {with:?}"
+            );
         }
     }
 
