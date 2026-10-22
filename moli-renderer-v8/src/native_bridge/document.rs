@@ -1670,7 +1670,7 @@ fn document_default_view_getter_function<'s>(
     }
 }
 
-fn document_associated_window_for_object<'s>(
+pub(crate) fn document_associated_window_for_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,

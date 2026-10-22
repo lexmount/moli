@@ -2,7 +2,7 @@ use super::location_navigation::{
     LocationNavigationKind, navigate_location_object,
     navigate_location_object_with_child_navigate_event,
 };
-use super::navigation_callbacks::{document_location_getter, document_location_setter};
+use super::navigation_callbacks::document_location_getter;
 use super::*;
 
 mod access;
@@ -33,10 +33,8 @@ pub(in crate::context_bootstrap) use surface::{
     document_location_value, window_location_setter, window_navigation_setter,
 };
 pub(crate) use surface::{
-    install_constructed_document_location_runtime_state,
-    sync_document_location_runtime_state_from_window,
-    sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
-    window_location_href,
+    install_document_location_accessor, sync_window_location_history_navigation_runtime_surface,
+    sync_window_location_runtime_state, window_location_href,
 };
 
 pub(in crate::context_bootstrap) fn put_forward_location_href<'s>(

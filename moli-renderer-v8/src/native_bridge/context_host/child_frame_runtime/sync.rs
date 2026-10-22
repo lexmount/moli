@@ -109,7 +109,7 @@ impl JsContextHost {
         let document = self
             .child_browsing_context_document_wrapper(scope, handle)
             .map(|document| {
-                sync_child_document_window_slots(scope, document, wrapper, true);
+                sync_child_document_window_slots(scope, document, wrapper);
                 document.into()
             })
             .unwrap_or_else(|| v8::null(scope).into());
