@@ -52,6 +52,25 @@ fn console_reporting_does_not_add_page_object_conversions() {
 }
 
 #[test]
+fn console_labels_convert_once_and_preserve_exceptions_in_the_callee_realm() {
+    let mut vm = new_storage_html_test_vm("https://console-labels.test/");
+    let source = format!(
+        r#"(() => {{
+const probe = {};
+const iframe = document.createElement('iframe');
+document.body.appendChild(iframe);
+try {{
+  const results = [probe(globalThis), probe(iframe.contentWindow)];
+  if (results.some(rows => rows.length !== 70)) throw new Error('incomplete label matrix');
+  return JSON.stringify(results.flat().filter(row => !row.passed));
+}} finally {{ iframe.remove(); }}
+}})()"#,
+        include_str!("console_labels.js")
+    );
+    assert_eq!(vm.eval(&source).unwrap(), "[]");
+}
+
+#[test]
 fn console_reporting_cannot_turn_a_throwing_conversion_into_a_page_exception() {
     let mut vm = new_storage_test_vm("https://console-reporting.test/");
     assert_eq!(
