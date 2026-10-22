@@ -1375,24 +1375,6 @@ fn css_owner_changes_prepare_font_projections_only_for_exposed_collections() {
     assert_eq!(vm.eval("lazyStyle.remove(); [heldFonts.size, heldSheets.length, heldFonts === document.fonts].join('|')").unwrap(), "0|0|true");
 }
 
-async fn eval_owned_font_loading_fixture(url: &str, script: &str) -> String {
-    let loader = static_http_loader(std::iter::empty::<String>());
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(url, &loader);
-    vm.eval(&format!(
-        "globalThis.ownedFontFixture = null; ({script}).then(         value => ownedFontFixture = value, error => ownedFontFixture = String(error));"
-    ))
-    .expect("schedule native font loading");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(ownedFontFixture !== null)",
-        "true",
-        "font payload should settle through owner tasks",
-    )
-    .await;
-    vm.eval("ownedFontFixture").expect("read font result")
-}
-
 #[tokio::test]
 async fn font_face_owned_binary_and_data_url_validation_accept_real_fonts() {
     for bytes in [
@@ -1432,8 +1414,7 @@ async fn font_face_owned_binary_and_data_url_validation_accept_real_fonts() {
             first = bytes[0],
         );
         let result =
-            eval_owned_font_loading_fixture("https://font-face-owned-validation.test/", &script)
-                .await;
+            eval_font_loading_fixture("https://font-face-owned-validation.test/", &script).await;
         assert_eq!(
             result,
             r#"{"status":["loaded","unloaded"],"promises":[true,true],"settled":["loaded","loaded"],"inputIntact":true}"#
@@ -1443,7 +1424,7 @@ async fn font_face_owned_binary_and_data_url_validation_accept_real_fonts() {
 
 #[tokio::test]
 async fn font_face_rejects_malformed_string_and_magic_prefixed_payloads() {
-    let result = eval_owned_font_loading_fixture(
+    let result = eval_font_loading_fixture(
         "https://font-face-payload-validation.test/",
         r#"
 (async () => {
