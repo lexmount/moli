@@ -62,7 +62,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     let document = host
         .child_browsing_context_document_wrapper(scope, init.handle)
         .ok_or_else(|| anyhow::anyhow!("missing child Document wrapper"))?;
-    sync_child_document_window_slots(scope, document, global, true);
+    sync_child_document_window_slots(scope, document, global);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
     bind_document(host, scope, &snapshot, document)?;
@@ -127,7 +127,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
     let document = host
         .child_browsing_context_document_wrapper(scope, rebind.handle)
         .ok_or_else(|| anyhow::anyhow!("missing rebound child Document wrapper"))?;
-    sync_child_document_window_slots(scope, document, global, true);
+    sync_child_document_window_slots(scope, document, global);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
     bind_document(host, scope, &snapshot, document)

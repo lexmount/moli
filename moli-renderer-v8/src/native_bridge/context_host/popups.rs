@@ -18,9 +18,8 @@ use crate::{
         finish_cross_document_navigation_for_window,
         history_entry_seed_for_cross_document_location,
         install_navigation_bootstrap_entry_for_holder, initialize_simple_event_target,
-        install_simple_window_event_handlers, install_storage_aliases_for_window, navigation_unload_event_active,
-        new_shared_web_storage_store, scoped_indexed_db_factory,
-        sync_document_location_runtime_state_from_window,
+        install_simple_window_event_handlers, install_storage_aliases_for_window,
+        navigation_unload_event_active, new_shared_web_storage_store, scoped_indexed_db_factory,
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
@@ -6207,7 +6206,6 @@ fn sync_lightweight_popup_document_window_slots<'s>(
         crate::context_bootstrap::WINDOW_DOCUMENT_SLOT,
         document.into(),
     );
-    sync_document_location_runtime_state_from_window(scope, document, window);
     if let Some(href) = crate::context_bootstrap::window_location_href(scope, window)
         .and_then(|href| v8_string(scope, &href))
     {

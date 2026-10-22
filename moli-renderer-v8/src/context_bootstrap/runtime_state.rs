@@ -7,7 +7,6 @@ use super::{
     css_runtime::install_css_runtime_state,
     exposed_interfaces::is_lazy_exposed_interface,
     indexed_db::ensure_indexed_db_runtime_state,
-    location_runtime::sync_document_location_runtime_state_from_window,
     navigation_bootstrap::install_window_location_history_navigation_runtime_state,
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
@@ -1441,12 +1440,6 @@ fn install_document_runtime_state<'s>(
     install_document_static_methods(scope, global)?;
     if let Some(prototype) = global_constructor_prototype(scope, "Document") {
         DocumentPrototypeRuntimeDeclaration::default().initialize(scope, prototype)?;
-    }
-    if let Some(document) = global
-        .get(scope, v8str(scope, "document").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
-        sync_document_location_runtime_state_from_window(scope, document, global);
     }
     Ok(())
 }

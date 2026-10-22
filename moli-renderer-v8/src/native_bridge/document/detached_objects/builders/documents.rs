@@ -57,8 +57,7 @@ fn new_detached_document_object<'s>(
         .ok()?;
     web_api_interfaces::initialize(scope, document, detached_document_constructor_name(kind))
         .ok()?;
-    crate::context_bootstrap::install_constructed_document_location_runtime_state(scope, document)
-        .ok()?;
+    crate::context_bootstrap::install_document_location_accessor(scope, document).ok()?;
     Some(document)
 }
 
