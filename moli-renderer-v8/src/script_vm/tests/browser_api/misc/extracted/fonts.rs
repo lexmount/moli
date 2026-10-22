@@ -1697,7 +1697,9 @@ async fn font_face_string_sources_follow_load_state_and_connected_style_use() {
   globalThis.__fontFaceStringSourceProbe.local.afterDetachedStyle = local.status;
   (document.body || document.documentElement || document).appendChild(target);
   globalThis.__fontFaceStringSourceProbe.local.afterConnection = local.status;
-  await Promise.allSettled([remoteLoaded, invalid.loaded, local.loaded]);
+  const localLoad = document.fonts.load('16px MissingLocalFace');
+  globalThis.__fontFaceStringSourceProbe.local.afterSetLoad = local.status;
+  await Promise.allSettled([remoteLoaded, invalid.loaded, local.loaded, localLoad]);
   return JSON.stringify(globalThis.__fontFaceStringSourceProbe);
 })()
 "#,
@@ -1706,7 +1708,7 @@ async fn font_face_string_sources_follow_load_state_and_connected_style_use() {
 
     assert_eq!(
         result,
-        r#"{"remote":{"before":"unloaded","stablePromise":true,"loadReturnsLoaded":true,"after":"loading","settlement":"resolved-self"},"invalid":{"status":"error","settlement":"SyntaxError"},"local":{"beforeStyle":"unloaded","afterDetachedStyle":"unloaded","afterConnection":"loading","settlement":"NetworkError"}}"#
+        r#"{"remote":{"before":"unloaded","stablePromise":true,"loadReturnsLoaded":true,"after":"loading","settlement":"resolved-self"},"invalid":{"status":"error","settlement":"SyntaxError"},"local":{"beforeStyle":"unloaded","afterDetachedStyle":"unloaded","afterConnection":"unloaded","settlement":"NetworkError","afterSetLoad":"error"}}"#
     );
 }
 

@@ -14,11 +14,10 @@ pub(super) fn order_font_data() -> (String, String) {
     )
 }
 
+const ORDER_DOCUMENT: &str = "<!doctype html><html><head></head><body><span id='probe' style='display:inline-block;font:40px OrderFace'>AAAA</span><iframe id='frame'></iframe></body></html>";
+
 pub(super) fn order_vm() -> StandaloneScriptVmHarness {
-    let mut vm = new_parsed_test_vm(
-        "https://font-selection-order.test/",
-        "<!doctype html><html><head></head><body><span id='probe' style='display:inline-block;font:40px OrderFace'>AAAA</span><iframe id='frame'></iframe></body></html>",
-    );
+    let mut vm = new_parsed_test_vm("https://font-selection-order.test/", ORDER_DOCUMENT);
     vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     vm
 }
@@ -281,9 +280,15 @@ fn font_face_selection_follows_owner_membership_instead_of_resource_id() {
     assert_eq!(width(&mut vm), "160");
 }
 
-#[test]
-fn manually_added_font_faces_take_priority_over_css_connected_faces() {
-    let mut vm = order_vm();
+#[tokio::test]
+async fn manually_added_font_faces_take_priority_over_css_connected_faces() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, mut completions) = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+        "https://font-selection-order.test/",
+        ORDER_DOCUMENT,
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     let (narrow, wide) = order_font_data();
     vm.eval(&format!(r#"
         const style=document.createElement('style');
@@ -292,6 +297,7 @@ fn manually_added_font_faces_take_priority_over_css_connected_faces() {
         globalThis.narrow=[...document.fonts][0];
         narrow.load();
     "#)).unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("narrow.status").unwrap(), "loaded");
     assert_eq!(
         vm.eval("String(probe.getBoundingClientRect().width)")

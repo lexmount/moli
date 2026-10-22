@@ -39,7 +39,11 @@ fn font_set_queries_normalize_reversed_computed_descriptor_ranges() {
 
 #[test]
 fn font_set_queries_resolve_css_calculations_in_requests_and_descriptors() {
-    let mut vm = new_storage_test_vm("https://font-query-calculations.test/");
+    let mut completions = RendererResourceCompletionTestHarness::new();
+    let mut vm = new_storage_test_vm_with_completion_sender(
+        "https://font-query-calculations.test/",
+        completions.sender(),
+    );
     let url = fixture_font_url();
     vm.eval(&format!(r#"
         const bytes=Uint8Array.from(atob('{}'),c=>c.charCodeAt(0));
@@ -59,9 +63,10 @@ fn font_set_queries_resolve_css_calculations_in_requests_and_descriptors() {
             error=>calculations.push(error.name));
         }}
     "#,url.split_once(',').unwrap().1)).unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(calculations)").unwrap(),
-        r#"[false,false,true,"NetworkError","NetworkError",[1,true,"unloaded"]]"#
+        r#"[false,false,true,[1,true,"unloaded"],"NetworkError","NetworkError"]"#
     );
     vm.eval(
         r#"
@@ -72,6 +77,7 @@ fn font_set_queries_resolve_css_calculations_in_requests_and_descriptors() {
     "#,
     )
     .unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(widthCalculations)").unwrap(),
         r#"[false,"NetworkError"]"#
@@ -80,7 +86,11 @@ fn font_set_queries_resolve_css_calculations_in_requests_and_descriptors() {
 
 #[test]
 fn font_set_queries_filter_text_without_loading_unrelated_sources() {
-    let mut vm = new_storage_test_vm("https://font-query-text.test/");
+    let mut completions = RendererResourceCompletionTestHarness::new();
+    let mut vm = new_storage_test_vm_with_completion_sender(
+        "https://font-query-text.test/",
+        completions.sender(),
+    );
     vm.eval(
         r#"
         globalThis.face = new FontFace('ReviewProbe',
@@ -97,6 +107,7 @@ fn font_set_queries_filter_text_without_loading_unrelated_sources() {
     "#,
     )
     .unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify({...queryResults,status:face.status})")
             .unwrap(),
@@ -109,6 +120,7 @@ fn font_set_queries_filter_text_without_loading_unrelated_sources() {
     "#,
     )
     .unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(matched)").unwrap(),
         r#"[false,"NetworkError"]"#
@@ -117,7 +129,11 @@ fn font_set_queries_filter_text_without_loading_unrelated_sources() {
 
 #[test]
 fn font_set_queries_select_weight_style_and_stretch_before_loading() {
-    let mut vm = new_storage_test_vm("https://font-query-properties.test/");
+    let mut completions = RendererResourceCompletionTestHarness::new();
+    let mut vm = new_storage_test_vm_with_completion_sender(
+        "https://font-query-properties.test/",
+        completions.sender(),
+    );
     let url = fixture_font_url();
     vm.eval(&format!(
         r#"
@@ -143,6 +159,7 @@ fn font_set_queries_select_weight_style_and_stretch_before_loading() {
         url.split_once(',').unwrap().1
     ))
     .unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(queryResults)").unwrap(),
         r#"{"checks":[true,true,true],"loads":[[1,true,"unloaded"],[1,true,"unloaded"],[1,true,"unloaded"]]}"#
@@ -154,6 +171,7 @@ fn font_set_queries_select_weight_style_and_stretch_before_loading() {
           document.fonts.load(query,'A').catch(e=>selected.push(e.name));
         }
     "#).unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(selected)").unwrap(),
         r#"[false,false,false,"NetworkError","NetworkError","NetworkError"]"#

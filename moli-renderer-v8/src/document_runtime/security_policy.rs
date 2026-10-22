@@ -100,36 +100,6 @@ pub(crate) struct DocumentRequestPolicySnapshot {
 pub(crate) type DocumentConnectPolicySnapshot = DocumentRequestPolicySnapshot;
 
 impl DocumentRequestPolicySnapshot {
-    pub(crate) fn font_violation(
-        &self,
-        document_url: &Url,
-        request_url: &Url,
-        disposition: ContentSecurityPolicyDisposition,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-    ) -> Option<DocumentContentSecurityPolicyViolation> {
-        match disposition {
-            ContentSecurityPolicyDisposition::Enforce => {
-                document_url_policy_violation_from_document_policies(
-                    self.enforce_policies.clone(),
-                    document_url,
-                    request_url,
-                    ContentSecurityPolicyResourceKind::DocumentFont,
-                    redirect_status,
-                    disposition,
-                )
-            }
-            ContentSecurityPolicyDisposition::Report => document_url_policy_violation(
-                &self.report_only_policies,
-                &self.reporting_endpoints,
-                document_url,
-                request_url,
-                ContentSecurityPolicyResourceKind::DocumentFont,
-                redirect_status,
-                disposition,
-            ),
-        }
-    }
-
     pub(crate) fn for_script_preload(
         mut self,
         metadata: crate::planning::ScriptFetchMetadata,
@@ -327,6 +297,7 @@ impl DocumentRequestPolicySnapshot {
         result
     }
 
+    #[cfg(test)]
     pub(crate) fn from_policy_container(policy: &DocumentPolicyContainer) -> Self {
         let mut enforce = policy.response_content_security_policies.clone();
         enforce.extend(policy.document_content_security_policies.iter().cloned());
