@@ -1529,6 +1529,118 @@ async fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
 }
 
 #[tokio::test]
+async fn font_face_family_serialization_preserves_source_modes_and_utf16() {
+    let result = eval_font_loading_fixture(
+        "https://font-face-family.test/",
+        r#"
+(async () => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement).appendChild(frame);
+  const failures = [];
+  const check = (name, actual, expected) => {
+    if (actual !== expected) failures.push({name, actual, expected});
+  };
+  for (const [label, realm] of [['main', window], ['child', frame.contentWindow]]) {
+    for (const [name, expected] of [
+      ['Simple', 'Simple'],
+      ['A B', '"A B"'],
+      [' a  b ', '" a  b "'],
+      ['sans-serif', '"sans-serif"'],
+      ['A, B', '"A, B"'],
+      ['A\\ B', '"A\\\\ B"'],
+      ['"A"', '"\\"A\\""'],
+      ['', '""'],
+      ['a\0b', '"a\\0 b"'],
+      ['\ud800', '\ud800'],
+      ['\udc00', '\udc00'],
+      ['🙂', '🙂'],
+    ]) {
+      const face = new realm.FontFace(name, 'url(unused)');
+      check(label + ' construct ' + name, face.family, expected);
+      face.family = name;
+      check(label + ' assign ' + name, face.family, expected);
+      check(label + ' status ' + name, face.status, 'unloaded');
+    }
+    const literal = new realm.FontFace('A B', 'url(unused)');
+    literal.family = 'Simple';
+    check(label + ' quoted to identifier', literal.family, 'Simple');
+    literal.family = 'A, B';
+    check(label + ' quoted to list literal', literal.family, '"A, B"');
+    const identifier = new realm.FontFace('Simple', 'url(unused)');
+    identifier.family = 'A, B';
+    check(label + ' identifier source mode', identifier.family, 'A, B');
+    const binary = new realm.FontFace('A B', new realm.Uint8Array([1, 2, 3]));
+    check(label + ' binary source mode', binary.family, 'A B');
+  }
+  const style = document.createElement('style');
+  style.textContent = '@font-face { font-family: "CSS A B"; src: url(unused); }';
+  document.head.appendChild(style);
+  const connected = Array.from(document.fonts).find(face => face.family === 'CSS A B');
+  check('CSS connected family', connected && connected.family, 'CSS A B');
+  check('CSS connected identity', document.fonts.has(connected), true);
+  style.remove();
+  return JSON.stringify(failures);
+})()
+"#,
+    )
+    .await;
+    assert_eq!(result, "[]");
+}
+
+#[tokio::test]
+async fn font_face_set_queries_use_native_literal_families() {
+    let result = eval_font_loading_fixture(
+        "https://font-face-native-family-query.test/",
+        r#"
+(async () => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement).appendChild(frame);
+  const failures = [];
+  const check = (name, condition) => { if (!condition) failures.push(name); };
+  for (const [label, realm] of [['main', window], ['child', frame.contentWindow]]) {
+    const set = realm.document.fonts;
+    for (const name of ['Literal Family', 'sans-serif', 'Literal, Family', 'Literal"Quote', 'Literal\\Slash']) {
+      const face = new realm.FontFace(name, fontFixtureSource);
+      set.add(face);
+      let reads = 0;
+      Object.defineProperty(face, 'family', {
+        get() { ++reads; throw Error('author family getter'); }
+      });
+      const query = '16px ' + JSON.stringify(name);
+      check(label + ' not loaded ' + name, set.check(query) === false);
+      const loaded = await set.load(query);
+      check(label + ' native match ' + name, loaded.length === 1 && loaded[0] === face);
+      check(label + ' loaded ' + name, set.check(query) === true);
+      check(label + ' no author code ' + name, reads === 0);
+      set.delete(face);
+    }
+    const first = new realm.FontFace('First Literal', fontFixtureSource);
+    const second = new realm.FontFace('Second Literal', fontFixtureSource);
+    set.add(second).add(first);
+    const loaded = await set.load('16px "First Literal", "Second Literal", serif');
+    check(label + ' every named family', loaded.length === 2 && loaded[0] === first && loaded[1] === second);
+    const repeated = await set.load('16px "First Literal", "Second Literal", "First Literal"');
+    check(label + ' repeated named family', repeated.length === 3 && repeated[0] === first && repeated[1] === second && repeated[2] === first);
+    set.delete(first);
+    set.delete(second);
+    const caption = new realm.FontFace('caption', fontFixtureSource);
+    set.add(caption);
+    check(label + ' system font is not a literal family', (await set.load('caption')).length === 0);
+    set.delete(caption);
+    const unpaired = new realm.FontFace('\ud800', fontFixtureSource);
+    set.add(unpaired);
+    check(label + ' distinct scalar identity', (await set.load('16px "\ufffd"')).length === 0);
+    set.delete(unpaired);
+  }
+  return JSON.stringify(failures);
+})()
+"#,
+    )
+    .await;
+    assert_eq!(result, "[]");
+}
+
+#[tokio::test]
 async fn font_face_string_sources_follow_load_state_and_connected_style_use() {
     let result = eval_font_loading_fixture(
         "https://font-face-string-source-state.test/",
