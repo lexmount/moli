@@ -533,7 +533,7 @@ pub(crate) use self::shared::{
     wasm_module_message_allowed_for_target, wasm_module_message_allowed_for_target_origin,
 };
 pub(crate) use self::shared::{
-    console_arg_remote_object_json, current_console_stack,
+    console_arg_remote_object_json, current_console_stack, initialize_console_namespace,
     install_console_message_buffers_for_context,
     snapshot_console_message_details_for_current_context,
     snapshot_console_messages_for_current_context,

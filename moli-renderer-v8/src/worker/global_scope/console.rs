@@ -76,6 +76,7 @@ pub(super) fn install_console<'s>(
     let console = WorkerConsoleObjectDeclaration::default()
         .bind(scope)
         .map_err(|error| anyhow!("failed to create worker console: {error}"))?;
+    crate::context_bootstrap::initialize_console_namespace(scope, console)?;
 
     WorkerGlobalConsoleDeclaration::new(console)
         .initialize(scope, global)

@@ -1,4 +1,5 @@
 mod callback_execution;
+mod console;
 mod error_reporting_guard;
 
 mod native_exception_data;
