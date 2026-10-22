@@ -64,7 +64,6 @@ pub(crate) fn overconstrained_error_constructor_callback<'s>(
         .initialize(scope, args.this())
         .is_ok()
     {
-        capture_dom_exception_stack(scope, args.this());
         rv.set(args.this().into());
     }
 }
