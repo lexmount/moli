@@ -148,6 +148,15 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         callback = super::super::pointer_lock::element_request_pointer_lock_callback
     )]
     request_pointer_lock: (),
+    #[webapi(
+        method = "requestFullscreen",
+        length = 0,
+        enumerable,
+        receiver = web_api_interfaces::Element::is_instance,
+        returns_promise,
+        callback = crate::native_bridge::fullscreen::element_request_fullscreen_callback
+    )]
+    request_fullscreen: (),
     #[webapi(accessor_property = "shadowRoot", enumerable, getter = element_shadow_root_getter_function)]
     shadow_root: (),
     #[webapi(
