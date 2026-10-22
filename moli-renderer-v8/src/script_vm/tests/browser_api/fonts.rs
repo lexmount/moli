@@ -9,6 +9,57 @@ mod readiness;
 mod selection_order;
 mod unicode_ranges;
 
+#[test]
+fn failed_font_face_reports_rejection_only_after_its_loaded_promise_is_observed() {
+    let mut vm = new_storage_test_vm("https://font-promise-observation.test/");
+    vm.eval(
+        r#"
+globalThis.fontRejections = [];
+addEventListener('unhandledrejection', event => {
+  fontRejections.push(event.reason.name);
+  event.preventDefault();
+});
+globalThis.failedFaces = [
+  new FontFace('Bad CSS', 'src'),
+  new FontFace('Bad binary', new Uint8Array([0, 1, 0, 0])),
+  new FontFace('Bad descriptor', 'local(Ahem)', {weight: 'invalid'})
+];
+globalThis.fontEvent = new FontFaceSetLoadEvent('loadingerror', {fontfaces: failedFaces});
+"#,
+    )
+    .unwrap();
+    vm.eval("0").unwrap();
+    assert_eq!(vm.eval("JSON.stringify(fontRejections)").unwrap(), "[]");
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([failedFaces.map(face => face.status), fontEvent.fontfaces.length])"
+        )
+        .unwrap(),
+        r#"[["error","error","error"],3]"#,
+    );
+
+    vm.eval("globalThis.observedFontPromise = failedFaces[0].loaded")
+        .unwrap();
+    vm.eval("0").unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(fontRejections)").unwrap(),
+        r#"["SyntaxError"]"#,
+    );
+    vm.eval(
+        r#"
+globalThis.fontPromiseResult = [];
+observedFontPromise.catch(error => fontPromiseResult.push(error instanceof DOMException, error.name));
+fontPromiseResult.push(observedFontPromise === failedFaces[0].loaded,
+  observedFontPromise === failedFaces[0].load());
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(fontPromiseResult)").unwrap(),
+        r#"[true,true,true,"SyntaxError"]"#,
+    );
+}
+
 pub(super) fn fixture_font_url() -> String {
     let bytes = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
