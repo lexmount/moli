@@ -482,11 +482,30 @@ async fn markdown_live_structure_and_visibility_have_exact_outputs() {
             ("<table><tr><th>Name</th><th>Status</th><th>Owner</th></tr><tr><td>A</td><td style='visibility:hidden'>private</td><td>alice</td></tr></table>", "| Name | Status | Owner |\n| --- | --- | --- |\n| A |  | alice |"),
             ("<a href='../docs'>Docs</a><img src='../a.png' alt='A'>", "[Docs](https://example.test/docs)![A](https://example.test/a.png)"),
             ("<dialog><section role=tabpanel>Cookie preferences</section></dialog><div popover><section role=tabpanel>Hidden menu</section></div><p>Article</p>", "Article"),
+            ("<ul><li><a href='/a' style='display:block'>A</a></li><li><a href='/b' style='display:block'>B</a></li></ul>", "- [A](https://example.test/a)\n- [B](https://example.test/b)"),
+            ("<table style='visibility:hidden'><tr><th>Plan</th><th>Price</th></tr><tr><td colspan=2>Loading</td></tr></table><p>After</p>", "After"),
+            ("<table><tr><th>A</th><th>B</th></tr><tr style='visibility:collapse'><td>Secret</td><td>Hidden</td></tr><tr><td>X</td><td>Y</td></tr></table>", "| A | B |\n| --- | --- |\n| X | Y |"),
+            ("<label>Volume <input type=range></label> <input type=color>", "Volume"),
+            ("<input type=range value=30><input type=color value='#ff0000'>", "30 #ff0000"),
+            ("<table><colgroup><col><col></colgroup><tr><th colspan=2>H</th></tr><tr><td>a</td><td>b</td></tr></table>", "<table>\n<colgroup>\n<col>\n<col></colgroup>\n<tbody>\n<tr>\n<th colspan=\"2\">H</th>\n</tr>\n<tr>\n<td>a</td>\n<td>b</td>\n</tr>\n</tbody>\n</table>"),
         ] {
             page.vm_mut().eval(&format!("document.body.innerHTML={}", serde_json::to_string(source).unwrap())).unwrap();
             for strip_css in [false, true] {
                 assert_eq!(page.render_page_dump(options(strip_css)), expected, "{source}");
             }
         }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_hidden_structure_keeps_restored_descendants_and_changed_controls() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval("document.body.innerHTML = `<table style='visibility:hidden'><tr><th style='visibility:visible'>Visible</th></tr><tr><td colspan=2>Hidden</td></tr></table><input id=r type=range><input id=c type=color>`; document.querySelector('#r').value='25'; document.querySelector('#c').value='#00ff00';").unwrap();
+        let result = page.render_page_dump(options(false));
+        assert!(result.contains("Visible"), "{result}");
+        assert!(!result.contains("Hidden"), "{result}");
+        assert!(result.contains("25 #00ff00"), "{result}");
     }).await;
 }

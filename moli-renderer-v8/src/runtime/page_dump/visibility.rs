@@ -116,6 +116,7 @@ impl<'a> MarkdownDom<'a> {
         let mut unchecked_controls = HashSet::new();
         let mut visibility_modes = HashMap::new();
         let mut source_regions = HashSet::new();
+        let node_order: Vec<_> = styles.iter().map(|(node, _)| *node).collect();
         for (node, values) in styles {
             debug_assert!(
                 dom.parent_node(node).is_none_or(|parent| {
@@ -138,7 +139,10 @@ impl<'a> MarkdownDom<'a> {
                 // A clean textarea gets its default from child text, not the
                 // control-state slot (which is initially empty). Once dirty,
                 // even an empty live value is authoritative.
-                if element.is_html_input() || element.input_value_dirty() {
+                let synthetic_default = Dom::attribute(dom, node, "type").is_some_and(|kind| {
+                    kind.eq_ignore_ascii_case("range") || kind.eq_ignore_ascii_case("color")
+                }) && Dom::attribute(dom, node, "value").is_none();
+                if (element.is_html_input() && !synthetic_default) || element.input_value_dirty() {
                     attribute_overrides
                         .entry(node)
                         .or_insert_with(HashMap::new)
@@ -192,7 +196,13 @@ impl<'a> MarkdownDom<'a> {
                 parent_visibility
             };
             visibility_modes.insert(node, visibility_mode);
-            if (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
+            let collapsed_table_part = values.visibility == "collapse"
+                && matches!(
+                    Dom::node_kind(dom, node),
+                    NodeKind::Element("tr" | "thead" | "tbody" | "tfoot" | "col" | "colgroup")
+                );
+            if collapsed_table_part
+                || (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
                 || (parent_is_disclosure_path && !disclosure_root && !disclosure_path)
                 || dom
                     .parent_node(node)
@@ -210,13 +220,7 @@ impl<'a> MarkdownDom<'a> {
             }
             let display = values.display.as_str();
             if !matches!(display, "" | "none" | "contents" | "inline" | "inline flow") {
-                let native_control = matches!(
-                    Dom::node_kind(dom, node),
-                    NodeKind::Element("input" | "textarea" | "select" | "button")
-                );
-                if native_control && display == "inline-block" {
-                    // Their inline control semantics already separate readable values.
-                } else if display.starts_with("inline") {
+                if display.starts_with("inline") {
                     inline_boundaries.insert(node);
                 } else {
                     blocks.insert(node);
@@ -257,6 +261,24 @@ impl<'a> MarkdownDom<'a> {
             }
             if visibility_mode == VisibilityMode::Hidden && !disclosure_root && !disclosure_path {
                 invisible.insert(node);
+            }
+        }
+        // Invisible cells still occupy columns. A wholly invisible table/list
+        // has no structure to export, unless a descendant restores visibility.
+        let mut visible_subtrees = HashSet::new();
+        for node in node_order.into_iter().rev() {
+            if suppressed.contains(&node) {
+                continue;
+            }
+            if !invisible.contains(&node) || visible_subtrees.contains(&node) {
+                if let Some(parent) = dom.parent_node(node) {
+                    visible_subtrees.insert(parent);
+                }
+            } else if matches!(
+                Dom::node_kind(dom, node),
+                NodeKind::Element("table" | "ul" | "ol" | "dl")
+            ) {
+                suppressed.insert(node);
             }
         }
         Self {
