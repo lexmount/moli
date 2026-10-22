@@ -184,8 +184,8 @@ pub(crate) use child_frame_runtime::{
     throw_cross_origin_type_error,
 };
 pub(crate) use child_frame_snapshots::{
-    ChildBrowsingContextDocumentSnapshot, ChildBrowsingContextFrameSnapshot,
-    ChildBrowsingContextSnapshot, DetachedChildBrowsingContextDocumentSnapshot,
+    ChildBrowsingContextFrameSnapshot, ChildBrowsingContextSnapshot,
+    DetachedChildBrowsingContextDocumentSnapshot,
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;

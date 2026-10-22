@@ -1,4 +1,4 @@
-use crate::dom::native::{NativeDom, NativeNodeId};
+use crate::dom::native::{DomHost, NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
@@ -10,29 +10,49 @@ mod visibility;
 
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
-        let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
-            .then(|| self.vm().document_runtime.dom_host().document_base_url())
-            .flatten();
-        let styles = if options.format == RendererPageDumpFormat::Markdown {
-            let dom = self.vm().document_runtime.dom_host().dom();
+        let frames = if options.with_frames {
+            self.vm().live_child_document_handles_in_snapshot_order()
+        } else {
+            Vec::new()
+        };
+        let (markdown_nodes, document_bases) = if options.format == RendererPageDumpFormat::Markdown
+        {
+            let dom_host = self.vm().document_runtime.dom_host();
+            let dom = dom_host.dom();
+            let mut documents = vec![dom.document_node_id()];
+            documents.extend(frames.iter().map(|(_, _, document)| *document));
+            let mut seen_documents = std::collections::HashSet::new();
+            documents.retain(|document| seen_documents.insert(*document));
             let mut nodes = Vec::new();
-            if let Some(body) = dom.body_node_id() {
-                // The root style carries inherited visibility into the body.
-                if let Some(html) = dom.document_element_node_id() {
+            let mut bases = std::collections::HashMap::new();
+            for document in documents {
+                // Keep inherited document visibility while avoiding metadata in
+                // the head from participating in the Markdown policy.
+                if let Some(html) = dom.document_element_handle_for_document(document) {
                     nodes.push(html);
                 }
-                collect_node_ids(dom, body, &mut nodes);
-            } else {
-                collect_node_ids(dom, dom.document_node_id(), &mut nodes);
+                if let Some(body) = dom.document_body_handle_for_document(document) {
+                    collect_node_ids(dom, body, &mut nodes);
+                } else {
+                    collect_node_ids(dom, document, &mut nodes);
+                }
+                if let Some(base) = dom_host.document_base_url_for_handle(document) {
+                    bases.insert(document, base);
+                }
             }
             nodes.retain(|node| {
                 dom.node(*node)
                     .is_some_and(|node| node.as_element().is_some())
             });
+            (nodes, bases)
+        } else {
+            (Vec::new(), std::collections::HashMap::new())
+        };
+        let styles = if options.format == RendererPageDumpFormat::Markdown {
             let values = self
                 .vm()
                 .computed_style_export_values_for_document_snapshot(
-                    nodes.iter().copied(),
+                    markdown_nodes.iter().copied(),
                     &[
                         "display",
                         "visibility",
@@ -43,7 +63,7 @@ impl PageVm {
                     ]
                     .map(str::to_owned),
                 );
-            nodes
+            markdown_nodes
                 .into_iter()
                 .zip(values)
                 .map(|(node, (values, own_visibility, original_display))| {
@@ -68,14 +88,15 @@ impl PageVm {
         };
         if options.format == RendererPageDumpFormat::Markdown
             && !options.with_base
-            && !options.with_frames
             && options.strip == RendererPageDumpStripOptions::default()
         {
-            return render_markdown_document_with_styles(
-                self.vm().document_runtime.dom_host().dom(),
-                styles,
-                markdown_base_url.as_ref(),
-            );
+            let dom = self.vm().document_runtime.dom_host().dom();
+            let frame_roots = if options.with_frames {
+                markdown_frame_roots(dom, &frames, &styles, &document_bases)
+            } else {
+                std::collections::HashMap::new()
+            };
+            return render_markdown_document_with_styles(dom, styles, document_bases, frame_roots);
         }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
@@ -88,36 +109,56 @@ impl PageVm {
                 .to_owned();
             inject_base_href(&mut dom, &href);
         }
-        if options.with_frames {
-            self.inline_child_frame_markups_into_dump_dom(&mut dom);
-        }
         apply_strip_options(&mut dom, options.strip);
+        for (_, _, document) in &frames {
+            apply_strip_options_at_root(&mut dom, *document, options.strip);
+        }
+        if options.with_frames && options.format == RendererPageDumpFormat::Html {
+            let bindings = self
+                .vm()
+                .document_runtime
+                .dom_host()
+                .snapshot_shadow_root_bindings();
+            let roots = bindings
+                .iter()
+                .map(|binding| binding.root)
+                .collect::<Vec<_>>();
+            for root in &roots {
+                apply_strip_options_at_root(&mut dom, *root, options.strip);
+            }
+            let mut export = DomHost::from_dom(dom);
+            export.restore_shadow_root_bindings(bindings);
+            self.inline_child_frame_markups_into_dump_dom(&mut export, &frames, &roots);
+            return export.dom().serialize_document();
+        }
+
+        let frame_roots = markdown_frame_roots(&dom, &frames, &styles, &document_bases);
 
         match options.format {
             RendererPageDumpFormat::Html => dom.serialize_document(),
             RendererPageDumpFormat::Markdown => {
-                render_markdown_document_with_styles(&dom, styles, markdown_base_url.as_ref())
+                render_markdown_document_with_styles(&dom, styles, document_bases, frame_roots)
             }
         }
     }
 
-    fn inline_child_frame_markups_into_dump_dom(&mut self, dom: &mut NativeDom) {
-        let child_frames = self
-            .vm()
-            .live_child_document_handles_in_snapshot_order()
-            .into_iter()
-            .map(|(frame_id, owner_node_id, _)| (frame_id, owner_node_id))
-            .collect::<Vec<_>>();
-
-        for (frame_id, owner_node_id) in child_frames {
-            let Some(snapshot) = self
-                .vm_mut()
-                .child_browsing_context_document_snapshot_by_frame_id(&frame_id)
+    fn inline_child_frame_markups_into_dump_dom(
+        &mut self,
+        dom: &mut DomHost,
+        frames: &[(String, NativeNodeId, NativeNodeId)],
+        shadow_roots: &[NativeNodeId],
+    ) {
+        for (_, owner_node_id, document) in frames.iter().rev() {
+            let Some(url) = self.vm().child_browsing_context_current_url(*owner_node_id) else {
+                continue;
+            };
+            let scripting_enabled = |node| self.vm().node_document_scripting_enabled(node);
+            let Some(markup) = dom.get_html(*document, &scripting_enabled, false, shadow_roots)
             else {
                 continue;
             };
-            let _ = dom.set_attribute(owner_node_id, "srcdoc", &snapshot.markup);
-            let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
+            let _ = dom.set_attribute(*owner_node_id, "srcdoc", &markup);
+            let _ = dom.set_attribute(*owner_node_id, "data-moli-frame-url", url.as_str());
         }
     }
 }
@@ -167,12 +208,20 @@ fn ensure_head_node(dom: &mut NativeDom) -> NativeNodeId {
 }
 
 fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions) {
+    apply_strip_options_at_root(dom, dom.document_node_id(), strip);
+}
+
+fn apply_strip_options_at_root(
+    dom: &mut NativeDom,
+    root: NativeNodeId,
+    strip: RendererPageDumpStripOptions,
+) {
     if !strip.js && !strip.ui && !strip.css {
         return;
     }
 
     let mut node_ids = Vec::new();
-    collect_node_ids(dom, dom.document_node_id(), &mut node_ids);
+    collect_node_ids(dom, root, &mut node_ids);
 
     for node_id in &node_ids {
         if strip.css {
@@ -247,22 +296,61 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
 
 #[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
-    render_markdown_document_with_styles(dom, Vec::new(), None)
+    render_markdown_document_with_styles(
+        dom,
+        Vec::new(),
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    )
 }
 
 fn render_markdown_document_with_styles(
     dom: &NativeDom,
     styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
-    base_url: Option<&url::Url>,
+    document_bases: std::collections::HashMap<NativeNodeId, url::Url>,
+    frame_roots: std::collections::HashMap<NativeNodeId, NativeNodeId>,
 ) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
-    let visible = visibility::MarkdownDom::new(dom, styles, base_url);
+    let visible = visibility::MarkdownDom::new(dom, styles, document_bases, frame_roots);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),
         ..Default::default()
     })
     .convert(&visible, root)
+}
+
+fn markdown_frame_roots(
+    dom: &NativeDom,
+    frames: &[(String, NativeNodeId, NativeNodeId)],
+    styles: &[(NativeNodeId, visibility::ExportStyle)],
+    document_bases: &std::collections::HashMap<NativeNodeId, url::Url>,
+) -> std::collections::HashMap<NativeNodeId, NativeNodeId> {
+    let mut roots = std::collections::HashMap::new();
+    for (_, owner, document) in frames.iter().rev() {
+        let Some(root) = dom
+            .document_body_handle_for_document(*document)
+            .or_else(|| dom.document_element_handle_for_document(*document))
+        else {
+            continue;
+        };
+        let visible = visibility::MarkdownDom::new(
+            dom,
+            styles.iter().cloned(),
+            document_bases.clone(),
+            roots.clone(),
+        );
+        let rendered = moli_html2md::Converter::new(moli_html2md::Options {
+            max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
+            default_code_language: Some("text".to_owned()),
+            ..Default::default()
+        })
+        .convert(&visible, root);
+        if !rendered.trim().is_empty() {
+            roots.insert(*owner, root);
+        }
+    }
+    roots
 }
 
 #[cfg(test)]
@@ -321,7 +409,12 @@ mod tests {
                 ),
             ];
             assert_eq!(
-                render_markdown_document_with_styles(&dom, styles, None),
+                render_markdown_document_with_styles(
+                    &dom,
+                    styles,
+                    std::collections::HashMap::new(),
+                    std::collections::HashMap::new(),
+                ),
                 expected,
                 "{display}"
             );

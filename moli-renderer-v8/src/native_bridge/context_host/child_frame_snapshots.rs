@@ -4,7 +4,6 @@ use url::Url;
 use crate::document_runtime::DocumentPolicyContainer;
 
 mod detached;
-mod document_lookup;
 mod frame_tree;
 mod ids;
 mod markup;
@@ -25,12 +24,6 @@ pub(crate) struct ChildBrowsingContextFrameSnapshot {
     pub(crate) security_origin_opaque: bool,
     #[serde(default)]
     pub(crate) child_frames: Vec<ChildBrowsingContextFrameSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChildBrowsingContextDocumentSnapshot {
-    pub(crate) url: String,
-    pub(crate) markup: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
