@@ -59,7 +59,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
             assert!(output.contains("m<sub>n</sub>"), "{output}");
-            assert!(output.contains("Active\nReviewed"), "{output}");
+            assert!(output.contains("Active Reviewed"), "{output}");
             assert!(output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
             for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template"] {
@@ -463,6 +463,29 @@ async fn markdown_nested_disclosures_and_resource_urls() {
             }
             for omitted in ["Private sibling", "Private ancestor", "Private navigation panel", "Private navigation search"] {
                 assert!(!result.contains(omitted), "unexpected {omitted}: {result}");
+            }
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_live_structure_and_visibility_have_exact_outputs() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/path/page").unwrap());
+        for (source, expected) in [
+            ("<ul><li>a</li><li>b</li></ul>", "- a\n- b"),
+            ("<ul><li>a<ul><li>b</li><li>c</li></ul></li><li>d</li></ul>", "- a\n  - b\n  - c\n- d"),
+            ("<select><optgroup label='Group'><option>x</option><option>y</option></optgroup></select>", "Group\nx\ny"),
+            ("<p>Search <input value='q'> <button>Go</button></p>", "Search q Go"),
+            ("<table><tr><th>Person</th></tr><tr><td>Alice <button>Edit</button></td></tr></table>", "| Person |\n| --- |\n| Alice Edit |"),
+            ("<table><tr><th>Name</th><th>Status</th><th>Owner</th></tr><tr><td>A</td><td style='visibility:hidden'>private</td><td>alice</td></tr></table>", "| Name | Status | Owner |\n| --- | --- | --- |\n| A |  | alice |"),
+            ("<a href='../docs'>Docs</a><img src='../a.png' alt='A'>", "[Docs](https://example.test/docs)![A](https://example.test/a.png)"),
+            ("<dialog><section role=tabpanel>Cookie preferences</section></dialog><div popover><section role=tabpanel>Hidden menu</section></div><p>Article</p>", "Article"),
+        ] {
+            page.vm_mut().eval(&format!("document.body.innerHTML={}", serde_json::to_string(source).unwrap())).unwrap();
+            for strip_css in [false, true] {
+                assert_eq!(page.render_page_dump(options(strip_css)), expected, "{source}");
             }
         }
     }).await;

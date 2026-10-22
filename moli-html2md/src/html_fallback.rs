@@ -6,7 +6,6 @@ use crate::{Dom, NodeKind};
 /// Markdown has no merged cells, nested tables, or block content inside cells.
 /// Each structural pre-scan stops at nested tables; nested scopes are disjoint.
 /// Conversion and target discovery keep their own bounded linear traversals.
-
 pub(crate) fn needed<D: Dom + ?Sized>(
     dom: &D,
     root: D::NodeId,
