@@ -39,19 +39,6 @@ struct WindowNavigationAccessorDeclaration {
     navigation: (),
 }
 
-#[derive(Default, WebApiObject)]
-#[webapi(plain, receiver = crate::web_api_interfaces::Document::is_instance)]
-struct DocumentLocationAccessorDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = document_location_getter,
-        setter = document_location_setter,
-        enumerable,
-        dont_delete
-    )]
-    location: (),
-}
-
 const CONSTRUCTED_DOCUMENT_LOCATION_GETTER_SLOT: &str = "__moliConstructedDocumentLocationGetter";
 const CONSTRUCTED_DOCUMENT_LOCATION_SETTER_SLOT: &str = "__moliConstructedDocumentLocationSetter";
 
@@ -68,7 +55,15 @@ pub(in crate::context_bootstrap) fn document_location_value<'s>(
     if !crate::native_bridge::document::document_is_fully_active(unsafe { &*runtime_ptr }, handle) {
         return Some(v8::null(scope).into());
     }
-    get_private_value(scope, receiver, WINDOW_LOCATION_SLOT)
+    // A Document has no separate Location. Resolve its relevant Window on
+    // every read so a newly materialized wrapper cannot retain a null cache.
+    let window = crate::native_bridge::document::document_associated_window_for_object(
+        scope,
+        runtime_ptr,
+        handle,
+        receiver,
+    )?;
+    window_location_slot_value(scope, window)
 }
 
 fn constructed_document_location_setter_callback<'s>(
@@ -129,12 +124,10 @@ fn constructed_document_location_accessor_functions<'s>(
     Ok((getter, setter))
 }
 
-pub(crate) fn install_constructed_document_location_runtime_state<'s>(
+pub(crate) fn install_document_location_accessor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let location = v8::null(scope);
-    set_private_value(scope, document, WINDOW_LOCATION_SLOT, location.into());
     let (getter, setter) = constructed_document_location_accessor_functions(scope, document)?;
     define_get_set_property(
         scope,
@@ -145,18 +138,6 @@ pub(crate) fn install_constructed_document_location_runtime_state<'s>(
         v8::PropertyAttribute::DONT_DELETE,
         "location",
     )
-}
-
-pub(crate) fn sync_document_location_runtime_state_from_window<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    let Some(location) = window_location_slot_value(scope, window) else {
-        return;
-    };
-    set_private_value(scope, document, WINDOW_LOCATION_SLOT, location);
-    install_public_location_accessor(scope, document);
 }
 
 pub(crate) fn sync_global_location_runtime_state(scope: &mut v8::PinScope<'_, '_>, href: &str) {
@@ -359,15 +340,4 @@ pub(in crate::context_bootstrap) fn window_navigation_setter<'s>(
         value,
         v8::PropertyAttribute::NONE,
     );
-}
-
-fn install_public_location_accessor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) {
-    let key = v8str(scope, "location");
-    if object.has_own_property(scope, key.into()).unwrap_or(false) {
-        return;
-    }
-    let _ = DocumentLocationAccessorDeclaration::default().initialize(scope, object);
 }

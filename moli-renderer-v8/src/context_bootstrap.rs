@@ -443,10 +443,8 @@ pub(in crate::context_bootstrap) use self::indexed_db::{
 pub(crate) use self::location_runtime::refresh_global_location_security_origin;
 pub(crate) use self::location_runtime::sync_global_location_runtime_state;
 pub(crate) use self::location_runtime::{
-    install_constructed_document_location_runtime_state,
-    sync_document_location_runtime_state_from_window,
-    sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
-    window_location_href,
+    install_document_location_accessor, sync_window_location_history_navigation_runtime_surface,
+    sync_window_location_runtime_state, window_location_href,
 };
 pub(crate) use self::media_cues::{
     new_vtt_cue_for_parsed, new_vtt_region_for_parsed, set_text_track_cue_track, text_track_cue_id,

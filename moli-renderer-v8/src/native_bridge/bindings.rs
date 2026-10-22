@@ -269,10 +269,8 @@ impl NativeBridgeBindings {
         if matches!(prototype_name, "Document" | "HTMLDocument" | "XMLDocument") {
             // Every Document owns this unforgeable accessor, including clones
             // that never pass through Window/bootstrap synchronization.
-            crate::context_bootstrap::install_constructed_document_location_runtime_state(
-                scope, wrapper,
-            )
-            .expect("Document.location accessor should initialize");
+            crate::context_bootstrap::install_document_location_accessor(scope, wrapper)
+                .expect("Document.location accessor should initialize");
         }
         if matches!(wrapper_kind, WrapperKind::Window) {
             window::sync_window_wrapper_function_identity(scope, wrapper);
