@@ -253,3 +253,50 @@ fn separate_nested_spans_keep_html_when_delimiters_are_ambiguous() {
         }
     }
 }
+
+#[test]
+fn multiline_image_alt_preserves_the_image() {
+    let result = markdown("<img src='/x' alt='first\n# heading'>");
+    // Alt newlines must not open a heading; the image and its text alternative survive.
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p><img src=\"/x\" alt=\"first # heading\" /></p>\n";
+    assert_eq!(
+        actual_html, desired_html,
+        "image alt survives Markdown rendering"
+    );
+}
+
+#[test]
+fn multiline_link_title_preserves_the_link() {
+    let result = markdown("<a href='/' title='first\n# heading'>link</a>");
+    // Turndown has this loss too; the link and its title must survive rendering.
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p><a href=\"/\" title=\"first\n# heading\">link</a></p>\n";
+    assert_eq!(
+        actual_html, desired_html,
+        "link title survives Markdown rendering"
+    );
+}
+
+#[test]
+fn multiple_nested_spans_keep_their_styles_at_paragraph_end() {
+    // This guards the closing-edge fix: with no following character there
+    // is no punctuation fallback, but sibling delimiters must not mispair.
+    let result = markdown("<em><strong>x</strong>b<strong>c</strong></em>");
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p><em><strong>x</strong>b<strong>c</strong></em></p>\n";
+    assert_eq!(
+        actual_html, desired_html,
+        "nested sibling emphasis remains intact"
+    );
+}
+
+#[test]
+fn mixed_emphasis_markers_preserve_intraword_styles() {
+    // The opening check sees the text 'x', although the nested styles emit
+    // punctuation first. This is separate from closing a same-marker run.
+    let result = markdown("before<em><del><strong>x</strong></del></em>");
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p>before<em><del><strong>x</strong></del></em></p>\n";
+    assert_eq!(actual_html, desired_html, "intraword styles remain intact");
+}

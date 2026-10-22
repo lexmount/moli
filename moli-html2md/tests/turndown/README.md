@@ -43,10 +43,6 @@ findings with active assertions of both Markdown and rendered HTML:
 | Tests | Status | Current behavior and comparison |
 | --- | --- | --- |
 | `track_nested_list_spacing_through_a_transparent_wrapper`, `track_nested_list_spacing_before_a_trailing_empty_element` | Open compatibility decision | Moli keeps the outer list tight when an `ins` wraps the nested list or an empty `span` follows it. Turndown makes it loose. Both preserve the list items. |
-| `track_multiline_image_alt_becoming_a_heading` | Open bug, also present in Turndown | An image alt containing `first\n# heading` breaks the image into text and a heading. The desired HTML retains the image and its full label. |
-| `track_multiline_link_title_becoming_a_heading` | Open bug, also present in Turndown | A link title containing `first\n# heading` breaks the link into text and a heading. The desired HTML retains the link and its multiline title. |
-| `track_multiple_nested_spans_at_the_end_of_a_paragraph` | Open bug, also present in Turndown | `<em><strong>x</strong>b<strong>c</strong></em>` produces ambiguous star delimiters at paragraph end, losing the second strong span and exposing literal stars. |
-| `track_mixed_emphasis_markers_at_an_intraword_opening` | Open bug in Moli's emphasis/strikethrough extension | `before<em><del><strong>x</strong></del></em>` loses outer emphasis because its opener precedes generated punctuation. |
 
 These tests are not ignored or expected to panic. A change to a recorded output
 requires review; when fixing a bug, replace the current-output assertion with a
@@ -74,3 +70,8 @@ The generator executes the pinned upstream source. It adapts import extensions
 for Node's ESM loader and provides CommonJS `require` for Domino, without changing
 conversion rules. The corpus records both the upstream revision and normalized
 options. `cases.rs` provides a separate named Rust test for every fixture.
+
+The multiline image-alt, multiline link-title, paragraph-end nested emphasis,
+and intraword mixed-emphasis bugs are fixed. Their exact rendered-HTML
+regressions are in `inline_boundaries.rs`; `tracking.rs` retains only the two
+open list-spacing compatibility decisions.

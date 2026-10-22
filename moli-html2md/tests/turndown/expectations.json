@@ -52,7 +52,7 @@
     "reason": "Escape list markers across text-node boundaries. Turndown escapes nodes individually and accidentally creates an ordered list."
   },
   "upstream_036": {
-    "markdown": "![the\ntitle](logo.png \"the\ntitle\")",
+    "markdown": "![the title](logo.png \"the&#10;title\")",
     "reason": "An image without alt uses its authored title as a text alternative. Turndown leaves that label empty."
   },
   "upstream_037": {
