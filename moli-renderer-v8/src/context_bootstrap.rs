@@ -329,8 +329,8 @@ pub(crate) use self::canvas::{
 };
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{
-    WebTransportErrorClonePayload, WebTransportErrorSource,
-    build_dom_exception_object, build_quota_exceeded_error_object, build_rtc_sdp_error,
+    WebTransportErrorClonePayload, WebTransportErrorSource, build_dom_exception_object,
+    build_quota_exceeded_error_object, build_rtc_sdp_error, build_web_transport_error,
     build_web_transport_error_from_clone_payload, dom_exception_clone_fields,
     ensure_dom_implementation_singleton, new_dom_error_value, new_dom_exception_value,
     new_most_derived_dom_exception_value, new_quota_exceeded_error_value,

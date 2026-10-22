@@ -24,7 +24,7 @@ fn native_exception_stacks_ignore_mutated_javascript_capture_helpers() {
         assert_eq!(actual[realm]["failures"], serde_json::json!([]), "{actual}");
         assert_eq!(
             actual[realm]["rows"].as_array().unwrap().len(),
-            29,
+            37,
             "{actual}"
         );
     }

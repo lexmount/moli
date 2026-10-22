@@ -13,7 +13,7 @@ pub(crate) use overconstrained_error::{
 };
 pub(crate) use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub(crate) use web_transport_error::{
-    WebTransportErrorClonePayload, WebTransportErrorSource,
+    WebTransportErrorClonePayload, WebTransportErrorSource, build_web_transport_error,
     build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
     web_transport_error_constructor_callback,
 };
@@ -529,6 +529,7 @@ fn websocket_error_declaration<'s>(
     WebSocketErrorObjectDeclaration::new(v8_string(scope, message), close_code, reason)
 }
 
+/// Create exception data without inventing a construction or deserialization stack.
 pub(crate) fn build_dom_exception_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
