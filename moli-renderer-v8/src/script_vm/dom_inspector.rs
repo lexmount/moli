@@ -463,6 +463,7 @@ fn run_dom_inspector_edit(
             }
         }
         DomInspectorEdit::SetOuterHtml { node, outer_html } => {
+            let outer_html = crate::dom::native::DomStringValue::from(outer_html);
             let runtime = unsafe { &*host_ptr };
             if runtime.dom_host().node(node).is_none() {
                 return DomInspectorEditOutcome::NodeNotFound;
@@ -480,7 +481,7 @@ fn run_dom_inspector_edit(
                     unsafe { &mut *host_ptr }.set_outer_html(scope, host_ptr, node, &outer_html)
                 },
             );
-            if changed {
+            if matches!(changed, Ok(true)) {
                 DomInspectorEditOutcome::Applied { result_node: None }
             } else {
                 DomInspectorEditOutcome::MutationFailed

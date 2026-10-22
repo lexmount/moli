@@ -158,6 +158,7 @@ mod window_open_special_targets;
 mod worker_listener_invocation;
 mod worker_options;
 
+mod xml_fragments;
 
 mod video_codec_support;
 

@@ -22,7 +22,7 @@ use super::{
         rendered_child_participates_in_flat_tree,
     },
     styles::StyleObservation,
-    trusted_types::{TrustedHtmlSink, trusted_html_sink_string},
+    trusted_types::{TrustedHtmlSink, trusted_html_sink_dom_string, trusted_html_sink_string},
 };
 
 fn get_html_options(
@@ -995,7 +995,7 @@ pub(in crate::native_bridge) fn node_outer_html_setter_function<'s>(
     }
     let value = args.get(0);
     let Some(html) =
-        trusted_html_sink_string(scope, runtime_ptr, value, TrustedHtmlSink::ElementOuterHtml)
+        trusted_html_sink_dom_string(scope, runtime_ptr, value, TrustedHtmlSink::ElementOuterHtml)
     else {
         return;
     };
@@ -1016,7 +1016,9 @@ pub(in crate::native_bridge) fn node_outer_html_setter_function<'s>(
     }
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_outer_html(scope, runtime_ptr, handle, &html);
+        if let Err(error) = runtime.set_outer_html(scope, runtime_ptr, handle, &html) {
+            throw_dom_exception(scope, "SyntaxError", 12, &error.to_string());
+        }
     });
 }
 
@@ -1042,12 +1044,14 @@ pub(in crate::native_bridge) fn node_inner_html_setter_function<'s>(
     } else {
         TrustedHtmlSink::ElementInnerHtml
     };
-    let Some(html) = trusted_html_sink_string(scope, runtime_ptr, value, sink) else {
+    let Some(html) = trusted_html_sink_dom_string(scope, runtime_ptr, value, sink) else {
         return;
     };
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_inner_html(scope, runtime_ptr, handle, &html);
+        if let Err(error) = runtime.set_inner_html(scope, runtime_ptr, handle, &html) {
+            throw_dom_exception(scope, "SyntaxError", 12, &error.to_string());
+        }
     });
 }
 
