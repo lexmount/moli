@@ -33,6 +33,11 @@ pub(super) fn font_face_set_matching_faces_array<'s>(
         let Ok(face_object) = v8::Local::<v8::Object>::try_from(face) else {
             continue;
         };
+        // CSS parsing replaces unpaired surrogates; such a literal FontFace
+        // name must not alias the replacement character in a parsed query.
+        if super::font_face::font_face_raw_family(scope, face_object)?.as_str().is_none() {
+            continue;
+        }
         let load = super::state::get(scope, face_object).expect("FontFace has native state");
         let descriptor = load.borrow().descriptor().clone();
         // Constructors and successful setters update this same typed descriptor
