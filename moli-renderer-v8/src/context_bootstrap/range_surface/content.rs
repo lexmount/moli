@@ -80,7 +80,7 @@ pub(super) fn range_create_contextual_fragment_callback<'s>(
     let requirements = context_host_ptr_from_global_bridge(scope)
         .map(|host_ptr| unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope))
         .unwrap_or_default();
-    let Some(markup) = crate::context_bootstrap::trusted_html_string_or_throw(
+    let Some(markup) = crate::context_bootstrap::trusted_html_dom_string_or_throw(
         scope,
         parsed.markup,
         requirements,
