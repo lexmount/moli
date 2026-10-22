@@ -219,6 +219,13 @@ impl<'a> ComputedStyleRead<'a> {
         Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 
+    pub(in crate::native_bridge::element) fn computed_style_original_display(&self) -> String {
+        self.stylo_style
+            .as_ref()
+            .map(StyloComputedStyleSnapshot::original_display)
+            .unwrap_or_default()
+    }
+
     pub(in crate::native_bridge::element) fn computed_style_has_own_visibility_value(
         &self,
     ) -> bool {

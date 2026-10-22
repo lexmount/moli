@@ -547,7 +547,7 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
 ) -> Vec<Vec<String>> {
     computed_style_export_values_for_document_snapshot(host, handles, properties)
         .into_iter()
-        .map(|(values, _)| values)
+        .map(|(values, _, _)| values)
         .collect()
 }
 
@@ -555,15 +555,15 @@ pub(crate) fn computed_style_export_values_for_document_snapshot(
     host: &JsContextHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
-) -> Vec<(Vec<String>, bool)> {
+) -> Vec<(Vec<String>, bool, String)> {
     let mut observation = StyleObservation::new(host);
     handles
         .into_iter()
         .map(
             |handle| match style_computation_context_for_document_snapshot(host, handle) {
-                None => (Vec::new(), false),
+                None => (Vec::new(), false, String::new()),
                 Some(DocumentSnapshotStyleComputation::HiddenChildFrame) => {
-                    (vec![String::new(); properties.len()], false)
+                    (vec![String::new(); properties.len()], false, String::new())
                 }
                 Some(DocumentSnapshotStyleComputation::Available(_)) => {
                     let style = observation.read(handle);
@@ -573,6 +573,7 @@ pub(crate) fn computed_style_export_values_for_document_snapshot(
                             .map(|property| style.property(property))
                             .collect(),
                         style.computed_style_has_own_visibility_value(),
+                        style.computed_style_original_display(),
                     )
                 }
             },

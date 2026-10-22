@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use moli_html2md::{Dom, NodeKind};
 use url::Url;
 
+use crate::dom::forms::InputType;
 use crate::dom::native::{NativeDom, NativeNodeId};
 
 /// Computed properties needed for document export. Paint effects such as
@@ -10,6 +11,10 @@ use crate::dom::native::{NativeDom, NativeNodeId};
 #[derive(Default)]
 pub(super) struct ExportStyle {
     pub display: String,
+    pub original_display: String,
+    pub position: String,
+    pub float: String,
+    pub flex_direction: String,
     pub visibility: String,
     pub baseline_shift: String,
     pub own_visibility: bool,
@@ -116,6 +121,20 @@ impl<'a> MarkdownDom<'a> {
         let mut unchecked_controls = HashSet::new();
         let mut visibility_modes = HashMap::new();
         let mut source_regions = HashSet::new();
+        // Flex/grid item flow is determined by the parent, while absolute and
+        // floating descendants do not introduce document paragraphs.
+        let item_blocks: HashMap<_, _> = styles
+            .iter()
+            .filter_map(|(node, values)| {
+                let blocks = match values.display.as_str() {
+                    "flex" | "inline-flex" => values.flex_direction.starts_with("column"),
+                    "grid" => true,
+                    "inline-grid" => false,
+                    _ => return None,
+                };
+                Some((*node, blocks))
+            })
+            .collect();
         let node_order: Vec<_> = styles.iter().map(|(node, _)| *node).collect();
         for (node, values) in styles {
             debug_assert!(
@@ -139,10 +158,9 @@ impl<'a> MarkdownDom<'a> {
                 // A clean textarea gets its default from child text, not the
                 // control-state slot (which is initially empty). Once dirty,
                 // even an empty live value is authoritative.
-                let synthetic_default = Dom::attribute(dom, node, "type").is_some_and(|kind| {
-                    kind.eq_ignore_ascii_case("range") || kind.eq_ignore_ascii_case("color")
-                }) && Dom::attribute(dom, node, "value").is_none();
-                if (element.is_html_input() && !synthetic_default) || element.input_value_dirty() {
+                let authored_control =
+                    matches!(element.input_type(), InputType::Range | InputType::Color);
+                if (element.is_html_input() && !authored_control) || element.input_value_dirty() {
                     attribute_overrides
                         .entry(node)
                         .or_insert_with(HashMap::new)
@@ -199,7 +217,7 @@ impl<'a> MarkdownDom<'a> {
             let collapsed_table_part = values.visibility == "collapse"
                 && matches!(
                     Dom::node_kind(dom, node),
-                    NodeKind::Element("tr" | "thead" | "tbody" | "tfoot" | "col" | "colgroup")
+                    NodeKind::Element("tr" | "thead" | "tbody" | "tfoot")
                 );
             if collapsed_table_part
                 || (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
@@ -218,10 +236,36 @@ impl<'a> MarkdownDom<'a> {
             {
                 source_regions.insert(node);
             }
-            let display = values.display.as_str();
-            if !matches!(display, "" | "none" | "contents" | "inline" | "inline flow") {
-                if display.starts_with("inline") {
+            let display = if values.original_display.is_empty() {
+                values.display.as_str()
+            } else {
+                values.original_display.as_str()
+            };
+            let positioned = matches!(values.position.as_str(), "absolute" | "fixed");
+            let parent_item = dom
+                .parent_node(node)
+                .and_then(|parent| item_blocks.get(&parent).copied());
+            let out_of_flow = positioned
+                || (parent_item.is_none() && !matches!(values.float.as_str(), "" | "none"));
+            let item_block = if positioned { None } else { parent_item };
+            if let Some(block) = item_block {
+                if block {
+                    blocks.insert(node);
+                } else {
                     inline_boundaries.insert(node);
+                }
+            } else if !out_of_flow
+                && !matches!(display, "" | "none" | "contents" | "inline" | "inline flow")
+            {
+                if display.starts_with("inline") {
+                    // Atomic inline glyph wrappers do not invent word spaces.
+                    if matches!(
+                        Dom::node_kind(dom, node),
+                        NodeKind::Element("input" | "textarea" | "select" | "button")
+                    ) || display.contains("list-item")
+                    {
+                        inline_boundaries.insert(node);
+                    }
                 } else {
                     blocks.insert(node);
                 }

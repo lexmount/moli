@@ -285,6 +285,10 @@ impl StyloComputedStyleSnapshot {
         serialize_raw_computed_property(&self.primary, property_id)
     }
 
+    pub(crate) fn original_display(&self) -> String {
+        style_traits::ToCss::to_css_string(&self.primary.get_box().original_display)
+    }
+
     pub(crate) fn has_own_visibility_value(&self) -> bool {
         self.primary
             .flags

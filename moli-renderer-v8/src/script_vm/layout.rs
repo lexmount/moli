@@ -93,7 +93,7 @@ impl ScriptVm {
         &self,
         handles: impl IntoIterator<Item = DomHandle>,
         properties: &[String],
-    ) -> Vec<(Vec<String>, bool)> {
+    ) -> Vec<(Vec<String>, bool, String)> {
         crate::native_bridge::element::computed_style_export_values_for_document_snapshot(
             &self._context_host.borrow(),
             handles,
