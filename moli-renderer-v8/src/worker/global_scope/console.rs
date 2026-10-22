@@ -26,15 +26,15 @@ struct WorkerConsoleObjectDeclaration {
     debug: (),
     #[webapi(method, enumerable, callback = console_log_callback, data = v8str(scope, "trace"))]
     trace: (),
-    #[webapi(method, enumerable, callback = console_noop_callback)]
+    #[webapi(method, enumerable, callback = console_label_callback, data = v8str(scope, "time"))]
     time: (),
-    #[webapi(method, enumerable, callback = console_noop_callback)]
+    #[webapi(method, enumerable, callback = console_label_callback, data = v8str(scope, "timeLog"))]
     time_log: (),
-    #[webapi(method, enumerable, callback = console_noop_callback)]
+    #[webapi(method, enumerable, callback = console_label_callback, data = v8str(scope, "timeEnd"))]
     time_end: (),
-    #[webapi(method, enumerable, callback = console_noop_callback)]
+    #[webapi(method, enumerable, callback = console_label_callback, data = v8str(scope, "count"))]
     count: (),
-    #[webapi(method, enumerable, callback = console_noop_callback)]
+    #[webapi(method, enumerable, callback = console_label_callback, data = v8str(scope, "countReset"))]
     count_reset: (),
     #[webapi(method, enumerable, callback = console_noop_callback)]
     dir: (),
@@ -143,6 +143,19 @@ fn console_noop_callback(
 ) {
 }
 
+fn console_label_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some((method, arguments)) = crate::context_bootstrap::console_label_arguments(scope, &args)
+    else {
+        return;
+    };
+    call_original_worker_console_method_with_arguments(scope, &arguments, method);
+    rv.set_undefined();
+}
+
 fn console_profile_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -166,17 +179,28 @@ fn call_original_worker_console_method<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     method_name: &'static str,
 ) {
-    let Some((original_console, method)) = crate::console_forwarding::captured_console_method(
-        scope,
-        WORKER_ORIGINAL_CONSOLE_SLOT,
-        method_name,
-    ) else {
-        return;
-    };
-
     let mut forwarded_args = Vec::with_capacity(args.length().max(0) as usize);
     for index in 0..args.length() {
         forwarded_args.push(args.get(index));
     }
-    let _ = method.call(scope, original_console.into(), &forwarded_args);
+    let method_name = v8str(scope, method_name);
+    call_original_worker_console_method_with_arguments(scope, &forwarded_args, method_name);
+}
+
+fn call_original_worker_console_method_with_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    forwarded_args: &[v8::Local<'s, v8::Value>],
+    method_name: v8::Local<'s, v8::String>,
+) {
+    let Some((original_console, method)) =
+        crate::console_forwarding::captured_console_method_by_name(
+            scope,
+            WORKER_ORIGINAL_CONSOLE_SLOT,
+            method_name,
+        )
+    else {
+        return;
+    };
+
+    let _ = method.call(scope, original_console.into(), forwarded_args);
 }
