@@ -147,14 +147,12 @@ fn range_registered_native_proxies_share_boundaries_and_selection_identity() {
           check(clone !== target && clone.startContainer === text && clone.startOffset === 2, 'cloneRange');
           const fragment = methods.cloneContents.call(proxy);
           check(fragment.textContent === 'c' && fragment.ownerDocument === text.ownerDocument, 'cloneContents');
-          if (flavor !== 'xml') {
-            for (const name of ['nodeType', 'parentNode', 'ownerDocument'])
-              Object.defineProperty(text, name, {configurable: true, get() {throw Error('public ' + name);}});
-            const parsed = methods.createContextualFragment.call(proxy, '<b>parsed</b>');
-            for (const name of ['nodeType', 'parentNode', 'ownerDocument']) delete text[name];
-            check(parsed.firstChild.localName === 'b' && parsed.textContent === 'parsed' &&
-              parsed.ownerDocument === text.ownerDocument, 'native contextual fragment');
-          }
+          for (const name of ['nodeType', 'parentNode', 'ownerDocument'])
+            Object.defineProperty(text, name, {configurable: true, get() {throw Error('public ' + name);}});
+          const parsed = methods.createContextualFragment.call(proxy, '<b>parsed</b>');
+          for (const name of ['nodeType', 'parentNode', 'ownerDocument']) delete text[name];
+          check(parsed.firstChild.localName === 'b' && parsed.textContent === 'parsed' &&
+            parsed.ownerDocument === text.ownerDocument, 'native contextual fragment');
           methods.collapse.call(proxy, false);
           check(get('collapsed') && get('startOffset') === 3 && target.startOffset === 3, 'collapse');
           if (selected) {

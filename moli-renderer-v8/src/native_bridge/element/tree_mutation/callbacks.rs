@@ -9,7 +9,7 @@ use super::super::super::{
     },
     throw_dom_exception,
 };
-use super::super::trusted_types::{TrustedHtmlSink, trusted_html_sink_string};
+use super::super::trusted_types::{TrustedHtmlSink, trusted_html_sink_dom_string};
 use super::{
     insertion::{
         insert_adjacent_context_handle, insert_adjacent_document_handle, insert_adjacent_handle,
@@ -263,7 +263,7 @@ pub(in crate::native_bridge) fn node_insert_adjacent_html_callback<'s>(
     let Some(parsed) = webidl::parse_args::<InsertAdjacentHtmlArgs<'s>>(scope, &args) else {
         return;
     };
-    let Some(text) = trusted_html_sink_string(
+    let Some(text) = trusted_html_sink_dom_string(
         scope,
         runtime_ptr,
         parsed.text,
@@ -316,7 +316,6 @@ pub(in crate::native_bridge) fn node_insert_adjacent_html_callback<'s>(
             unsafe { &mut *runtime_ptr }.insert_adjacent_html(
                 scope,
                 runtime_ptr,
-                target,
                 document_handle,
                 context_handle,
                 &text,
@@ -327,6 +326,13 @@ pub(in crate::native_bridge) fn node_insert_adjacent_html_callback<'s>(
                 },
             )
         });
+    let inserted = match inserted {
+        Ok(inserted) => inserted,
+        Err(error) => {
+            throw_dom_exception(scope, "SyntaxError", 12, &error.to_string());
+            return;
+        }
+    };
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;

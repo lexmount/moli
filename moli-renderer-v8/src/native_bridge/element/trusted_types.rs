@@ -198,6 +198,18 @@ impl TrustedHtmlSink {
             Self::ElementInnerHtml | Self::ShadowRootInnerHtml | Self::ElementOuterHtml
         )
     }
+
+    fn normalize_input<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> v8::Local<'s, v8::Value> {
+        if self.uses_legacy_null_to_empty_string() && value.is_null() {
+            v8::String::empty(scope).into()
+        } else {
+            value
+        }
+    }
 }
 
 pub(in crate::native_bridge::element) fn trusted_html_sink_string<'s>(
@@ -206,13 +218,26 @@ pub(in crate::native_bridge::element) fn trusted_html_sink_string<'s>(
     value: v8::Local<'s, v8::Value>,
     sink: TrustedHtmlSink,
 ) -> Option<String> {
-    let value = if sink.uses_legacy_null_to_empty_string() && value.is_null() {
-        v8::String::empty(scope).into()
-    } else {
-        value
-    };
+    let value = sink.normalize_input(scope, value);
     let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
     crate::context_bootstrap::trusted_html_string_or_throw(
+        scope,
+        value,
+        requirements,
+        sink.name(),
+        sink.api_name(),
+    )
+}
+
+pub(in crate::native_bridge::element) fn trusted_html_sink_dom_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    value: v8::Local<'s, v8::Value>,
+    sink: TrustedHtmlSink,
+) -> Option<crate::dom::native::DomStringValue> {
+    let value = sink.normalize_input(scope, value);
+    let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
+    crate::context_bootstrap::trusted_html_dom_string_or_throw(
         scope,
         value,
         requirements,

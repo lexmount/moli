@@ -40,7 +40,7 @@ pub use script_planning::{
     PreparedImportMapSource, PreparedScript, ScriptFetchMetadata, ScriptFilterSkipReason,
     ScriptSource, build_prepared_import_map, build_prepared_script, classify_parser_script,
 };
-pub use xml::XmlParser;
+pub use xml::{ParsedXmlFragment, XmlFragmentParseError, XmlParser};
 pub use xml_stream::XmlDocumentStream;
 
 const STREAM_CHUNK_BYTES: usize = 8 * 1024;
