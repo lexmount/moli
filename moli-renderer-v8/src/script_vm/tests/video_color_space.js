@@ -216,9 +216,9 @@
       const custom = Reflect.construct(C, [{transfer: 'pq'}], Target);
       equal(Object.getPrototypeOf(custom), Target.prototype); fields(custom, {transfer: 'pq'});
     });
-    test('non-object NewTarget prototype uses its realm interface prototype', () => {
+    test('non-object NewTarget prototype retains its realm Object prototype', () => {
       const foreign = realms[realms.length - 1], newTarget = foreign.Function(''); newTarget.prototype = null;
-      const fallback = Reflect.construct(C, [], newTarget); equal(Object.getPrototypeOf(fallback), foreign.VideoColorSpace.prototype);
+      const fallback = Reflect.construct(C, [], newTarget); equal(Object.getPrototypeOf(fallback), foreign.Object.prototype);
       fields(fallback, {});
     }, 'standard-newtarget');
     test('nonserializable platform object rejects clone and storage', () => {

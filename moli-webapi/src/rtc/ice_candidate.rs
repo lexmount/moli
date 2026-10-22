@@ -1,9 +1,6 @@
 use super::{dictionary_string::DictionaryDomString, ice_candidate_parser::parse_ice_candidate};
 use crate::interfaces as web_api_interfaces;
-use moli_v8_util::{
-    apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
-    throw_type_error, v8str,
-};
+use moli_v8_util::{callback_data_index_value, get_private_value, throw_type_error, v8str};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl as webidl;
 
@@ -175,12 +172,6 @@ pub fn rtc_ice_candidate_constructor_callback<'s>(
     {
         return;
     }
-    apply_webidl_constructor_prototype_fallback(
-        scope,
-        args.this(),
-        args.new_target(),
-        "RTCIceCandidate",
-    );
     rv.set(args.this().into());
 }
 

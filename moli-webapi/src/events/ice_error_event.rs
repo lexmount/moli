@@ -6,7 +6,7 @@ use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{callback_data_index_value, callback_data_item, throw_type_error};
 use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webidl as webidl;
-use moli_webapi_declare::initialize_web_api_constructor_receiver;
+
 use webidl::WebIdlDictionarySerialize;
 
 const ADDRESS_SLOT: &str = "__moliRtcIceErrorAddress";
@@ -88,13 +88,6 @@ pub fn rtc_peer_connection_ice_error_event_constructor<'s>(
     let Some(parsed) = webidl::parse_args::<Args>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(
-        scope,
-        args.this(),
-        "RTCPeerConnectionIceErrorEvent",
-    ) {
-        return;
-    }
     let Some(event_type) =
         v8::String::new_from_two_byte(scope, &parsed.event_type.0, v8::NewStringType::Normal)
     else {

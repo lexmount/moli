@@ -28,7 +28,7 @@
       get track() { reads.push('track'); return audio; }, get transceiver() { reads.push('transceiver'); return rtpTransceiver; }};
     const prototype = Object.create(C.prototype), target = new Proxy(function Target() {}, {get(object, key) { if (key === 'prototype') { reads.push('prototype'); return prototype; } return object[key]; }});
     const constructed = Reflect.construct(C, [{toString() { reads.push('type'); return 'track'; }}, source], target);
-    assert(reads.join() === 'type,bubbles,cancelable,composed,receiver,streams,iterator,value,track,transceiver,prototype' && Object.getPrototypeOf(constructed) === prototype, 'full conversion order before prototype');
+    assert(reads.join() === 'prototype,type,bubbles,cancelable,composed,receiver,streams,iterator,value,track,transceiver' && Object.getPrototypeOf(constructed) === prototype, 'native prototype selection followed by full conversion order');
     let error, marker = {}, count = 0;
     try { new C('track', {...init, streams: [new Proxy(stream, {})], get track() { count++; return audio; }}); } catch (caught) { error = caught; }
     assert(error instanceof w.TypeError && count === 0, 'stream element native brand precedes track read');

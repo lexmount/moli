@@ -9,6 +9,13 @@
   const other = child.contentWindow;
   const definitions = [
     ['DOMParser', () => [], 'DOMParser'],
+    ['VideoDecoder', () => [{error() {}, output() {}}], 'VideoDecoder'],
+    ['VideoEncoder', () => [{error() {}, output() {}}], 'VideoEncoder'],
+    ['VideoFrame', w => [new w.Uint8Array(16), {format: 'RGBA', codedWidth: 2, codedHeight: 2, timestamp: 0}], 'VideoFrame'],
+    ['MediaMetadata', () => [{title: 'native'}], 'MediaMetadata'],
+    ['MediaStream', () => [], 'MediaStream'],
+    ['MediaRecorder', w => [new w.MediaStream()], 'MediaRecorder'],
+    ['RTCDTMFToneChangeEvent', () => ['x', {tone: '1'}], 'RTCDTMFToneChangeEvent'],
     ['VideoColorSpace', () => [{matrix: 'bt709'}], 'VideoColorSpace'],
     ['RTCIceCandidate', () => [{candidate: '', sdpMid: '0'}], 'RTCIceCandidate'],
     ['RTCSessionDescription', () => [{type: 'offer', sdp: ''}], 'RTCSessionDescription'],
@@ -32,6 +39,10 @@
         try {
           const C = w[name], defaults = w[defaultName].prototype;
           check(`${realm}/${name}/metadata`, typeof C === 'function' && C.name === name && C.prototype === defaults);
+          check(`${realm}/${name}/native-source`, Function.prototype.toString.call(C) === `function ${name}() { [native code] }`);
+          class Derived extends C {}
+          const derived = new Derived(...args(w));
+          check(`${realm}/${name}/subclass`, Object.getPrototypeOf(derived) === Derived.prototype && derived instanceof Derived && derived instanceof C);
           const explicit = [w.Object.prototype, Object.create(null), new Proxy({}, {})];
           for (const [i, prototype] of explicit.entries()) {
             const N = new Proxy(w.Function(), {get(target, key, receiver) {
@@ -48,7 +59,7 @@
               return Reflect.get(target, key, receiver);
             }});
             const value = Reflect.construct(C, args(w), N);
-            check(`${realm}/${name}/fallback-${nw === window ? 'main' : 'child'}`, Object.getPrototypeOf(value) === nw[defaultName].prototype && reads === 1, {reads});
+            check(`${realm}/${name}/fallback-${nw === window ? 'main' : 'child'}`, Object.getPrototypeOf(value) === nw.Object.prototype && reads === 1, {reads});
           }
           const prototype = Object.create(null);
           let reads = 0, nested = null;
@@ -84,6 +95,31 @@
         try { value = Reflect.construct(w.VideoColorSpace, [], pair.proxy); } catch (e) { error = e; }
         check(`${realm}/revoked-after-get-${kind}`, reads === 1 && (kind === 'object' ? value && Object.getPrototypeOf(value) === prototype : error instanceof w.TypeError), {reads, error: String(error)});
       }
+      for (const [name, member, init] of [
+        ['RTCIceCandidate', 'candidate', {sdpMid: '0'}],
+        ['RTCSessionDescription', 'sdp', {type: 'offer'}]
+      ]) {
+        const C = w[name], N = w.Function();
+        const oldPrototype = Object.create(C.prototype), newPrototype = Object.create(C.prototype);
+        N.prototype = oldPrototype;
+        Object.defineProperty(init, member, {get() { N.prototype = newPrototype; return ''; }});
+        const value = Reflect.construct(C, [init], N);
+        check(`${realm}/${name}/conversion-keeps-selected-prototype`,
+          Object.getPrototypeOf(value) === oldPrototype && N.prototype === newPrototype);
+      }
+      {
+        const log = [], marker = {}, bytes = new w.Uint8Array(16);
+        const init = {format: 'RGBA', codedWidth: 2, codedHeight: 2,
+          get timestamp() { log.push('conversion'); return 0; }, transfer: [bytes.buffer]};
+        const N = new Proxy(w.Function(), {get(target, key, receiver) {
+          if (key === 'prototype') { log.push('prototype'); throw marker; }
+          return Reflect.get(target, key, receiver);
+        }});
+        let caught;
+        try { Reflect.construct(w.VideoFrame, [bytes, init], N); } catch (error) { caught = error; }
+        check(`${realm}/VideoFrame/prototype-exception-prevents-conversion-and-transfer`,
+          caught === marker && log.join() === 'prototype' && bytes.byteLength === 16, [...log]);
+      }
       const log = [];
       const N = new Proxy(w.Function(), {get(target, key, receiver) {
         if (key === 'prototype') { log.push('prototype'); return w.Object.prototype; }
@@ -91,14 +127,14 @@
       }});
       const init = {get fullRange() { log.push('fullRange'); return true; }, get matrix() { log.push('matrix'); return 'bt709'; }, get primaries() { log.push('primaries'); return 'bt709'; }, get transfer() { log.push('transfer'); return 'bt709'; }};
       Reflect.construct(w.VideoColorSpace, [init], N);
-      check(`${realm}/conversion-before-prototype`, log.join(',') === 'fullRange,matrix,primaries,transfer,prototype', log);
+      check(`${realm}/native-prototype-before-conversion`, log.join(',') === 'prototype,fullRange,matrix,primaries,transfer', [...log]);
       log.length = 0;
       const sentinel = {};
       try { Reflect.construct(w.VideoColorSpace, [{get matrix() { log.push('matrix'); throw sentinel; }}], N); } catch (error) { check(`${realm}/conversion-exception-identity`, error === sentinel); }
-      check(`${realm}/failed-conversion-no-prototype`, log.join(',') === 'matrix', log);
+      check(`${realm}/failed-conversion-retains-prototype-read`, log.join(',') === 'prototype,matrix', [...log]);
     }
-    // A lazily materialized constructor must use captured native construction,
-    // even when an author has replaced Reflect.construct and polluted traps.
+    // Native construction does not consult an author Reflect.construct or
+    // Object.prototype trap names, including during lazy materialization.
     const intrinsicConstruct = Reflect.construct;
     const prototypeGet = Object.prototype.get;
     const inheritedConstruct = Object.prototype.construct;
@@ -106,7 +142,7 @@
       Reflect.construct = () => { throw Error('author Reflect.construct'); };
       Object.prototype.get = () => { throw Error('inherited get trap'); };
       Object.prototype.construct = () => { throw Error('inherited construct trap'); };
-      check('intrinsic-capture-and-handler-prototype', Object.getPrototypeOf(new VideoColorSpace()) === VideoColorSpace.prototype);
+      check('native-construction-ignores-author-reflection', Object.getPrototypeOf(new VideoColorSpace()) === VideoColorSpace.prototype);
     } finally {
       Reflect.construct = intrinsicConstruct;
       if (prototypeGet === undefined) delete Object.prototype.get; else Object.prototype.get = prototypeGet;

@@ -358,9 +358,9 @@ fn shared_new_target_fallback_uses_the_target_realm_without_repeating_proxy_gett
         let target = eval(scope, "(function Target() {}).bind(null)")
             .to_object(scope)
             .unwrap();
-        let prototype = eval(scope, "RTCSessionDescription.prototype")
-            .to_object(scope)
-            .unwrap();
+        // IDL-002 keeps the prototype selected by V8, including its native
+        // target-realm Object.prototype fallback.
+        let prototype = eval(scope, "Object.prototype").to_object(scope).unwrap();
         let size = eval(scope, "new CountQueuingStrategy({highWaterMark:1}).size")
             .to_object(scope)
             .unwrap();
@@ -385,7 +385,12 @@ fn shared_new_target_fallback_uses_the_target_realm_without_repeating_proxy_gett
         const target = new Proxy(foreignTarget, {get(object, key, receiver) { if(key === 'prototype') { reads++; return null; } return Reflect.get(object,key,receiver); }});
         const description = Reflect.construct(RTCSessionDescription, [{type:'answer',sdp:'ok'}], target);
         check(reads === 1, 'NewTarget.prototype was read more than once');
-        check(Object.getPrototypeOf(description) === foreignPrototype && description.sdp === 'ok');
+        const sdp = Object.getOwnPropertyDescriptor(RTCSessionDescription.prototype, 'sdp').get;
+        check(Object.getPrototypeOf(description) === foreignPrototype && sdp.call(description) === 'ok');
+        let explicitReads = 0;
+        const explicitTarget = new Proxy(foreignTarget, {get(object, key, receiver) { if(key === 'prototype') { explicitReads++; return foreignPrototype; } return Reflect.get(object,key,receiver); }});
+        const explicit = Reflect.construct(RTCSessionDescription, [{type:'offer',sdp:'explicit'}], explicitTarget);
+        check(explicitReads === 1 && Object.getPrototypeOf(explicit) === foreignPrototype && sdp.call(explicit) === 'explicit', 'native constructor replaced an explicit Object.prototype');
         check(new CountQueuingStrategy({highWaterMark:1}).size !== foreignSize, 'size cache leaked across realms');
     })()"#,
     );

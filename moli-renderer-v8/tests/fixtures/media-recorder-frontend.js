@@ -151,11 +151,11 @@
       throws(realm.DOMException, () => recorder.start(), 'NotSupportedError');
       recorder.stop(); assert(log.length === 0, 'no synthetic recording events');
     });
-    check(prefix+'MediaRecorder conversion precedes newTarget prototype lookup', () => {
+    check(prefix+'MediaRecorder native prototype lookup precedes conversion', () => {
       const log = [], target = new Proxy(function() {}, {get(object,key) {if (key === 'prototype') log.push('prototype'); return Reflect.get(object,key)}});
       const options = {get mimeType() {log.push('mimeType'); return ''}};
       const recorder = Reflect.construct(C,[new realm.MediaStream(),options],target);
-      assert(log.join() === 'mimeType,prototype', 'WebIDL constructor allocation order '+log);
+      assert(log.join() === 'prototype,mimeType', 'native constructor allocation order '+log);
       assert(Object.getOwnPropertyDescriptor(P,'state').get.call(recorder) === 'inactive', 'subclass native brand');
     });
     check(prefix+'MediaRecorder callee error realm with foreign genuine receivers', () => {

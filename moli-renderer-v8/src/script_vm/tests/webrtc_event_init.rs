@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn webrtc_event_constructors_use_shared_dictionary_brands_and_deferred_prototypes() {
+fn webrtc_event_constructors_use_shared_dictionary_brands_and_native_prototypes() {
     for url in ["https://rtc-events.test/", "http://rtc-events.test/"] {
         let mut vm = new_storage_page_task_executor_test_vm(url);
         vm.eval(include_str!("../../../tests/fixtures/webrtc-event-init.js"))

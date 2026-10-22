@@ -1,15 +1,13 @@
 //! Synthetic WebRTC event payloads, independent of an RTP or DTMF backend.
 
 use super::{
-    EventInit, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state,
+    EventInit, event_private_value, initialize_event_object_with_type, initialize_event_wrapper,
+    new_event_state,
 };
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{throw_type_error, v8str};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl as webidl;
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
-};
 
 const TONE: &str = "__moliRtcDtmfTone";
 const RECEIVER: &str = "__moliRtcTrackReceiver";
@@ -127,13 +125,7 @@ pub fn rtc_dtmf_tone_event_constructor<'s>(
     let Some(parsed) = webidl::parse_args::<ToneArgs>(scope, &args) else {
         return;
     };
-    let Some(state) = event_state(
-        scope,
-        &args,
-        "RTCDTMFToneChangeEvent",
-        &parsed.event_type,
-        &parsed.init.base,
-    ) else {
+    let Some(state) = event_state(scope, &parsed.event_type, &parsed.init.base) else {
         return;
     };
     let Some(tone) =
@@ -162,13 +154,7 @@ pub fn rtc_track_event_constructor<'s>(
     let Some(parsed) = webidl::parse_args::<TrackArgs>(scope, &args) else {
         return;
     };
-    let Some(state) = event_state(
-        scope,
-        &args,
-        "RTCTrackEvent",
-        &parsed.event_type,
-        &parsed.init.base,
-    ) else {
+    let Some(state) = event_state(scope, &parsed.event_type, &parsed.init.base) else {
         return;
     };
     // Snapshot the sequence in the event's realm, retaining supplied platform
@@ -195,16 +181,9 @@ pub fn rtc_track_event_constructor<'s>(
 
 fn event_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    interface: &str,
     event_type: &webidl::DomString16,
     init: &EventInit,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    // The public constructor uses the shared deferred-prototype entry. Complete
-    // all WebIDL conversion before observing newTarget.prototype.
-    if !initialize_web_api_constructor_receiver(scope, args.this(), interface) {
-        return None;
-    }
     let event_type =
         v8::String::new_from_two_byte(scope, &event_type.0, v8::NewStringType::Normal)?;
     let state = new_event_state(scope);
