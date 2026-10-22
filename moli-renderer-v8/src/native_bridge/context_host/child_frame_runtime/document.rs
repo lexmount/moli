@@ -66,13 +66,6 @@ impl JsContextHost {
         Some(document)
     }
 
-    fn child_browsing_context_has_uncommitted_navigation_seed(&self, handle: DomHandle) -> bool {
-        let Some(entry) = self.child_browsing_contexts.get(&handle) else {
-            return false;
-        };
-        entry.has_uncommitted_navigation_seed()
-    }
-
     fn child_document_active_parser_was_aborted(&self, handle: DomHandle) -> bool {
         self.child_browsing_context_document_handle(handle)
             .and_then(|document| self.dom_host().node(document))
@@ -172,12 +165,7 @@ impl JsContextHost {
             initialize_child_document_context(scope, document, handle);
             if let Some(window) = window {
                 let _ = bind_current_child_window_document(scope, self, handle, document);
-                sync_child_document_window_slots(
-                    scope,
-                    document,
-                    window,
-                    !self.child_browsing_context_has_uncommitted_navigation_seed(handle),
-                );
+                sync_child_document_window_slots(scope, document, window);
                 // bind_current_child_window_document publishes through the
                 // private slot used by the unforgeable Window.document getter.
                 // Redefining that public property can run a different realm's

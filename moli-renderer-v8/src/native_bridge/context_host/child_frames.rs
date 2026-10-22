@@ -1133,13 +1133,6 @@ impl ChildBrowsingContextEntry {
         }
     }
 
-    pub(super) fn has_uncommitted_navigation_seed(&self) -> bool {
-        self.has_pending_live_navigation()
-            || self.pending_attribute_bootstrap_commit()
-            || child_navigation_current_url(&self.navigation_entry_seed)
-                != child_navigation_current_url(&self.committed_navigation_entry_seed)
-    }
-
     pub(super) fn pending_live_navigation(&self) -> Option<ChildBrowsingContextBootstrap> {
         self.pending_live_navigation
             .as_ref()
