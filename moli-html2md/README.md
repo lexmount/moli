@@ -24,9 +24,10 @@ Implement `Dom` with a copyable node ID and four borrowed queries:
 - `first_child` and `next_sibling`: ordered traversal of a stable, acyclic tree.
 - `attribute`: decoded attribute value, borrowed from the DOM.
 
-Browser adapters can provide `control_value` for the current textarea value,
+Browser adapters can provide `control_value` for current input and textarea values,
 including an empty string after a user clears it. Without that optional query,
-textarea child text is used; a nonstandard `value` attribute does not override it.
+input attributes and textarea child text supply defaults; a nonstandard textarea
+`value` attribute does not override its child text.
 
 The converter does not need parent pointers, mutable access, serialization, or
 an allocation for each node. The caller chooses the root; its siblings are not
@@ -106,8 +107,9 @@ spaces and blank lines. Empty blocks still separate surrounding text.
 This is a structural content dump. It omits non-rendered serialized state blobs
 but retains content in collapsed panels and inactive tabs. It does not evaluate
 stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
-through the optional DOM query. The converter
-cannot preserve all HTML presentation (for example, arbitrary ordered-list numbering).
+through the optional DOM query. Moli's browser exporter also uses current CSS
+visibility, retaining disclosure panels and collapsed lines in visible source
+blocks while excluding hidden UI templates. The converter cannot preserve all HTML presentation (for example, arbitrary ordered-list numbering).
 DOM snapshots used by Moli's optional
 strip/base/frame transformations remain the responsibility of the caller.
 
