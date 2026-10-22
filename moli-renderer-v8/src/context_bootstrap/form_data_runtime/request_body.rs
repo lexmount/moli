@@ -13,17 +13,19 @@ pub(crate) fn form_data_request_body<'s>(
         return None;
     }
     let entries = form_data_entries(scope, object);
-    Some(form_data_entries_multipart_body_with_prefix(
+    Some(form_data_entries_multipart_body(
         scope,
         &entries,
         FORM_DATA_MULTIPART_BOUNDARY_PREFIX,
+        encoding_rs::UTF_8,
     ))
 }
 
-pub(crate) fn form_data_entries_multipart_body_with_prefix<'s>(
+pub(crate) fn form_data_entries_multipart_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: &[(String, v8::Global<v8::Value>)],
     boundary_prefix: &str,
+    encoding: &'static encoding_rs::Encoding,
 ) -> (Vec<u8>, String) {
     let parts = entries
         .iter()
@@ -35,7 +37,7 @@ pub(crate) fn form_data_entries_multipart_body_with_prefix<'s>(
             }
         })
         .collect::<Vec<_>>();
-    moli_multipart::serialize_multipart_form_data_with_prefix(&parts, boundary_prefix)
+    moli_multipart::serialize_multipart_form_data_with_encoding(&parts, boundary_prefix, encoding)
 }
 
 fn form_data_request_value<'s>(

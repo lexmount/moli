@@ -219,7 +219,7 @@ pub use context_bootstrap::{
     web_storage_partitioned_area_key,
 };
 pub(crate) use context_bootstrap::{
-    construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
+    construct_form_data_entries_for_form, form_data_entries_multipart_body,
     form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     snapshot_form_data_value,
 };
