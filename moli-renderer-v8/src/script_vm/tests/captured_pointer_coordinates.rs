@@ -57,6 +57,94 @@ fn dispatch(vm: &mut StandaloneScriptVmHarness, kind: &str, x: f64, y: f64, butt
     assert!(result.handled);
 }
 
+async fn assert_removed_pointer_target_preserves_frame_coordinates(
+    pointer_type: &str,
+    scaled: bool,
+) {
+    let mut vm = new_storage_html_test_vm("https://removed-pointer-coordinates.test/");
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.eval(r#"
+        document.body.style.margin='0';
+        globalThis.frame=document.createElement('iframe');
+        frame.style.cssText='position:absolute;left:100px;top:60px;width:200px;height:120px;border:0';
+        frame.srcdoc='<style>html,body{margin:0}</style><div id=container style="position:absolute;left:20px;top:20px;width:80px;height:80px"><div id=target style="width:40px;height:40px"></div></div>';
+        document.body.append(frame);'ready'
+    "#).unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "removed pointer target setup")
+        .await;
+    if scaled {
+        vm.eval("frame.style.transform='scale(2)';frame.style.transformOrigin='0 0';'scaled'")
+            .unwrap();
+    }
+    let (mouse_type, buttons) = match pointer_type {
+        "pointerdown" => ("mousedown", 1),
+        "pointerup" => ("mouseup", 0),
+        _ => unreachable!(),
+    };
+    vm.eval(&format!(
+        r#"
+        globalThis.target=frame.contentDocument.getElementById('target');
+        globalThis.container=frame.contentDocument.getElementById('container');
+        globalThis.events=[];globalThis.hadCapture=null;
+        target.addEventListener('{pointer_type}',event=>{{
+            events.push([event.type,event.target.id,event.clientX,event.clientY]);
+            hadCapture=target.hasPointerCapture(event.pointerId);
+            target.remove();
+            frame.style.left='300px';frame.style.top='200px';
+            frame.style.transform='scale(3)';
+        }});
+        container.addEventListener('{mouse_type}',event=>
+            events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        'installed'
+    "#
+    ))
+    .unwrap();
+    vm.publish_layout_for_test().unwrap();
+    let (x, y) = if scaled {
+        (160.0, 120.0)
+    } else {
+        (130.0, 90.0)
+    };
+    if pointer_type == "pointerup" {
+        dispatch(&mut vm, "mousedown", x, y, 1);
+    }
+    let builds = vm.layout_pass_observability_for_test().1;
+    dispatch(&mut vm, mouse_type, x, y, buttons);
+    let events: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(events)").unwrap()).unwrap();
+    assert_eq!(
+        events,
+        serde_json::json!([
+            [pointer_type, "target", 30, 30],
+            [mouse_type, "container", 30, 30],
+        ]),
+        "pointer_type={pointer_type}, scaled={scaled}"
+    );
+    assert_eq!(vm.eval("String(hadCapture)").unwrap(), "false");
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        builds,
+        "retargeting must use geometry sampled before the callback moves and scales the frame"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pointer_down_removal_preserves_compat_mouse_frame_coordinates() {
+    assert_removed_pointer_target_preserves_frame_coordinates("pointerdown", false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pointer_up_removal_preserves_compat_mouse_frame_coordinates() {
+    assert_removed_pointer_target_preserves_frame_coordinates("pointerup", false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scaled_frame_pointer_removal_preserves_compat_mouse_coordinates() {
+    for pointer_type in ["pointerdown", "pointerup"] {
+        assert_removed_pointer_target_preserves_frame_coordinates(pointer_type, true).await;
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bounds() {
     let mut vm = captured_child_vm(false, false).await;
