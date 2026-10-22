@@ -228,11 +228,19 @@ pub(super) fn window_task_target_for_runtime_owner<'s>(
     ))
 }
 
-pub(super) fn navigation_document_is_active<'s>(
+/// A closing Window retains its fully active Document until final retirement.
+/// Reads of that Document must not use navigation work admission below.
+pub(super) fn runtime_window_document_is_fully_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    navigation_document_is_live(scope, owner)
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    super::window_accessors::window_document_handle(scope, owner, host).is_some_and(|document| {
+        crate::native_bridge::document::document_is_fully_active(host, document)
+    })
 }
 
 pub(super) fn navigation_can_update_current_entry<'s>(
@@ -381,7 +389,8 @@ pub(super) fn navigation_document_base_url<'s>(
     Some(base)
 }
 
-fn navigation_document_is_live<'s>(
+/// Navigation work stops when close() is accepted, before Document retirement.
+pub(super) fn navigation_document_is_live<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {

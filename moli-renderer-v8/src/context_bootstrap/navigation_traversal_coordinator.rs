@@ -15,7 +15,7 @@ use super::navigation_traversal_execution::TraversalTarget;
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
-    navigation_document_is_active, window_navigation_for_holder,
+    navigation_document_is_live, window_navigation_for_holder,
     window_task_target_for_runtime_owner,
 };
 use crate::document_runtime::DomHandle;
@@ -323,7 +323,7 @@ fn validate<'s>(
     admission: &PendingHistoryTraversalAdmission,
 ) -> Option<Vec<TraversalTarget<'s>>> {
     let owner = v8::Local::new(scope, &admission.initiator);
-    if !admission.active.get() || !navigation_document_is_active(scope, owner) {
+    if !admission.active.get() || !navigation_document_is_live(scope, owner) {
         return None;
     }
     let targets = super::navigation_traversal_plan::project_traversal_participants(
@@ -336,7 +336,7 @@ fn validate<'s>(
     }
     for (target, participant) in targets.iter().zip(&admission.participants) {
         let history = v8::Local::new(scope, &participant.history);
-        if !navigation_document_is_active(scope, target.owner)
+        if !navigation_document_is_live(scope, target.owner)
             || !history.strict_equals(target.history.into())
             || entry_reference(scope, history, target.current_index).as_ref()
                 != Some(&participant.source)

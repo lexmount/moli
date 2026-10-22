@@ -202,7 +202,7 @@ pub(super) fn window_is_closed<'s>(
         .or_else(|| crate::native_bridge::cross_origin_lightweight_popup_id(scope, receiver))
     {
         return window_host_ptr(scope, receiver)
-            .is_none_or(|host| !unsafe { &*host }.lightweight_popup_is_open(popup_id));
+            .is_none_or(|host| unsafe { &*host }.lightweight_popup_is_closed(popup_id));
     }
     if window_child_context_handle(scope, receiver).is_some() {
         return window_has_discarded_child_browsing_context(scope, receiver);

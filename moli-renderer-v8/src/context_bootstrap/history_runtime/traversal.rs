@@ -14,7 +14,7 @@ use super::super::navigation_result::{
     navigation_dom_exception, perform_navigation_scroll_if_needed, suppress_unhandled_rejection,
 };
 use super::super::navigation_window::{
-    navigation_document_has_opaque_origin, navigation_document_is_active, runtime_top_window_owner,
+    navigation_document_has_opaque_origin, navigation_document_is_live, runtime_top_window_owner,
     runtime_window_owner, window_history_for_holder, window_location_for_holder,
     window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
@@ -525,7 +525,7 @@ fn finish_traversal_intercept<'s>(
     let transition_resolver = traversal_transition_resolver(scope, data);
     set_traversal_intercept_inactive(scope, navigation, data);
     let owner = runtime_window_owner(scope, navigation);
-    let active = navigation_document_is_active(scope, owner);
+    let active = navigation_document_is_live(scope, owner);
     let error = error.or_else(|| {
         (!active).then(|| navigation_dom_exception(scope, "Navigation was canceled", "AbortError"))
     });

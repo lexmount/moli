@@ -526,7 +526,6 @@ pub(super) struct LightweightPopupBrowsingContextRecord {
     opener_sandbox_policy: Option<DocumentSandboxPolicy>,
     lifecycle: LightweightPopupLifecycle,
     closed_origin: Option<super::WindowSecurityOrigin>,
-    is_closing: bool,
     navigation_id: LightweightPopupNavigationId,
 }
 
@@ -536,7 +535,7 @@ impl LightweightPopupBrowsingContextRecord {
     }
 
     pub(in crate::native_bridge::context_host) fn is_open(&self) -> bool {
-        self.is_live() && !self.is_closing && !self.auxiliary_window.is_closed()
+        self.is_live() && self.auxiliary_window.is_open()
     }
 }
 
@@ -732,23 +731,12 @@ impl JsContextHost {
             .map(|record| record.navigation_id)
     }
 
-    fn begin_lightweight_popup_close(&mut self, popup_id: u64) -> bool {
-        let Some(record) = self.lightweight_popup_record_mut(popup_id) else {
-            return false;
-        };
-        if !record.is_open() {
-            return false;
-        }
-        record.is_closing = true;
-        true
-    }
-
     fn take_lightweight_popup_close_transition(
         &mut self,
         popup_id: u64,
     ) -> Option<LightweightPopupCloseTransition> {
         let record = self.lightweight_popup_record_mut(popup_id)?;
-        if !record.is_live() || !record.is_closing {
+        if !record.is_live() || !record.auxiliary_window.is_closing() {
             return None;
         }
         let lifecycle = std::mem::replace(&mut record.lifecycle, LightweightPopupLifecycle::Closed);
@@ -758,7 +746,6 @@ impl JsContextHost {
         record.closed_origin = Some(super::WindowSecurityOrigin::for_popup(
             open.document.access_origin.clone(),
         ));
-        record.is_closing = false;
         record.navigation_id = LightweightPopupNavigationId::new(
             record
                 .navigation_id
@@ -1206,7 +1193,6 @@ impl JsContextHost {
                     },
                     session_storage_store,
                 })),
-                is_closing: false,
                 closed_origin: None,
                 navigation_id: LightweightPopupNavigationId::new(1),
             },
@@ -1930,7 +1916,12 @@ impl JsContextHost {
 
     pub(crate) fn lightweight_popup_is_closing(&self, popup_id: u64) -> bool {
         self.lightweight_popup_record(popup_id)
-            .is_some_and(|record| record.is_live() && record.is_closing)
+            .is_some_and(|record| record.is_live() && record.auxiliary_window.is_closing())
+    }
+
+    pub(crate) fn lightweight_popup_is_closed(&self, popup_id: u64) -> bool {
+        self.lightweight_popup_record(popup_id)
+            .is_none_or(|record| !record.is_live() || record.auxiliary_window.is_closed())
     }
 
     pub(crate) fn open_lightweight_popup_ids(&self) -> Vec<u64> {
@@ -6112,11 +6103,17 @@ pub(super) fn lightweight_popup_close_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    if !host.begin_lightweight_popup_close(popup_id) {
+    let Some(record) = host
+        .lightweight_popup_record(popup_id)
+        .filter(|record| record.is_live())
+    else {
         return;
-    }
+    };
+    let Some(close) = record.auxiliary_window.begin_close() else {
+        return;
+    };
     host.dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
-    if host.page_popup_close_sender().send(popup_id).is_err() {
+    if close.finish() && host.page_popup_close_sender().send(popup_id).is_err() {
         tracing::debug!(
             popup_id,
             "retired Page DOM-manipulation route rejected popup close task"

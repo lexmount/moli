@@ -27,7 +27,7 @@ use super::navigation_result::{
     cancel_pending_same_document_navigation_finishes_including_reentrant, navigation_dom_exception,
 };
 use super::navigation_window::{
-    navigation_document_has_disabled_entries, navigation_document_is_active,
+    navigation_document_has_disabled_entries, navigation_document_is_live,
     should_dispatch_hash_change, window_location_for_holder, window_navigation_for_holder,
 };
 use crate::script_cleanup::ScriptExecutionScope;
@@ -61,7 +61,7 @@ pub(super) fn dispatch_cross_document_navigation_event<'s>(
     cancel_active_intercepted_same_document_navigation(scope, navigation);
     cancel_active_cross_document_navigation(scope, navigation, None);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
-    if !navigation_document_is_active(scope, owner) {
+    if !navigation_document_is_live(scope, owner) {
         return false;
     }
     let current_href = window_location_for_holder(scope, owner)
@@ -108,7 +108,7 @@ pub(super) fn dispatch_cross_document_navigation_event<'s>(
     if outcome.abort_error.is_some() {
         return false;
     }
-    if !outcome.proceed || !navigation_document_is_active(scope, owner) {
+    if !outcome.proceed || !navigation_document_is_live(scope, owner) {
         let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
         finish_cross_document_navigation_error(scope, navigation, &outcome, error, &current_href);
         return false;

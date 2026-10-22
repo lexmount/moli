@@ -29,7 +29,7 @@ impl JsContextHost {
         };
         let scope = &mut v8::ContextScope::new(scope, context);
         // close() owns a distinct beforeunload check, including when called
-        // from pagehide. begin_lightweight_popup_close prevents close reentry.
+        // from pagehide. The native close claim prevents close reentry.
         if !closing && navigation_unload_event_active(scope, window) {
             return false;
         }

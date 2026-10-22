@@ -9,7 +9,7 @@ use super::navigation_result::{
     navigation_rejected_dom_exception_result, track_cross_document_traversal_navigation,
 };
 use super::navigation_seed::history_entry_seed_for_traversal;
-use super::navigation_window::{navigation_document_is_active, window_navigation_for_holder};
+use super::navigation_window::{navigation_document_is_live, window_navigation_for_holder};
 use super::navigation_window::{window_history_for_holder, window_task_target_for_runtime_owner};
 use super::*;
 use crate::native_bridge::{
@@ -277,7 +277,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
             && host.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
                 == retiring_document
             && window_task_target_for_runtime_owner(scope, host, owner) == Some(traversal.target)
-            && navigation_document_is_active(scope, owner)
+            && navigation_document_is_live(scope, owner)
     };
     if let crate::native_bridge::OwnerDispatchScope::Child(child_handle) = dispatch_scope {
         host.dispatch_child_document_tree_beforeunload_for_traversal(scope, child_handle);
