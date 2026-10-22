@@ -12,6 +12,7 @@ use moli_dom::forms::{
     text_control_suffers_too_long as form_text_control_suffers_too_long,
     text_control_suffers_too_short as form_text_control_suffers_too_short,
 };
+use moli_v8_util::NativeRegExp;
 use moli_webapi_declare::WebApiObject;
 
 use super::super::{
@@ -379,7 +380,7 @@ fn control_validity(
     ControlValidity {
         value_missing: control_suffers_required_value_missing(runtime, handle, element),
         type_mismatch: control_suffers_type_mismatch(runtime, handle, element),
-        pattern_mismatch: control_suffers_pattern_mismatch(scope, runtime, handle, element),
+        pattern_mismatch: control_suffers_pattern_mismatch(scope, element),
         too_long: control_suffers_too_long(runtime, handle, element),
         too_short: control_suffers_too_short(runtime, handle, element),
         range_underflow: control_suffers_range_underflow(runtime, handle, element),
@@ -556,12 +557,7 @@ fn control_suffers_type_mismatch(
     )
 }
 
-fn control_suffers_pattern_mismatch(
-    scope: &mut v8::PinScope<'_, '_>,
-    _runtime: &JsContextHost,
-    _handle: DomHandle,
-    element: &Element,
-) -> bool {
+fn control_suffers_pattern_mismatch(scope: &mut v8::PinScope<'_, '_>, element: &Element) -> bool {
     if !element.is_html_input()
         || !element_type_supports_intrinsic_validation(element)
         || !element.input_type().supports_pattern()
@@ -575,58 +571,43 @@ fn control_suffers_pattern_mismatch(
     if value.is_empty() {
         return false;
     }
+    let Some(pattern) = compile_html_pattern(scope, pattern) else {
+        return false;
+    };
     if element.input_type() == InputType::Email && element.has_attribute("multiple") {
-        return v8_pattern_is_usable(scope, pattern).is_some_and(|()| {
-            value
-                .split(',')
-                .map(str::trim)
-                .any(|part| !v8_pattern_matches_entire_value(scope, pattern, part).unwrap_or(true))
-        });
+        return value
+            .split(',')
+            .map(str::trim)
+            .any(|part| pattern_mismatches_value(scope, &pattern, part));
     }
-    v8_pattern_is_usable(scope, pattern).is_some_and(|()| {
-        v8_pattern_matches_entire_value(scope, pattern, &value).is_some_and(|matched| !matched)
-    })
+    pattern_mismatches_value(scope, &pattern, &value)
 }
 
 pub(crate) fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-    let pattern = v8_string(&scope, pattern)?;
-    if v8::RegExp::new(&scope, pattern, RegExpCreationFlags::UNICODE_SETS).is_none() {
-        scope.reset();
-        return None;
-    }
-    Some(())
+    let pattern = v8_string(scope, pattern)?;
+    NativeRegExp::new(scope, pattern, RegExpCreationFlags::UNICODE_SETS).map(|_| ())
 }
 
-fn v8_pattern_matches_entire_value(
-    scope: &mut v8::PinScope<'_, '_>,
+fn compile_html_pattern<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     pattern: &str,
-    value: &str,
-) -> Option<bool> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-
-    // HTML pattern validation is implicitly anchored; run it through V8 so
-    // backreferences, lookaheads, and other ECMAScript regexp syntax match the
-    // JavaScript engine instead of a Rust-side approximation.
+) -> Option<NativeRegExp<'s>> {
+    // HTML validates the standalone source before anchoring it; invalid source
+    // must not become usable merely because the wrapper balances its groups.
+    v8_pattern_is_usable(scope, pattern)?;
     let anchored_pattern = format!("^(?:{pattern})$");
-    let pattern = v8_string(&scope, &anchored_pattern)?;
-    let subject = v8_string(&scope, value)?;
-    let Some(regex) = v8::RegExp::new(&scope, pattern, RegExpCreationFlags::UNICODE_SETS) else {
-        // Invalid HTML pattern values are ignored by constraint validation, so
-        // swallow V8's SyntaxError instead of leaking it through input.validity.
-        scope.reset();
-        return None;
-    };
+    let pattern = v8_string(scope, &anchored_pattern)?;
+    NativeRegExp::new(scope, pattern, RegExpCreationFlags::UNICODE_SETS)
+}
 
-    let Some(result) = regex.exec(&scope, subject) else {
-        // Exec should only be empty for exceptional cases; constraint
-        // validation treats those like an unusable pattern and continues.
-        scope.reset();
-        return None;
-    };
-    Some(!result.is_null())
+fn pattern_mismatches_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    pattern: &NativeRegExp<'_>,
+    value: &str,
+) -> bool {
+    v8_string(scope, value)
+        .and_then(|subject| pattern.is_match(scope, subject))
+        .is_some_and(|matched| !matched)
 }
 
 fn control_suffers_too_long(runtime: &JsContextHost, handle: DomHandle, element: &Element) -> bool {

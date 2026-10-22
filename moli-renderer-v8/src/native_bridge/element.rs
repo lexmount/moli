@@ -602,6 +602,7 @@ pub(super) use popover::{
     node_hide_popover_callback, node_popover_getter_function, node_popover_setter_function,
     node_show_popover_callback, node_toggle_popover_callback,
 };
+pub(in crate::native_bridge) use query::selector_validity_states;
 pub(super) use query::{
     node_closest_callback, node_get_elements_by_class_name_callback,
     node_get_elements_by_name_callback, node_get_elements_by_tag_name_callback,

@@ -7,6 +7,7 @@ mod microtasks;
 mod object_readers;
 mod promises;
 mod properties;
+mod regexp;
 mod strings;
 mod symbols;
 
@@ -19,6 +20,7 @@ pub use microtasks::*;
 pub use object_readers::*;
 pub use promises::*;
 pub use properties::*;
+pub use regexp::*;
 pub use strings::*;
 pub use symbols::*;
 
