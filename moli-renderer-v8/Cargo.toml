@@ -125,6 +125,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 url = "2.5.7"
+urlpattern = "0.6.0"
 idna = "1.0"
 uuid = { version = "1.23.1", default-features = false }
 v_xmlescape = { git = "https://github.com/lexmount/v_escape", rev = "d30e780f4d498ffae80e836bc046501f6dfde47a", default-features = false, features = ["std", "string", "fmt"] }

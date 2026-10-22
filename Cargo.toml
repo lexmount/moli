@@ -94,7 +94,7 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/html5ever-0.40.1", "vendor/url-2.5.8", "vendor/shiguredo_libvpx-2026.1.0"]
+exclude = ["vendor/html5ever-0.40.1", "vendor/url-2.5.8", "vendor/urlpattern-0.6.0", "vendor/shiguredo_libvpx-2026.1.0"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
@@ -111,6 +111,7 @@ fontique = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44
 # Share fontations between shaping, raster rendering and PDF font subsetting.
 subsetter = { git = "https://github.com/lexmount/subsetter", rev = "8d3815245835af309559c3b4a872d6a0a54913a9" }
 url = { path = "vendor/url-2.5.8" }
+urlpattern = { path = "vendor/urlpattern-0.6.0" }
 idna = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
 html5ever = { path = "vendor/html5ever-0.40.1" }
 xml5ever = { git = "https://github.com/lexmount/html5ever", rev = "4574311c63e79bba7d4ddb98cb0562d8dad499ee" }
