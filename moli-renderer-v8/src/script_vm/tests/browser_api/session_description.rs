@@ -162,7 +162,8 @@ fn rtc_session_description_preserves_subclasses_and_cross_realm_behavior() {
         const foreignJson = child.RTCSessionDescription.prototype.toJSON.call(derived);
         return [derived instanceof Derived, derived instanceof RTCSessionDescription,
           Object.getPrototypeOf(foreign) === child.RTCSessionDescription.prototype,
-          Object.getPrototypeOf(fallback) === child.RTCSessionDescription.prototype,
+          Object.getPrototypeOf(fallback) === child.Object.prototype,
+          Object.getOwnPropertyDescriptor(RTCSessionDescription.prototype, 'type').get.call(fallback) === 'rollback',
           Object.getOwnPropertyDescriptor(RTCSessionDescription.prototype, 'sdp').get.call(foreign) === 'foreign',
           json.type === 'answer', json.sdp === 'foreign',
           Object.getPrototypeOf(json) === Object.prototype,

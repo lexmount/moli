@@ -1,5 +1,4 @@
 use super::*;
-use crate::util::apply_webidl_constructor_prototype_fallback;
 use webidl::WebIdlEnum;
 
 const SOURCE_SLOT: &str = "__moliWebTransportErrorSource";
@@ -91,12 +90,6 @@ pub(crate) fn web_transport_error_constructor_callback<'s>(
         return;
     };
     if declaration.initialize(scope, args.this()).is_ok() {
-        apply_webidl_constructor_prototype_fallback(
-            scope,
-            args.this(),
-            args.new_target(),
-            "WebTransportError",
-        );
         capture_dom_exception_stack(scope, args.this());
         rv.set(args.this().into());
     }

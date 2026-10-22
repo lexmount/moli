@@ -98,10 +98,10 @@ fn media_recorder_inert_live_tracks_remain_unrecorded_and_options_convert_before
       const log = [], target = new Proxy(function() {}, {get(object,key) {if(key==='prototype') log.push('prototype'); return Reflect.get(object,key)}});
       const options = {get mimeType() {log.push('type'); return 'audio/banana'}, get videoBitsPerSecond() {log.push('rate'); return 1}};
       let error; try {Reflect.construct(other.MediaRecorder,[stream,options],target)} catch(caught) {error=caught}
-      assert(error instanceof other.DOMException && error.name==='NotSupportedError' && log.join()==='type,rate,prototype','conversion, allocation, backend validation order');
+      assert(error instanceof other.DOMException && error.name==='NotSupportedError' && log.join()==='prototype,type,rate','native allocation, conversion, backend validation order');
       const marker = {}; log.length=0;
       try {Reflect.construct(other.MediaRecorder,[stream,{get mimeType() {log.push('type'); throw marker}}],target)} catch(caught) {error=caught}
-      assert(error===marker && log.join()==='type','conversion exception prevents prototype lookup');
+      assert(error===marker && log.join()==='prototype,type','native prototype lookup precedes conversion exception');
       const savedRecorder = other.MediaRecorder, savedStream = MediaStream;
       other.MediaRecorder = function() {throw Error('poisoned MediaRecorder')};
       globalThis.MediaStream = function() {throw Error('poisoned MediaStream')};

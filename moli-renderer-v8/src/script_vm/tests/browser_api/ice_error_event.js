@@ -155,8 +155,8 @@
     if (key === 'prototype') prototypeReads++;
     return Reflect.get(object, key);
   }}));
-  check('new target realm fallback', Object.getPrototypeOf(fallback) === child.RTCPeerConnectionIceErrorEvent.prototype &&
-    fallback.address === raw && prototypeReads === 1);
+  check('new target realm fallback', Object.getPrototypeOf(fallback) === child.Object.prototype &&
+    Object.getOwnPropertyDescriptor(Ctor.prototype, 'address').get.call(fallback) === raw && prototypeReads === 1);
   Object.setPrototypeOf(event, null);
   check('brand survives prototype removal', Object.getOwnPropertyDescriptor(Ctor.prototype, 'errorCode').get.call(event) === 703 &&
     Object.getOwnPropertyDescriptor(Event.prototype, 'type').get.call(event) === 'again');

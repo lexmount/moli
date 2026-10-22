@@ -4,9 +4,7 @@ use crate::{
     util::{callback_data_index_value, callback_data_item, throw_type_error, v8str},
     webidl::{self, WebIdlDictionarySerialize},
 };
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiValue,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiValue};
 
 const DESCRIPTION_SLOT: &str = "__moliRtcSessionDescription";
 const DESCRIPTION_MEMBERS: &[&str] = &["type", "sdp"];

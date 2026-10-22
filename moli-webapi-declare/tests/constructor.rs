@@ -1,40 +1,13 @@
 use std::pin::pin;
 
 use moli_v8_test_util::ensure_v8;
-use moli_v8_util::{
-    WebApiIntrinsicKind, WebApiIntrinsicLookup, get_private_object,
-    install_web_api_intrinsic_resolver, set_private_value, v8str,
-};
-use moli_webapi_declare::{
-    capture_web_api_constructor_intrinsics, initialize_web_api_constructor_receiver,
-    web_api_constructor_with_deferred_prototype,
-};
+use moli_v8_util::v8str;
 
 moli_webapi_declare::declare_web_api_interfaces! {
     TestThing;
 }
 
-fn intrinsic<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: &str,
-    kind: WebApiIntrinsicKind,
-) -> WebApiIntrinsicLookup<'s> {
-    if name != "TestThing" {
-        return WebApiIntrinsicLookup::Unmanaged;
-    }
-    let global = scope.get_current_context().global(scope);
-    WebApiIntrinsicLookup::Managed(get_private_object(
-        scope,
-        global,
-        match kind {
-            WebApiIntrinsicKind::Constructor => "test.constructor",
-            WebApiIntrinsicKind::Prototype => "test.prototype",
-        },
-    ))
-}
-
 fn install<'s>(scope: &mut v8::PinScope<'s, '_>) {
-    capture_web_api_constructor_intrinsics(scope).unwrap();
     let global = scope.get_current_context().global(scope);
     let template = v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
         TestThing,
@@ -47,15 +20,11 @@ fn install<'s>(scope: &mut v8::PinScope<'s, '_>) {
     let native = template.get_function(scope).unwrap();
     let prototype = native.get(scope, v8str(scope, "prototype").into()).unwrap();
     let prototype = v8::Local::<v8::Object>::try_from(prototype).unwrap();
-    set_private_value(scope, global, "test.constructor", native.into());
-    set_private_value(scope, global, "test.prototype", prototype.into());
-    install_web_api_intrinsic_resolver(scope, intrinsic);
-    let public = web_api_constructor_with_deferred_prototype(scope, native).unwrap();
     prototype
-        .set(scope, v8str(scope, "constructor").into(), public.into())
+        .set(scope, v8str(scope, "constructor").into(), native.into())
         .unwrap();
     global
-        .set(scope, v8str(scope, "TestThing").into(), public.into())
+        .set(scope, v8str(scope, "TestThing").into(), native.into())
         .unwrap();
 }
 
@@ -68,15 +37,6 @@ fn constructor<'s>(
     let Some(converted) = args.get(0).to_string(scope) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "TestThing") {
-        return;
-    }
-    // A second native initialization must not invoke the author's getter twice.
-    assert!(initialize_web_api_constructor_receiver(
-        scope,
-        args.this(),
-        "TestThing"
-    ));
     for (name, value) in [
         ("converted", converted.into()),
         ("originalNewTarget", args.new_target()),
@@ -107,7 +67,7 @@ fn eval<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8:
 }
 
 #[test]
-fn constructor_defers_prototype_get_and_preserves_native_callback_information() {
+fn native_constructor_preserves_v8_order_and_callback_information() {
     ensure_v8();
     let mut isolate = v8::Isolate::new(Default::default());
     let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -127,7 +87,7 @@ fn constructor_defers_prototype_get_and_preserves_native_callback_information() 
                 }});
                 const argument = {toString() { log.push('conversion'); return 'value'; }};
                 const value = Reflect.construct(TestThing, [argument, 1, 2], N);
-                if (log.join(',') !== 'conversion,prototype'
+                if (log.join(',') !== 'prototype,conversion'
                     || Object.getPrototypeOf(value) !== prototype
                     || value.converted !== 'value' || value.originalNewTarget !== N
                     || value.callbackData !== 'native callback data' || value.argumentCount !== 3
@@ -137,13 +97,19 @@ fn constructor_defers_prototype_get_and_preserves_native_callback_information() 
                 const sentinel = {};
                 try { Reflect.construct(TestThing, [{toString() { throw sentinel; }}], N); }
                 catch (error) { if (error !== sentinel) return false; }
-                if (log.length !== 0) return false;
+                if (log.join(',') !== 'prototype') return false;
+                log.length = 0;
                 const badN = new Proxy(function() {}, {get(target, key) {
                     if (key === 'prototype') throw sentinel;
                     return Reflect.get(target, key);
                 }});
                 try { Reflect.construct(TestThing, [argument], badN); return false; }
                 catch (error) { if (error !== sentinel) return false; }
+                if (log.length !== 0) return false;
+                class Derived extends TestThing {}
+                const derived = new Derived('subclass');
+                if (Object.getPrototypeOf(derived) !== Derived.prototype
+                    || !(derived instanceof TestThing) || derived.originalNewTarget !== Derived) return false;
                 const nativeConstruct = Reflect.construct;
                 Reflect.construct = () => { throw Error('public Reflect'); };
                 Object.prototype.get = () => { throw Error('inherited trap'); };
@@ -183,7 +149,7 @@ fn constructor_uses_new_target_realm_and_keeps_reentrant_invocations_independent
         eval(
             scope,
             r#"(() => {
-                const foreignPrototype = other.TestThing.prototype;
+                const foreignPrototype = other.Object.prototype;
                 const foreignTarget = other.Function();
                 foreignTarget.prototype = 7;
                 const bound = foreignTarget.bind(null);

@@ -59,7 +59,7 @@
       const log = [], options = {get error() {log.push('error'); return () => {}}, get output() {log.push('output'); return () => {}}};
       const target = new Proxy(function() {}, {get(object, key) { if (key === 'prototype') log.push('prototype'); return Reflect.get(object, key); }});
       const codec = Reflect.construct(C, [options], target);
-      assert(log.join(',') === 'error,output,prototype', log.join(','));
+      assert(log.join(',') === 'prototype,error,output', log.join(','));
       C.prototype.close.call(codec);
     });
     await check(label('getter exception preserved'), () => {

@@ -278,43 +278,8 @@ fn finish_materialized_interface<'s>(
             set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
             v8::Local::<v8::Object>::from(proxy)
         }
-        ConstructorKind::DomParser
-        | ConstructorKind::VideoDecoder
-        | ConstructorKind::VideoEncoder
-        | ConstructorKind::VideoFrame
-        | ConstructorKind::VideoColorSpace
-        | ConstructorKind::MediaMetadata
-        | ConstructorKind::MediaStream
-        | ConstructorKind::MediaRecorder
-        | ConstructorKind::RtcIceCandidate
-        | ConstructorKind::RtcSessionDescription
-        | ConstructorKind::RtcError
-        | ConstructorKind::RtcErrorEvent
-        | ConstructorKind::RtcDtmfToneChangeEvent
-        | ConstructorKind::RtcTrackEvent
-        | ConstructorKind::RtcDataChannelEvent
-        | ConstructorKind::RtcPeerConnectionIceEvent
-        | ConstructorKind::RtcPeerConnectionIceErrorEvent
-        | ConstructorKind::RtcRtpScriptTransform
-        | ConstructorKind::KeyFrameRequestEvent
-        | ConstructorKind::Image
-        | ConstructorKind::Audio
-        | ConstructorKind::Option => {
-            let proxy = moli_webapi_declare::web_api_constructor_with_deferred_prototype(
-                scope,
-                constructor,
-            )
-            .ok_or_else(|| {
-                anyhow!(
-                    "failed to create WebIDL constructor entry for `{}`",
-                    metadata.name
-                )
-            })?;
-            if metadata.prototype_property == ResolvedPrototypeProperty::TemplateReadOnly {
-                set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
-            }
-            proxy.into()
-        }
+        // Retain V8's native allocation and prototype selection for ordinary
+        // constructors, including their differences from strict Web IDL order.
         _ => constructor.into(),
     };
     // Like Blink's ConstructorForTypeSlowCase, finish every fallible binding

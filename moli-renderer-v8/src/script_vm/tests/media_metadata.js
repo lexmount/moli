@@ -55,17 +55,17 @@
         return Reflect.get(target, key, receiver);
       }});
       const value = Reflect.construct(C, [{get title() {log.push('title'); return 't';}}], N);
-      return log.join(',') === 'title,prototype' && Object.getPrototypeOf(value) === w.Object.prototype && getter('title').call(value) === 't';
+      return log.join(',') === 'prototype,title' && Object.getPrototypeOf(value) === w.Object.prototype && getter('title').call(value) === 't';
     });
-    run(label + '/conversion-exception-before-prototype', () => {
+    run(label + '/prototype-exception-before-conversion', () => {
       const sentinel = {}, N = new Proxy(w.Function(), {get(target, key, receiver) {if (key === 'prototype') throw 42; return Reflect.get(target, key, receiver);}});
-      return capture(() => Reflect.construct(C, [{get title() {throw sentinel;}}], N)) === sentinel;
+      return capture(() => Reflect.construct(C, [{get title() {throw sentinel;}}], N)) === 42;
     });
     for (const nw of [window, other]) run(label + '/fallback/' + (nw === window ? 'main' : 'child'), () => {
       let reads = 0;
       const N = new Proxy(nw.Function(), {get(target, key, receiver) {if (key === 'prototype') {reads++; return 42;} return Reflect.get(target, key, receiver);}});
       const value = Reflect.construct(C, [], N);
-      return reads === 1 && Object.getPrototypeOf(value) === nw.MediaMetadata.prototype && getter('title').call(value) === '';
+      return reads === 1 && Object.getPrototypeOf(value) === nw.Object.prototype && getter('title').call(value) === '';
     });
     run(label + '/artwork-copy-freeze-cache', () => {
       const image = {src: '../cover', sizes: '40x40\ud800', type: 'image/png\udfff', ignored: true}, input = [image];

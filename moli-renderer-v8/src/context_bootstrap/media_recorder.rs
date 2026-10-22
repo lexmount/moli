@@ -3,9 +3,7 @@
 //! recording session is supported, and no encoded data or recording events are
 //! fabricated. Receiver checks and input conversion use shared WebIDL bindings.
 
-use moli_webapi_declare::{
-    WebApiFunctionTemplate, WebApiObject, WebApiValue, initialize_web_api_constructor_receiver,
-};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiValue};
 
 use super::{media_streams, throw_dom_exception_value};
 use crate::{
@@ -180,9 +178,6 @@ pub(super) fn constructor<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
-    if !initialize_web_api_constructor_receiver(scope, args.this(), "MediaRecorder") {
-        return;
-    }
     if !parsed.options.mime_type.0.is_empty() {
         throw_dom_exception_value(
             scope,
