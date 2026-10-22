@@ -89,13 +89,15 @@ impl ScriptVm {
         )
     }
 
-    pub(crate) fn computed_style_own_visibility_values_for_document_snapshot(
+    pub(crate) fn computed_style_export_values_for_document_snapshot(
         &self,
         handles: impl IntoIterator<Item = DomHandle>,
-    ) -> Vec<bool> {
-        crate::native_bridge::element::computed_style_own_visibility_values_for_document_snapshot(
+        properties: &[String],
+    ) -> Vec<(Vec<String>, bool)> {
+        crate::native_bridge::element::computed_style_export_values_for_document_snapshot(
             &self._context_host.borrow(),
             handles,
+            properties,
         )
     }
 

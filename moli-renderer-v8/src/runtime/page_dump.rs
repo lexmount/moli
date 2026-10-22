@@ -23,19 +23,14 @@ impl PageVm {
             });
             let values = self
                 .vm()
-                .computed_style_property_values_for_document_snapshot(
+                .computed_style_export_values_for_document_snapshot(
                     nodes.iter().copied(),
-                    &["display", "visibility", "baseline-shift", "width", "height"]
-                        .map(str::to_owned),
+                    &["display", "visibility", "baseline-shift"].map(str::to_owned),
                 );
-            let own_visibility = self
-                .vm()
-                .computed_style_own_visibility_values_for_document_snapshot(nodes.iter().copied());
             nodes
                 .into_iter()
                 .zip(values)
-                .zip(own_visibility)
-                .map(|((node, values), own_visibility)| {
+                .map(|(node, (values, own_visibility))| {
                     let mut values = values.into_iter();
                     (
                         node,
@@ -43,8 +38,6 @@ impl PageVm {
                             display: values.next().unwrap_or_default(),
                             visibility: values.next().unwrap_or_default(),
                             baseline_shift: values.next().unwrap_or_default(),
-                            width: values.next().unwrap_or_default(),
-                            height: values.next().unwrap_or_default(),
                             own_visibility,
                         },
                     )

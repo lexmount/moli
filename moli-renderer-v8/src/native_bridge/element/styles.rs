@@ -545,44 +545,38 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
 ) -> Vec<Vec<String>> {
+    computed_style_export_values_for_document_snapshot(host, handles, properties)
+        .into_iter()
+        .map(|(values, _)| values)
+        .collect()
+}
+
+pub(crate) fn computed_style_export_values_for_document_snapshot(
+    host: &JsContextHost,
+    handles: impl IntoIterator<Item = DomHandle>,
+    properties: &[String],
+) -> Vec<(Vec<String>, bool)> {
     let mut observation = StyleObservation::new(host);
     handles
         .into_iter()
         .map(
             |handle| match style_computation_context_for_document_snapshot(host, handle) {
-                None => Vec::new(),
+                None => (Vec::new(), false),
                 Some(DocumentSnapshotStyleComputation::HiddenChildFrame) => {
-                    vec![String::new(); properties.len()]
+                    (vec![String::new(); properties.len()], false)
                 }
                 Some(DocumentSnapshotStyleComputation::Available(_)) => {
                     let style = observation.read(handle);
-                    properties
-                        .iter()
-                        .map(|property| style.property(property))
-                        .collect()
+                    (
+                        properties
+                            .iter()
+                            .map(|property| style.property(property))
+                            .collect(),
+                        style.computed_style_has_own_visibility_value(),
+                    )
                 }
             },
         )
-        .collect()
-}
-
-pub(crate) fn computed_style_own_visibility_values_for_document_snapshot(
-    host: &JsContextHost,
-    handles: impl IntoIterator<Item = DomHandle>,
-) -> Vec<bool> {
-    let mut observation = StyleObservation::new(host);
-    handles
-        .into_iter()
-        .map(|handle| {
-            let Some(DocumentSnapshotStyleComputation::Available(_)) =
-                style_computation_context_for_document_snapshot(host, handle)
-            else {
-                return false;
-            };
-            observation
-                .read(handle)
-                .computed_style_has_own_visibility_value()
-        })
         .collect()
 }
 

@@ -12,8 +12,6 @@ pub(super) struct ExportStyle {
     pub display: String,
     pub visibility: String,
     pub baseline_shift: String,
-    pub width: String,
-    pub height: String,
     pub own_visibility: bool,
 }
 
@@ -47,6 +45,8 @@ impl<'a> MarkdownDom<'a> {
         styles: impl IntoIterator<Item = (NativeNodeId, ExportStyle)>,
         base_url: Option<&Url>,
     ) -> Self {
+        // The caller supplies element styles in DOM pre-order. Inherited state
+        // below is computed once, after the parent has been visited.
         let styles: Vec<_> = styles.into_iter().collect();
         let document_element = dom.document_element_node_id();
         let body = dom.body_node_id();
@@ -58,14 +58,15 @@ impl<'a> MarkdownDom<'a> {
             Dom::attribute(dom, *node, "href").is_some_and(|href| href.starts_with('#'))
         });
         let mut disclosures = HashSet::new();
-        let targets: HashMap<_, _> = styles
-            .iter()
-            .filter_map(|(node, _)| Dom::attribute(dom, *node, "id").map(|id| (id, *node)))
-            .collect();
+        let mut targets = HashMap::new();
+        for (node, _) in &styles {
+            if let Some(id) = Dom::attribute(dom, *node, "id") {
+                targets.entry(id).or_insert(*node);
+            }
+        }
         for (node, _) in &styles {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
-                || Dom::attribute(dom, *node, "role")
-                    .is_some_and(|role| role.eq_ignore_ascii_case("tab")))
+                || Dom::attribute(dom, *node, "role").is_some_and(|role| has_role(role, "tab")))
                 && let Some(controlled) = Dom::attribute(dom, *node, "aria-controls")
             {
                 disclosures.extend(
@@ -81,11 +82,7 @@ impl<'a> MarkdownDom<'a> {
             .collect();
         let hidden_nodes: HashSet<_> = styles
             .iter()
-            .filter_map(|(node, values)| {
-                (values.display == "none"
-                    || matches!(values.visibility.as_str(), "hidden" | "collapse"))
-                .then_some(*node)
-            })
+            .filter_map(|(node, values)| (values.display == "none").then_some(*node))
             .collect();
         let mut disclosure_paths = HashSet::new();
         for &target in &disclosure_roots {
@@ -110,7 +107,14 @@ impl<'a> MarkdownDom<'a> {
         let mut visibility_modes = HashMap::new();
         let mut source_regions = HashSet::new();
         for (node, values) in styles {
-            // A visible pre/code block is source text. Collapsible line spans
+            debug_assert!(
+                dom.parent_node(node).is_none_or(|parent| {
+                    !matches!(Dom::node_kind(dom, parent), NodeKind::Element(_))
+                        || visibility_modes.contains_key(&parent)
+                }),
+                "document export requires parent-before-child styles"
+            );
+            // A visible preformatted block is source text. Collapsible line spans
             // belong to that source; hidden outer blocks remain excluded.
             let in_source = dom
                 .parent_node(node)
@@ -143,10 +147,8 @@ impl<'a> MarkdownDom<'a> {
                 }
             }
             let disclosure_root = disclosure_roots.contains(&node)
-                || (role.eq_ignore_ascii_case("tabpanel") && content_context(dom, node))
-                || Dom::attribute(dom, node, "hidden") == Some("until-found")
-                || (!matches!(role, "dialog" | "alertdialog" | "menu")
-                    && Dom::attribute(dom, node, "id").is_some_and(|id| disclosures.contains(id)));
+                || (has_role(role, "tabpanel") && content_context(dom, node))
+                || Dom::attribute(dom, node, "hidden") == Some("until-found");
             let disclosure_path = disclosure_paths.contains(&node);
             let parent_is_disclosure_path = dom
                 .parent_node(node)
@@ -154,10 +156,6 @@ impl<'a> MarkdownDom<'a> {
             if disclosure_path {
                 invisible.insert(node);
             }
-            let tracking_pixel = matches!(Dom::node_kind(dom, node), NodeKind::Element("img"))
-                && Dom::attribute(dom, node, "alt").is_none_or(|alt| alt.trim().is_empty())
-                && px(&values.width).is_some_and(|width| width <= 1.5)
-                && px(&values.height).is_some_and(|height| height <= 1.5);
             let document_root = Some(node) == document_element || Some(node) == body;
             let parent_visibility = dom
                 .parent_node(node)
@@ -188,7 +186,6 @@ impl<'a> MarkdownDom<'a> {
             };
             visibility_modes.insert(node, visibility_mode);
             if (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
-                || tracking_pixel
                 || (parent_is_disclosure_path && !disclosure_root && !disclosure_path)
                 || dom
                     .parent_node(node)
@@ -200,19 +197,35 @@ impl<'a> MarkdownDom<'a> {
             }
             if !suppressed.contains(&node)
                 && visibility_mode != VisibilityMode::Hidden
-                && (in_source
-                    || matches!(Dom::node_kind(dom, node), NodeKind::Element("pre" | "code")))
+                && (in_source || matches!(Dom::node_kind(dom, node), NodeKind::Element("pre")))
             {
                 source_regions.insert(node);
             }
             if matches!(
                 values.display.as_str(),
-                "block" | "flow-root" | "flex" | "grid" | "list-item" | "table"
+                "block"
+                    | "flow-root"
+                    | "flex"
+                    | "grid"
+                    | "list-item"
+                    | "table"
+                    | "table-row-group"
+                    | "table-header-group"
+                    | "table-footer-group"
+                    | "table-row"
+                    | "table-cell"
+                    | "table-caption"
             ) {
                 blocks.insert(node);
             } else if matches!(
                 values.display.as_str(),
-                "inline-block" | "inline-flex" | "inline-grid" | "inline-table"
+                "inline-block"
+                    | "inline-flex"
+                    | "inline-grid"
+                    | "inline-table"
+                    | "ruby"
+                    | "ruby-base"
+                    | "ruby-text"
             ) {
                 inline_boundaries.insert(node);
             }
@@ -225,20 +238,8 @@ impl<'a> MarkdownDom<'a> {
                 }
             }
             if let Some(base_url) = base_url {
-                let names: &[&str] = match Dom::node_kind(dom, node) {
-                    NodeKind::Element("a") => &["href"],
-                    NodeKind::Element("img") => &[
-                        "src",
-                        "data-original",
-                        "data-src",
-                        "data-lazy-src",
-                        "srcset",
-                        "data-srcset",
-                    ],
-                    NodeKind::Element("iframe" | "audio" | "source") => {
-                        &["src", "data-src", "data-lazy-src"]
-                    }
-                    NodeKind::Element("video") => &["src", "poster", "data-src", "data-lazy-src"],
+                let names = match Dom::node_kind(dom, node) {
+                    NodeKind::Element(tag) => moli_html2md::resource_url_attributes(tag),
                     _ => &[],
                 };
                 for &name in names {
@@ -305,7 +306,7 @@ fn content_context(dom: &NativeDom, mut node: NativeNodeId) -> bool {
                 "alertdialog",
             ]
             .iter()
-            .any(|excluded| role.eq_ignore_ascii_case(excluded))
+            .any(|excluded| has_role(role, excluded))
         }) {
             return false;
         }
@@ -325,13 +326,15 @@ fn target_is_disclosure(dom: &NativeDom, targets: &HashMap<&str, NativeNodeId>, 
             ) || Dom::attribute(dom, target, "role").is_some_and(|role| {
                 ["tabpanel", "region"]
                     .iter()
-                    .any(|value| role.eq_ignore_ascii_case(value))
+                    .any(|value| has_role(role, value))
             }))
     })
 }
 
-fn px(value: &str) -> Option<f32> {
-    value.strip_suffix("px")?.trim().parse().ok()
+fn has_role(value: &str, expected: &str) -> bool {
+    value
+        .split_ascii_whitespace()
+        .any(|token| token.eq_ignore_ascii_case(expected))
 }
 
 fn resolve_srcset(base_url: &Url, value: &str) -> Option<String> {
