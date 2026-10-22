@@ -817,6 +817,152 @@ async fn heap_profiler_moli_diagnostics_reports_dedicated_worker_isolates() {
 }
 
 #[tokio::test]
+async fn heap_profiler_idle_reset_preserves_realtime_pool_and_actual_retention() {
+    use crate::conn::{CdpConnection, CdpInitialStoragePartition};
+    use moli_core::runtime::NavigationRuntimeConfig;
+    use moli_core::{LayoutPolicy, LayoutWorkingSetBudget, OptionalResourceFetchMask};
+
+    async fn width(ctx: &mut TestContext, id: u64, width: u32) {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": format!(
+                    "(() => {{const el=document.getElementById('budget-box');\
+                     el.style.width='{width}px';return el.offsetWidth;}})()"
+                ),
+                "returnByValue": true,
+            },
+        }))
+        .await;
+        let response = take_response_by_id(ctx, id);
+        assert!(response.get("error").is_none(), "{response}");
+        assert!(
+            response["result"].get("exceptionDetails").is_none(),
+            "{response}"
+        );
+        assert_eq!(
+            response["result"]["result"]["value"],
+            json!(width),
+            "{response}"
+        );
+    }
+
+    fn assert_empty(pool: &LayoutWorkingSetBudget) {
+        let snapshot = pool.snapshot();
+        assert_eq!(snapshot.open_pages, 0, "{snapshot:?}");
+        assert_eq!(snapshot.live_leases, 0, "{snapshot:?}");
+        assert_eq!(snapshot.charged_bytes, 0, "{snapshot:?}");
+        assert_eq!(snapshot.queued_pages, 0, "{snapshot:?}");
+        assert_eq!(snapshot.ready_bytes, 0, "{snapshot:?}");
+    }
+
+    const HTML: &str = "<!doctype html><body><div id=budget-box style='display:block;width:100px;height:20px;padding:0;border:0'></div>";
+    let pool = LayoutWorkingSetBudget::default();
+    let conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        CdpInitialStoragePartition::memory(),
+        NavigationRuntimeConfig::new(
+            moli_fetch::FetchConfig::default(),
+            OptionalResourceFetchMask::NONE,
+            true,
+            LayoutPolicy::Realtime,
+        )
+        .with_layout_working_set_budget(pool.clone()),
+    );
+    let mut ctx = TestContext::from_conn(conn);
+    with_loaded_document_async(&mut ctx, HTML).await;
+    width(&mut ctx, 206_850, 170).await;
+    let warm = pool.snapshot();
+    assert_eq!(warm.open_pages, 1, "{warm:?}");
+    assert_eq!(warm.live_leases, 1, "{warm:?}");
+    assert!(warm.charged_bytes > 0, "{warm:?}");
+
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .remove_active_page_target_async()
+            .await
+    );
+    let removed = ctx
+        .conn
+        .remove_browser_context_by_id_restoring_active_async("BID-1", None)
+        .await;
+    assert!(removed.is_some());
+    drop(removed);
+    assert!(ctx.conn.browser_contexts().next().is_none());
+    assert_empty(&pool);
+    // With no Context or Page, this is the actual fallback engine, not the
+    // former Page's engine. Keep the identity so reset cannot be a no-op.
+    let old_owner = ctx
+        .conn
+        .active_navigation_engine()
+        .renderer_owner_id_for_diagnostics();
+    assert!(
+        ctx.conn
+            .active_navigation_engine()
+            .runtime_config()
+            .layout_working_set_budget()
+            .unwrap()
+            .shares_state_with(&pool)
+    );
+    pool.set_pressure_target(0).unwrap();
+
+    // This existing internal diagnostic is valid on the TestContext's root
+    // route; it is intentionally not exposed as a browser WebSocket method.
+    ctx.process_async(json!({"id": 206_851, "method": "HeapProfiler.moliResetIdleEngine"}))
+        .await;
+    let reset = take_response_by_id(&mut ctx, 206_851);
+    assert!(reset.get("error").is_none(), "{reset}");
+    assert_eq!(reset["result"]["reset"], json!(true), "{reset}");
+    assert_ne!(
+        ctx.conn
+            .active_navigation_engine()
+            .renderer_owner_id_for_diagnostics(),
+        old_owner
+    );
+    let config = ctx.conn.active_navigation_engine().runtime_config();
+    assert_eq!(config.layout_policy(), LayoutPolicy::Realtime);
+    assert!(
+        config
+            .layout_working_set_budget()
+            .unwrap()
+            .shares_state_with(&pool)
+    );
+    assert_eq!(pool.snapshot().pressure_target, 0);
+    assert_empty(&pool);
+
+    // A new Context and Page must register against that same external pool.
+    // Zero pressure permits fresh geometry but denies retained computation.
+    with_loaded_document_async(&mut ctx, HTML).await;
+    width(&mut ctx, 206_852, 230).await;
+    let suppressed = pool.snapshot();
+    assert_eq!(suppressed.open_pages, 1, "{suppressed:?}");
+    assert_eq!(suppressed.live_leases, 0, "{suppressed:?}");
+    assert_eq!(suppressed.charged_bytes, 0, "{suppressed:?}");
+    assert_eq!(suppressed.queued_pages, 0, "{suppressed:?}");
+    assert_eq!(suppressed.ready_bytes, 0, "{suppressed:?}");
+
+    pool.set_pressure_target(pool.limits().browser_bytes)
+        .unwrap();
+    width(&mut ctx, 206_853, 260).await;
+    let recovered = pool.snapshot();
+    assert_eq!(recovered.open_pages, 1, "{recovered:?}");
+    assert_eq!(recovered.live_leases, 1, "{recovered:?}");
+    assert!(recovered.charged_bytes > 0, "{recovered:?}");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .remove_active_page_target_async()
+            .await
+    );
+    assert_empty(&pool);
+}
+
+#[tokio::test]
 async fn heap_profiler_moli_reset_idle_engine_only_resets_without_loaded_page() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><p>loaded</p>").await;

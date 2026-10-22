@@ -7,9 +7,9 @@ mod collections;
 mod context_host;
 mod current_input;
 pub(crate) use context_host::{
-    JsContextHost, JsContextHostPageTaskCapabilities, MouseReleaseFollowUp,
-    PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
-    SharedResourceTimingBufferRegistry, caller_can_access_window,
+    JsContextHost, JsContextHostPageTaskCapabilities, LayoutPublicationRequest,
+    MouseReleaseFollowUp, PendingScrollObservableEffects, PostParseAutofocusAdmission,
+    ServiceWorkerWindowOwner, SharedResourceTimingBufferRegistry, caller_can_access_window,
 };
 pub(crate) use current_input::{
     CurrentInputEvent, CurrentInputEventScope, InputNavigationPolicy, navigation_policy_from_event,
@@ -54,16 +54,21 @@ pub(crate) use collections::{
     build_static_handle_node_list_wrapper, install_collection_template_bindings,
 };
 pub(crate) use context_host::{
-    DetachedChildBrowsingContextDocumentSnapshot, ImageDecodeRequestId,
-    RuntimeObservableContextToken, cross_origin_lightweight_popup_id,
-    current_runtime_observable_context_token, defer_active_lightweight_popup_restore,
-    enter_active_lightweight_popup_scope, enter_top_level_lightweight_popup_scope,
-    install_child_window_proxy_access_check_handlers,
-    install_runtime_observable_context_token_for_context, is_cross_origin_top_window_proxy,
-    lightweight_popup_id_from_window, restore_active_lightweight_popup_scope,
+    DetachedChildBrowsingContextDocumentSnapshot, DocumentExecutionContext, ImageDecodeRequestId,
+    IsolatedWindowWorld, RuntimeObservableContextToken, WindowEventAccess,
+    cross_origin_lightweight_popup_id, current_runtime_observable_context_token,
+    defer_active_lightweight_popup_restore, enter_active_lightweight_popup_scope,
+    enter_top_level_lightweight_popup_scope, install_child_window_proxy_access_check_handlers,
+    install_isolated_window_world_definition, install_runtime_observable_context_token_for_context,
+    is_cross_origin_top_window_proxy, isolated_window_world_for_context,
+    lightweight_popup_id_from_window, remember_isolated_window_context,
+    restore_active_lightweight_popup_scope,
     restore_deferred_active_lightweight_popup_scope_if_present,
     throw_cross_origin_location_security_error, throw_cross_origin_type_error,
+    window_context_in_wrapper_world, window_event_access, window_in_wrapper_world,
 };
+#[cfg(test)]
+pub(crate) use context_host::{IsolatedWindowWorldId, install_isolated_window_world_for_context};
 
 pub(crate) const ACTIVE_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliActiveChildWindowHandle";
 pub(crate) const ENTERED_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliEnteredChildWindowHandle";

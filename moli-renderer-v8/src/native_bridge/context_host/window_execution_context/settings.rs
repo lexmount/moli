@@ -132,6 +132,12 @@ impl WindowEnvironmentSettings {
         self.document
     }
 
+    /// Metadata for native inert Document construction, never execution
+    /// authority. Callers must independently authorize any callback/task.
+    pub(crate) fn execution_context_identity(&self) -> WindowExecutionContextIdentity {
+        self.execution_identity
+    }
+
     pub(crate) fn api_base_url(&self, host: &JsContextHost) -> Option<Url> {
         let document = host.dom_host().node(self.document)?.as_document()?;
         // Preserve the existing bootstrap view while an initial empty Document

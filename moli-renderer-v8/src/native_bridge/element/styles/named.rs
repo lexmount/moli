@@ -105,6 +105,9 @@ fn live_style_named_property_value_for_handle<'s>(
         return resolve_known_style_property_name(raw_key).map(|_| String::new());
     }
     let property = resolve_style_property_name(runtime, handle, mode, raw_key)?;
+    if !super::public_layout::prepare_live_style_property(scope, runtime, handle, mode, &property) {
+        return None;
+    }
     let context = style_object_computation_context(scope, style);
     Some(
         if let Some(pseudo) = style_object_pseudo_element(scope, style, mode) {

@@ -15,6 +15,7 @@ use crate::{
     },
     document_runtime::DocumentRuntime,
     exception_reporting::v8_message_listener,
+    layout_working_set_budget::PageBudgetHandle,
     module_runtime::{
         dynamic_import_callback, dynamic_import_with_phase_callback,
         initialize_import_meta_object_callback,
@@ -270,6 +271,10 @@ struct RendererPageScriptEnvironmentInner {
     inspector_isolate_backend: RendererInspectorIsolateBackendHandle,
     page_runtime_task_source: PageRuntimeTaskSource,
     output_journal: crate::runtime::RendererTurnOutputJournal,
+    // Having a Page environment means managed retention. None is an explicit
+    // disabled binding (e.g. budget identity exhaustion), never standalone fallback.
+    // The unique PageRegistration remains in its reservation/stable slot.
+    layout_working_set_budget: Option<PageBudgetHandle>,
     global_proxy: OnceCell<v8::Global<v8::Object>>,
     auxiliary_allocator: OnceCell<crate::runtime::RendererAuxiliaryPageAllocator>,
     browsing_context_name: OnceCell<crate::runtime::RendererBrowsingContextName>,
@@ -344,6 +349,7 @@ impl RendererPageScriptEnvironment {
         inspector_isolate_backend: RendererInspectorIsolateBackendHandle,
         page_runtime_task_source: PageRuntimeTaskSource,
         output_journal: crate::runtime::RendererTurnOutputJournal,
+        layout_working_set_budget: Option<PageBudgetHandle>,
     ) -> Self {
         let registry = renderer_document_isolate.related_pages.clone();
         let environment = Self {
@@ -353,6 +359,7 @@ impl RendererPageScriptEnvironment {
                 inspector_isolate_backend,
                 page_runtime_task_source,
                 output_journal,
+                layout_working_set_budget,
                 global_proxy: OnceCell::new(),
                 auxiliary_allocator: OnceCell::new(),
                 browsing_context_name: OnceCell::new(),
@@ -366,6 +373,10 @@ impl RendererPageScriptEnvironment {
             .borrow_mut()
             .insert(page_id, Rc::downgrade(&environment.inner));
         environment
+    }
+
+    pub(crate) fn layout_working_set_budget(&self) -> Option<PageBudgetHandle> {
+        self.inner.layout_working_set_budget.clone()
     }
 
     pub(crate) fn bind_auxiliary_allocator(

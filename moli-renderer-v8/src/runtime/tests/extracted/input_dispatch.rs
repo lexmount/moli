@@ -1,5 +1,331 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_popup_show_measure_position_and_input_complete_without_capture() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, ready, release_ready, ready_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/popup-position-ready",
+            "ready",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let (completion_base_url, completed, release_completed, completion_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/popup-position-completed",
+            "completed",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let html = include_str!("../../../../tests/fixtures/realtime-popup-position-input.html")
+        .replace(
+            "__READY_URL__",
+            &serde_json::to_string(&format!("{base_url}/popup-position-ready")).unwrap(),
+        )
+        .replace(
+            "__COMPLETED_URL__",
+            &serde_json::to_string(&format!("{completion_base_url}/popup-position-completed"))
+                .unwrap(),
+        );
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        &html,
+    )
+    .await;
+
+    // No evaluate, capture, layout-publication helper or manual frame pump is
+    // sent before ready. The page's two rAF callbacks reveal and place the
+    // previously hidden panel using its own synchronous geometry reads.
+    tokio::time::timeout(Duration::from_secs(2), ready)
+        .await
+        .expect("the page must show, measure and position its panel without a follow-up command")
+        .unwrap();
+    release_ready.send(()).unwrap();
+    ready_server.await.unwrap();
+
+    // The fixture places a 160x48 panel at (100, 4). Pick a point inside
+    // that result without asking a selector or geometry getter for a point.
+    // An old hidden-panel width of zero would place it at x=260, so a later
+    // frame could not rescue the wrong computed position before this click.
+    for (event_name, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        let pending = page
+            .enqueue_protocol_command(RendererPageCommand::DispatchMouseEventAtPoint {
+                x: 120.0,
+                y: 16.0,
+                event_name: event_name.to_owned(),
+                button: 0,
+                buttons: Some(buttons),
+                click_count: 1,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                pointer: RendererPointerEventProperties::default(),
+                modifiers: 0,
+            })
+            .expect("popup pointer command must enqueue");
+        let outcome = tokio::time::timeout(Duration::from_secs(2), pending.wait())
+            .await
+            .expect("popup pointer command must reach its completion ACK")
+            .expect("popup pointer command must complete");
+        let (completion, _) = outcome.into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        assert!(
+            matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled),
+            "{event_name} must dispatch through the real Page input route"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(2), completed)
+        .await
+        .expect("pointer click and its microtask must finish the business without a repair command")
+        .unwrap();
+    release_completed.send(()).unwrap();
+    completion_server.await.unwrap();
+
+    // This is a stored string created before the completion fetch, not a DOM
+    // or computed-style/geometry read that could make the business succeed.
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "window.popupResult".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let result = mouse_input_json_witness(&reply);
+    page.close_async().await.unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "phase": "closed",
+            "frames": 2,
+            "events": [
+                "hidden-frame",
+                "shown-measured-positioned",
+                ["mousedown", "choice", 120, 16],
+                ["mouseup", "choice", 120, 16],
+                ["click", "choice", 120, 16],
+                "click-microtask"
+            ],
+            "anchor": [180, 60, 80, 24],
+            "panelSize": [160, 48],
+            "placement": [100, 4],
+            "selected": "alpha",
+            "closed": true
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_timer_network_and_frame_advance_during_sustained_wheel_input() {
+    use futures_util::{StreamExt, stream::FuturesUnordered};
+
+    const IN_FLIGHT: usize = 128;
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, mut payload_requested, release_payload, payload_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/input-fairness-payload",
+            "network-ready",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let (completion_url, mut completed, release_completion, completion_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/input-fairness-complete",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let html = include_str!("../../../../tests/fixtures/realtime-input-fairness.html").replace(
+        "__COMPLETION_URL__",
+        &serde_json::to_string(&format!("{completion_url}/input-fairness-complete")).unwrap(),
+    );
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        &html,
+    )
+    .await;
+    let enqueue_wheel = || {
+        page.enqueue_protocol_command(RendererPageCommand::DispatchMouseEventAtPoint {
+            x: 10.0,
+            y: 10.0,
+            event_name: "wheel".to_owned(),
+            button: -1,
+            buttons: Some(0),
+            click_count: 0,
+            delta_x: 0.0,
+            delta_y: 1.0,
+            pointer: RendererPointerEventProperties::default(),
+            modifiers: 0,
+        })
+        .expect("wheel input should enqueue")
+        .wait()
+    };
+    // Refill a bounded set of input commands until the page itself signals
+    // all three callbacks. They are registered by the first wheel handler,
+    // so setup cannot satisfy this test before input starts. No evaluate or
+    // capture barrier helps them run, and no fixed input count assumes how
+    // many commands a machine needs to reach the first frame deadline.
+    let mut pending = FuturesUnordered::new();
+    for _ in 0..IN_FLIGHT {
+        pending.push(enqueue_wheel());
+    }
+    let mut sent = IN_FLIGHT;
+    let mut release_payload = Some(release_payload);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            tokio::select! {
+                signal = &mut completed => {
+                    signal.expect("page completion signal must remain open");
+                    break;
+                }
+                request = &mut payload_requested, if release_payload.is_some() => {
+                    request.expect("network request signal must remain open");
+                    release_payload.take().unwrap().send(()).unwrap();
+                }
+                Some(result) = pending.next() => {
+                    let (completion, _) = result.unwrap().into_completion_and_predecessor();
+                    let (reply, _, _) = completion.into_parts();
+                    assert!(matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled));
+                    pending.push(enqueue_wheel());
+                    sent += 1;
+                }
+            }
+        }
+    })
+    .await
+    .expect("timer, network and frame callbacks must run during sustained input");
+    assert!(
+        release_payload.is_none(),
+        "network response must be consumed"
+    );
+    release_completion.send(()).unwrap();
+    payload_server.await.unwrap();
+    completion_server.await.unwrap();
+    while let Some(result) = pending.next().await {
+        let (completion, _) = result.unwrap().into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        assert!(
+            matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled)
+        );
+    }
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify({...fairness,scrollTop:scroller.scrollTop})".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let state = mouse_input_json_witness(&reply);
+    page.close_async().await.unwrap();
+    assert_eq!(state["inputs"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["microtasks"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["deltaSum"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["scrollTop"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["errors"], serde_json::json!([]), "{state}");
+    assert_eq!(state["networkBody"], "network-ready", "{state}");
+    assert_eq!(state["samples"].as_object().unwrap().len(), 3, "{state}");
+    for name in ["timer", "network", "frame"] {
+        let sample = &state["samples"][name];
+        let count = sample["inputs"].as_u64().unwrap();
+        assert!(
+            count > 0 && count < sent as u64,
+            "{name} must execute before input drains: {state}"
+        );
+        assert_eq!(sample["microtasks"], sample["inputs"], "{name}: {state}");
+        assert_eq!(sample["width"], sample["expectedWidth"], "{name}: {state}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_input_scroll_io_and_dynamic_checkbox_complete_without_capture() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, ready, release_response, server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/realtime-input-ready",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(&runtime, &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(), r#"
+        <!doctype html><div id=scroller style="position:absolute;left:0;top:0;width:200px;height:100px;overflow:auto">
+          <div style="height:300px"></div><div id=sentinel style="height:20px"></div>
+        </div><script>
+        window.events=[];window.clicks=0;
+        scroller.addEventListener('wheel',event=>{
+          events.push('wheel:'+event.deltaY);Promise.resolve().then(()=>events.push('wheel-microtask'));
+        });
+        window.io=new IntersectionObserver(entries=>{
+          if(!entries.some(entry=>entry.isIntersecting))return;
+          io.disconnect();events.push('io');
+          const input=document.createElement('input');input.id='toggle';input.type='checkbox';
+          input.style.cssText='position:fixed;left:230px;top:20px;width:24px;height:24px;margin:0;opacity:0';
+          input.addEventListener('click',()=>{
+            clicks++;events.push('click');Promise.resolve().then(()=>events.push('click-microtask'));
+          });
+          document.body.append(input);fetch('/realtime-input-ready');
+        },{root:scroller});io.observe(sentinel);
+        </script>
+    "#).await;
+    let outcome = dispatch_wheel_for_action_window_test(&page, 300.0).await;
+    assert!(outcome.handled);
+    tokio::time::timeout(Duration::from_secs(2), ready)
+        .await
+        .expect("wheel and IO must advance without a screenshot or barrier command")
+        .unwrap();
+    release_response.send(()).unwrap();
+    server.await.unwrap();
+    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        page.run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
+            x: 240.0,
+            y: 30.0,
+            event_name: event.to_owned(),
+            button: 0,
+            buttons: Some(buttons),
+            click_count: 1,
+            delta_x: 0.0,
+            delta_y: 0.0,
+            pointer: RendererPointerEventProperties::default(),
+            modifiers: 0,
+        })
+        .await
+        .unwrap();
+    }
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([scroller.scrollTop,toggle.checked,clicks,events])"
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let value = renderer_json_value(reply);
+    page.close_async().await.unwrap();
+    assert_eq!(
+        value,
+        Some(serde_json::json!(
+            "[220,true,1,[\"wheel:300\",\"wheel-microtask\",\"io\",\"click\",\"click-microtask\"]]"
+        ))
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn mouse_input_completion_publishes_handler_navigation_once() {
     let runtime = initialize_layout_test_runtime();
@@ -655,4 +981,479 @@ async fn due_page_deadline_is_admitted_during_sustained_command_input() {
     page.close_async()
         .await
         .expect("Page deadline fairness page should close");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_captured_child_pointer_keeps_its_current_frame_coordinates_until_release() {
+    assert_realtime_captured_child_pointer_coordinates(false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_captured_child_pointer_keeps_current_packet_coordinates_across_got_publication() {
+    assert_realtime_captured_child_pointer_coordinates(true).await;
+}
+
+async fn assert_realtime_captured_child_pointer_coordinates(publish_in_got: bool) {
+    async fn command(
+        page: &RendererPageHandle,
+        command: RendererPageCommand,
+    ) -> anyhow::Result<RendererPageReply> {
+        let (reply, _) =
+            tokio::time::timeout(Duration::from_secs(5), page.run_async_command(command)).await??;
+        Ok(reply)
+    }
+
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/realtime-child-pointer-capture").unwrap(),
+        "<!doctype html><style>html,body{margin:0;padding:0}</style><body></body>",
+    )
+    .await;
+
+    // Keep close outside the fallible case so an input/setup error is reported
+    // together with the result of the normal owner teardown.
+    let result = async {
+        command(
+            &page,
+            RendererPageCommand::SetViewportSurface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: 640,
+                inner_height: 480,
+                outer_width: 640,
+                outer_height: 480,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            })),
+        )
+        .await?;
+        let setup = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: r#"
+(() => {
+  window.captureWitness = {
+    events: [], transitions: [], errors: [], childMoves: 0, frameMoved: false
+  };
+  const witness = window.captureWitness;
+  const publishInGot = __PUBLISH_IN_GOT__;
+  const recordError = event => {
+    witness.errors.push(String(event.message || event.reason || 'unknown error'));
+  };
+  window.addEventListener('error', recordError);
+  window.addEventListener('unhandledrejection', recordError);
+  const outside = document.createElement('div');
+  outside.id = 'outside';
+  outside.style.cssText = 'position:fixed;left:0;top:0;width:50px;height:50px';
+  document.body.appendChild(outside);
+  for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+    outside.addEventListener(type, event => {
+      witness.events.push([type, 'root', event.target.id,
+        event.clientX, event.clientY, event.buttons, false]);
+    });
+  }
+  const frame = document.createElement('iframe');
+  frame.style.cssText =
+    'position:absolute;left:100px;top:60px;width:200px;height:120px;border:0;padding:0;margin:0';
+  const installed = new Promise((resolve, reject) => {
+    frame.addEventListener('load', () => {
+      try {
+        const child = frame.contentDocument;
+        const captured = child.getElementById('captured');
+        if (!captured) throw new Error('loaded child is missing the capture target');
+        frame.contentWindow.addEventListener('error', recordError);
+        frame.contentWindow.addEventListener('unhandledrejection', recordError);
+        let pointerId = null;
+        captured.addEventListener('pointerdown', event => {
+          pointerId = event.pointerId;
+          captured.setPointerCapture(pointerId);
+        });
+        for (const type of ['gotpointercapture', 'lostpointercapture']) {
+          captured.addEventListener(type, event => {
+            witness.transitions.push([type, event.target.id,
+              event.target.ownerDocument === child,
+              captured.hasPointerCapture(pointerId), event.buttons]);
+            if (publishInGot && type === 'gotpointercapture') {
+              // This separate control deliberately replaces the screen sample
+              // during pending-capture delivery. The current input's point was
+              // already projected; only later native input uses the new sample.
+              frame.style.left = '200px';
+              frame.style.top = '100px';
+              const rect = frame.getBoundingClientRect();
+              witness.publishedFrame = {
+                rect: [rect.x, rect.y, rect.width, rect.height],
+                childMovesBeforePublication: witness.childMoves
+              };
+              witness.frameMoved = true;
+            }
+          });
+        }
+        for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+          child.addEventListener(type, event => {
+            witness.events.push([type, 'child', event.target.id,
+              event.clientX, event.clientY, event.buttons,
+              captured.hasPointerCapture(pointerId)]);
+            if (type === 'pointermove') {
+              witness.childMoves++;
+              if (!publishInGot && witness.childMoves === 1) {
+                // The original business case still performs only this write.
+                // Its branch never reads geometry or explicitly publishes it.
+                frame.style.left = '200px';
+                frame.style.top = '100px';
+                witness.frameMoved = true;
+              }
+            }
+          });
+        }
+        resolve('installed');
+      } catch (error) {
+        reject(error);
+      }
+    }, {once: true});
+  });
+  frame.srcdoc = `<!doctype html>
+    <style>html,body{margin:0;padding:0}</style>
+    <div id="captured" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>`;
+  document.body.appendChild(frame);
+  return installed;
+})()
+"#
+                .replace(
+                    "__PUBLISH_IN_GOT__",
+                    if publish_in_got { "true" } else { "false" },
+                ),
+                await_promise: true,
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            renderer_json_value(setup) == Some(serde_json::json!("installed")),
+            "the ordinary child load must install its listeners before input"
+        );
+
+        // Root (130,90) initially gives child (30,30). The second input begins
+        // at child (31,31), then delivers pending gotpointercapture. The control
+        // publishes the frame's new location inside that callback; the original
+        // case only writes it in the later pointermove listener. In both cases
+        // the next root (20,20) maps to captured child (-180,-80).
+        for (event_name, x, y, button, buttons) in [
+            ("mousedown", 130.0, 90.0, 0, 1),
+            ("mousemove", 131.0, 91.0, -1, 1),
+            ("mousemove", 20.0, 20.0, -1, 1),
+            ("mouseup", 20.0, 20.0, 0, 0),
+            ("mousemove", 20.0, 20.0, -1, 0),
+        ] {
+            let reply = command(
+                &page,
+                RendererPageCommand::DispatchMouseEventAtPoint {
+                    x,
+                    y,
+                    event_name: event_name.to_owned(),
+                    button,
+                    buttons: Some(buttons),
+                    click_count: i32::from(event_name != "mousemove"),
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                },
+            )
+            .await?;
+            anyhow::ensure!(
+                matches!(reply, RendererPageReply::InputDispatchOutcome(outcome)
+                    if outcome.handled && !outcome.triggered_top_level_navigation),
+                "{event_name} must finish through the real owner input route"
+            );
+        }
+        // The business and coordinates are already recorded by input handlers.
+        // This final read neither selects a target nor computes any geometry.
+        let witness = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: "JSON.stringify(window.captureWitness)".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await?;
+        let observation = tokio::time::timeout(
+            Duration::from_secs(5),
+            RendererPageTestingHandle::new_for_testing(&page)
+                .layout_working_set_observation_async(),
+        )
+        .await??;
+        Ok::<_, anyhow::Error>((witness, observation))
+    }
+    .await;
+    let close = tokio::time::timeout(Duration::from_secs(5), page.close_async()).await;
+    let (reply, observation) = match result {
+        Ok(value) => value,
+        Err(error) => panic!("child capture case failed: {error:#}; close result: {close:?}"),
+    };
+    close
+        .expect("child capture close deadline")
+        .expect("child capture page must close");
+    let witness = mouse_input_json_witness(&reply);
+    assert_eq!(
+        witness["events"][0],
+        serde_json::json!(["pointerdown", "child", "captured", 30, 30, 1, true]),
+        "the first native down establishes the initial child coordinate control"
+    );
+    assert_eq!(
+        witness["events"][1],
+        serde_json::json!(["pointermove", "child", "captured", 31, 31, 1, true]),
+        "the current move keeps its pre-callback point even when gotpointercapture publishes a new screen sample"
+    );
+    let mut expected = serde_json::json!({
+        "events": [
+            ["pointerdown", "child", "captured", 30, 30, 1, true],
+            ["pointermove", "child", "captured", 31, 31, 1, true],
+            ["pointermove", "child", "captured", -180, -80, 1, true],
+            ["pointerup", "child", "captured", -180, -80, 0, true],
+            ["pointermove", "root", "outside", 20, 20, 0, false]
+        ],
+        "transitions": [
+            ["gotpointercapture", "captured", true, true, 1],
+            ["lostpointercapture", "captured", true, false, 0]
+        ],
+        "errors": [],
+        "childMoves": 2,
+        "frameMoved": true
+    });
+    if publish_in_got {
+        let published_frame = serde_json::json!({
+            "rect": [200, 100, 200, 120],
+            "childMovesBeforePublication": 0
+        });
+        assert_eq!(
+            witness["publishedFrame"], published_frame,
+            "the control must observe the new frame geometry during gotpointercapture before the first child move"
+        );
+        expected["publishedFrame"] = published_frame;
+    }
+    assert_eq!(
+        witness, expected,
+        "capture target identity and its current Document coordinate system are separate from the raw hit"
+    );
+    assert_eq!(
+        observation.last_pass_paint_operations,
+        Some(0),
+        "the last observed layout pass did not paint; this is not a cumulative paint counter"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_hidden_iframe_capture_keeps_input_commands_deliverable_without_layout_box() {
+    async fn command(
+        page: &RendererPageHandle,
+        command: RendererPageCommand,
+    ) -> anyhow::Result<RendererPageReply> {
+        let (reply, _) =
+            tokio::time::timeout(Duration::from_secs(5), page.run_async_command(command)).await??;
+        Ok(reply)
+    }
+
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/realtime-hidden-frame-capture").unwrap(),
+        "<!doctype html><style>html,body{margin:0;padding:0}</style><body></body>",
+    )
+    .await;
+
+    let result = async {
+        command(
+            &page,
+            RendererPageCommand::SetViewportSurface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: 640,
+                inner_height: 480,
+                outer_width: 640,
+                outer_height: 480,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            })),
+        )
+        .await?;
+        let setup = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: r#"
+(() => {
+  const witness = window.hiddenCaptureWitness = {
+    events: [], transitions: [], errors: [], childMoves: 0
+  };
+  const recordError = event => witness.errors.push(
+    String(event.message || event.reason || 'unknown error'));
+  window.addEventListener('error', recordError);
+  window.addEventListener('unhandledrejection', recordError);
+  const outside = document.createElement('div');
+  outside.id = 'outside';
+  outside.style.cssText = 'position:fixed;left:0;top:0;width:50px;height:50px';
+  document.body.appendChild(outside);
+  outside.addEventListener('pointermove', event => {
+    witness.events.push(['pointermove', 'root', event.target.id,
+      event.clientX, event.clientY, event.buttons, false]);
+  });
+  const frame = document.createElement('iframe');
+  frame.style.cssText =
+    'position:absolute;left:100px;top:60px;width:200px;height:120px;border:0;padding:0;margin:0';
+  const installed = new Promise((resolve, reject) => {
+    frame.addEventListener('load', () => {
+      try {
+        const child = frame.contentDocument;
+        const captured = child.getElementById('captured');
+        if (!captured) throw new Error('loaded child is missing its target');
+        frame.contentWindow.addEventListener('error', recordError);
+        frame.contentWindow.addEventListener('unhandledrejection', recordError);
+        let pointerId = null;
+        captured.addEventListener('pointerdown', event => {
+          pointerId = event.pointerId;
+          captured.setPointerCapture(pointerId);
+        });
+        for (const type of ['gotpointercapture', 'lostpointercapture']) {
+          captured.addEventListener(type, event => {
+            witness.transitions.push([type, event.target.id,
+              captured.hasPointerCapture(pointerId), event.buttons]);
+          });
+        }
+        for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+          child.addEventListener(type, event => {
+            witness.events.push([type, 'child', event.target.id,
+              event.clientX, event.clientY, event.buttons,
+              captured.hasPointerCapture(pointerId)]);
+            if (type === 'pointermove' && ++witness.childMoves === 1) {
+              // Capture is already active. This source write removes its
+              // containing frame's layout box, not its Document or DOM nodes.
+              // No getter, capture, rAF or manual frame pump follows it.
+              frame.style.display = 'none';
+              witness.hiddenState = [frame.style.display, frame.isConnected,
+                captured.isConnected, captured.ownerDocument === child,
+                captured.hasPointerCapture(pointerId)];
+            }
+          });
+        }
+        resolve('installed');
+      } catch (error) {
+        reject(error);
+      }
+    }, {once: true});
+  });
+  frame.srcdoc = `<!doctype html>
+    <style>html,body{margin:0;padding:0}</style>
+    <div id="captured" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>`;
+  document.body.appendChild(frame);
+  return installed;
+})()
+"#
+                .to_owned(),
+                await_promise: true,
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            renderer_json_value(setup) == Some(serde_json::json!("installed")),
+            "normal child load must install listeners before native input"
+        );
+
+        for (event_name, x, y, button, buttons) in [
+            ("mousedown", 130.0, 90.0, 0, 1),
+            ("mousemove", 131.0, 91.0, -1, 1),
+            ("mousemove", 20.0, 20.0, -1, 1),
+            ("mouseup", 20.0, 20.0, 0, 0),
+            ("mousemove", 20.0, 20.0, -1, 0),
+        ] {
+            let reply = command(
+                &page,
+                RendererPageCommand::DispatchMouseEventAtPoint {
+                    x,
+                    y,
+                    event_name: event_name.to_owned(),
+                    button,
+                    buttons: Some(buttons),
+                    click_count: i32::from(event_name != "mousemove"),
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                },
+            )
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "{event_name} at ({x},{y}) must remain deliverable after hiding: {error:#}"
+                )
+            })?;
+            anyhow::ensure!(
+                matches!(reply, RendererPageReply::InputDispatchOutcome(outcome)
+                    if outcome.handled && !outcome.triggered_top_level_navigation),
+                "{event_name} must complete through the normal owner input route"
+            );
+        }
+        command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: "JSON.stringify(window.hiddenCaptureWitness)".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await
+    }
+    .await;
+    let close = tokio::time::timeout(Duration::from_secs(5), page.close_async()).await;
+    let reply = match result {
+        Ok(value) => value,
+        Err(error) => {
+            panic!("hidden frame capture case failed: {error:#}; close result: {close:?}")
+        }
+    };
+    close
+        .expect("hidden frame capture close deadline")
+        .expect("hidden frame capture page must close");
+    let witness = mouse_input_json_witness(&reply);
+    // Preserve the raw hidden-frame coordinates in the witness, but do not
+    // turn the former identity fallback into a new coordinate contract.
+    // The visible controls below remain exact; hidden input must be finite
+    // and keep its existing capture target, delivery, and release behavior.
+    for event_index in [2, 3] {
+        for coordinate_index in [3, 4] {
+            assert!(
+                witness["events"][event_index][coordinate_index]
+                    .as_f64()
+                    .is_some_and(f64::is_finite),
+                "hidden captured input must carry finite coordinates: {witness}"
+            );
+        }
+    }
+    assert_eq!(
+        witness,
+        serde_json::json!({
+            "events": [
+                ["pointerdown", "child", "captured", 30, 30, 1, true],
+                ["pointermove", "child", "captured", 31, 31, 1, true],
+                ["pointermove", "child", "captured",
+                    witness["events"][2][3].clone(), witness["events"][2][4].clone(), 1, true],
+                ["pointerup", "child", "captured",
+                    witness["events"][3][3].clone(), witness["events"][3][4].clone(), 0, true],
+                ["pointermove", "root", "outside", 20, 20, 0, false]
+            ],
+            "transitions": [
+                ["gotpointercapture", "captured", true, 1],
+                ["lostpointercapture", "captured", false, 0]
+            ],
+            "errors": [],
+            "childMoves": 2,
+            "hiddenState": ["none", true, true, true, true]
+        }),
+        "a legal missing iframe box must not turn existing capture delivery into a native geometry error"
+    );
 }

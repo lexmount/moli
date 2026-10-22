@@ -4,6 +4,11 @@
 //! `runtime`, `page`, `network`, and `protocol_types`, while the heavier
 //! implementation now lives in the split internal crates.
 
+// The facade's Send/Sync assertions traverse typed renderer resource routes,
+// including recursive SVG trees. Use the same type recursion budget as the
+// renderer without changing the assertions or runtime ownership.
+#![recursion_limit = "256"]
+
 mod config;
 mod dom;
 pub mod network;
@@ -21,6 +26,8 @@ pub use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFet
 pub use moli_renderer_v8::ProcessEnvironmentOwner;
 pub use moli_renderer_v8::renderer_output_transport_channel;
 pub use moli_renderer_v8::{
+    LayoutWorkingSetBudget, LayoutWorkingSetBudgetConfigError, LayoutWorkingSetBudgetLimits,
+    LayoutWorkingSetBudgetSnapshot, LayoutWorkingSetBudgetTiming, LayoutWorkingSetPressureChange,
     PageId, RendererBrowserContextRuntimeId, RendererCdpCall, RendererDocumentLifecycleIdentity,
     RendererDocumentTitleChanged, RendererNativeCommandReadyResponse,
     RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,

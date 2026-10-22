@@ -47,7 +47,7 @@ pub(crate) struct RuntimeMutationOptions {
     pub(crate) source: DomMutationSource,
     pub(crate) connected_script_policy: ConnectedScriptMutationPolicy,
     pub(crate) hide_nonce_content_attributes: bool,
-    pub(crate) dispatch_atomic_move_callbacks: bool,
+    pub(crate) state_preserving_move: bool,
     pub(crate) parser_created: bool,
     pub(crate) check_inline_style_csp: bool,
 }
@@ -58,7 +58,7 @@ impl RuntimeMutationOptions {
             source: DomMutationSource::JsDomApi,
             connected_script_policy: ConnectedScriptMutationPolicy::PrepareAndStart,
             hide_nonce_content_attributes: true,
-            dispatch_atomic_move_callbacks: false,
+            state_preserving_move: false,
             parser_created: false,
             check_inline_style_csp: true,
         }
@@ -69,7 +69,7 @@ impl RuntimeMutationOptions {
             source: DomMutationSource::ParserTreeSink,
             connected_script_policy: ConnectedScriptMutationPolicy::DeferToOwner,
             hide_nonce_content_attributes: false,
-            dispatch_atomic_move_callbacks: false,
+            state_preserving_move: false,
             parser_created: true,
             check_inline_style_csp: true,
         }
@@ -88,8 +88,8 @@ impl RuntimeMutationOptions {
         self
     }
 
-    pub(crate) const fn with_atomic_move_callbacks(mut self, dispatch: bool) -> Self {
-        self.dispatch_atomic_move_callbacks = dispatch;
+    pub(crate) const fn with_state_preserving_move(mut self, preserve: bool) -> Self {
+        self.state_preserving_move = preserve;
         self
     }
 
@@ -182,7 +182,7 @@ impl MutationCoordinator {
             connected_script_policy = ?options.connected_script_policy,
             parser_created = options.parser_created,
             hide_nonce_content_attributes = options.hide_nonce_content_attributes,
-            dispatch_atomic_move_callbacks = options.dispatch_atomic_move_callbacks,
+            state_preserving_move = options.state_preserving_move,
             "applying runtime mutation effects"
         );
         let notifications::MutationNotificationTimings {
@@ -190,7 +190,13 @@ impl MutationCoordinator {
             style_effects_us,
             style_invalidation_us,
             observer_us,
-        } = notify_dom_mutation(scope, host_ptr, dom_host, &effects);
+        } = notify_dom_mutation(
+            scope,
+            host_ptr,
+            dom_host,
+            &effects,
+            options.state_preserving_move,
+        );
 
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
         let prepare_connected_scripts = options.prepares_connected_scripts();

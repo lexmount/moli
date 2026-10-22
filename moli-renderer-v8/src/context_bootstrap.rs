@@ -118,6 +118,11 @@ mod range_live;
 mod range_surface;
 mod resize_observer_runtime;
 pub(crate) use resize_observer_runtime::queue_resize_observer_checks;
+#[cfg(test)]
+pub(crate) use resize_observer_runtime::resize_observer_measurements_for_test;
+pub(crate) use resize_observer_runtime::{
+    broadcast_realtime_resize_observer, gather_realtime_resize_observers,
+};
 mod runtime_state;
 mod selection;
 mod selection_callbacks;
@@ -152,7 +157,8 @@ pub(crate) use crypto::{
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
 pub(crate) use css_fontface_runtime::{
-    new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
+    check_realtime_document_font_readiness, new_font_face_set, rebuild_font_face_set_faces,
+    settle_document_font_face_set_ready, sync_realtime_document_font_face_set,
 };
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
@@ -276,12 +282,12 @@ pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, construct_original_error_event,
     construct_original_message_event, event_attribute, event_backing, event_bool_attribute,
-    event_callback_values, event_initialized, event_internal_bool_flag, event_is_dispatching,
-    event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
-    initialize_event_wrapper, initialize_native_security_policy_violation_event,
-    mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
-    set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
-    submit_event_submitter_value,
+    event_initialized, event_internal_bool_flag, event_is_dispatching, event_is_error_event,
+    event_is_mouse_event, event_private_value, initialize_event_object, initialize_event_wrapper,
+    initialize_native_security_policy_violation_event, mark_agent_submit_event, mark_event_trusted,
+    new_event_state, new_event_wrapper, node_event_callback_values, set_event_composed_path,
+    set_event_internal_flag, set_event_private_value, set_event_trusted,
+    submit_event_submitter_value, window_event_callback_values,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,
@@ -337,8 +343,8 @@ pub(crate) use self::location_runtime::{
 pub(crate) use self::media_cues::set_text_track_cue_track;
 pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
-    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
-    dispatch_simple_event_target_event_collecting_errors,
+    dispatch_media_query_list_change_events, dispatch_realtime_media_query_event,
+    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     evaluate_match_media_query_list_with_viewport, initialize_simple_event_target,
     install_simple_event_target_handlers, install_simple_event_target_methods,
     invoke_simple_event_listener, is_simple_event_target,
@@ -348,6 +354,7 @@ pub(crate) use self::media_queries::{
     simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
     simple_object_event_set_handler, simple_object_event_target_add_listener,
     simple_object_event_target_remove_listener, simple_object_has_event_listeners,
+    take_realtime_media_query_events,
 };
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortRealmBinding, detach_message_port_owner_for_transfer,
@@ -386,7 +393,8 @@ pub(crate) use self::notification_runtime::{
 };
 pub(crate) use self::performance_runtime::{
     ResourcePerformanceEntry, bind_window_performance_seed, current_performance_time_origin,
-    increment_performance_event_count, record_performance_dom_content_loaded_event_end,
+    current_window_performance_time_origin_seed, increment_performance_event_count,
+    record_performance_dom_content_loaded_event_end,
     record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
     record_performance_load_event_start, record_resource_performance_entry,
     run_resource_timing_buffer_full_task,
@@ -518,6 +526,7 @@ use crate::web_api_interfaces;
 use anyhow::{Result, anyhow};
 pub(crate) use exposed_interfaces::{
     ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
+    has_intrinsic_interface_registry,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 

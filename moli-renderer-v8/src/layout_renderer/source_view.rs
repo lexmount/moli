@@ -18,6 +18,10 @@ pub(super) struct NativeLayoutSourceView<'a> {
     root: DomHandle,
     document: Option<DomHandle>,
     include_paint_resources: bool,
+    capture_images: Option<(
+        &'a crate::capture_layout_resources::CaptureLayoutOverlay,
+        crate::capture_layout_resources::CaptureLayoutIdentity,
+    )>,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
 }
 
@@ -37,8 +41,18 @@ impl<'a> NativeLayoutSourceView<'a> {
             root,
             document: runtime.dom_host().owner_document_handle(root),
             include_paint_resources,
+            capture_images: None,
             text_selections: document_text_selections(runtime, root),
         }
+    }
+
+    pub(super) fn with_capture_images(
+        mut self,
+        overlay: &'a crate::capture_layout_resources::CaptureLayoutOverlay,
+        identity: crate::capture_layout_resources::CaptureLayoutIdentity,
+    ) -> Self {
+        self.capture_images = Some((overlay, identity));
+        self
     }
 
     fn host(&self) -> &DomHost {
@@ -281,9 +295,14 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         if parsed.fragment().is_some() {
             return None;
         }
-        let ready = self
-            .runtime
-            .ready_css_image_for_layout(self.document?, parsed.as_str())?;
+        let ready = if let Some((overlay, identity)) = self.capture_images {
+            // Every capture image (including a reused live image) is strongly
+            // retained by the job, which owns the decode permit until encode.
+            overlay.image(identity, parsed.as_str())?.for_layout()
+        } else {
+            self.runtime
+                .ready_css_image_for_layout(self.document?, parsed.as_str())?
+        };
         Some(LayoutImageResource {
             intrinsic_width: ready.intrinsic_width,
             intrinsic_height: ready.intrinsic_height,

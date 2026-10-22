@@ -667,7 +667,7 @@ where
                 self.register_box_fragment(index, fragment);
             }
 
-            let Some(context) = layout_box.inline_layout.as_ref() else {
+            let Some(context) = self.world.inline_layouts[index].as_ref() else {
                 continue;
             };
             let layout = layout_box.final_layout;

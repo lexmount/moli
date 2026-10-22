@@ -2091,6 +2091,9 @@ impl JsContextHost {
     }
 
     fn retire_lightweight_popup_document_owner(&mut self, owner: LightweightPopupDocumentOwner) {
+        self.retire_realtime_rendering_document(super::WindowDocumentOwner::LightweightPopup(
+            owner,
+        ));
         let _ = self
             .retire_document_resource_loader(super::WindowDocumentOwner::LightweightPopup(owner));
         self.finish_service_worker_clients_open_window_popup_with_null_for_owner(owner);
@@ -2826,6 +2829,10 @@ impl JsContextHost {
                 scope, document,
             )
         {
+            // This projection now represents a framed Window Document. Its
+            // lifetime follows the popup owner, rather than its parser's
+            // former inert-document association with the opener.
+            self.forget_inert_document_execution_context(document_handle);
             if self.lightweight_popup_document_handle(popup_id) != Some(document_handle) {
                 self.forget_lightweight_popup_document_handle(popup_id);
             }

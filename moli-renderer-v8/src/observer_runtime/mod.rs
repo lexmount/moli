@@ -3,12 +3,28 @@
 mod callback;
 mod dom_access;
 mod intersection;
+
+pub(crate) use dom_access::{
+    deliver_realtime_intersection_observer, realtime_intersection_observer_ids,
+    sample_realtime_intersections,
+};
 mod schedule;
 
 pub(crate) use dom_access::{
     ObserverStoreAccessToken, coalesce_child_list_replacement_records, flush_slotchange_microtask,
     queue_intersection_checks, queue_mutation_records, retire_context_token,
     retire_execution_context_owner,
+};
+pub(crate) use dom_access::{
+    activate_realtime_resize_observer, begin_realtime_resize_observer_sampling,
+    deactivate_realtime_resize_observer, did_publish_realtime_resize_observer_layout,
+    discard_realtime_resize_observer_document_boxes, discard_realtime_resize_observer_tree_boxes,
+    ensure_realtime_resize_observer_controller, has_pending_realtime_resize_observers,
+    prune_realtime_resize_observers, realtime_resize_observer_box_was_removed,
+    rebind_realtime_resize_observer_document, register_realtime_resize_observer,
+    request_realtime_resize_observer_checks, request_realtime_resize_observer_document,
+    retire_realtime_resize_observer_controller, retire_realtime_resize_observer_document,
+    take_realtime_resize_observers,
 };
 
 use crate::web_api_interfaces;
@@ -771,9 +787,8 @@ impl ObserverStore {
             return;
         };
         state.observed_targets.shift_remove(&target);
-        state
-            .queued_entries
-            .retain(|queued| queued.target != target);
+        // Removing a registration does not consume records already sampled.
+        // They remain available to takeRecords() or the queued notification.
         state.last_reported_entries.remove(&target);
     }
 
@@ -789,7 +804,6 @@ impl ObserverStore {
             return;
         };
         state.observed_targets.clear();
-        state.queued_entries.clear();
         state.last_reported_entries.clear();
     }
 

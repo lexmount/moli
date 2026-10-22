@@ -16,6 +16,15 @@ use taffy::{
     style_helpers::{length, percent},
 };
 
+#[path = "phase5_output_contract/working_set.rs"]
+mod working_set;
+#[path = "phase5_output_contract/working_set_construction.rs"]
+mod working_set_construction;
+#[path = "phase5_output_contract/working_set_numeric.rs"]
+mod working_set_numeric;
+#[path = "phase5_output_contract/working_set_styles.rs"]
+mod working_set_styles;
+
 #[derive(Clone)]
 struct Node {
     label: &'static str,

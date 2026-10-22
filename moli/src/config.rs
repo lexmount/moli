@@ -73,6 +73,11 @@ impl AppConfig {
                 config.server.port = args.port;
                 config.server.timeout_secs = args.timeout;
                 if let Some(interval_ms) = args.screencast_interval {
+                    if !config.browser.layout_policy().uses_real_layout() {
+                        bail!(
+                            "--screencast-interval-ms requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+                        );
+                    }
                     config.server.screencast_interval_ms = interval_ms;
                 }
             }
@@ -97,8 +102,17 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
-    if common.scrollbars && !common.layout {
-        bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
+    let layout_policy = if common.realtime {
+        LayoutPolicy::Realtime
+    } else if common.layout {
+        LayoutPolicy::OnDemand
+    } else {
+        LayoutPolicy::Mock
+    };
+    if common.scrollbars && !layout_policy.uses_real_layout() {
+        bail!(
+            "--scrollbars requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+        );
     }
 
     if let Some(log_level) = common.log_level {
@@ -194,14 +208,10 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     config
         .browser
         .set_subframe_loading_enabled(!common.disable_subframes);
-    config.browser.set_layout_policy(if common.layout {
-        LayoutPolicy::OnDemand
-    } else {
-        LayoutPolicy::Mock
-    });
+    config.browser.set_layout_policy(layout_policy);
     config
         .browser
-        .set_scrollbars_hidden(common.layout && !common.scrollbars);
+        .set_scrollbars_hidden(layout_policy.uses_real_layout() && !common.scrollbars);
     config.fetch.cookie_files = common.cookie_file.clone();
     config.browser.fetch_mut().set_network_blocking(
         common.block_private_networks,

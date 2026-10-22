@@ -82,6 +82,7 @@ mod page_generated_dom;
 mod page_geometry;
 mod page_network;
 mod page_print;
+mod page_print_capture;
 mod page_screenshot;
 mod page_settings;
 mod page_state;
@@ -121,10 +122,12 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageDedicatedWorkerClientEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageFontLoadingTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use self::page_vm::AuthorizedCurrentPageImageLoadEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageIndexedDbTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageIntersectionObserverTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageMediaElementEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageMessagePortDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageMiscPlatformApiTask;
@@ -145,6 +148,8 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageWebCryptoTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageWindowMessage;
 #[cfg(test)]
 pub(crate) use self::page_vm::PageDomManipulationTestFamily;
+#[cfg(test)]
+pub(crate) use self::page_vm::PageSelectedTaskTestSelector;
 pub(crate) use self::page_vm::backend_node_registry::SharedRendererBackendNodeRegistry;
 #[cfg(test)]
 pub(crate) use self::page_vm::backend_node_registry::new_shared_renderer_backend_node_registry;
@@ -245,6 +250,7 @@ pub enum RendererOwnerRuntimeActivitySource {
     FileReading,
     /// One callback from the HTML miscellaneous-platform API task source.
     MiscPlatformApi,
+    IntersectionObserver,
     /// A Window.postMessage delivery already settled by the Page owner.
     WindowMessage,
     /// An IndexedDB request/transaction task already settled by the Page owner.
@@ -328,7 +334,8 @@ pub use self::page_screenshot::{
     RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererScreenshotClip,
-    RendererScreenshotFormat, RendererScreenshotRegion, RendererVisualStateToken,
+    RendererScreenshotFormat, RendererScreenshotPurpose, RendererScreenshotRegion,
+    RendererVisualStateToken,
 };
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;

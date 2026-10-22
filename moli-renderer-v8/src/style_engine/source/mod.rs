@@ -118,7 +118,7 @@ impl MoliStyleEngine {
         &mut self,
         document: DomHandle,
         installations: Vec<AdoptedStyleSheetInstallation>,
-    ) {
+    ) -> bool {
         let world = self.world_for_document(document);
         let previous_source_ids = world
             .adopted_style_sheet_sources
@@ -137,7 +137,9 @@ impl MoliStyleEngine {
                 document,
                 previous_source_ids.into_iter().chain(next_source_ids),
             );
+            return true;
         }
+        false
     }
 
     pub(crate) fn adopted_style_sheet_sources_for_document(
@@ -758,9 +760,9 @@ impl MoliStyleEngine {
         host: &DomHost,
         root: DomHandle,
         installations: Vec<AdoptedStyleSheetInstallation>,
-    ) {
+    ) -> bool {
         let Some(world) = self.owner_document_world(host, root) else {
-            return;
+            return false;
         };
         let previous_source_ids = world
             .adopted_style_sheet_sources
@@ -780,7 +782,9 @@ impl MoliStyleEngine {
                 root,
                 previous_source_ids.into_iter().chain(next_source_ids),
             );
+            return true;
         }
+        false
     }
 
     pub(crate) fn shadow_root_adopted_style_sheet_sources_with_host(

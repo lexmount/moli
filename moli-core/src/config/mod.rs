@@ -5,12 +5,15 @@ use moli_page_types::{
     LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask, SubresourceResourceType,
 };
 
+use crate::LayoutWorkingSetBudget;
+
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
     document_start_scripts: Vec<String>,
     fetch: FetchConfig,
     profile_dir: Option<PathBuf>,
     layout_configuration: LayoutConfiguration,
+    layout_working_set_budget: Option<LayoutWorkingSetBudget>,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     script_execution_disabled: bool,
@@ -26,6 +29,7 @@ impl Default for BrowserConfig {
             fetch: FetchConfig::default(),
             profile_dir: None,
             layout_configuration: LayoutConfiguration::default(),
+            layout_working_set_budget: None,
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             script_execution_disabled: false,
@@ -94,6 +98,20 @@ impl BrowserConfig {
 
     pub fn layout_configuration(&self) -> LayoutConfiguration {
         self.layout_configuration
+    }
+
+    /// The optional shared budget for retained Realtime working state.
+    pub fn layout_working_set_budget(&self) -> Option<&LayoutWorkingSetBudget> {
+        self.layout_working_set_budget.as_ref()
+    }
+
+    pub fn set_layout_working_set_budget(&mut self, budget: Option<LayoutWorkingSetBudget>) {
+        self.layout_working_set_budget = budget;
+    }
+
+    pub fn with_layout_working_set_budget(mut self, budget: LayoutWorkingSetBudget) -> Self {
+        self.set_layout_working_set_budget(Some(budget));
+        self
     }
 
     pub fn image_fetch_enabled(&self) -> bool {

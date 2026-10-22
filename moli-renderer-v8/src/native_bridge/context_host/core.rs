@@ -339,6 +339,7 @@ impl JsContextHost {
             layout_policy: moli_page_types::LayoutPolicy::default(),
             scrollbars_hidden: false,
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
+            realtime_layout_state: None,
             layout_pass_active: Cell::new(false),
             completed_layout_pass_count: Cell::new(0),
             completed_layout_pass_time: Cell::new(std::time::Duration::ZERO),
@@ -380,6 +381,7 @@ impl JsContextHost {
             observers: ObserverStore::default(),
             child_browsing_contexts: IndexMap::new(),
             frame_owner_store,
+            inert_document_execution_contexts: None,
             frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore::default(),
             frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore::default(),
             frame_document_blocking_stylesheets: FrameDocumentBlockingStylesheetStore::default(),
@@ -389,6 +391,8 @@ impl JsContextHost {
             child_default_context_bootstrap: None,
             #[cfg(test)]
             force_child_default_context_preflight_failure: false,
+            #[cfg(test)]
+            force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell::new(false),
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: Rc::new(RefCell::new(None)),
             next_child_browsing_context_id: 1,
@@ -443,6 +447,7 @@ impl JsContextHost {
                 super::directory_reader_callbacks::DirectoryReaderCallbackState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
+            intersection_observer_tasks: None,
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
@@ -680,6 +685,10 @@ impl JsContextHost {
             let runtime: &mut DocumentRuntime = self;
             runtime.open_document();
         }
+        crate::observer_runtime::discard_realtime_resize_observer_document_boxes(
+            self,
+            retired_document_handle,
+        );
         let retired_descendant_count =
             descendant_count_before.saturating_sub(self.child_browsing_contexts.len());
         let document_handle = self.document_handle();
@@ -731,6 +740,10 @@ impl JsContextHost {
             transition.retired_owner(),
             transition.current_owner(),
         );
+        self.rebind_realtime_document_after_open(
+            transition.retired_owner(),
+            transition.current_owner(),
+        );
         let image_decode_retirement =
             self.retire_image_decode_requests_for_document_owner(scope, transition.retired_owner());
         self.apply_main_service_worker_document_owner_transition(transition);
@@ -754,6 +767,12 @@ impl JsContextHost {
         self.inline_style_declarations.clear();
         self.style_engine
             .clear_for_document_replacement(document_handle);
+        if self.layout_policy().is_realtime() {
+            // Retire services before author code can measure the rewritten
+            // document. The deferred ScriptVm journal must not later erase a
+            // new layout already published by a getter or this frame's body.
+            self.reset_document_layout_state();
+        }
         if let Some(lifecycle) = &self.root_document_lifecycle {
             lifecycle.did_open_document();
         }
@@ -767,6 +786,8 @@ impl JsContextHost {
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"
         );
+        self.initialize_realtime_document_fonts();
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) fn page_websocket_sender(
@@ -905,6 +926,29 @@ impl JsContextHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .misc_platform_api()
+            .clone()
+    }
+
+    pub(crate) fn page_intersection_observer_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageIntersectionObserverSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
+            )
+            .intersection_observer()
+            .clone()
+    }
+    pub(crate) fn page_font_loading_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageFontLoadingSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before font readiness admission",
+            )
+            .font_loading()
             .clone()
     }
 
@@ -1820,6 +1864,10 @@ impl JsContextHost {
         {
             self.active_form_submission_forms.remove(index);
         }
+    }
+
+    pub(crate) fn observers(&self, _access: &ObserverStoreAccessToken) -> &ObserverStore {
+        &self.observers
     }
 
     pub(crate) fn observers_mut(

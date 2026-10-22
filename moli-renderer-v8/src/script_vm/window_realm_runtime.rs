@@ -138,7 +138,9 @@ impl WindowRealmRuntimeState {
                 );
             }
         }
-        if let Some(handle) = child_handle {
+        if self.isolated {
+            unsafe { &*host_ptr }.detach_isolated_proxy_after_aborted_context(scope, context);
+        } else if let Some(handle) = child_handle {
             let owns_current_proxy = unsafe { &*host_ptr }
                 .existing_child_browsing_context_window_wrapper(scope, handle)
                 .and_then(|proxy| proxy.get_creation_context(scope))

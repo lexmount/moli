@@ -2389,3 +2389,160 @@ globalThis.__detachedShadowStylesheetHost = host;
         "a connected shadow adopted stylesheet must prevent the font fast path",
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn capture_request_keeps_original_client_and_capability_across_document_open() {
+    use crate::capture_resources::{CaptureResourceFetch, CaptureResourceKind, PrintCaptureJob};
+    use crate::runtime::{RendererCaptureScreenshotRequest, RendererScreenshotPurpose};
+
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader
+        .set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::IMAGE);
+    let (mut vm, _completions) = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+        "https://capture-client-retirement.test/",
+        "<!doctype html><html><body>before</body></html>",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    let request = RendererCaptureScreenshotRequest {
+        purpose: RendererScreenshotPurpose::Print {
+            print_background: true,
+        },
+        ..RendererCaptureScreenshotRequest::viewport_png()
+    };
+    let mut original_job = PrintCaptureJob::new(request.clone()).unwrap();
+    let original_endpoint = original_job.endpoint();
+    let (document, original_target, original_client) = {
+        let host = vm._context_host.borrow();
+        let document = host.document_handle();
+        let target = host
+            .capture_layout_identity_for_document(document)
+            .unwrap()
+            .target;
+        let client = host.service_worker_client_id_for_subresource_owner(target.dispatch_scope());
+        (document, target, client)
+    };
+    let original_id = vm
+        .start_capture_resource(
+            document,
+            original_target,
+            CaptureResourceKind::Image,
+            Url::parse("https://capture-client-retirement.test/original.png").unwrap(),
+            0,
+            original_endpoint.clone(),
+        )
+        .unwrap()
+        .expect("Image request must pause before transport");
+    assert_eq!(
+        vm._context_host
+            .borrow_mut()
+            .take_pending_subresource_fetch_infos()
+            .into_iter()
+            .map(|info| info.internal_id)
+            .collect::<Vec<_>>(),
+        vec![original_id],
+        "the actual start path must enqueue Fetch interception before any network task"
+    );
+    {
+        let mut host = vm._context_host.borrow_mut();
+        let pending = host.take_pending_subresource_fetch(original_id).unwrap();
+        let crate::types::PendingSubresourceContinuation::CaptureResource(capture) =
+            &pending.continuation
+        else {
+            panic!("capture continuation");
+        };
+        assert_eq!(capture.service_worker_client_id, original_client);
+        assert_eq!(capture.target, original_target);
+        host.restore_pending_subresource_fetch(pending);
+    }
+
+    vm.eval("document.open(); document.write('<!doctype html><html><body>after</body></html>'); document.close(); 'after'")
+        .expect("same-LocalWindow document.open");
+    let current_target = {
+        let host = vm._context_host.borrow();
+        let target = host
+            .capture_layout_identity_for_document(host.document_handle())
+            .unwrap()
+            .target;
+        assert_ne!(target, original_target);
+        assert_eq!(
+            host.service_worker_client_id_for_subresource_owner(target.dispatch_scope()),
+            original_client,
+            "document.open updates the existing client; it does not allocate a second one"
+        );
+        target
+    };
+    {
+        let mut host = vm._context_host.borrow_mut();
+        let pending = host
+            .take_pending_subresource_fetch(original_id)
+            .expect("old transport remains resident");
+        let crate::types::PendingSubresourceContinuation::CaptureResource(capture) =
+            &pending.continuation
+        else {
+            panic!("capture continuation after replacement");
+        };
+        assert_eq!(capture.target, original_target);
+        assert_eq!(capture.service_worker_client_id, original_client);
+        assert!(capture.endpoint.same_capture(&original_endpoint));
+        host.restore_pending_subresource_fetch(pending);
+    }
+
+    let replacement_job = PrintCaptureJob::new(request).unwrap();
+    let replacement_endpoint = replacement_job.endpoint();
+    let replacement_id = vm
+        .start_capture_resource(
+            document,
+            current_target,
+            CaptureResourceKind::Image,
+            Url::parse("https://capture-client-retirement.test/replacement.png").unwrap(),
+            0,
+            replacement_endpoint.clone(),
+        )
+        .unwrap()
+        .expect("new Document request must pause before transport");
+    assert_eq!(
+        vm._context_host
+            .borrow_mut()
+            .take_pending_subresource_fetch_infos()
+            .into_iter()
+            .map(|info| info.internal_id)
+            .collect::<Vec<_>>(),
+        vec![replacement_id]
+    );
+    assert!(
+        replacement_id > original_id,
+        "Host request ids do not restart on document.open"
+    );
+    let original_fetch = [CaptureResourceFetch {
+        internal_id: original_id,
+        target: original_target,
+        entry_id: 0,
+        kind: CaptureResourceKind::Image,
+    }];
+    vm.cancel_capture_resource_fetches(&original_fetch, &replacement_endpoint);
+    {
+        let mut host = vm._context_host.borrow_mut();
+        let pending = host
+            .take_pending_subresource_fetch(original_id)
+            .expect("another capture's endpoint is not cancellation authority");
+        host.restore_pending_subresource_fetch(pending);
+    }
+    original_job.revoke();
+    vm.cancel_capture_resource_fetches(&original_fetch, &original_endpoint);
+    let mut host = vm._context_host.borrow_mut();
+    assert!(host.take_pending_subresource_fetch(original_id).is_none());
+    let replacement = host
+        .take_pending_subresource_fetch(replacement_id)
+        .expect("original capture cleanup must preserve the replacement request");
+    let registry_id = replacement.load.registry_id();
+    host.restore_pending_subresource_fetch(replacement);
+    assert_eq!(
+        host.retire_document_resource_load_consumers(registry_id),
+        (1, 0)
+    );
+    assert!(
+        host.take_pending_subresource_fetch(replacement_id)
+            .is_none()
+    );
+}

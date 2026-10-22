@@ -66,6 +66,7 @@ mod frontend_node_bindings;
 mod javascript_navigation_lifecycle;
 mod main_document_lifecycle_completion;
 mod page_action_window;
+pub(in crate::runtime) use page_action_window::RendererInputDispatchPolicy;
 mod page_broadcast_channel_delivery;
 mod page_callback_task_completion;
 mod page_child_classic_script_source_load_task_completion;
@@ -98,6 +99,7 @@ mod page_dynamic_import_owner_action;
 mod page_element_toggle_event;
 mod page_file_entry_file_callback;
 mod page_file_reading;
+mod page_font_loading;
 mod page_hash_change_delivery;
 mod page_history_traversal;
 #[cfg(test)]
@@ -106,6 +108,7 @@ mod page_image_load_event;
 mod page_indexed_db_task;
 mod page_internal_loading;
 mod page_internal_loading_task_completion;
+mod page_intersection_observer;
 mod page_main_document_post_parse;
 mod page_main_document_runtime;
 mod page_main_native_module_task;
@@ -216,10 +219,12 @@ pub(crate) use page_dynamic_import_owner_action::AuthorizedCurrentChildDynamicIm
 pub(crate) use page_element_toggle_event::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use page_file_entry_file_callback::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use page_file_reading::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use page_font_loading::AuthorizedCurrentPageFontLoadingTask;
 pub(crate) use page_hash_change_delivery::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use page_history_traversal::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use page_image_load_event::AuthorizedCurrentPageImageLoadEvent;
 pub(crate) use page_indexed_db_task::AuthorizedCurrentPageIndexedDbTask;
+pub(crate) use page_intersection_observer::AuthorizedCurrentPageIntersectionObserverTask;
 pub(crate) use page_media_element_event::AuthorizedCurrentPageMediaElementEvent;
 pub(crate) use page_message_port_delivery::AuthorizedCurrentPageMessagePortDelivery;
 pub(crate) use page_misc_platform_api::AuthorizedCurrentPageMiscPlatformApiTask;
@@ -4422,6 +4427,8 @@ impl PageVm {
         };
         vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_configuration.policy);
+        vm.install_page_layout_working_set_budget()
+            .map_err(|error| Box::new((error, vm.document_runtime.dom_host().clone())))?;
         vm.set_scrollbars_hidden(
             env.layout_configuration
                 .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),

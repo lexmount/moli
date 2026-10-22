@@ -374,6 +374,14 @@ impl MoliStyleEngine {
             .source_set_generation()
     }
 
+    /// Source commits only; computed-style materialization and invalidation
+    /// cleanup advance other counters and must not invalidate their own layout.
+    pub(crate) fn source_set_generation_for_document(&self, document: DomHandle) -> u64 {
+        self.document_worlds
+            .generation_snapshot_for_document(document)
+            .source_set_generation
+    }
+
     #[cfg(test)]
     pub(crate) fn computed_cache_generation_for_document_for_test(
         &self,

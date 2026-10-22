@@ -1,5 +1,7 @@
 //! Screenshot and screencast requests, replies and pixel capture.
 
+use crate::native_bridge::LayoutPublicationRequest;
+use crate::style_engine::StyloStyleEnvironment;
 use moli_layout::{
     LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest, PaintCaptureSurface,
     PaintViewport,
@@ -113,6 +115,15 @@ pub enum RendererScreenshotFormat {
     Jpeg,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RendererScreenshotPurpose {
+    Screenshot,
+    /// Pixel capture under print media, independent of native PDF output.
+    Print {
+        print_background: bool,
+    },
+}
+
 /// A CDP page-coordinate clip. Validation remains at the renderer boundary so
 /// every protocol frontend shares the same finite/range checks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,6 +148,7 @@ pub enum RendererScreenshotRegion {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RendererCaptureScreenshotRequest {
+    pub purpose: RendererScreenshotPurpose,
     pub format: RendererScreenshotFormat,
     pub quality: u8,
     pub region: RendererScreenshotRegion,
@@ -196,6 +208,7 @@ pub enum RendererCaptureScreencastFrameReply {
 impl RendererCaptureScreenshotRequest {
     pub fn viewport_png() -> Self {
         Self {
+            purpose: RendererScreenshotPurpose::Screenshot,
             format: RendererScreenshotFormat::Png,
             quality: 100,
             region: RendererScreenshotRegion::Viewport,
@@ -214,7 +227,11 @@ impl PageVm {
         &mut self,
         request: RendererCaptureScreenshotRequest,
     ) -> anyhow::Result<RendererCaptureScreenshotReply> {
-        self.flush_page_action_window(moli_action_window::ActionBarrier::Screenshot)?;
+        let barrier = match request.purpose {
+            RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
+            RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
+        };
+        self.flush_page_action_window(barrier)?;
         let paint_capture = request
             .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
         self.capture_image(
@@ -222,9 +239,32 @@ impl PageVm {
             request.quality,
             request.optimize_for_speed,
             paint_capture,
-            moli_layout::LayoutFlushReason::Screenshot,
+            match request.purpose {
+                RendererScreenshotPurpose::Screenshot => moli_layout::LayoutFlushReason::Screenshot,
+                RendererScreenshotPurpose::Print { .. } => moli_layout::LayoutFlushReason::Print,
+            },
+            match request.purpose {
+                RendererScreenshotPurpose::Screenshot => LayoutPublicationRequest::Screen,
+                RendererScreenshotPurpose::Print { .. } => LayoutPublicationRequest::Transient,
+            },
+            self.capture_style_environment_override(request.purpose),
         )
         .map(RendererImageCaptureOutcome::into_screenshot_reply)
+    }
+
+    pub(super) fn capture_style_environment_override(
+        &self,
+        purpose: RendererScreenshotPurpose,
+    ) -> Option<StyloStyleEnvironment> {
+        if matches!(purpose, RendererScreenshotPurpose::Print { .. })
+            && self.document_settings.emulated_media.media.is_none()
+        {
+            let mut print = self.document_settings.emulated_media.clone();
+            print.media = Some("print".to_owned());
+            Some(StyloStyleEnvironment::from_emulated_media(&print))
+        } else {
+            None
+        }
     }
 
     /// Polls one screencast subscription. Only this request accepts a known
@@ -283,6 +323,8 @@ impl PageVm {
             request.optimize_for_speed,
             paint_capture,
             moli_layout::LayoutFlushReason::Screencast,
+            LayoutPublicationRequest::Screen,
+            None,
         )? {
             RendererImageCaptureOutcome::Captured(image) => image,
             RendererImageCaptureOutcome::LayoutDisabled => {
@@ -315,6 +357,8 @@ impl PageVm {
         optimize_for_speed: bool,
         paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
+        publication: LayoutPublicationRequest,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
@@ -328,9 +372,13 @@ impl PageVm {
             surface.device_pixel_ratio as f32,
         );
         let layout_started = profile_enabled.then(Instant::now);
-        let Some(snapshot) =
-            self.vm_mut()
-                .paint_layout_snapshot_with_capture(viewport, reason, paint_capture)?
+        let Some(snapshot) = self.vm_mut().paint_layout_snapshot_with_capture(
+            viewport,
+            reason,
+            paint_capture,
+            publication,
+            environment_override,
+        )?
         else {
             return Ok(RendererImageCaptureOutcome::NoDocument);
         };
@@ -338,8 +386,30 @@ impl PageVm {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
 
+        Self::encode_capture_snapshot(
+            &snapshot,
+            format,
+            quality,
+            optimize_for_speed,
+            reason,
+            layout_us,
+            total_started,
+        )
+        .map(RendererImageCaptureOutcome::Captured)
+    }
+
+    pub(super) fn encode_capture_snapshot(
+        snapshot: &moli_layout::PaintSnapshot,
+        format: RendererScreenshotFormat,
+        quality: u8,
+        optimize_for_speed: bool,
+        reason: moli_layout::LayoutFlushReason,
+        layout_us: u128,
+        total_started: Option<Instant>,
+    ) -> anyhow::Result<RendererCapturedScreenshot> {
+        let profile_enabled = moli_trace::cpu_profile_enabled();
         if profile_enabled {
-            let profile = PaintFragmentProfile::from_snapshot(&snapshot);
+            let profile = PaintFragmentProfile::from_snapshot(snapshot);
             tracing::info!(
                 target: "moli_cpu_profile",
                 stage = "paint_fragment_profile",
@@ -360,7 +430,7 @@ impl PageVm {
         }
 
         let raster_started = profile_enabled.then(Instant::now);
-        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        let mut raster = moli_paint::raster_snapshot(snapshot)?;
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -406,14 +476,12 @@ impl PageVm {
                 total_us = started.elapsed().as_micros(),
             );
         }
-        Ok(RendererImageCaptureOutcome::Captured(
-            RendererCapturedScreenshot {
-                mime_type: mime_type.to_owned(),
-                width,
-                height,
-                bytes: bytes.into(),
-            },
-        ))
+        Ok(RendererCapturedScreenshot {
+            mime_type: mime_type.to_owned(),
+            width,
+            height,
+            bytes: bytes.into(),
+        })
     }
 }
 
@@ -450,7 +518,7 @@ fn visual_state_for_captured_screencast_frame(
 }
 
 impl RendererCaptureScreenshotRequest {
-    fn paint_capture_request(
+    pub(crate) fn paint_capture_request(
         &self,
         surface: ViewportSurface,
     ) -> anyhow::Result<PaintCaptureRequest> {
@@ -478,7 +546,10 @@ impl RendererCaptureScreenshotRequest {
         };
         Ok(PaintCaptureRequest {
             region,
-            include_backgrounds: true,
+            include_backgrounds: match self.purpose {
+                RendererScreenshotPurpose::Screenshot => true,
+                RendererScreenshotPurpose::Print { print_background } => print_background,
+            },
             include_viewport_controls,
             base_background_color: paint_background_color(self.base_background_color),
             max_width: self.max_width,

@@ -203,7 +203,9 @@ pub async fn run_cli_with_config<W: Write>(
                 |error| with_http_status_context(error, &args, page_status, final_url.as_str());
             if !args.fail || http_failure.is_none() {
                 let rendered = if let Some(expression) = eval_expression.as_deref() {
-                    if config.browser.layout_policy().uses_real_layout() {
+                    // OnDemand needs an explicit sample before the script.
+                    // Realtime refreshes at each geometry demand itself.
+                    if config.browser.layout_policy() == moli_core::LayoutPolicy::OnDemand {
                         page.publish_layout_async()
                             .await
                             .context("failed to publish layout before evaluating JavaScript")

@@ -176,9 +176,13 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
             previous
         );
         assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
-        vm.paint_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0), reason)
-            .expect("fresh paint publishes the scrolled geometry")
-            .expect("document layout");
+        vm.paint_layout_snapshot(
+            moli_layout::PaintViewport::new(800, 600, 1.0),
+            reason,
+            crate::native_bridge::LayoutPublicationRequest::Screen,
+        )
+        .expect("fresh paint publishes the scrolled geometry")
+        .expect("document layout");
         vm.eval("void 0")
             .expect("complete the turn and deliver queued observers");
         assert_eq!(

@@ -76,7 +76,7 @@ impl DocumentWebFontState {
         &mut self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
         services: &mut DocumentLayoutServices,
-    ) {
+    ) -> bool {
         let active = resources
             .into_iter()
             .filter_map(StylesheetLoadBlockingResource::web_font)
@@ -88,10 +88,12 @@ impl DocumentWebFontState {
             .filter(|slot| !active.contains(*slot))
             .cloned()
             .collect::<Vec<_>>();
+        let mut registration_removed = false;
         for slot in removed {
             self.slots.remove(&slot);
-            services.remove_web_font(&slot);
+            registration_removed |= services.remove_web_font(&slot);
         }
+        registration_removed
     }
 
     /// Binds a new request identity, or suppresses a duplicate request for a
@@ -100,15 +102,15 @@ impl DocumentWebFontState {
         &mut self,
         resource: StylesheetLoadBlockingResource,
         services: &mut DocumentLayoutServices,
-    ) -> Option<StylesheetLoadBlockingResource> {
+    ) -> (Option<StylesheetLoadBlockingResource>, bool) {
         let Some(font) = resource.web_font() else {
-            return Some(resource);
+            return (Some(resource), false);
         };
         let slot = font.slot().to_owned();
         if self.slots.get(&slot).is_some_and(|current| {
             current.request_url == *resource.request_url() && current.face == *font.face()
         }) {
-            return None;
+            return (None, false);
         }
 
         self.next_request_id = self
@@ -116,7 +118,7 @@ impl DocumentWebFontState {
             .checked_add(1)
             .expect("document web-font request identity space exhausted");
         let request_id = self.next_request_id;
-        services.remove_web_font(&slot);
+        let registration_removed = services.remove_web_font(&slot);
         self.slots.insert(
             slot,
             WebFontSlot {
@@ -126,7 +128,10 @@ impl DocumentWebFontState {
                 status: WebFontRequestStatus::Pending,
             },
         );
-        Some(resource.bind_web_font_request(request_id))
+        (
+            Some(resource.bind_web_font_request(request_id)),
+            registration_removed,
+        )
     }
 
     pub(crate) fn complete(
@@ -214,12 +219,14 @@ mod tests {
                 resource("@font-face{font-family:First;src:url(font.woff2)}"),
                 &mut services,
             )
+            .0
             .unwrap();
         let second = state
             .admit(
                 resource("@font-face{font-family:Second;src:url(font.woff2)}"),
                 &mut services,
             )
+            .0
             .unwrap();
 
         state.retain_active_slots([&second], &mut services);
@@ -244,6 +251,7 @@ mod tests {
                 resource("@font-face{font-family:Demo;src:url(font.woff2)}"),
                 &mut services,
             )
+            .0
             .unwrap();
         let late = admitted.clone();
         assert!(matches!(

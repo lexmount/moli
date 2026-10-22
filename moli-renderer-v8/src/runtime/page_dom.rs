@@ -1387,9 +1387,8 @@ impl PageVm {
         &mut self,
         handle: DomHandle,
     ) -> Result<Option<Vec<(String, String)>>> {
-        Ok(self
-            .vm()
-            .computed_style_properties_for_inspector_handle(handle))
+        self.vm()
+            .computed_style_properties_for_inspector_handle(handle)
     }
 
     pub(crate) fn computed_style_properties_for_node(

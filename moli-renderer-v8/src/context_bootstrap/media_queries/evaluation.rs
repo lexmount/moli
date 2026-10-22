@@ -5,11 +5,17 @@ use super::{
 };
 use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
 use crate::context_bootstrap::current_window_style_viewport;
+use crate::context_bootstrap::window_accessors::{
+    prepare_window_viewport_read, window_current_dispatch_scope,
+};
 use crate::context_bootstrap::{
     MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
     MEDIA_QUERY_LIST_REGISTRY_SLOT,
 };
 use crate::context_bootstrap::{global_queue_array, push_object_to_global_registry};
+use crate::native_bridge::{
+    JsContextHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
+};
 use crate::style_engine::{
     StyleViewport,
     media_list::{evaluate_media_query_list, normalize_media_query_list},
@@ -89,29 +95,151 @@ fn media_query_list_attribute_getter_callback<'s>(
         return;
     };
     if slot == MEDIA_QUERY_LIST_MATCHES_SLOT {
-        let context = args
-            .this()
-            .get_creation_context(scope)
-            .unwrap_or_else(|| scope.get_current_context());
-        let scope = &mut v8::ContextScope::new(scope, context);
-        let media = media_query_list_media_slot(scope, args.this()).unwrap_or_default();
-        let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            let host = unsafe { &*host_ptr };
-            evaluate_match_media_query_list_with_viewport(
-                &media,
-                Some(host.emulated_media()),
-                current_window_style_viewport(scope, host),
-            )
-        } else {
-            evaluate_match_media_query_list(&media, None)
-        };
-        rv.set_bool(matches);
+        if let Some(matches) = read_media_query_matches(scope, args.this()) {
+            rv.set_bool(matches);
+        }
         return;
     }
     rv.set(
         media_query_list_slot_value(scope, args.this(), slot)
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
+}
+
+const REALTIME_MEDIA_QUERY_ID_SLOT: &str = "__moliRealtimeMediaQueryId";
+
+fn realtime_media_query_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<u64> {
+    get_private_value(scope, list, REALTIME_MEDIA_QUERY_ID_SLOT)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+        .and_then(|value| {
+            let (id, lossless) = value.u64_value();
+            lossless.then_some(id)
+        })
+}
+
+pub(super) fn read_media_query_matches<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<bool> {
+    let context = list
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    let media = media_query_list_media_slot(scope, list).unwrap_or_default();
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return Some(evaluate_match_media_query_list(&media, None));
+    };
+    let host = unsafe { &*host_ptr };
+    if window_current_dispatch_scope(scope, global, host).is_none() {
+        return Some(false);
+    }
+    if !prepare_window_viewport_read(scope, global) {
+        return None;
+    }
+    if host.layout_policy().is_realtime()
+        && let Some(id) = realtime_media_query_id(scope, list)
+    {
+        return Some(host.realtime_media_query_matches(id));
+    }
+    Some(evaluate_match_media_query_list_with_viewport(
+        &media,
+        Some(host.emulated_media()),
+        current_window_style_viewport(scope, host),
+    ))
+}
+
+pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    event_type: &str,
+) {
+    if event_type != "change" {
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    if !unsafe { &*host_ptr }.layout_policy().is_realtime() {
+        return;
+    }
+    let Some(id) = realtime_media_query_id(scope, list) else {
+        return;
+    };
+    let active = !super::simple_object_event_listeners_snapshot(scope, list, event_type).is_empty();
+    unsafe { &*host_ptr }.set_realtime_media_query_listening(id, active);
+}
+
+/// These strong roots exist only for a Document's current media phase. The
+/// persistent native query holds the list weakly; it never roots a Context.
+pub(crate) struct PreparedRealtimeMediaQueryEvent {
+    pub(crate) id: u64,
+    pub(crate) binding: WindowExecutionContextBinding,
+    pub(crate) list: v8::Global<v8::Object>,
+    pub(crate) event: v8::Global<v8::Object>,
+}
+
+pub(crate) fn take_realtime_media_query_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    target: WindowDocumentTaskTarget,
+) -> Vec<PreparedRealtimeMediaQueryEvent> {
+    // Freeze the whole Document batch once, not separately per Realm. Queries
+    // queued or registered during a callback belong to the next media phase.
+    let candidates = unsafe { &*host_ptr }.take_realtime_media_query_notifications(target);
+    let mut events = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !unsafe { &*host_ptr }.realtime_media_query_is_current(target, candidate.id) {
+            continue;
+        }
+        // No Host/state borrow survives a weak upgrade or any V8 operation.
+        let Some(list) = candidate.list.to_local(scope) else {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
+            continue;
+        };
+        let Some(context) = list.get_creation_context(scope) else {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
+            continue;
+        };
+        let identity = candidate.execution_context;
+        let binding = WindowExecutionContextBinding::new(
+            identity.owner(),
+            identity.dispatch_scope(),
+            identity.realm_token(),
+            v8::Global::new(scope, context),
+        );
+        let list = v8::Global::new(scope, list);
+        let event = binding.with_current_scope(scope, host_ptr, |scope, _| {
+            let list = v8::Local::new(scope, &list);
+            let event =
+                super::event::create_realtime_media_query_list_event(scope, list, &candidate.media);
+            v8::Global::new(scope, event)
+        });
+        let Some(event) = event else {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
+            continue;
+        };
+        // Prepare every event before the first author callback. The existing
+        // native event.matches getter deliberately continues to read its list.
+        events.push(PreparedRealtimeMediaQueryEvent {
+            id: candidate.id,
+            binding,
+            list,
+            event,
+        });
+    }
+    events
+}
+
+pub(crate) fn dispatch_realtime_media_query_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    let _ = dispatch_media_query_list_event(scope, list, event);
 }
 
 const MEDIA_QUERY_LIST_ATTRIBUTE_SLOTS: &[&str] =
@@ -144,6 +272,7 @@ fn media_query_list_onchange_setter_callback<'s>(
         MEDIA_QUERY_LIST_ONCHANGE_SLOT,
         args.get(0),
     );
+    realtime_media_query_listeners_changed(scope, target, "change");
     rv.set_undefined();
 }
 
@@ -156,6 +285,10 @@ pub(crate) fn window_match_media_callback<'s>(
         return;
     };
     let serialized_query = serialize_match_media_query_list(&parsed.query);
+    let global = scope.get_current_context().global(scope);
+    if !prepare_window_viewport_read(scope, global) {
+        return;
+    }
     let (emulated_media, viewport) =
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let host = unsafe { &*host_ptr };
@@ -171,9 +304,30 @@ pub(crate) fn window_match_media_callback<'s>(
         emulated_media.as_ref(),
         viewport,
     );
+    let realtime_registration = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && unsafe { &*host_ptr }.layout_policy().is_realtime()
+        && let Some(target) = unsafe { &*host_ptr }.current_window_document_task_target(scope)
+    {
+        Some((host_ptr, target, serialized_query.clone()))
+    } else {
+        None
+    };
     let mql = MediaQueryListObjectDeclaration::new(serialized_query, matches)
         .bind(scope)
         .expect("MediaQueryList declaration should bind");
+    if let Some((host_ptr, target, media)) = realtime_registration {
+        let id = match unsafe { &*host_ptr }
+            .register_realtime_media_query(scope, target, media, matches, mql)
+        {
+            Ok(id) => id,
+            Err(error) => {
+                crate::context_bootstrap::throw_error(scope, &error.to_string());
+                return;
+            }
+        };
+        let value = v8::BigInt::new_from_u64(scope, id);
+        set_private_value(scope, mql, REALTIME_MEDIA_QUERY_ID_SLOT, value.into());
+    }
     initialize_simple_event_target(scope, mql);
 
     if global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT).is_none() {

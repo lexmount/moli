@@ -1,4 +1,5 @@
 use crate::{
+    LayoutWorkingSetBudget,
     network::{ResourceRequestClient, SharedWebStorageStore},
     page::{
         CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, NavigationResponse,
@@ -383,6 +384,7 @@ pub struct NavigationRuntimeConfig {
     subframe_loading_enabled: bool,
     layout_configuration: LayoutConfiguration,
     debugger_enabled: bool,
+    layout_working_set_budget: Option<LayoutWorkingSetBudget>,
 }
 
 impl NavigationRuntimeConfig {
@@ -415,6 +417,7 @@ impl NavigationRuntimeConfig {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled: false,
+            layout_working_set_budget: None,
         }
     }
 
@@ -459,6 +462,27 @@ impl NavigationRuntimeConfig {
         self.debugger_enabled = enabled;
         self
     }
+    /// The optional Browser-wide budget carried across context and engine creation.
+    pub fn layout_working_set_budget(&self) -> Option<&LayoutWorkingSetBudget> {
+        self.layout_working_set_budget.as_ref()
+    }
+
+    pub fn set_layout_working_set_budget(&mut self, budget: Option<LayoutWorkingSetBudget>) {
+        self.layout_working_set_budget = budget;
+    }
+
+    pub fn with_layout_working_set_budget(mut self, budget: LayoutWorkingSetBudget) -> Self {
+        self.set_layout_working_set_budget(Some(budget));
+        self
+    }
+
+    /// Establishes a new Browser/Serve root's shared pool only when needed.
+    /// Existing-context constructors instead resolve the context's bound pool.
+    pub fn ensure_layout_working_set_budget(&mut self) {
+        if self.layout_policy().is_realtime() && self.layout_working_set_budget.is_none() {
+            self.layout_working_set_budget = Some(LayoutWorkingSetBudget::default());
+        }
+    }
 }
 
 impl Default for NavigationRuntimeConfig {
@@ -474,13 +498,15 @@ impl Default for NavigationRuntimeConfig {
 
 impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
     fn from(config: &crate::config::BrowserConfig) -> Self {
-        Self::new_with_layout_configuration(
+        let mut runtime_config = Self::new_with_layout_configuration(
             config.fetch().clone(),
             config.optional_resource_fetch_mask(),
             config.subframe_loading_enabled(),
             config.layout_configuration(),
         )
-        .with_debugger_enabled(config.debugger_enabled())
+        .with_debugger_enabled(config.debugger_enabled());
+        runtime_config.set_layout_working_set_budget(config.layout_working_set_budget().cloned());
+        runtime_config
     }
 }
 
@@ -645,6 +671,7 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
+            layout_working_set_budget,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
@@ -665,7 +692,10 @@ impl NavigationEngine {
         };
         js_runtime
             .renderer_owner_handle()
-            .configure_layout_configuration(layout_configuration)?;
+            .configure_layout_configuration_with_budget(
+                layout_configuration,
+                layout_working_set_budget,
+            )?;
         let standalone_lifetime_owner = standalone_browser_context_owner.map(|owner| {
             Rc::new(NavigationEngineLifetimeOwner {
                 js_runtime: Some(js_runtime.clone()),
@@ -718,11 +748,15 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
+            layout_working_set_budget,
         } = config;
         renderer_owner_source
             .js_runtime
             .renderer_owner_handle()
-            .configure_layout_configuration(layout_configuration)?;
+            .configure_layout_configuration_with_budget(
+                layout_configuration,
+                layout_working_set_budget,
+            )?;
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
@@ -803,13 +837,19 @@ impl NavigationEngine {
     }
 
     pub fn runtime_config(&self) -> NavigationRuntimeConfig {
-        NavigationRuntimeConfig::new_with_layout_configuration(
+        let mut config = NavigationRuntimeConfig::new_with_layout_configuration(
             self.fetch_config.clone(),
             self.optional_resource_fetch_mask(),
             self.subframe_loading_enabled(),
             self.layout_configuration,
         )
-        .with_debugger_enabled(self.debugger_enabled)
+        .with_debugger_enabled(self.debugger_enabled);
+        config.set_layout_working_set_budget(
+            self.js_runtime
+                .renderer_owner_handle()
+                .layout_working_set_budget(),
+        );
+        config
     }
 
     pub fn debugger_enabled(&self) -> bool {
@@ -2053,6 +2093,9 @@ impl NavigationEngine {
         self.fetch_config.set_http_no_proxy(no_proxy);
     }
 }
+
+#[cfg(test)]
+mod budget_tests;
 
 #[cfg(test)]
 mod tests {

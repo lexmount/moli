@@ -95,7 +95,8 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
-            } if event_name == "wheel" => self
+            } if event_name == "wheel"
+                && self.input_dispatch_policy() == page_vm::RendererInputDispatchPolicy::LegacyWindow => self
                 .queue_wheel_event(
                     x,
                     y,
@@ -534,7 +535,7 @@ impl PageVm {
                 top_frame_id,
                 options,
             } => Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(
-                self.dom_snapshot_capture_payload(&top_frame_id, options),
+                self.dom_snapshot_capture_payload(&top_frame_id, options)?,
             )),
             RendererPageCommand::DocumentChildNodeSnapshotEventsForNode {
                 inspector_session_id,
@@ -1157,6 +1158,12 @@ impl PageVm {
             #[cfg(debug_assertions)]
             RendererPageCommand::PanicForTesting => {
                 panic!("renderer page command panicked for testing")
+            }
+            #[cfg(test)]
+            RendererPageCommand::ObserveRealtimeOpportunityForTesting { expression, completed } => {
+                self.vm().context_host_weak_for_test().upgrade().expect("live Host").borrow().observe_next_realtime_opportunity_for_test(completed);
+                self.vm_mut().eval(&expression)?;
+                Ok(RendererPageReply::Unit)
             }
         }
     }

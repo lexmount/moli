@@ -1,5 +1,29 @@
 use super::*;
 
+fn preserve_capture_request_metadata(
+    pending: &PendingSubresourceFetchState,
+    request: moli_fetch::Request,
+) -> moli_fetch::Request {
+    let PendingSubresourceContinuation::CaptureResource(capture) = &pending.continuation else {
+        return request;
+    };
+    let metadata = match capture.kind {
+        crate::capture_resources::CaptureResourceKind::Font => {
+            moli_fetch::BrowserRequestMetadata::Font
+        }
+        crate::capture_resources::CaptureResourceKind::Image => {
+            moli_fetch::BrowserRequestMetadata::Image
+        }
+    };
+    // Fetch continuation and authentication rebuild the transport request.
+    // Retain the capture request's browser metadata and frozen partition,
+    // without changing the reconstruction contract for legacy continuations.
+    request
+        .with_browser_request_metadata(metadata)
+        .with_page_network_policy()
+        .with_network_partition_key(pending.network_partition_key.clone())
+}
+
 impl ScriptVm {
     pub(crate) fn continue_pending_subresource_fetch_body(
         &mut self,
@@ -382,23 +406,30 @@ impl ScriptVm {
             }
             SubresourceResourceType::WebSocket => request,
         };
+        let request = preserve_capture_request_metadata(&pending, request);
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
-        self.spawn_running_subresource_fetch(
-            loader,
-            request,
-            RunningSubresourceFetchState {
-                pending,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                intercept_response,
-                handle_auth_requests,
-                initial_auth_network_request_headers: None,
-            },
-            Some(cancel_handle),
+        let is_capture = matches!(
+            &pending.continuation,
+            PendingSubresourceContinuation::CaptureResource(_)
         );
+        let state = RunningSubresourceFetchState {
+            pending,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
+            intercept_response,
+            handle_auth_requests,
+            initial_auth_network_request_headers: None,
+        };
+        if is_capture {
+            // This is the initial request continuation. Authentication retries
+            // below use the transport directly and do not redispatch a SW event.
+            self.spawn_running_capture_resource_fetch(loader, request, state, cancel_handle)?;
+        } else {
+            self.spawn_running_subresource_fetch(loader, request, state, Some(cancel_handle));
+        }
         Ok(AsyncSubresourceCommandExecution::without_window_realm(
             PendingSubresourceContinueOutcome::Started,
         ))
@@ -695,6 +726,7 @@ impl ScriptVm {
             }
             SubresourceResourceType::WebSocket => request,
         };
+        let request = preserve_capture_request_metadata(&pending_fetch, request);
         let request_headers = original_request_headers;
         if self._context_host.borrow().network_offline() {
             let activity = self.resolve_pending_subresource_fetch_body(
@@ -874,6 +906,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_pending_subresource_response(PendingSubresourceResponseState {
+                capture_security: None,
                 pending,
                 request_url,
                 request_method,
@@ -1693,6 +1726,11 @@ impl ScriptVm {
             }
             return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
         }
+        let capture_security = if response_code.is_none() && response_headers.is_none() {
+            pending.capture_security
+        } else {
+            None
+        };
         let response = crate::protocol_types::NavigationResponse::with_status_headers_from(
             &pending.response,
             response_code.unwrap_or(pending.response.status),
@@ -1705,8 +1743,8 @@ impl ScriptVm {
             pending.request_headers,
             pending.request_body,
             None,
-            false,
-            None,
+            capture_security.is_some_and(|security| security.skip_fetch_security_validation),
+            capture_security.and_then(|security| security.response_filter),
             None,
             Ok(response),
         )?;

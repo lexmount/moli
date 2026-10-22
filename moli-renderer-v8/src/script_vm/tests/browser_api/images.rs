@@ -116,6 +116,8 @@ async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),
         (moli_page_types::LayoutPolicy::OnDemand, false, false),
+        (moli_page_types::LayoutPolicy::Realtime, true, true),
+        (moli_page_types::LayoutPolicy::Realtime, false, false),
         (moli_page_types::LayoutPolicy::Mock, true, false),
         (moli_page_types::LayoutPolicy::Mock, false, false),
     ];
@@ -168,6 +170,120 @@ async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
             "layout={layout_policy:?}, image_fetch_enabled={image_fetch_enabled}"
         );
     }
+}
+
+#[tokio::test]
+async fn realtime_layout_image_decode_commits_dimensions_before_load_callback() {
+    use moli_page_types::LayoutPolicy;
+
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://realtime-image.test/",
+            &loader,
+        );
+        vm.set_layout_policy(policy);
+        let before = vm.eval(
+            r#"
+            globalThis.image = document.createElement('img');
+            image.style.display = 'block';
+            document.body.append(image);
+            image.onload = () => { globalThis.loadedWidth = image.offsetWidth; };
+            image.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+            String(image.offsetWidth)
+            "#,
+        ).unwrap();
+        assert_ne!(before, "1", "decode has not committed to the owner yet");
+        let builds = vm.layout_pass_observability_for_test().1;
+        let dom_version = vm._context_host.borrow().dom_host().dom_version();
+
+        run_next_image_event_task(&mut vm, &loader, "intrinsic size commit").await;
+        assert_eq!(vm.eval("String(image.naturalWidth)").unwrap(), "1");
+        assert_eq!(
+            vm._context_host.borrow().dom_host().dom_version(),
+            dom_version
+        );
+        let expected = if policy.is_realtime() { "1" } else { &before };
+        assert_eq!(vm.eval("String(loadedWidth)").unwrap(), expected);
+        assert_eq!(vm.eval("String(image.offsetWidth)").unwrap(), expected);
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds + u64::from(policy.is_realtime())
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+
+        if policy.is_realtime() {
+            let image = vm
+                .document_runtime
+                .query_selector(None, "img")
+                .unwrap()
+                .unwrap();
+            assert!(
+                vm._context_host
+                    .borrow_mut()
+                    .retire_image_resource_for_element(image)
+            );
+            assert_eq!(vm.eval("String(image.offsetWidth)").unwrap(), before);
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn realtime_layout_stale_image_decode_does_not_invalidate_the_replacement() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://realtime-image-stale.test/",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        "globalThis.image=document.createElement('img');document.body.append(image);\
+         globalThis.loads=0;image.onload=()=>loads++;image.src='/old.gif'",
+    )
+    .unwrap();
+    let old_request = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(old_request.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        old_request[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    wait_for_image_event_task(&mut vm, "stale intrinsic size completion").await;
+
+    let width = vm
+        .eval("image.src='/new.gif';String(image.offsetWidth)")
+        .unwrap();
+    let new_request = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(new_request.len(), 1);
+    let builds = vm.layout_pass_observability_for_test().1;
+    run_next_image_event_task(&mut vm, &loader, "retire stale intrinsic size completion").await;
+    assert_eq!(vm.eval("String(image.offsetWidth)").unwrap(), width);
+    assert_eq!(vm.eval("String(loads)").unwrap(), "0");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+
+    vm.fulfill_pending_subresource_fetch(
+        new_request[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(&mut vm, &loader, "current intrinsic size completion").await;
+    assert_eq!(vm.eval("String(image.offsetWidth)").unwrap(), "1");
+    assert_eq!(vm.eval("String(loads)").unwrap(), "1");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
 
 #[tokio::test]

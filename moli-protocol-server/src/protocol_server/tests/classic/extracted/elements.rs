@@ -2863,7 +2863,9 @@ async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
         .await;
         let expected = match policy {
             LayoutPolicy::Mock => json!(["click"]),
-            LayoutPolicy::OnDemand => json!(["pointerdown", "mousedown", "mouseup", "click"]),
+            LayoutPolicy::OnDemand | LayoutPolicy::Realtime => {
+                json!(["pointerdown", "mousedown", "mouseup", "click"])
+            }
         };
         assert_eq!(observed["value"], expected, "{policy:?}");
         classic_request_json_with_body(

@@ -16,11 +16,11 @@ use super::{
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
 };
-use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
+use crate::{LayoutBoxId, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
 
 pub(super) fn project_inline_box_fragments<N>(
     world: &LayoutWorld<N>,
-    owner: &LayoutBox<N>,
+    owner_id: LayoutBoxId,
     paint_space: PaintSpace,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
@@ -29,9 +29,10 @@ pub(super) fn project_inline_box_fragments<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let Some(context) = owner.inline_layout.as_ref() else {
+    let Some(context) = world.inline_layouts[owner_id.index()].as_ref() else {
         return;
     };
+    let owner = &world.boxes[owner_id.index()];
     let owner_layout = owner.final_layout;
     let origin_x = owner_layout.border.left + owner_layout.padding.left;
     let origin_y = owner_layout.border.top + owner_layout.padding.top;
