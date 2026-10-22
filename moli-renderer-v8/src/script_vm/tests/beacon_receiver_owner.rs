@@ -74,9 +74,13 @@ fn beacon_receiver_owner_is_retained_through_reentry_and_rechecked_after_retirem
     assert!(vm.take_pending_subresource_fetch_infos().is_empty());
 }
 
-#[test]
-fn beacon_receiver_owner_uses_popup_markers_in_the_shared_realm() {
-    let mut vm = new_storage_html_test_vm("https://beacon-popup.test/parent/page");
+#[tokio::test(flavor = "current_thread")]
+async fn beacon_receiver_owner_uses_popup_markers_and_rechecks_after_native_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://beacon-popup.test/parent/page",
+        &loader,
+    );
     vm.set_fetch_subresource_interception(
         crate::types::SubresourceInterceptionClasses::for_resource_type(
             crate::types::SubresourceResourceType::Ping,
@@ -87,6 +91,7 @@ fn beacon_receiver_owner_uses_popup_markers_in_the_shared_realm() {
         globalThis.popup = open('about:blank', 'beacon-popup');
         popup.document.head.appendChild(Object.assign(popup.document.createElement('base'), {href: 'https://beacon-popup.test/popup/'}));
         globalThis.popupNavigator = popup.navigator;
+        globalThis.popupDocument = popup.document;
         globalThis.topSend = Navigator.prototype.sendBeacon;
         globalThis.popupSend = popupNavigator.sendBeacon;
     "#).unwrap();
@@ -150,8 +155,38 @@ fn beacon_receiver_owner_uses_popup_markers_in_the_shared_realm() {
     "#
         )
         .unwrap(),
-        "false"
+        "true"
     );
     assert_eq!(vm.eval("String(bodyConversions)").unwrap(), "1");
+    assert_eq!(
+        vm.eval("String(popup.closed && popupDocument.defaultView !== null)")
+            .unwrap(),
+        "true"
+    );
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].document_url.as_str(),
+        vm.eval("popupDocument.URL").unwrap()
+    );
+    assert_eq!(
+        requests[0].url.as_str(),
+        "https://beacon-popup.test/popup/closed"
+    );
+    assert_eq!(requests[0].request_body.as_deref(), Some("closed-body"));
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(popup.closed && popupDocument.defaultView === null)",
+        "true",
+        "the native close task must retire the popup before its retained Navigator is rejected",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(topSend.call(popupNavigator, 'retired', {toString(){++bodyConversions;return 'retired-body'}}))")
+            .unwrap(),
+        "false"
+    );
+    assert_eq!(vm.eval("String(bodyConversions)").unwrap(), "2");
     assert!(vm.take_pending_subresource_fetch_infos().is_empty());
 }

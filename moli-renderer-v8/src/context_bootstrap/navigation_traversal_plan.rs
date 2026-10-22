@@ -6,7 +6,7 @@ use super::navigation_projection::{
 };
 use super::navigation_traversal_execution::TraversalTarget;
 use super::navigation_window::{
-    navigation_document_is_active, navigation_has_disabled_entries, runtime_window_owner,
+    navigation_document_is_live, navigation_has_disabled_entries, runtime_window_owner,
     window_history_for_holder,
 };
 
@@ -109,7 +109,7 @@ pub(super) fn navigation_delta_traversal_plan<'s>(
     delta: i64,
 ) -> Option<NavigationTraversalPlan<'s>> {
     let owner = runtime_window_owner(scope, navigation);
-    if !navigation_document_is_active(scope, owner) {
+    if !navigation_document_is_live(scope, owner) {
         return Some(NavigationTraversalPlan::RejectInvalidState(
             "Cannot traverse a non-fully-active document",
         ));
@@ -167,7 +167,7 @@ pub(super) fn navigation_index_traversal_plan<'s>(
     target_index: u32,
 ) -> Option<NavigationTraversalPlan<'s>> {
     let owner = runtime_window_owner(scope, navigation);
-    if !navigation_document_is_active(scope, owner) {
+    if !navigation_document_is_live(scope, owner) {
         return Some(NavigationTraversalPlan::RejectInvalidState(
             "Cannot traverse a non-fully-active document",
         ));

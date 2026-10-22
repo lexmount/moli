@@ -15,8 +15,8 @@ use super::navigation_traversal::{
     navigation_traverse_to_callback, pending_or_current_navigation_entry_index,
 };
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
-    navigation_has_disabled_entries, runtime_window_owner, window_history_for_holder,
+    child_browsing_context_handle_for_runtime_owner, navigation_has_disabled_entries,
+    runtime_window_document_is_fully_active, runtime_window_owner, window_history_for_holder,
 };
 use super::*;
 use anyhow::Result;

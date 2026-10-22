@@ -77,11 +77,19 @@ pub(crate) fn window_opener_value<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let null = v8::null(scope).into();
-    if window_is_closed(scope, receiver) {
+    let closed = window_is_closed(scope, receiver);
+    let host = window_host_ptr(scope, receiver).map(|host_ptr| unsafe { &*host_ptr });
+    // A requested close makes Window.closed observable while its Document
+    // still has a browsing context for the queued unload steps.
+    if closed
+        && host.is_none_or(|host| {
+            super::helpers::window_document_handle(scope, receiver, host)
+                .is_none_or(|document| !host.document_has_browsing_context(document))
+        })
+    {
         return Some(null);
     }
-    if let Some(host_ptr) = window_host_ptr(scope, receiver) {
-        let host = unsafe { &*host_ptr };
+    if let Some(host) = host {
         if let Some(popup_id) =
             crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
         {

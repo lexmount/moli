@@ -109,7 +109,7 @@ impl<'s> WindowTarget<'s> {
                 host,
                 child: None,
                 popup: Some(popup),
-                closed: !owner.lightweight_popup_is_open(popup),
+                closed: owner.lightweight_popup_is_closed(popup),
             });
         }
         let identity = owner.window_execution_context_identity_for_access_check(context);
