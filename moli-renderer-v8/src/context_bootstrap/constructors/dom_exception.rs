@@ -529,17 +529,6 @@ fn websocket_error_reason_getter_callback<'s>(
     }
 }
 
-fn initialize_dom_exception<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    exception: v8::Local<'s, v8::Object>,
-    message: &str,
-    name: &str,
-) {
-    dom_exception_declaration(scope, message, name)
-        .initialize(scope, exception)
-        .expect("DOMException declaration should initialize");
-}
-
 pub(super) fn capture_dom_exception_stack(
     scope: &mut v8::PinScope<'_, '_>,
     exception: v8::Local<'_, v8::Object>,

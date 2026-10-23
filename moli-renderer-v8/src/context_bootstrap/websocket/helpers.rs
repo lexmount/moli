@@ -2,8 +2,8 @@ use super::*;
 use crate::webidl;
 use moli_websocket::{
     WebSocketCloseValidationError, WebSocketSubprotocolError, WebSocketUrlError,
-    close_info_code_from_number, normalize_websocket_url as normalize_socket_url,
-    validate_subprotocols,
+    close_info_code_from_number, normalize_websocket_close_info,
+    normalize_websocket_url as normalize_socket_url, validate_subprotocols,
 };
 
 pub(super) enum WebSocketProtocolParseError {
@@ -116,6 +116,8 @@ fn websocket_stream_subprotocol_constructor_error(error: WebSocketSubprotocolErr
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "WebSocketCloseInfo")]
 pub(super) struct WebSocketCloseInfo {
+    // Finish all dictionary conversions before applying close-code semantics.
+    // The protocol helper preserves Blink's observed truncating clamp behavior.
     #[webidl(converter = "unrestricted_double")]
     close_code: Option<f64>,
     #[webidl(default = "", converter = "usv_string")]

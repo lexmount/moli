@@ -192,7 +192,6 @@ pub(in crate::context_bootstrap) fn websocket_error_constructor_callback<'s>(
             return;
         }
     };
-
     let Some(message) =
         v8::String::new_from_two_byte(scope, &parsed.message, v8::NewStringType::Normal)
     else {
