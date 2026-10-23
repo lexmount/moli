@@ -603,6 +603,11 @@ pub struct CommonArgs {
     )]
     pub layout: bool,
 
+    /// Refresh changed layout on geometry reads, including script mutations.
+    /// Requires --layout; otherwise geometry retains the published snapshot.
+    #[arg(long, env = "MOLI_LIVE_LAYOUT", value_parser = clap::builder::BoolishValueParser::new(), requires_if("true", "layout"))]
+    pub live_layout: bool,
+
     /// Show native scrollbars. Requires --layout.
     #[arg(
         long,
@@ -1096,6 +1101,16 @@ mod tests {
             }
             other => panic!("expected serve command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn live_layout_requires_explicit_layout() {
+        assert!(Cli::try_parse_from(["moli", "serve", "--live-layout"]).is_err());
+        let cli = Cli::parse_from(["moli", "serve", "--layout", "--live-layout"]);
+        let Commands::Serve(args) = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(args.common.layout && args.common.live_layout);
     }
 
     #[test]
