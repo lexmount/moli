@@ -42,6 +42,10 @@ impl<I: Copy, K: Copy, P> PendingExactWindowDocumentTask<I, K, P> {
         &self.payload
     }
 
+    pub(super) fn payload_mut(&mut self) -> &mut P {
+        &mut self.payload
+    }
+
     pub(super) fn into_payload(self) -> P {
         self.payload
     }
@@ -101,6 +105,10 @@ impl<I: Copy + Eq, K: Copy + Eq, P> ExactWindowDocumentTaskLedger<I, K, P> {
 
     pub(super) fn at(&self, index: usize) -> &PendingExactWindowDocumentTask<I, K, P> {
         &self.pending[index]
+    }
+
+    pub(super) fn at_mut(&mut self, index: usize) -> &mut PendingExactWindowDocumentTask<I, K, P> {
+        &mut self.pending[index]
     }
 
     pub(super) fn remove_at(&mut self, index: usize) -> PendingExactWindowDocumentTask<I, K, P> {

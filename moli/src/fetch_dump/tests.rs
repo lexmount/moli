@@ -246,6 +246,168 @@ async fn render_markdown_dump_uses_renderer_live_dump() -> Result<()> {
 }
 
 #[tokio::test]
+async fn markdown_dump_reads_dom_after_explicit_layout_observer_update() -> Result<()> {
+    let config = BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand);
+    let (_browser, mut page, http_server) = load_page_with_config(
+        r#"<!doctype html><main id="viewport" style="width:520px;height:80px"></main><script>
+            const viewport = document.getElementById('viewport');
+            const rows = [
+                ['1', 'Ada', '31', 'London', 'active'],
+                ['2', 'Grace', '28', 'New York', 'active'],
+                ['3', 'Linus', '35', 'Helsinki', 'away'],
+                ['4', 'Margaret', '33', 'Toronto', 'active'],
+            ];
+            new ResizeObserver(([entry]) => {
+                const columns = entry.contentRect.width >= 500
+                    ? ['ID', 'Name', 'Age', 'City', 'Status']
+                    : ['ID', 'Name'];
+                viewport.replaceChildren();
+                const header = document.createElement('div');
+                header.textContent = columns.join(' | ');
+                viewport.appendChild(header);
+                for (const row of rows) {
+                    const item = document.createElement('div');
+                    item.textContent = row.slice(0, columns.length).join(' | ');
+                    viewport.appendChild(item);
+                }
+            }).observe(viewport);
+        </script>"#,
+        config,
+    )
+    .await?;
+
+    // Layout is an explicit operation. Once its ResizeObserver callback has
+    // updated the live DOM, Markdown reads that DOM without publishing layout.
+    page.publish_layout_async().await?;
+    page.evaluate_runtime_expression_with_await_async(
+        "new Promise((resolve,reject)=>{const end=Date.now()+2000;const poll=()=>document.getElementById('viewport').childElementCount===5?resolve():Date.now()>end?reject(new Error('layout-driven DOM update missing')):setTimeout(poll,1);poll()})",
+        true,
+    )
+    .await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "document.getElementById('viewport').textContent.includes('Ada')",
+        )
+        .await?["value"],
+        true
+    );
+
+    let rendered = render_page_dump_with_options_async(
+        &mut page,
+        DumpFormat::Markdown,
+        StripOptions::default(),
+        false,
+        false,
+        false,
+        None,
+    )
+    .await?;
+
+    assert!(
+        rendered.contains("ID | Name | Age | City | Status"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("1 | Ada | 31 | London | active"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("4 | Margaret | 33 | Toronto | active"),
+        "{rendered}"
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_layout_resize_observer_updates_virtual_children_and_deduplicates_sizes() -> Result<()>
+{
+    let config = BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand);
+    let (_browser, mut page, server) = load_page_with_config(r#"<div id="box" style="width:120px;height:40px"></div><script>
+        window.widths=[];const box=document.getElementById('box');
+        new ResizeObserver(es=>{const width=es[0].contentRect.width;widths.push(width);if(width>300&&!box.querySelector('span')){const item=document.createElement('span');item.id='virtual-item';item.textContent='Virtual child';box.appendChild(item)}}).observe(box);
+    </script>"#, config).await?;
+    let screenshot = FetchCommandConfig {
+        dump_mode: Some(DumpFormat::Screenshot),
+        ..Default::default()
+    };
+    render_page_output_async(&mut page, &screenshot).await?;
+    page.evaluate_runtime_expression_with_await_async("new Promise((resolve,reject)=>{const end=Date.now()+2000;const poll=()=>widths.includes(120)?resolve():Date.now()>end?reject(new Error('initial resize notification missing')):setTimeout(poll,1);poll()})", true).await?;
+    page.evaluate_runtime_expression_async("document.getElementById('box').style.width='420px'")
+        .await?;
+    render_page_output_async(&mut page, &screenshot).await?;
+    page.evaluate_runtime_expression_with_await_async("new Promise((resolve,reject)=>{const end=Date.now()+2000;const poll=()=>document.getElementById('virtual-item')?resolve():Date.now()>end?reject(new Error('updated resize notification missing')):setTimeout(poll,1);poll()})", true).await?;
+    let widths = page
+        .evaluate_runtime_expression_async("JSON.stringify(widths)")
+        .await?;
+    // Real-layout observers receive the geometry produced by rendering
+    // updates. The non-layout fallback must not race them with a zero-size
+    // callback from the earlier DOM-only checkpoint path.
+    assert_eq!(widths["value"], "[120,420]");
+    render_page_output_async(&mut page, &screenshot).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("JSON.stringify(widths)")
+            .await?["value"],
+        "[120,420]"
+    );
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn resize_observer_same_depth_feedback_is_bounded() -> Result<()> {
+    let config = BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand);
+    let (_browser, mut page, server) = load_page_with_config(r#"<div id="box" style="width:120px;height:20px"></div><script>window.calls=0;window.recoveryCalls=0;window.feedback=false;window.errors=[];window.onerrorCalls=0;const box=document.getElementById('box');window.observer=new ResizeObserver(es=>{calls++;if(feedback)box.style.width=(es[0].contentRect.width+1)+'px'});addEventListener('error',e=>{errors.push({message:e.message,instance:e instanceof ErrorEvent,target:e.target===window,currentTarget:e.currentTarget===window,trusted:e.isTrusted,bubbles:e.bubbles,cancelable:e.cancelable,error:e.error,filename:e.filename,lineno:e.lineno,colno:e.colno});observer.disconnect();window.recoveryObserver=new ResizeObserver(()=>recoveryCalls++);recoveryObserver.observe(box);e.preventDefault()});window.onerror=()=>{onerrorCalls++;return true};observer.observe(box)</script>"#, config).await?;
+    render_page_output_async(
+        &mut page,
+        &FetchCommandConfig {
+            dump_mode: Some(DumpFormat::Screenshot),
+            ..Default::default()
+        },
+    )
+    .await?;
+    page.evaluate_runtime_expression_async(
+        "calls=0;feedback=true;document.getElementById('box').style.width='140px'",
+    )
+    .await?;
+    page.evaluate_runtime_expression_with_await_async(
+        "new Promise((resolve,reject)=>{const end=Date.now()+2000;const poll=()=>calls&&recoveryCalls?resolve():Date.now()>end?reject(new Error('resize recovery callback missing')):setTimeout(poll,1);poll()})",
+        true,
+    )
+    .await?;
+    page.evaluate_runtime_expression_async("document.getElementById('box').style.width='200px'")
+        .await?;
+    render_page_output_async(
+        &mut page,
+        &FetchCommandConfig {
+            dump_mode: Some(DumpFormat::Screenshot),
+            ..Default::default()
+        },
+    )
+    .await?;
+    page.evaluate_runtime_expression_with_await_async(
+        "new Promise((resolve,reject)=>{const end=Date.now()+2000;const poll=()=>recoveryCalls>=2?resolve():Date.now()>end?reject(new Error('second resize recovery callback missing')):setTimeout(poll,1);poll()})",
+        true,
+    )
+    .await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("String(calls)")
+            .await?["value"],
+        "1"
+    );
+    let result = page
+        .evaluate_runtime_expression_async("JSON.stringify({errors,onerrorCalls,recoveryCalls})")
+        .await?;
+    let result: Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    assert_eq!(
+        result,
+        json!({"errors":[{"message":"ResizeObserver loop completed with undelivered notifications.","instance":true,"target":true,"currentTarget":true,"trusted":true,"bubbles":false,"cancelable":true,"error":null,"filename":"","lineno":0,"colno":0}],"onerrorCalls":1,"recoveryCalls":2})
+    );
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn render_semantic_tree_dump_uses_renderer_live_accessibility_tree() -> Result<()> {
     let (_browser, mut page, http_server) =
         load_page(r#"<!doctype html><html><body><button id="target">old</button></body></html>"#)
@@ -527,5 +689,25 @@ async fn render_page_dump_async_includes_network_trace_config_summary() -> Resul
     assert_eq!(payload["network"]["config"]["proxy_bearer_token"], true);
     assert_eq!(payload["network"]["config"]["connect_timeout_ms"], 2500);
     http_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn resize_observer_registered_in_child_during_parent_delivery_receives_initial_size()
+-> Result<()> {
+    let config = BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand);
+    let (_browser, mut page, server) = load_page_with_config(r#"<div id="box" style="width:120px;height:20px"></div><iframe id="child" srcdoc="&lt;div id='target' style='width:80px;height:20px'&gt;&lt;/div&gt;"></iframe>"#, config).await?;
+    page.publish_layout_async().await?;
+    page.evaluate_runtime_expression_async(r#"window.parentCalls=0;window.childWidths=[];new ResizeObserver(()=>{if(++parentCalls===1){const w=document.getElementById('child').contentWindow;window.childObserver=new w.ResizeObserver(es=>childWidths.push(es[0].contentRect.width));childObserver.observe(w.document.getElementById('target'));}}).observe(document.getElementById('box'))"#).await?;
+    page.evaluate_runtime_expression_with_await_async(
+        "new Promise((resolve,reject)=>{const end=Date.now()+2000;const poll=()=>childWidths.length?resolve():Date.now()>end?reject(new Error('child resize notification missing')):setTimeout(poll,1);poll()})",
+        true,
+    )
+    .await?;
+    let result = page
+        .evaluate_runtime_expression_async("JSON.stringify({parentCalls,childWidths})")
+        .await?;
+    server.abort();
+    assert_eq!(result["value"], r#"{"parentCalls":1,"childWidths":[80]}"#);
     Ok(())
 }

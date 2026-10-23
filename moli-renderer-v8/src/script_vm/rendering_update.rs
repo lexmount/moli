@@ -7,6 +7,11 @@ use crate::page_task_queue::{
 };
 use crate::runtime::AuthorizedCurrentPageRenderingUpdate;
 
+/// Bound one rendering opportunity without treating a finite deep tree as a
+/// ResizeObserver feedback loop. Remaining deeper observations continue on a
+/// later Page turn.
+pub(super) const RESIZE_OBSERVER_ROUNDS_PER_RENDERING_TURN: usize = 32;
+
 impl ScriptVm {
     pub(super) fn queue_main_document_post_parse_autofocus_best_effort(
         &mut self,
@@ -58,7 +63,8 @@ impl ScriptVm {
     ) -> Result<bool> {
         let task = authorization.into_task();
         let owner = task.owner();
-        self.with_default_context_scope(|scope, host_ptr| {
+        let resize = task.kind() == RendererPageRenderingUpdateTaskKind::ResizeObserver;
+        let (applied, mut minimum_depth) = self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .apply_authorized_rendering_update(
                     scope,
@@ -68,7 +74,84 @@ impl ScriptVm {
                     task.kind(),
                 )
                 .ok_or_else(|| anyhow!("authorized rendering update lost its exact payload"))
-        })
+        })?;
+        if resize && applied {
+            let has_observations = self.with_default_context_scope(|scope, host_ptr| {
+                Ok(unsafe { &mut *host_ptr }
+                    .resize_observer_target_has_observations(scope, owner.target()))
+            })?;
+            if !has_observations {
+                return Ok(applied);
+            }
+            let previous_target = self
+                ._context_host
+                .borrow_mut()
+                .begin_resize_observer_broadcast(owner.target());
+            let broadcast: Result<(bool, bool)> = (|| {
+                let mut undelivered = false;
+                for _ in 0..RESIZE_OBSERVER_ROUNDS_PER_RENDERING_TURN {
+                    let viewport = self
+                        ._context_host
+                        .borrow()
+                        .layout_viewport_for_document(self.document_runtime.document_handle());
+                    self.with_fresh_layout_pass(
+                        moli_layout::LayoutPassRequest::new(
+                            viewport,
+                            moli_layout::LayoutFlushReason::Explicit,
+                        ),
+                        |_| Ok(()),
+                    )?;
+                    let (depth, skipped) = self.with_default_context_scope(|scope, host_ptr| {
+                        let host = unsafe { &mut *host_ptr };
+                        Ok(host.broadcast_resize_observers_for_target(
+                            scope,
+                            owner.target(),
+                            minimum_depth,
+                        ))
+                    })?;
+                    undelivered = skipped;
+                    let Some(depth) = depth else {
+                        return Ok((undelivered, false));
+                    };
+                    minimum_depth = depth;
+                }
+                // Yield the owner without dropping legitimate deeper work.
+                // The budget itself is not evidence of a resize feedback loop.
+                Ok((undelivered, true))
+            })();
+            self._context_host
+                .borrow_mut()
+                .restore_resize_observer_broadcast(previous_target);
+            let (undelivered, resume) = broadcast?;
+            if resume {
+                self._context_host
+                    .borrow_mut()
+                    .queue_resize_observer_rendering_update_for_target(
+                        owner.target(),
+                        minimum_depth,
+                    );
+            }
+            if undelivered && !resume {
+                self.record_runtime_warning(format_args!(
+                    "ResizeObserver loop completed with undelivered notifications."
+                ));
+                self.with_default_context_scope(|scope, host_ptr| {
+                    unsafe { &mut *host_ptr }
+                        .report_resize_observer_loop_error_for_target(
+                            scope,
+                            host_ptr,
+                            owner.target(),
+                        )
+                        .map_err(anyhow::Error::msg)
+                })?;
+                self.with_default_context_scope(|scope, host_ptr| {
+                    let _ = unsafe { &mut *host_ptr }
+                        .schedule_resize_observer_rendering_retry_for_target(scope, owner.target());
+                    Ok(())
+                })?;
+            }
+        }
+        Ok(applied)
     }
 
     pub(crate) fn discard_stale_rendering_update_task(
