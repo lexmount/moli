@@ -78,6 +78,7 @@ pub(in crate::worker) struct WorkerXhrCompletion {
     pub(in crate::worker) local_request: Option<Box<PendingSubresourceFetchInfo>>,
 
     pub(in crate::worker) result: Result<Response, String>,
+
 }
 
 pub(super) fn next_fetch_id(state: &mut WorkerGlobalState) -> u32 {
@@ -113,6 +114,7 @@ pub(super) fn merge_worker_request_headers(
 }
 
 pub(in crate::worker) struct WorkerWebSocketState {
+    pub(in crate::worker) stream_abort: Option<crate::context_bootstrap::WebSocketStreamAbortRegistration>,
     pub(in crate::worker) wrapper: v8::Global<v8::Object>,
     pub(in crate::worker) connection: WebSocketConnectionHandle,
     pub(in crate::worker) document_url: Url,
