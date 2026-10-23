@@ -1724,25 +1724,16 @@ pub(crate) fn close_worker_websocket(
 pub(in crate::worker) fn dispatch_worker_websocket_event(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    event: WebSocketEvent,
-) -> bool {
-    let socket_id = match &event {
-        WebSocketEvent::HandshakeResponse { socket_id, .. }
-        | WebSocketEvent::Open { socket_id, .. }
-        | WebSocketEvent::TextMessage { socket_id, .. }
-        | WebSocketEvent::BinaryMessage { socket_id, .. }
-        | WebSocketEvent::SendCompleted { socket_id, .. }
-        | WebSocketEvent::Error { socket_id, .. }
-        | WebSocketEvent::Closing { socket_id }
-        | WebSocketEvent::Close { socket_id, .. } => *socket_id,
-    };
+    event: &WebSocketEvent,
+) -> crate::context_bootstrap::WebSocketDispatchResult {
+    let socket_id = event.socket_id();
     let socket_context = {
         let mut state = state.borrow_mut();
         let parent_tx = state.parent_tx.clone();
         let socket_context = state.websockets.get_mut(&socket_id).map(|entry| {
             let was_opened = entry.opened;
             let mut should_record_error_failure = false;
-            match &event {
+            match event {
                 WebSocketEvent::Open { .. } => {
                     entry.opened = true;
                     entry.network_recorded = true;
@@ -1778,11 +1769,11 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
         parent_tx,
     )) = socket_context
     else {
-        return false;
+        return crate::context_bootstrap::WebSocketDispatchResult::Noop;
     };
 
     let mut parent_messages = Vec::new();
-    match &event {
+    match event {
         WebSocketEvent::Open {
             request_headers,
             response_status,
@@ -1897,12 +1888,12 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
         let _ = parent_tx.send(message);
     }
 
-    let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, &event);
+    let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, event);
     if !matches!(
         dispatch_result,
         crate::context_bootstrap::WebSocketDispatchResult::Backpressured
     ) {
-        let frame_event = match &event {
+        let frame_event = match event {
             WebSocketEvent::TextMessage { data, .. } => Some(WorkerWebSocketFrameEvent {
                 socket_id,
                 document_url: document_url.clone(),
@@ -1931,7 +1922,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
     {
         load.finish();
     }
-    dispatch_result.dispatched()
+    dispatch_result
 }
 
 pub(in crate::worker) fn worker_websocket_frame_opcode(
