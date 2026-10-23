@@ -24,7 +24,7 @@
   ]);
   for (const [name, method] of [['UIEvent', 'initUIEvent'], ['CompositionEvent', 'initCompositionEvent']]) {
     const C = globalThis[name], remote = other[name];
-    const order = ['bubbles', 'cancelable', 'composed', 'detail', 'view', 'which',
+    const order = ['bubbles', 'cancelable', 'composed', 'detail', 'sourceCapabilities', 'view',
       ...(name === 'CompositionEvent' ? ['data'] : [])];
     const legacy = (view, payload) => {
       const e = new C('before');
@@ -60,10 +60,10 @@
       check(`${name} detail long ${String(value)}`, () => new C('x', {detail: value}).detail === expected);
       if (name === 'UIEvent') check(`legacy detail long ${String(value)}`, () => legacy(null, value).detail === expected);
     }
-    for (const [value, expected] of [[-1, 4294967295], [4294967297, 1], [1.9, 1], [NaN, 0], [Infinity, 0]]) {
-      check(`${name} which unsigned long ${String(value)}`, () => new C('x', {which: value}).which === expected);
+    for (const value of [-1, 4294967297, 1.9, NaN, Infinity]) {
+      check(`${name} ignores legacy which ${String(value)}`, () => new C('x', {which: value}).which === 0);
     }
-    for (const field of ['detail', 'which']) {
+    for (const field of ['detail']) {
       for (const value of [Symbol(), 1n]) {
         check(`${name} ${field} rejects ${typeof value}`, () => typeError(() => new C('x', {[field]: value})));
       }
@@ -82,7 +82,7 @@
         }})), sentinel) && seen.join() === order.slice(0, order.indexOf(stop) + 1).join();
       });
     }
-    for (const field of ['detail', 'which', ...(name === 'CompositionEvent' ? ['data'] : [])]) {
+    for (const field of ['detail', ...(name === 'CompositionEvent' ? ['data'] : [])]) {
       check(`${name} ${field} conversion exception stops`, () => {
         const seen = [], sentinel = {};
         return throws(() => new C('x', new Proxy({}, {get(_target, key) {
@@ -119,7 +119,7 @@
     ]) {
       check(`${name} constructor rejects ${label} view before later conversion`, () => {
         let converted = false;
-        return typeError(() => new C('x', {view, which: {valueOf() {converted = true; return 0;}}})) && !converted && traps === 0;
+        return typeError(() => new C('x', {view, get which() {converted = true; throw Error('ignored');}})) && !converted && traps === 0;
       });
       check(`${name} legacy rejects ${label} view atomically`, () => {
         const e = new C('before', {view: other, detail: 7, data: 'before', cancelable: true});

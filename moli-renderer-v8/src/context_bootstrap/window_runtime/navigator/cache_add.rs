@@ -218,9 +218,10 @@ fn start<'s>(
                 return;
             }
         };
-        let snapshot = crate::network_host::request_input_snapshot(scope, request.into())
-            .expect("intrinsic Request has readable native slots")
-            .expect("intrinsic Request is branded");
+        let (_, snapshot, _) = crate::network_host::RequestInfo::Native(request)
+            .materialize(scope)
+            .expect("intrinsic Request has readable native slots");
+        let snapshot = snapshot.expect("intrinsic Request is branded");
         let stored_request = crate::network_host::cached_request_from_native(scope, request);
         let mut signals = vec![cancel];
         if let Some(signal) = snapshot.signal {

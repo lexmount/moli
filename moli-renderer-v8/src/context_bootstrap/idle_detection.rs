@@ -231,7 +231,7 @@ fn idle_detector_start_callback<'s>(
     {
         let reason = signal
             .reason(scope)
-            .unwrap_or_else(|| crate::native_bridge::abort::abort_error_value(scope));
+            .unwrap_or_else(|| v8::undefined(scope).into());
         let _ = resolver.reject(scope, reason);
         return;
     }

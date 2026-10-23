@@ -75,8 +75,8 @@ pub(super) fn parse_window_fetch_input<'s>(
             .or_else(|| moli_fetch::RequestMode::from_str(&inherited.mode).ok())
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &method)?;
-        let has_stream_body = init.body_stream.is_some()
-            || !init.body_present && inherited.body.is_none() && body_stream.is_some();
+        let has_stream_body =
+            init.body_stream.is_some() || !init.body_present && inherited.has_stream_body;
         validate_fetch_body(
             body.is_some() || body_stream.is_some(),
             has_stream_body,
