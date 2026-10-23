@@ -169,12 +169,11 @@ pub(crate) fn build_web_transport_error_from_clone_payload<'s>(
         );
         return None;
     }
-    crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "WebTransportError",
-    )
-    .ok()?;
-    declaration(scope, payload)?.bind(scope).ok()
+    let object = build_dom_exception_instance(scope, "WebTransportError")?;
+    declaration(scope, payload)?
+        .initialize(scope, object)
+        .ok()?;
+    Some(object)
 }
 
 pub(crate) fn build_web_transport_error<'s>(
