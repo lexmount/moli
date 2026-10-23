@@ -1,4 +1,6 @@
+mod stream;
 mod tls;
+pub use stream::{StreamWebSocketFixture, spawn_parked_stream_websocket_server};
 pub use tls::TlsWebSocketFixture;
 
 use std::sync::Arc;

@@ -1,5 +1,6 @@
 use super::helpers::websocket_id;
 use super::stream::reject_websocket_stream_abort;
+use super::transport::{close_websocket_stream_transport, websocket_stream_transport_wrapper};
 use super::*;
 use crate::abort_signal_route::ResolvedAbortSignal;
 
@@ -48,9 +49,15 @@ pub(super) fn install_websocket_stream_abort<'s>(
         signal: v8::Global::new(scope, signal.value()),
         algorithm: v8::Global::new(scope, algorithm),
     };
-    let retained = context_host_ptr_from_global_bridge(scope).is_some_and(|host| {
+    let retained = if let Some(host) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host }.set_websocket_stream_abort_registration(socket_id, registration)
-    });
+    } else {
+        crate::worker::set_worker_websocket_stream_abort_registration(
+            scope,
+            socket_id,
+            registration,
+        )
+    };
     if !retained {
         signal.unregister_algorithm(scope, algorithm);
     }
@@ -63,8 +70,11 @@ pub(super) fn remove_websocket_stream_abort<'s>(
     let Some(socket_id) = websocket_id(scope, stream) else {
         return;
     };
-    let registration = context_host_ptr_from_global_bridge(scope)
-        .and_then(|host| unsafe { &mut *host }.take_websocket_stream_abort_registration(socket_id));
+    let registration = if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host }.take_websocket_stream_abort_registration(socket_id)
+    } else {
+        crate::worker::take_worker_websocket_stream_abort_registration(scope, socket_id)
+    };
     if let Some(registration) = registration {
         registration.remove(scope);
     }
@@ -79,16 +89,12 @@ fn abort_callback<'s>(
     let Some(socket_id) = args.data().number_value(scope).map(|id| id as u64) else {
         return;
     };
-    let Some(host) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
     // A retained signal must never revive a retired connection or enter its
     // replacement realm. The existing transport owner check also retires stale ids.
-    let Some((_, _, _, stream)) = unsafe { &mut *host }.websocket_dispatch_target(scope, socket_id)
-    else {
+    let Some(stream) = websocket_stream_transport_wrapper(scope, socket_id) else {
         return;
     };
     remove_websocket_stream_abort(scope, stream);
-    let _ = unsafe { &mut *host }.close_websocket(socket_id, None, String::new());
+    close_websocket_stream_transport(scope, socket_id, None, String::new());
     reject_websocket_stream_abort(scope, stream);
 }
