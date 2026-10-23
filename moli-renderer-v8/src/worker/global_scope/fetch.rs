@@ -390,8 +390,8 @@ pub(crate) fn close_worker_websocket(
 pub(in crate::worker) fn dispatch_worker_websocket_event(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    event: WebSocketEvent,
-) -> bool {
+    event: &WebSocketEvent,
+) -> crate::context_bootstrap::WebSocketDispatchResult {
     let socket_id = event.socket_id();
     let (socket, document_url, socket_url, output) = {
         let mut state = state.borrow_mut();
@@ -402,14 +402,14 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
             ..
         } = &mut *state;
         let Some(entry) = websockets.get_mut(&socket_id) else {
-            return false;
+            return crate::context_bootstrap::WebSocketDispatchResult::Noop;
         };
         let output = interception_context
             .clone()
             .expect("Worker WebSocket has a network output owner");
         let document_url = &entry.document_url;
         let socket_url = &entry.url;
-        let item = match &event {
+        let item = match event {
             WebSocketEvent::Open {
                 request_headers,
                 response_status,
@@ -505,9 +505,9 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
             output,
         )
     };
-    let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, &event);
+    let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, event);
     if dispatch_result != crate::context_bootstrap::WebSocketDispatchResult::Backpressured {
-        let frame = match &event {
+        let frame = match event {
             WebSocketEvent::TextMessage { data, .. } => {
                 Some((WebSocketFrameOpcode::Text, data.len()))
             }
@@ -535,7 +535,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
     {
         load.finish();
     }
-    dispatch_result.dispatched()
+    dispatch_result
 }
 
 fn worker_websocket_frame_opcode(opcode: moli_websocket::FrameOpcode) -> WebSocketFrameOpcode {
