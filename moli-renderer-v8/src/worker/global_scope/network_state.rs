@@ -234,6 +234,8 @@ impl WorkerXhrResponse {
 
 pub(in crate::worker) struct WorkerWebSocketState {
     pub(in crate::worker) wrapper: v8::Global<v8::Object>,
+    pub(in crate::worker) stream_abort:
+        Option<crate::context_bootstrap::WebSocketStreamAbortRegistration>,
     pub(in crate::worker) connection: WebSocketConnectionHandle,
     pub(in crate::worker) document_url: Url,
     pub(in crate::worker) url: Url,

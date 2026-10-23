@@ -147,7 +147,7 @@ pub(crate) struct WorkerGlobalState {
         Option<crate::context_bootstrap::SharedStorageBucketStore>,
     /// Async WebSocket transport events routed back onto this worker loop.
     pub(in crate::worker) websocket_event_tx: tokio::sync::mpsc::Sender<WebSocketEvent>,
-    /// Worker-owned classic WebSocket connections keyed by socket id.
+    /// Worker-owned classic and Stream WebSocket connections keyed by socket id.
     pub(in crate::worker) websockets: HashMap<u64, WorkerWebSocketState>,
     /// Worker-local WebSocket id counter.
     pub(in crate::worker) next_websocket_id: u64,

@@ -77,7 +77,9 @@ pub(crate) use global_scope::{
     send_worker_websocket_blob,
     send_worker_websocket_text,
     service_worker_runtime_identity,
+    set_worker_websocket_stream_abort_registration,
     start_worker_font_face_fetch,
+    take_worker_websocket_stream_abort_registration,
     try_worker_xhr_abort_callback,
     try_worker_xhr_reschedule_timeout_after_timeout_change,
     try_worker_xhr_send_callback,
@@ -108,6 +110,7 @@ pub(crate) use global_scope::{
     worker_termination_requested,
     worker_trusted_types_for_script_requirements,
     worker_uses_shared_worker_agent_cluster,
+    worker_websocket_wrapper,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
