@@ -10,6 +10,10 @@ use crate::{
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
+    /// One coalesced CSS animation/transition rescan for the whole Document.
+    /// Style invalidation queues it so newly started or finished animations and
+    /// transitions dispatch their events on a rendering-update turn.
+    AnimationTransitionScan,
     /// Flush the main Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
@@ -114,6 +118,46 @@ impl JsContextHost {
             RendererPageRenderingUpdateTaskKind::AnimationStartScan,
             PendingRenderingUpdatePayload::AnimationStartScan(event_target),
         )
+    }
+
+    /// Queue one coalesced CSS animation/transition rescan for every current
+    /// Document. Called from style invalidation (class/style/attribute
+    /// mutations) so animations and transitions that start or finish without a
+    /// fresh `animationstart` listener registration are still observed.
+    ///
+    /// This resolves targets from the current registered execution contexts, so
+    /// it needs no V8 scope. Repeated invalidations coalesce onto the pending
+    /// per-Document entry until its rendering turn consumes it.
+    pub(crate) fn queue_animation_transition_scan(&mut self) {
+        // Standalone ScriptVm contexts intentionally do not install Page task
+        // capabilities; their DOM mutations have no owner scheduler to receive
+        // rendering updates.
+        if !self.has_page_task_capabilities() {
+            return;
+        }
+        let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
+            self.child_browsing_context_handles_in_document_order()
+                .into_iter()
+                .map(OwnerDispatchScope::Child),
+        );
+        for dispatch_scope in scopes {
+            if self
+                .current_registered_window_execution_context_identity(dispatch_scope)
+                .is_none()
+            {
+                continue;
+            }
+            let Some(target) =
+                self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+            else {
+                continue;
+            };
+            self.queue_rendering_update(
+                target,
+                RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+                PendingRenderingUpdatePayload::AnimationTransitionScan,
+            );
+        }
     }
 
     /// Capture each current Document before changing the native environment.
@@ -249,6 +293,9 @@ impl JsContextHost {
             PendingRenderingUpdatePayload::AnimationStartScan(event_target) => {
                 self.dispatch_authorized_animation_start_scan(scope, host_ptr, target, event_target)
             }
+            PendingRenderingUpdatePayload::AnimationTransitionScan => {
+                self.dispatch_authorized_animation_transition_scan(scope, host_ptr, target)
+            }
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
@@ -284,6 +331,28 @@ impl JsContextHost {
             host_ptr,
             resolved.document_handle,
             event_target,
+        );
+        dispatch_scope.restore(scope, previous_scope);
+        dispatched
+    }
+
+    fn dispatch_authorized_animation_transition_scan(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let dispatch_scope = target.dispatch_scope();
+        let previous_scope = dispatch_scope.enter(scope);
+        let dispatched = super::super::element::dispatch_animation_transition_scan(
+            scope,
+            host_ptr,
+            resolved.document_handle,
         );
         dispatch_scope.restore(scope, previous_scope);
         dispatched

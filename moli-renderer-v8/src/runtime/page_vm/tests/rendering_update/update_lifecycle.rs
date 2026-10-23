@@ -441,10 +441,10 @@ document.close();
             .expect("replacement main Document owner should exist");
         assert_ne!(before_document, after_document);
 
-        let stale = page_vm
+        let stale_start = page_vm
             .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
             .expect("retired Document animation work should remain an exact source entry");
-        let (stale_owner, stale_kind) = stale
+        let (stale_owner, stale_kind) = stale_start
             .rendering_update_owner_and_kind()
             .expect("rendering selector must retain the retired task identity");
         assert_eq!(
@@ -457,7 +457,7 @@ document.close();
             "the claimed task must retain the retired exact Document"
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale_start, &loader)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("String(__retiredAnimationEvents)")?,

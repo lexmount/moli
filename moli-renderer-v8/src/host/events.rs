@@ -29,6 +29,26 @@ struct HostEventInitDeclaration {
     cancelable: bool,
 }
 
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct HostAnimationEventInitDeclaration<'scope> {
+    bubbles: bool,
+    cancelable: bool,
+    animation_name: v8::Local<'scope, v8::String>,
+    elapsed_time: f64,
+    pseudo_element: v8::Local<'scope, v8::String>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct HostTransitionEventInitDeclaration<'scope> {
+    bubbles: bool,
+    cancelable: bool,
+    property_name: v8::Local<'scope, v8::String>,
+    elapsed_time: f64,
+    pseudo_element: v8::Local<'scope, v8::String>,
+}
+
 struct EventListenerEntry {
     id: u64,
     callback_id: crate::native_bridge::EventCallbackId,
@@ -1962,6 +1982,119 @@ fn construct_event_instance<'s>(
     constructor
         .new_instance(&scope, &[event_type.into(), init.into()])
         .ok_or_else(|| "intrinsic Event constructor failed for a host event".to_owned())
+}
+
+/// Construct a trusted `AnimationEvent` for a CSS animation lifecycle event.
+pub(crate) fn create_animation_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    animation_name: &str,
+    elapsed_time: f64,
+    target: v8::Local<'s, v8::Value>,
+    bubbles: bool,
+    cancelable: bool,
+) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
+    let event = construct_value_event_instance(
+        scope,
+        "AnimationEvent",
+        event_type,
+        ValueEventMembers::Animation {
+            name: animation_name,
+            elapsed_time,
+        },
+        bubbles,
+        cancelable,
+    )?;
+    mark_event_trusted(scope, event);
+    set_event_target(scope, event, target);
+    set_event_current_target(scope, event, target);
+    clear_event_composed_path(scope, event);
+    Ok(event)
+}
+
+/// Construct a trusted `TransitionEvent` for a CSS transition lifecycle event.
+pub(crate) fn create_transition_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    property_name: &str,
+    elapsed_time: f64,
+    target: v8::Local<'s, v8::Value>,
+    bubbles: bool,
+    cancelable: bool,
+) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
+    let event = construct_value_event_instance(
+        scope,
+        "TransitionEvent",
+        event_type,
+        ValueEventMembers::Transition {
+            name: property_name,
+            elapsed_time,
+        },
+        bubbles,
+        cancelable,
+    )?;
+    mark_event_trusted(scope, event);
+    set_event_target(scope, event, target);
+    set_event_current_target(scope, event, target);
+    clear_event_composed_path(scope, event);
+    Ok(event)
+}
+
+enum ValueEventMembers<'a> {
+    Animation { name: &'a str, elapsed_time: f64 },
+    Transition { name: &'a str, elapsed_time: f64 },
+}
+
+fn construct_value_event_instance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    interface: &str,
+    event_type: &str,
+    members: ValueEventMembers<'_>,
+    bubbles: bool,
+    cancelable: bool,
+) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
+    let constructor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, interface)
+            .map_err(|error| {
+                format!("failed to resolve intrinsic {interface} constructor: {error}")
+            })?;
+    let event_type = v8_string(scope, event_type)
+        .ok_or_else(|| format!("failed to allocate event type `{event_type}`"))?;
+    let pseudo_element =
+        v8_string(scope, "").ok_or_else(|| "failed to allocate string".to_owned())?;
+    let init = match members {
+        ValueEventMembers::Animation { name, elapsed_time } => {
+            let name =
+                v8_string(scope, name).ok_or_else(|| "failed to allocate string".to_owned())?;
+            HostAnimationEventInitDeclaration::new(
+                bubbles,
+                cancelable,
+                name,
+                elapsed_time,
+                pseudo_element,
+            )
+            .bind(scope)
+            .map_err(|error| format!("failed to build AnimationEventInit dictionary: {error}"))?
+        }
+        ValueEventMembers::Transition { name, elapsed_time } => {
+            let name =
+                v8_string(scope, name).ok_or_else(|| "failed to allocate string".to_owned())?;
+            HostTransitionEventInitDeclaration::new(
+                bubbles,
+                cancelable,
+                name,
+                elapsed_time,
+                pseudo_element,
+            )
+            .bind(scope)
+            .map_err(|error| format!("failed to build TransitionEventInit dictionary: {error}"))?
+        }
+    };
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let scope = try_catch.init();
+    constructor
+        .new_instance(&scope, &[event_type.into(), init.into()])
+        .ok_or_else(|| format!("intrinsic {interface} constructor failed for a host event"))
 }
 
 fn normalize_public_event_record<'s>(

@@ -151,7 +151,8 @@ pub(crate) use self::base_prototypes::{
 use self::shadow_template::*;
 
 pub(crate) use animations::{
-    dispatch_animation_start_scan, queue_animation_start_for_listener_target,
+    dispatch_animation_start_scan, dispatch_animation_transition_scan,
+    element_tree_has_css_lifecycle, queue_animation_start_for_listener_target,
 };
 pub(crate) use geometry::{
     compute_mock_client_rect, compute_mock_intersection_client_rect,

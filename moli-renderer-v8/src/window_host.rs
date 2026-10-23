@@ -227,6 +227,14 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     if child_window_target.is_none() && call.event_type == "animationstart" {
         queue_animation_start_for_listener_target(scope, host_ptr, target);
     }
+    if child_window_target.is_none()
+        && matches!(
+            call.event_type.as_str(),
+            "transitionrun" | "transitionstart" | "transitionend" | "transitioncancel"
+        )
+    {
+        unsafe { &mut *host_ptr }.queue_animation_transition_scan();
+    }
 }
 
 fn default_passive_value(

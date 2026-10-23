@@ -35,6 +35,10 @@ impl RendererPageRenderingUpdateTaskId {
 pub(crate) enum RendererPageRenderingUpdateTaskKind {
     DocumentScrollEvents,
     AnimationStartScan,
+    /// One coalesced CSS animation/transition rescan for the owning Document.
+    /// Queued from style invalidation so class/style/attribute changes that
+    /// start or finish an animation or transition are observed.
+    AnimationTransitionScan,
     PostParseAutofocus,
     EnvironmentChange,
 }

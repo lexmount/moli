@@ -1945,6 +1945,11 @@ impl JsContextHost {
                 &emulated_media,
                 viewport,
             );
+        if previous.into_iter().chain(next).any(|element| {
+            crate::native_bridge::element::element_tree_has_css_lifecycle(self, element)
+        }) {
+            self.queue_animation_transition_scan();
+        }
     }
 
     pub(crate) fn note_element_state_style_activity_with_old_state(
@@ -1965,6 +1970,9 @@ impl JsContextHost {
                 &emulated_media,
                 viewport,
             );
+        if crate::native_bridge::element::element_tree_has_css_lifecycle(self, element) {
+            self.queue_animation_transition_scan();
+        }
     }
 
     pub(crate) fn set_hovered_element_for_input(&mut self, hit: Option<DomHandle>) -> bool {
@@ -2383,6 +2391,25 @@ impl JsContextHost {
                 None,
             );
         }
+        if effects.iter().any(|effect| match effect {
+            StyleMutationEffect::Attribute { name, .. }
+                if name.eq_ignore_ascii_case("class") || name.eq_ignore_ascii_case("style") =>
+            {
+                true
+            }
+            StyleMutationEffect::Attribute { element, .. } => {
+                crate::native_bridge::element::element_tree_has_css_lifecycle(self, *element)
+            }
+            StyleMutationEffect::ConnectedSubtrees { roots } => roots.iter().any(|root| {
+                crate::native_bridge::element::element_tree_has_css_lifecycle(self, *root)
+            }),
+            StyleMutationEffect::DisconnectedSubtrees { roots } => roots.iter().any(|root| {
+                crate::native_bridge::element::element_tree_has_css_lifecycle(self, *root)
+            }),
+            _ => false,
+        }) {
+            self.queue_animation_transition_scan();
+        }
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
@@ -2390,6 +2417,7 @@ impl JsContextHost {
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .invalidate_inline_style_subtree(unsafe { &*dom_host }, root);
+        self.queue_animation_transition_scan();
     }
 
     pub(crate) fn note_style_subtree_context_change(&mut self, root: DomHandle) {

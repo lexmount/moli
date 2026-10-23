@@ -339,7 +339,7 @@ impl<'a> ComputedStyleRead<'a> {
         super::super::computed_names::computed_property_names_for_read(self)
     }
 
-    pub(in crate::native_bridge::element::styles) fn properties(&self) -> Vec<(String, String)> {
+    pub(crate) fn properties(&self) -> Vec<(String, String)> {
         self.property_names()
             .into_iter()
             .map(|name| {
