@@ -61,7 +61,7 @@ pub(super) fn websocket_send_callback<'s>(
             WebSocketSendPayload::Text(text) => host.send_websocket_text(socket_id, text),
             WebSocketSendPayload::Binary(bytes) => host.send_websocket_binary(socket_id, bytes),
         };
-        if !sent {
+        if !matches!(sent, Some(Ok(()))) {
             add_buffered_amount(scope, args.this(), -amount);
             set_websocket_ready_state(scope, args.this(), CLOSED);
         }

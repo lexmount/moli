@@ -41,7 +41,6 @@ const WEBSOCKET_STREAM_ERROR_SLOT: &str = "__moliWebSocketStreamError";
 const WEBSOCKET_STREAM_PROMISE_RESOLVER_SLOT: &str = "__moliWebSocketStreamPromiseResolver";
 const WEBSOCKET_STREAM_SINK_CLOSED_PROMISE_SLOT: &str = "__moliWebSocketStreamSinkClosedPromise";
 const WEBSOCKET_STREAM_PENDING_WRITES_SLOT: &str = "__moliWebSocketStreamPendingWrites";
-const WEBSOCKET_STREAM_SEND_REJECTED_SLOT: &str = "__moliWebSocketStreamSendRejected";
 
 const CONNECTING: f64 = 0.0;
 const OPEN: f64 = 1.0;

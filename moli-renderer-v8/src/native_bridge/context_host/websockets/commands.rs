@@ -13,20 +13,26 @@ impl JsContextHost {
         self.page_websocket_sender().signal_readable_pull(socket_id);
     }
 
-    pub(crate) fn send_websocket_text(&self, socket_id: u64, text: String) -> bool {
+    pub(crate) fn send_websocket_text(
+        &self,
+        socket_id: u64,
+        text: String,
+    ) -> Option<Result<(), moli_websocket::SendError>> {
         self.websockets
             .get(&socket_id)
             .and_then(|state| state.connection.as_ref())
-            .map(|connection| connection.send_text(text).is_ok())
-            .unwrap_or(false)
+            .map(|connection| connection.send_text(text))
     }
 
-    pub(crate) fn send_websocket_binary(&self, socket_id: u64, bytes: Vec<u8>) -> bool {
+    pub(crate) fn send_websocket_binary(
+        &self,
+        socket_id: u64,
+        bytes: Vec<u8>,
+    ) -> Option<Result<(), moli_websocket::SendError>> {
         self.websockets
             .get(&socket_id)
             .and_then(|state| state.connection.as_ref())
-            .map(|connection| connection.send_binary(bytes).is_ok())
-            .unwrap_or(false)
+            .map(|connection| connection.send_binary(bytes))
     }
 
     pub(crate) fn close_websocket(

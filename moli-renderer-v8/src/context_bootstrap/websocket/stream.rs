@@ -36,8 +36,6 @@ struct WebSocketStreamWritableSinkDeclaration<'scope> {
     closed: Option<v8::Local<'scope, v8::Value>>,
     #[webapi(slot = WEBSOCKET_STREAM_PENDING_WRITES_SLOT, init = "array")]
     pending_writes: (),
-    #[webapi(slot = WEBSOCKET_STREAM_SEND_REJECTED_SLOT, init = false)]
-    send_rejected: (),
     #[webapi(method, callback = websocket_stream_sink_write_callback, length = 1)]
     write: (),
     #[webapi(method, callback = websocket_stream_sink_close_callback, length = 0)]
@@ -353,28 +351,24 @@ fn websocket_stream_sink_write_callback<'s>(
             return;
         }
     };
-    let mut sent = false;
-    if let Some(socket_id) = websocket_id(scope, args.this())
+    let admission = if let Some(socket_id) = websocket_id(scope, args.this())
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        let host = unsafe { &mut *host_ptr };
-        sent = match payload {
+        let host = unsafe { &*host_ptr };
+        match payload {
             WebSocketSendPayload::Text(text) => host.send_websocket_text(socket_id, text),
             WebSocketSendPayload::Binary(bytes) => host.send_websocket_binary(socket_id, bytes),
-        };
-    }
-    if sent {
+        }
+    } else {
+        None
+    };
+    if admission.is_some() {
+        // The transport may already have queued its terminal event when command
+        // admission fails. Keep the write pending until that owner's Close or
+        // Error task settles it together with the stream, instead of exposing
+        // the transport's state before the realm has observed closure.
         enqueue_websocket_stream_pending_write(scope, args.this(), resolver);
     } else {
-        // Native admission can end before the queued Close reaches this realm.
-        // Remember that this write failed even after WritableStream has drained
-        // its rejection reactions and no native pending-write record exists.
-        set_private_value(
-            scope,
-            args.this(),
-            WEBSOCKET_STREAM_SEND_REJECTED_SLOT,
-            v8::Boolean::new(scope, true).into(),
-        );
         let error = websocket_dom_exception_value(
             scope,
             "InvalidStateError",
@@ -476,8 +470,6 @@ fn websocket_stream_has_interrupted_write<'s>(
         return false;
     };
     websocket_stream_pending_writes(scope, sink).is_some_and(|pending| pending.length() > 0)
-        || get_private_value(scope, sink, WEBSOCKET_STREAM_SEND_REJECTED_SLOT)
-            .is_some_and(|value| value.boolean_value(scope))
 }
 
 fn websocket_stream_pending_writes<'s>(
