@@ -99,6 +99,11 @@ pub enum AccessType {
 pub type FailedAccessCheckCallback =
   unsafe extern "C" fn(Local<Object>, AccessType, Local<Value>);
 
+/// Classifies API wrappers for V8's native `Error.isError` implementation.
+/// The callback must not invoke JavaScript or throw an exception.
+pub type IsJSApiWrapperNativeErrorCallback =
+  unsafe extern "C" fn(*mut RealIsolate, Local<Object>) -> bool;
+
 /// Memory pressure level for the MemoryPressureNotification.
 /// None hints V8 that there is no memory pressure.
 /// Moderate hints V8 to speed up incremental garbage collection at the cost
@@ -836,6 +841,10 @@ unsafe extern "C" {
     isolate: *mut RealIsolate,
     callback: FailedAccessCheckCallback,
   );
+  fn v8__Isolate__SetIsJSApiWrapperNativeErrorCallback(
+    isolate: *mut RealIsolate,
+    callback: IsJSApiWrapperNativeErrorCallback,
+  );
   fn v8__Isolate__RequestInterrupt(
     isolate: *const RealIsolate,
     callback: InterruptCallback,
@@ -922,6 +931,21 @@ impl UnsafeRawIsolatePtr {
 pub struct RealIsolate(Opaque);
 
 impl Isolate {
+  /// Installs the embedder's native error classifier for API wrappers.
+  /// Ordinary JavaScript errors and Proxies remain classified by V8 itself.
+  #[inline(always)]
+  pub fn set_is_js_api_wrapper_native_error_callback(
+    &mut self,
+    callback: IsJSApiWrapperNativeErrorCallback,
+  ) {
+    unsafe {
+      v8__Isolate__SetIsJSApiWrapperNativeErrorCallback(
+        self.as_real_ptr(),
+        callback,
+      )
+    }
+  }
+
   /// Installs the callback invoked when an object access check fails and no
   /// failed-access interceptor handles the operation.
   #[inline(always)]
