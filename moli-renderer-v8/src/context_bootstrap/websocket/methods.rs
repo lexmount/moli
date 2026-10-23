@@ -1,12 +1,12 @@
 use super::helpers::{
-    add_buffered_amount, set_websocket_ready_state, throw_websocket_close_error,
-    throw_websocket_dom_exception, websocket_close_info_code, websocket_close_info_reason,
-    websocket_id, websocket_ready_state,
+    WebSocketCloseInfo, add_buffered_amount, set_websocket_ready_state,
+    throw_websocket_close_error, throw_websocket_dom_exception, websocket_id,
+    websocket_ready_state,
 };
 use super::payload::{WebSocketSendPayload, websocket_send_payload};
 use super::*;
 use crate::webidl;
-use moli_websocket::{normalize_websocket_close_info, validate_websocket_close_request};
+use moli_websocket::validate_websocket_close_request;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WebSocket.close")]
@@ -15,6 +15,13 @@ struct WebSocketCloseArgs {
     code: Option<u16>,
     #[webidl(converter = "usv_string")]
     reason: Option<String>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebSocketStream.close")]
+struct WebSocketStreamCloseArgs {
+    #[webidl(dictionary)]
+    init: WebSocketCloseInfo,
 }
 
 pub(super) fn websocket_send_callback<'s>(
@@ -120,30 +127,10 @@ pub(super) fn websocket_stream_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let init = if args.length() > 0 && !args.get(0).is_null_or_undefined() {
-        match v8::Local::<v8::Object>::try_from(args.get(0)) {
-            Ok(init) => Some(init),
-            Err(_) => {
-                throw_type_error(
-                    scope,
-                    "Failed to execute 'close' on 'WebSocketStream': the provided close info value is not an object.",
-                );
-                return;
-            }
-        }
-    } else {
-        None
+    let Some(parsed) = webidl::parse_args::<WebSocketStreamCloseArgs>(scope, &args) else {
+        return;
     };
-    let close_code = match websocket_close_info_code(scope, init) {
-        Some(Ok(close_code)) => Some(close_code),
-        Some(Err(error)) => {
-            throw_websocket_close_error(scope, "execute 'close' on 'WebSocketStream'", error);
-            return;
-        }
-        None => None,
-    };
-    let reason = websocket_close_info_reason(scope, init);
-    let close = match normalize_websocket_close_info(close_code, reason) {
+    let close = match parsed.init.normalize() {
         Ok(close) => close,
         Err(error) => {
             throw_websocket_close_error(scope, "execute 'close' on 'WebSocketStream'", error);

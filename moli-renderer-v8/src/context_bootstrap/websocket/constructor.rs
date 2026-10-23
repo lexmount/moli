@@ -1,8 +1,8 @@
 use super::helpers::{
-    WebSocketProtocolParseError, normalize_websocket_stream_url, normalize_websocket_url,
-    parse_websocket_protocols, parse_websocket_stream_protocols, throw_websocket_close_error,
-    throw_websocket_dom_exception, websocket_close_info_code, websocket_close_info_reason,
-    websocket_id, websocket_object_slot,
+    WebSocketCloseInfo, WebSocketProtocolParseError, normalize_websocket_stream_url,
+    normalize_websocket_url, parse_websocket_protocols, parse_websocket_stream_protocols,
+    throw_websocket_close_error, throw_websocket_dom_exception, websocket_id,
+    websocket_object_slot,
 };
 use super::realm::{effective_websocket_document_scope, websocket_constructor_relevant_context};
 use super::stream::{new_websocket_stream_promise, reject_websocket_stream_abort};
@@ -11,9 +11,18 @@ use crate::context_bootstrap::constructors::initialize_websocket_error;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
-use moli_websocket::{normalize_websocket_close_info, websocket_url_is_potentially_trustworthy};
+use moli_websocket::websocket_url_is_potentially_trustworthy;
 
 const WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT: &str = "__moliWebSocketStreamAbortStream";
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebSocketError")]
+struct WebSocketErrorConstructorArgs {
+    #[webidl(default = Vec::new(), converter = "dom_string16")]
+    message: Vec<u16>,
+    #[webidl(dictionary)]
+    init: WebSocketCloseInfo,
+}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WebSocket)]
@@ -177,46 +186,22 @@ pub(in crate::context_bootstrap) fn websocket_error_constructor_callback<'s>(
         );
         return;
     }
-    let message = if args.length() > 0 && !args.get(0).is_undefined() {
-        args.get(0)
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default()
-    } else {
-        String::new()
+    let Some(parsed) = webidl::parse_args::<WebSocketErrorConstructorArgs>(scope, &args) else {
+        return;
     };
-    let init = if args.length() > 1 && !args.get(1).is_null_or_undefined() {
-        match v8::Local::<v8::Object>::try_from(args.get(1)) {
-            Ok(init) => Some(init),
-            Err(_) => {
-                throw_type_error(
-                    scope,
-                    "Failed to construct 'WebSocketError': the provided init value is not an object.",
-                );
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    let close_code = match websocket_close_info_code(scope, init) {
-        Some(Ok(close_code)) => Some(close_code),
-        Some(Err(error)) => {
-            throw_websocket_close_error(scope, "construct 'WebSocketError'", error);
-            return;
-        }
-        None => None,
-    };
-    let reason = websocket_close_info_reason(scope, init);
-    let close = match normalize_websocket_close_info(close_code, reason) {
+    let close = match parsed.init.normalize() {
         Ok(close) => close,
         Err(error) => {
             throw_websocket_close_error(scope, "construct 'WebSocketError'", error);
             return;
         }
     };
-
-    initialize_websocket_error(scope, args.this(), &message, close.code, &close.reason);
+    let Some(message) =
+        v8::String::new_from_two_byte(scope, &parsed.message, v8::NewStringType::Normal)
+    else {
+        return;
+    };
+    initialize_websocket_error(scope, args.this(), message, close.code, &close.reason);
     rv.set(args.this().into());
 }
 
