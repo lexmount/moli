@@ -48,9 +48,9 @@ pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
 pub(crate) const HOST_OBJECT_TAG_CRYPTO_KEY: u32 = 3;
 const HOST_OBJECT_TAG_READABLE_STREAM: u32 = 4;
 pub(crate) const HOST_OBJECT_TAG_BLOB: u32 = 5;
-const HOST_OBJECT_TAG_DOM_EXCEPTION: u32 = 6;
+pub(crate) const HOST_OBJECT_TAG_DOM_EXCEPTION: u32 = 6;
 pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
-const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
+pub(crate) const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
 pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
@@ -699,24 +699,15 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
-            Some("QuotaExceededError") => {
-                if let Some((message, quota, requested)) =
-                    quota_exceeded_error_clone_fields(scope, object)
-                {
-                    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
-                    write_string(serializer, &message);
-                    write_optional_double(serializer, quota);
-                    write_optional_double(serializer, requested);
-                    return Some(true);
-                }
+            Some("QuotaExceededError")
+                if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
             }
-            Some("DOMException") => {
-                if let Some((message, name)) = dom_exception_clone_fields(scope, object) {
-                    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
-                    write_string(serializer, &message);
-                    write_string(serializer, &name);
-                    return Some(true);
-                }
+            Some("DOMException")
+                if write_dom_exception_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
             }
             _ => {}
         }
@@ -1057,18 +1048,9 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 let payload = read_web_transport_error_payload(deserializer)?;
                 build_web_transport_error_from_clone_payload(scope, &payload)
             }
-            HOST_OBJECT_TAG_DOM_EXCEPTION => {
-                let message = read_string(deserializer)?;
-                let name = read_string(deserializer)?;
-                Some(build_dom_exception_object(scope, &message, &name))
-            }
+            HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
             HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
-                let message = read_string(deserializer)?;
-                let quota = read_optional_double(deserializer)?;
-                let requested = read_optional_double(deserializer)?;
-                Some(build_quota_exceeded_error_object(
-                    scope, &message, quota, requested,
-                ))
+                read_quota_exceeded_error_payload(scope, deserializer)
             }
             _ => {
                 throw_data_clone_exception(scope, "Unsupported structured clone host object.");
@@ -1477,6 +1459,52 @@ pub(crate) fn read_web_transport_error_payload(
         source,
         stream_error_code,
     })
+}
+
+pub(crate) fn write_dom_exception_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<()> {
+    let (message, name) = dom_exception_clone_fields(scope, object)?;
+    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
+    write_string(serializer, &message);
+    write_string(serializer, &name);
+    Some(())
+}
+
+pub(crate) fn read_dom_exception_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = read_string(deserializer)?;
+    let name = read_string(deserializer)?;
+    Some(build_dom_exception_object(scope, &message, &name))
+}
+
+pub(crate) fn write_quota_exceeded_error_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<()> {
+    let (message, quota, requested) = quota_exceeded_error_clone_fields(scope, object)?;
+    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
+    write_string(serializer, &message);
+    write_optional_double(serializer, quota);
+    write_optional_double(serializer, requested);
+    Some(())
+}
+
+pub(crate) fn read_quota_exceeded_error_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = read_string(deserializer)?;
+    let quota = read_optional_double(deserializer)?;
+    let requested = read_optional_double(deserializer)?;
+    Some(build_quota_exceeded_error_object(
+        scope, &message, quota, requested,
+    ))
 }
 
 fn write_string(serializer: &dyn v8::ValueSerializerHelper, value: &str) {
