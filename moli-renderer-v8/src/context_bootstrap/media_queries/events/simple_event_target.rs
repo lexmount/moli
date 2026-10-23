@@ -30,7 +30,7 @@ use listeners::{
     simple_object_event_listeners_snapshot_in_registry,
     simple_object_event_set_handler_in_registry,
     simple_object_event_target_add_listener_for_target,
-    simple_object_event_target_remove_listener_for_target,
+    simple_object_event_target_remove_listener_in_registry,
 };
 use state::{
     ResolvedSimpleEventTarget, SimpleEventListenerRegistry, resolve_simple_event_target,

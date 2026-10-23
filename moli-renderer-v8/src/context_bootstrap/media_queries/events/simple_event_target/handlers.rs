@@ -32,7 +32,7 @@ pub(crate) fn simple_event_target_handler_setter_callback<'s>(
         property.strip_prefix("on").expect("event handler property"),
         &property,
         args.get(0),
-        Some(target.registry),
+        target.registry,
     );
 }
 

@@ -39,7 +39,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
     let dispatch_result = dispatch_resolved_event(
         scope,
         target.identity,
-        Some(target.registry),
+        target.registry,
         &event_type,
         event,
         None,
@@ -100,7 +100,20 @@ fn dispatch_object_event<'s>(
             dispatched: false,
         };
     };
-    let registry = SimpleEventListenerRegistry::from_owner(scope, target.listener_owner);
+    let Some(registry) = SimpleEventListenerRegistry::from_owner(scope, target.listener_owner)
+    else {
+        // A native producer may dispatch before listener state is initialized.
+        // It still owes the event its target, checkpoint and dispatch cleanup.
+        crate::context_bootstrap::event_target_dispatch::begin_dispatch(
+            scope,
+            target.dispatch_target,
+            event,
+        );
+        return SimpleEventDispatchResult {
+            uncanceled: finish_event_dispatch(scope, event, checkpoint),
+            dispatched: false,
+        };
+    };
     dispatch_resolved_event(
         scope,
         target,
@@ -115,7 +128,7 @@ fn dispatch_object_event<'s>(
 fn dispatch_resolved_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: ResolvedEventTarget<'s>,
-    registry: Option<SimpleEventListenerRegistry<'s>>,
+    registry: SimpleEventListenerRegistry<'s>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
@@ -134,7 +147,7 @@ fn dispatch_resolved_event<'s>(
     } else {
         None
     };
-    if let (true, Some(registry)) = (can_invoke, registry) {
+    if can_invoke {
         // Object-backed EventTargets clone their list once at AT_TARGET.
         // Capture remains part of listener identity; invocation follows
         // registration order, including EventHandler entries.
@@ -195,16 +208,22 @@ fn dispatch_resolved_event<'s>(
         }
     }
 
+    SimpleEventDispatchResult {
+        uncanceled: finish_event_dispatch(scope, event, checkpoint),
+        dispatched,
+    }
+}
+
+fn finish_event_dispatch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
+) -> bool {
     if let Some(checkpoint) = checkpoint {
         checkpoint(scope);
     }
     crate::context_bootstrap::event_target_dispatch::finish_dispatch(scope, event);
-    let default_prevented =
-        crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
-    SimpleEventDispatchResult {
-        uncanceled: !default_prevented,
-        dispatched,
-    }
+    !crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented")
 }
 
 struct SimpleEventCallbackResult {

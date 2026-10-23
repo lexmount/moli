@@ -627,3 +627,49 @@ fn simple_event_target_registry_reuse_preserves_reentrant_listener_mutations() {
         return trace.join(',') === 'new';
     })()"#).unwrap(), "true");
 }
+
+#[test]
+fn empty_native_event_targets_preserve_dispatch_lifecycle_with_or_without_registry() {
+    fn checkpoint(scope: &mut v8::PinScope<'_, '_>) {
+        let source = v8::String::new(scope, "emptyNativeCheckpoint = emptyNativeEvent.target === emptyNativeTarget && emptyNativeEvent.currentTarget === emptyNativeTarget && emptyNativeEvent.composedPath()[0] === emptyNativeTarget;").unwrap();
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        assert!(
+            crate::script_execution::execute_compiled_script(scope, script)
+                .unwrap()
+                .is_true()
+        );
+    }
+
+    let mut vm = new_storage_html_test_vm("https://event-target-empty-native.test/");
+    for initialized in [false, true] {
+        for canceled in [false, true] {
+            vm.eval(&format!(
+                "globalThis.emptyNativeTarget = {}; globalThis.emptyNativeEvent = new Event('empty', {{cancelable: true}}); globalThis.emptyNativeCheckpoint = false; {}; true;",
+                if initialized { "new EventTarget()" } else { "{}" },
+                if canceled { "emptyNativeEvent.preventDefault(); emptyNativeEvent.stopImmediatePropagation();" } else { "" },
+            )).unwrap();
+            vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+                let global = scope.get_current_context().global(scope);
+                let target = global
+                    .get(scope, crate::util::v8str(scope, "emptyNativeTarget").into())
+                    .unwrap();
+                let target = v8::Local::<v8::Object>::try_from(target).unwrap();
+                let event = global
+                    .get(scope, crate::util::v8str(scope, "emptyNativeEvent").into())
+                    .unwrap();
+                let event = v8::Local::<v8::Object>::try_from(event).unwrap();
+                crate::context_bootstrap::mark_event_trusted(scope, event);
+                let result =
+                    crate::context_bootstrap::dispatch_simple_event_target_event_with_checkpoint(
+                        scope, target, "empty", event, checkpoint,
+                    );
+                assert!(!result.dispatched);
+                assert_eq!(result.uncanceled, !canceled);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(vm.eval("String(emptyNativeCheckpoint && emptyNativeEvent.target === emptyNativeTarget && emptyNativeEvent.currentTarget === null && emptyNativeEvent.eventPhase === 0 && emptyNativeEvent.composedPath().length === 0 && !emptyNativeEvent.cancelBubble && emptyNativeEvent.isTrusted)").unwrap(), "true");
+        }
+    }
+    assert_eq!(vm.eval("(() => { const target = new EventTarget(); const event = new Event('empty'); return target.dispatchEvent(event) && event.target === target && event.currentTarget === null && event.composedPath().length === 0; })()").unwrap(), "true");
+}

@@ -180,7 +180,7 @@ pub(super) fn simple_object_event_target_add_listener_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     target: v8::Local<'s, v8::Object>,
-    registry: Option<SimpleEventListenerRegistry<'s>>,
+    registry: SimpleEventListenerRegistry<'s>,
 ) {
     let Some(call) = parse_listener_args::<AddEventListenerArgs>(scope, args, "addEventListener")
     else {
@@ -216,9 +216,12 @@ pub(crate) fn simple_object_event_target_register_webidl_listener<'s>(
     listener: webidl::WebIdlCallbackInterface,
     options: webidl::EventListenerOptions,
 ) {
+    let Some(registry) = simple_object_event_listener_registry(scope, target) else {
+        return;
+    };
     let listener = simple_object_event_listener_parts(scope, listener);
     simple_object_event_target_register_resolved_listener(
-        scope, target, event_type, listener, options, None, None,
+        scope, target, event_type, listener, options, None, registry,
     );
 }
 
@@ -229,15 +232,11 @@ fn simple_object_event_target_register_resolved_listener<'s>(
     listener: SimpleObjectResolvedEventListener<'s>,
     options: webidl::EventListenerOptions,
     signal: Option<ResolvedAbortSignal<'s>>,
-    registry: Option<SimpleEventListenerRegistry<'s>>,
+    registry: SimpleEventListenerRegistry<'s>,
 ) {
     if signal.is_some_and(|signal| signal.is_aborted(scope)) {
         return;
     }
-    let Some(registry) = registry.or_else(|| simple_object_event_listener_registry(scope, target))
-    else {
-        return;
-    };
     let Some(listeners) = simple_object_event_listener_array(scope, registry, &event_type, true)
     else {
         return;
@@ -292,11 +291,10 @@ fn simple_object_event_target_register_resolved_listener<'s>(
     }
 }
 
-pub(super) fn simple_object_event_target_remove_listener_for_target<'s>(
+pub(super) fn simple_object_event_target_remove_listener_in_registry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-    target: v8::Local<'s, v8::Object>,
-    registry: Option<SimpleEventListenerRegistry<'s>>,
+    registry: SimpleEventListenerRegistry<'s>,
 ) {
     let Some(call) =
         parse_listener_args::<RemoveEventListenerArgs>(scope, args, "removeEventListener")
@@ -307,10 +305,6 @@ pub(super) fn simple_object_event_target_remove_listener_for_target<'s>(
         return;
     };
     let listener = listener.value(scope);
-    let Some(registry) = registry.or_else(|| simple_object_event_listener_registry(scope, target))
-    else {
-        return;
-    };
     simple_object_event_remove_listener_from_registry(
         scope,
         registry,
@@ -548,7 +542,10 @@ pub(crate) fn simple_object_event_set_handler<'s>(
     handler_slot_name: &str,
     value: v8::Local<'s, v8::Value>,
 ) {
-    let registry = simple_object_event_listener_registry(scope, target);
+    let Some(registry) = simple_object_event_listener_registry(scope, target) else {
+        let _ = store_event_handler_value(scope, target, handler_slot_name, value);
+        return;
+    };
     simple_object_event_set_handler_in_registry(
         scope,
         target,
@@ -559,27 +556,34 @@ pub(crate) fn simple_object_event_set_handler<'s>(
     );
 }
 
-pub(super) fn simple_object_event_set_handler_in_registry<'s>(
+fn store_event_handler_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
-    event_type: &str,
     handler_slot_name: &str,
     value: v8::Local<'s, v8::Value>,
-    registry: Option<SimpleEventListenerRegistry<'s>>,
-) {
+) -> Option<v8::Local<'s, v8::Object>> {
     // EventHandler uses [LegacyTreatNonObjectAsNull]. Non-callable objects still
     // activate the handler, but must never be treated as handleEvent listeners.
     let callback = v8::Local::<v8::Object>::try_from(value).ok();
-    let active = callback.is_some();
     set_private_value(
         scope,
         target,
         handler_slot_name,
         callback.map_or_else(|| v8::null(scope).into(), |callback| callback.into()),
     );
-    let Some(registry) = registry else {
-        return;
-    };
+    callback
+}
+
+pub(super) fn simple_object_event_set_handler_in_registry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    handler_slot_name: &str,
+    value: v8::Local<'s, v8::Value>,
+    registry: SimpleEventListenerRegistry<'s>,
+) {
+    let callback = store_event_handler_value(scope, target, handler_slot_name, value);
+    let active = callback.is_some();
     let Some(listeners) = simple_object_event_listener_array(scope, registry, event_type, active)
     else {
         return;
