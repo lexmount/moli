@@ -529,17 +529,6 @@ fn websocket_error_reason_getter_callback<'s>(
     }
 }
 
-fn initialize_dom_exception<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    exception: v8::Local<'s, v8::Object>,
-    message: &str,
-    name: &str,
-) {
-    dom_exception_declaration(scope, message, name)
-        .initialize(scope, exception)
-        .expect("DOMException declaration should initialize");
-}
-
 pub(super) fn capture_dom_exception_stack(
     scope: &mut v8::PinScope<'_, '_>,
     exception: v8::Local<'_, v8::Object>,
@@ -588,13 +577,13 @@ fn initialize_quota_exceeded_error<'s>(
 
 fn websocket_error_declaration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    message: &str,
+    message: Option<v8::Local<'s, v8::String>>,
     close_code: Option<u16>,
     reason: &str,
 ) -> WebSocketErrorObjectDeclaration<'s> {
     let close_code = nullable_double_slot_value(scope, close_code.map(f64::from));
     let reason = v8_string(scope, reason).unwrap_or_else(|| v8::String::empty(scope));
-    WebSocketErrorObjectDeclaration::new(v8_string(scope, message), close_code, reason)
+    WebSocketErrorObjectDeclaration::new(message, close_code, reason)
 }
 
 /// Create exception data without inventing a construction or deserialization stack.
@@ -776,11 +765,11 @@ pub(crate) fn new_quota_exceeded_error_value<'s>(
 pub(crate) fn initialize_websocket_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: v8::Local<'s, v8::Object>,
-    message: &str,
+    message: v8::Local<'s, v8::String>,
     close_code: Option<u16>,
     reason: &str,
 ) {
-    websocket_error_declaration(scope, message, close_code, reason)
+    websocket_error_declaration(scope, Some(message), close_code, reason)
         .initialize(scope, exception)
         .expect("WebSocketError declaration should initialize");
 }
@@ -791,6 +780,7 @@ pub(crate) fn new_websocket_error_value<'s>(
     close_code: Option<u16>,
     reason: &str,
 ) -> v8::Local<'s, v8::Value> {
+    let message = v8_string(scope, message);
     let declaration = websocket_error_declaration(scope, message, close_code, reason);
     let exception = bind_dom_exception_declaration(scope, "WebSocketError", &declaration);
     capture_dom_exception_stack(scope, exception);
