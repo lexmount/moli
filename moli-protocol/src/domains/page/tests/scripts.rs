@@ -986,6 +986,126 @@ async fn create_isolated_world_for_child_frame_evaluates_in_child_scope() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
+async fn create_isolated_world_promotes_same_name_implicit_parent_without_losing_globals() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>parent-frame<iframe srcdoc=\"<body>child-frame</body>\"></iframe></body>",
+        Some("SID-1"),
+    )
+    .await;
+    let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 4200).await;
+    wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
+
+    ctx.process_async(json!({
+        "id": 4201,
+        "method": "Runtime.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(4201, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 4202,
+        "method": "Page.createIsolatedWorld",
+        "sessionId": "SID-1",
+        "params": { "frameId": child_frame_id, "worldName": "W" }
+    }))
+    .await;
+    let child_context_id = take_response_by_id(&mut ctx, 4202)["result"]["executionContextId"]
+        .as_i64()
+        .expect("child isolated execution context id");
+
+    // Cross-Window access creates the parent member before an explicit CDP request.
+    ctx.process_async(json!({
+        "id": 4203,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "contextId": child_context_id,
+            "expression": "parent.marker=1;globalThis.childMarker=2;parent.marker"
+        }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 4203)["result"]["result"]["value"],
+        json!(1)
+    );
+
+    ctx.process_async(json!({
+        "id": 4204,
+        "method": "Page.createIsolatedWorld",
+        "sessionId": "SID-1",
+        "params": { "frameId": "TID-1", "worldName": "W" }
+    }))
+    .await;
+    let parent_context_id = take_response_by_id(&mut ctx, 4204)["result"]["executionContextId"]
+        .as_i64()
+        .expect("parent isolated execution context id");
+    assert_ne!(parent_context_id, child_context_id);
+
+    for (id, context_id, expression, expected) in [
+        (
+            4205,
+            parent_context_id,
+            "[marker,typeof childMarker]",
+            json!([1, "undefined"]),
+        ),
+        (
+            4206,
+            child_context_id,
+            "[childMarker,parent.marker]",
+            json!([2, 1]),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "contextId": context_id,
+                "expression": expression,
+                "returnByValue": true
+            }
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, id)["result"]["result"]["value"],
+            expected
+        );
+    }
+
+    for (id, frame_id, context_id) in [
+        (4207, "TID-1", parent_context_id),
+        (4208, child_frame_id.as_str(), child_context_id),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Page.createIsolatedWorld",
+            "sessionId": "SID-1",
+            "params": { "frameId": frame_id, "worldName": "W" }
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, id)["result"]["executionContextId"],
+            json!(context_id)
+        );
+    }
+
+    ctx.process_async(json!({
+        "id": 4209,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": { "expression": "typeof marker" }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 4209)["result"]["result"]["value"],
+        json!("undefined")
+    );
+}
+#[tokio::test(flavor = "multi_thread")]
 async fn create_isolated_world_for_child_frame_replays_world_scoped_document_start_scripts() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");

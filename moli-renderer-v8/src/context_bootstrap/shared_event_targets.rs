@@ -152,35 +152,20 @@ pub(super) fn target_in_realm<'s>(
         .unwrap_or(target)
 }
 
-/// Only another Realm of this exact live Window can replace a real global.
-/// Cross-Document aliases keep their existing behavior. In particular, the
-/// current parent/top alias path has no target-Window isolated-world resolver;
-/// this helper must not manufacture one by returning the callback global.
+/// A Window's view belongs to the target Window in the accessing world. A
+/// borrowed child callback must never replace a parent with the child global.
 pub(super) fn window_target_in_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target_context = target.get_creation_context(scope)?;
-    if !target.strict_equals(target_context.global(scope).into()) {
-        return None;
+    match crate::native_bridge::window_in_wrapper_world(scope, target, context) {
+        Ok(window) => window,
+        Err(error) => {
+            super::throw_error(scope, &format!("Window world projection failed: {error}"));
+            None
+        }
     }
-    let host_ptr = crate::util::context_host_ptr_from_context_slot(target_context)?;
-    if crate::util::context_host_ptr_from_context_slot(context) != Some(host_ptr) {
-        return None;
-    }
-    let host = unsafe { &*host_ptr };
-    let target_identity =
-        host.window_execution_context_identity_for_access_check(target_context)?;
-    let destination_identity = host.window_execution_context_identity_for_access_check(context)?;
-    if target_identity.owner() != destination_identity.owner()
-        || target_identity.dispatch_scope() != destination_identity.dispatch_scope()
-        || !host.window_execution_context_identity_is_current(target_identity)
-        || !host.window_execution_context_identity_is_current(destination_identity)
-    {
-        return None;
-    }
-    Some(context.global(scope))
 }
 
 /// Select the listener world's wrapper only for a Node owned by this live

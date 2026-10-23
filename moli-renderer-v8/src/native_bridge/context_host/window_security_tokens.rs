@@ -106,6 +106,7 @@ impl JsContextHost {
                 updated += 1;
             }
         }
+        updated += self.refresh_isolated_window_security_tokens(scope);
         self.refresh_child_window_access_surfaces_after_origin_mutation(scope);
         if let Some(environment) = self.page_script_environment() {
             for related in environment.related_document_hosts() {
@@ -138,6 +139,44 @@ impl JsContextHost {
                 {
                     updated += 1;
                 }
+                updated += related_host.refresh_isolated_window_security_tokens(scope);
+            }
+        }
+        updated
+    }
+
+    fn refresh_isolated_window_security_tokens(&self, scope: &mut v8::PinScope<'_, '_>) -> usize {
+        // Clone only weak handles before entering V8. Neither the membership
+        // store's borrow nor a strong Context root survives this refresh.
+        let contexts = self.isolated_window_contexts_for_security_refresh();
+        let mut updated = 0;
+        for (token, weak) in contexts {
+            let Some(context) = weak.to_local(scope) else {
+                continue;
+            };
+            if !crate::util::context_host_ptr_from_context_slot(context)
+                .is_some_and(|host| std::ptr::eq(host, self))
+            {
+                continue;
+            }
+            let Some(identity) = self.window_execution_context_identity_for_access_check(context)
+            else {
+                continue;
+            };
+            if identity.realm_token() != token
+                || !self.window_execution_context_identity_is_current(identity)
+            {
+                continue;
+            }
+            let key = match identity.dispatch_scope() {
+                OwnerDispatchScope::Top => self.main_isolated_world_security_token_key(),
+                OwnerDispatchScope::Child(handle) => {
+                    self.child_isolated_world_security_token_key(handle)
+                }
+                OwnerDispatchScope::LightweightPopup(_) => continue,
+            };
+            if set_window_security_token(scope, context, key.as_deref()) {
+                updated += 1;
             }
         }
         updated

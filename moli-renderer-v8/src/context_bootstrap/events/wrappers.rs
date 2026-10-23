@@ -153,11 +153,10 @@ pub(crate) fn new_event_wrapper<'s>(
     Some(wrapper)
 }
 
-/// Project DOM and Window listeners of the same live Window through their
-/// existing world caches. The dispatch state stays shared and same-world
-/// identity stays intact. Foreign-Window callbacks retain their existing
-/// behavior: resolving an isolated world of another target Window requires an
-/// alias/world resolver that this path does not yet provide.
+/// Project DOM and Window listeners through their existing world caches. The
+/// Window resolver selects the target Window's Context in the listener's
+/// world; Nodes retain their native ownerDocument checks. Dispatch state stays
+/// shared and same-world identity stays intact.
 pub(crate) fn event_callback_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Value>,
@@ -172,6 +171,14 @@ pub(crate) fn event_callback_values<'s>(
     )
     .or_else(|| super::super::shared_event_targets::node_target_in_realm(scope, target, context)) else {
         return Some((receiver, event));
+    };
+    // A Window view determines the target Realm. An adopted Node can keep
+    // a wrapper from its old Window: node_target_in_realm already checked its
+    // native ownerDocument against the listener Realm, so keep that Context.
+    let context = if crate::web_api_interfaces::Node::is_instance(scope, target) {
+        context
+    } else {
+        target.get_creation_context(scope)?
     };
     if world_wrappers::belongs_to_world(scope, event, context) {
         return Some((target.into(), event));

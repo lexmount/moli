@@ -2250,6 +2250,7 @@ mod websocket;
 mod webtransport_stream_interface_exposure;
 mod window_execution_context;
 mod window_getter_consolidation;
+mod window_node_worlds;
 mod window_receiver_access;
 mod worklet_interfaces;
 

@@ -25,6 +25,10 @@ pub(super) struct IntrinsicInterfaceRegistry {
 const INTRINSIC_OBJECTS_CONTEXT_SLOT: i32 = 0;
 const OBJECTS_PER_INTERFACE: usize = 3;
 
+pub(crate) fn has_intrinsic_interface_registry(context: v8::Local<'_, v8::Context>) -> bool {
+    context.get_slot::<IntrinsicInterfaceRegistry>().is_some()
+}
+
 fn intrinsic_objects<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Array>> {
     // Registry initialization always sets this slot before any identity lookup.
     scope
