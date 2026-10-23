@@ -5,7 +5,7 @@ use super::helpers::{
     websocket_object_slot,
 };
 use super::realm::{effective_websocket_document_scope, websocket_constructor_relevant_context};
-use super::stream::{new_websocket_stream_promise, reject_websocket_stream_abort};
+use super::stream::reject_websocket_stream_abort;
 use super::*;
 use crate::context_bootstrap::constructors::initialize_websocket_error;
 use crate::web_api_interfaces;
@@ -68,16 +68,12 @@ struct WebSocketStreamObjectDeclaration<'scope> {
     url: v8::Local<'scope, v8::String>,
     #[webapi(slot = WEBSOCKET_STREAM_OPENED_SLOT)]
     opened: v8::Local<'scope, v8::Promise>,
-    #[webapi(slot = WEBSOCKET_STREAM_OPENED_RESOLVE_SLOT)]
-    opened_resolve: v8::Local<'scope, v8::Function>,
-    #[webapi(slot = WEBSOCKET_STREAM_OPENED_REJECT_SLOT)]
-    opened_reject: v8::Local<'scope, v8::Function>,
+    #[webapi(slot = WEBSOCKET_STREAM_OPENED_RESOLVER_SLOT)]
+    opened_resolver: v8::Local<'scope, v8::PromiseResolver>,
     #[webapi(slot = WEBSOCKET_STREAM_CLOSED_SLOT)]
     closed: v8::Local<'scope, v8::Promise>,
-    #[webapi(slot = WEBSOCKET_STREAM_CLOSED_RESOLVE_SLOT)]
-    closed_resolve: v8::Local<'scope, v8::Function>,
-    #[webapi(slot = WEBSOCKET_STREAM_CLOSED_REJECT_SLOT)]
-    closed_reject: v8::Local<'scope, v8::Function>,
+    #[webapi(slot = WEBSOCKET_STREAM_CLOSED_RESOLVER_SLOT)]
+    closed_resolver: v8::Local<'scope, v8::PromiseResolver>,
 }
 
 #[derive(WebApiObject)]
@@ -449,25 +445,21 @@ fn websocket_stream_constructor_callback_inner<'s>(
         }
     };
     let signal = options.signal;
-    let Some((opened_promise, opened_resolve, opened_reject)) = new_websocket_stream_promise(scope)
-    else {
+    let Some(opened_resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
     };
-    let Some((closed_promise, closed_resolve, closed_reject)) = new_websocket_stream_promise(scope)
-    else {
+    let Some(closed_resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
     };
     let stream = args.this();
     WebSocketStreamObjectDeclaration::new(
         v8_string(scope, url.as_str()).unwrap_or_else(|| v8::String::empty(scope)),
-        opened_promise,
-        opened_resolve,
-        opened_reject,
-        closed_promise,
-        closed_resolve,
-        closed_reject,
+        opened_resolver.get_promise(scope),
+        opened_resolver,
+        closed_resolver.get_promise(scope),
+        closed_resolver,
     )
     .initialize(scope, stream)
     .expect("WebSocketStream object declaration should initialize");
