@@ -4,14 +4,13 @@ use crate::webidl;
 use super::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, MessagePortRealmBinding,
     ensure_message_port_wrapper_for_id_in_realm,
-    events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
-    invoke_simple_event_listener,
+    events::construct_original_event,
     navigation_serialize::{
         current_document_content_security_policies, current_document_referrer_policy,
         document_referrer_policy_for_native_document,
     },
     shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    simple_object_event_set_handler,
     worker_host::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
         materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
@@ -712,39 +711,10 @@ fn dispatch_shared_worker_error_event<'s>(
     };
     let Some(event) = event else { return false };
     crate::context_bootstrap::mark_event_trusted(scope, event);
-    set_event_dispatch_fields(scope, worker, event);
-
-    let listeners = simple_object_event_listeners_snapshot(scope, worker, "error");
-    let mut dispatched = false;
-    for listener in listeners {
-        let Some(listener) = listener.prepare_for_invocation(scope, worker, "error") else {
-            continue;
-        };
-        dispatched = true;
-        let callback_result = invoke_simple_event_listener(
-            scope,
-            "error",
-            "SharedWorker error listener",
-            &listener,
-            worker.into(),
-            &[event.into()],
-            event,
-        );
-        if event_kind == crate::worker::WorkerParentErrorEventKind::ErrorEvent
-            && listener.handler_slot.as_deref() == Some(SHARED_WORKER_ONERROR_SLOT)
-            && let Some(returned) = callback_result
-            && v8::Local::new(scope, &returned).boolean_value(scope)
-        {
-            let _ = crate::context_bootstrap::event_backing(scope, event).set(
-                scope,
-                v8str(scope, "defaultPrevented").into(),
-                v8::Boolean::new(scope, true).into(),
-            );
-        }
-    }
-
-    clear_event_dispatch_fields(scope, event);
-    dispatched
+    crate::context_bootstrap::dispatch_simple_event_target_event_collecting_errors(
+        scope, worker, "error", event, None,
+    )
+    .dispatched
 }
 
 fn new_error_event<'s>(

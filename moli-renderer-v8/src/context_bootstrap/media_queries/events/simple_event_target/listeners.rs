@@ -113,16 +113,6 @@ struct SimpleObjectResolvedEventListener<'s> {
 }
 
 impl<'s> SimpleObjectEventListenerSnapshot<'s> {
-    pub(crate) fn prepare_for_invocation(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        target: v8::Local<'s, v8::Object>,
-        event_type: &str,
-    ) -> Option<Self> {
-        let registry = simple_object_event_listener_registry(scope, target)?;
-        self.prepare_in_registry(scope, registry, event_type)
-    }
-
     pub(super) fn prepare_in_registry(
         &self,
         scope: &mut v8::PinScope<'s, '_>,

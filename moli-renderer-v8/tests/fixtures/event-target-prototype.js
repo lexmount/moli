@@ -118,7 +118,7 @@
       dispatch.call(target, event('x')); remove.call(target, 'x', capture, true);
       dispatch.call(target, event('x'));
       observations.captureOrder = trace.join(',');
-      return observations.captureOrder === 'capture,bubble,bubble';
+      return observations.captureOrder === 'bubble,capture,bubble';
     });
     check('cancellation and passive listeners are preserved', () => {
       const a = make(), b = make(), ea = event('x'), eb = event('x');

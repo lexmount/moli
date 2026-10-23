@@ -11799,7 +11799,7 @@ wait_until = "load"
 timeout_ms = 30000
 suite = "smoke"
 tags = ["worker", "events"]
-notes = "Manual smoke port for page-global window.onerror propagation from unhandled dedicated worker runtime errors, and suppression through Worker error preventDefault() or truthy worker.onerror."
+notes = "Manual smoke port for page-global window.onerror propagation from unhandled dedicated worker runtime errors, and suppression through Worker error preventDefault() or false-returning Worker.onerror."
 
 [[test]]
 id = "worker-load-failure-basic"

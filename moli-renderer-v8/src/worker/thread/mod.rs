@@ -113,8 +113,6 @@ use super::module_runtime::{
     worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
 };
 
-pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
-
 const WORKER_STACK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, crate::webidl::WebIdlEnum)]
@@ -1568,9 +1566,7 @@ async fn worker_main(
         .bind_request_client(loader.request_client().clone());
     install_worker_promise_rejection_dispatch(
         worker_isolate.worker_isolate_mut(),
-        parent_tx.clone(),
         worker_wake_tx.clone(),
-        script_url.clone(),
     );
 
     // Worker-owned isolate timer queues are shared between V8 callbacks and the
@@ -2019,13 +2015,7 @@ async fn worker_main(
                     pending_bootstrap_messages.push_back(WorkerMessage::Post(payload));
                     continue;
                 }
-                dispatch_message_event(
-                    worker_isolate.worker_isolate_mut(),
-                    &context,
-                    &payload,
-                    &parent_tx,
-                    &script_url,
-                );
+                dispatch_message_event(worker_isolate.worker_isolate_mut(), &context, &payload);
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
                     &context,
@@ -2066,8 +2056,6 @@ async fn worker_main(
                     worker_isolate.worker_isolate_mut(),
                     &context,
                     port_id,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2105,8 +2093,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2127,7 +2113,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2285,8 +2270,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2307,7 +2290,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2328,7 +2310,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2349,7 +2330,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2370,7 +2350,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),

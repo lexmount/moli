@@ -22,6 +22,19 @@
     check(!target.dispatchEvent(event) && calls.length === 1 && calls[0], label + ': dispatch identity');
     check(target.dispatchEvent(new Event('inheritance-probe')) && calls.length === 1, label + ': once');
     check(event.currentTarget === null && event.composedPath().length === 0, label + ': cleanup');
+    const order = [];
+    target.addEventListener('order-probe', () => order.push('normal'), {once: true});
+    target.addEventListener('order-probe', event => {
+      order.push('capture');
+      event.stopPropagation();
+      target.addEventListener('order-probe', () => order.push('late'), {once: true});
+    }, {capture: true, once: true});
+    target.addEventListener('order-probe', () => order.push('last'), {once: true});
+    target.dispatchEvent(new Event('order-probe'));
+    check(order.join(',') === 'normal,capture,last', label + ': registration order and stopPropagation');
+    order.length = 0;
+    target.dispatchEvent(new Event('order-probe'));
+    check(order.join(',') === 'late', label + ': list snapshot and stop flag cleanup');
     const original = EventTarget.prototype.addEventListener;
     let inheritedCalls = 0;
     try {

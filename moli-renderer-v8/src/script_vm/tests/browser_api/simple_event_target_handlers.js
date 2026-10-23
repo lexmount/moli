@@ -17,34 +17,34 @@ function checkHandlerDispatch(target, type, realm = globalThis) {
   target.addEventListener(type, last);
   target.addEventListener(type, capture, true);
   check(fire(), false, 'handler cancellation');
-  check(trace.splice(0), ['capture', 'first', 'handler', 'last'], 'capture and registration order');
+  check(trace.splice(0), ['first', 'handler', 'last', 'capture'], 'registration order');
 
   during = () => { target[property] = () => trace.push('replacement'); };
   check(fire(), true, 'replacement cancellation');
-  check(trace.splice(0), ['capture', 'first', 'replacement', 'last'], 'replacement during dispatch');
+  check(trace.splice(0), ['first', 'replacement', 'last', 'capture'], 'replacement during dispatch');
 
   during = () => { target[property] = null; target[property] = handler; };
   fire();
-  check(trace.splice(0), ['capture', 'first', 'last'], 'removed entry stays inactive in snapshot');
+  check(trace.splice(0), ['first', 'last', 'capture'], 'removed entry stays inactive in snapshot');
   during = () => {};
   fire();
-  check(trace.splice(0), ['capture', 'first', 'last', 'handler'], 'reactivation appends');
+  check(trace.splice(0), ['first', 'last', 'capture', 'handler'], 'reactivation appends');
 
   during = event => event.stopImmediatePropagation();
   fire();
-  check(trace.splice(0), ['capture', 'first'], 'earlier listener stops handler');
+  check(trace.splice(0), ['first'], 'earlier listener stops handler');
   during = () => {};
   target[property] = null;
   target.removeEventListener(type, last);
   target[property] = event => { trace.push('handler'); event.stopImmediatePropagation(); };
   target.addEventListener(type, last);
   fire();
-  check(trace.splice(0), ['capture', 'first', 'handler'], 'handler stops later listener');
+  check(trace.splice(0), ['first', 'capture', 'handler'], 'handler stops later listener');
 
   target[property] = handler;
   during = event => event.stopPropagation();
   fire();
-  check(trace.splice(0), ['capture', 'first', 'handler', 'last'], 'stopPropagation keeps same phase');
+  check(trace.splice(0), ['first', 'capture', 'handler', 'last'], 'stopPropagation keeps same target');
   during = () => {};
 
   // Dispatch uses the registered handler even when script shadows its IDL
@@ -53,7 +53,7 @@ function checkHandlerDispatch(target, type, realm = globalThis) {
   const ownDescriptor = Object.getOwnPropertyDescriptor(target, property);
   Object.defineProperty(target, property, {configurable: true, get() { reads++; throw new Error('handler getter read'); }});
   fire();
-  check(trace.splice(0), ['capture', 'first', 'handler', 'last'], 'shadowed accessor retains listener');
+  check(trace.splice(0), ['first', 'capture', 'handler', 'last'], 'shadowed accessor retains listener');
   check(reads, 0, 'no property lookup during dispatch');
   delete target[property];
   if (ownDescriptor) Object.defineProperty(target, property, ownDescriptor);

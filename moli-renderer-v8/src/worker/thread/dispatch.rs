@@ -9,18 +9,14 @@ use tokio::sync::mpsc;
 
 use moli_webapi_declare::WebApiObject;
 
-use crate::callback_invocation::{CallbackInvocationOutcome, CallbackInvoker};
 use crate::context_bootstrap::{
-    EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
-    SimpleObjectEventListenerSnapshot, dispatch_message_port_events_for_port_collecting_errors,
+    EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
+    dispatch_message_port_events_for_port_collecting_errors,
     dispatch_service_worker_controller_change, ensure_message_port_wrapper_for_id,
-    event_internal_bool_flag, mark_event_trusted, runtime_message_allowed_for_current_target,
-    set_event_internal_flag, simple_object_event_listeners_snapshot,
+    mark_event_trusted, runtime_message_allowed_for_current_target, set_event_internal_flag,
     structured_deserialize_value_for_message_event,
 };
-use crate::exception_reporting::{
-    CallbackExceptionLogLevel, V8ExceptionReport, log_unhandled_promise_rejection,
-};
+use crate::exception_reporting::{V8ExceptionReport, log_unhandled_promise_rejection};
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
     build_navigation_preload_response_object_from_stream_for_request_mode,
@@ -71,7 +67,6 @@ use super::super::handle::{
 };
 use super::super::timer_callback::WorkerTimerCallbackOutcome;
 use super::ActiveTimer;
-use super::WorkerExceptionError;
 
 const SERVICE_WORKER_LIFECYCLE_EVENT_ID_SLOT: &str = "__lmServiceWorkerLifecycleEventId";
 const SERVICE_WORKER_FETCH_EVENT_ID_SLOT: &str = "__lmServiceWorkerFetchEventId";
@@ -348,9 +343,7 @@ struct PendingWorkerPromiseRejection {
 }
 
 struct WorkerPromiseRejectDispatchSlot {
-    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     worker_wake_tx: mpsc::UnboundedSender<WorkerMessage>,
-    script_url: String,
     pending_unhandled_rejections: Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
     reported_unhandled_rejections: Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
     unhandled_rejection_task_queued: Rc<Cell<bool>>,
@@ -358,14 +351,10 @@ struct WorkerPromiseRejectDispatchSlot {
 
 pub(super) fn install_worker_promise_rejection_dispatch(
     isolate: &mut v8::OwnedIsolate,
-    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     worker_wake_tx: mpsc::UnboundedSender<WorkerMessage>,
-    script_url: String,
 ) {
     isolate.set_slot(WorkerPromiseRejectDispatchSlot {
-        parent_tx,
         worker_wake_tx,
-        script_url,
         pending_unhandled_rejections: Rc::new(RefCell::new(Vec::new())),
         reported_unhandled_rejections: Rc::new(RefCell::new(Vec::new())),
         unhandled_rejection_task_queued: Rc::new(Cell::new(false)),
@@ -376,8 +365,6 @@ pub(super) fn install_worker_promise_rejection_dispatch(
 fn worker_promise_reject_dispatch_state(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<(
-    mpsc::UnboundedSender<WorkerToParentMessage>,
-    String,
     Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
     Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
     Rc<Cell<bool>>,
@@ -386,8 +373,6 @@ fn worker_promise_reject_dispatch_state(
         .get_slot::<WorkerPromiseRejectDispatchSlot>()
         .map(|slot| {
             (
-                slot.parent_tx.clone(),
-                slot.script_url.clone(),
                 slot.pending_unhandled_rejections.clone(),
                 slot.reported_unhandled_rejections.clone(),
                 slot.unhandled_rejection_task_queued.clone(),
@@ -450,13 +435,8 @@ pub(super) fn dispatch_queued_worker_promise_rejections(scope: &mut v8::PinScope
 }
 
 fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
-    let Some((
-        parent_tx,
-        script_url,
-        pending_unhandled_rejections,
-        reported_unhandled_rejections,
-        _task_queued,
-    )) = worker_promise_reject_dispatch_state(scope)
+    let Some((pending_unhandled_rejections, reported_unhandled_rejections, _task_queued)) =
+        worker_promise_reject_dispatch_state(scope)
     else {
         return;
     };
@@ -468,14 +448,8 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
             .reason
             .as_ref()
             .map(|reason| v8::Local::new(scope, reason));
-        let allows_default = dispatch_worker_promise_rejection_event(
-            scope,
-            "unhandledrejection",
-            promise,
-            reason,
-            &parent_tx,
-            &script_url,
-        );
+        let allows_default =
+            dispatch_worker_promise_rejection_event(scope, "unhandledrejection", promise, reason);
         // Do not expose a `rejectionhandled` transition when the handler was
         // attached by the `unhandledrejection` listener itself.
         if !promise.has_handler() {
@@ -507,13 +481,8 @@ unsafe extern "C" fn worker_promise_reject_callback(message: v8::PromiseRejectMe
     let context = scope.get_current_context();
     let scope = &mut v8::ContextScope::new(scope, context);
 
-    let Some((
-        parent_tx,
-        script_url,
-        pending_unhandled_rejections,
-        reported_unhandled_rejections,
-        _task_queued,
-    )) = worker_promise_reject_dispatch_state(scope)
+    let Some((pending_unhandled_rejections, reported_unhandled_rejections, _task_queued)) =
+        worker_promise_reject_dispatch_state(scope)
     else {
         return;
     };
@@ -562,14 +531,8 @@ unsafe extern "C" fn worker_promise_reject_callback(message: v8::PromiseRejectMe
                 .as_ref()
                 .map(|reason| v8::Local::new(scope, reason))
                 .or_else(|| message.get_value());
-            let _ = dispatch_worker_promise_rejection_event(
-                scope,
-                "rejectionhandled",
-                promise,
-                reason,
-                &parent_tx,
-                &script_url,
-            );
+            let _ =
+                dispatch_worker_promise_rejection_event(scope, "rejectionhandled", promise, reason);
         }
         _ => {}
     }
@@ -586,72 +549,12 @@ pub(super) fn event_bool_property(
         .is_some_and(|value| value.is_true())
 }
 
-fn event_stop_immediate_propagation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-) -> bool {
-    event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT)
-}
-
 fn set_event_stop_immediate_propagation(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) {
     set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, true);
     set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, true);
-}
-
-fn set_event_dispatch_fields<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-) {
-    mark_event_trusted(scope, event);
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "target").into(),
-        target.into(),
-    );
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "srcElement").into(),
-        target.into(),
-    );
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "currentTarget").into(),
-        target.into(),
-    );
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "eventPhase").into(),
-        v8::Integer::new_from_unsigned(scope, 2).into(),
-    );
-    crate::context_bootstrap::set_event_private_value(
-        scope,
-        event,
-        EVENT_DISPATCHING_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
-}
-
-fn clear_event_dispatch_fields(scope: &mut v8::PinScope<'_, '_>, event: v8::Local<'_, v8::Object>) {
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "currentTarget").into(),
-        v8::null(scope).into(),
-    );
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "eventPhase").into(),
-        v8::Integer::new_from_unsigned(scope, 0).into(),
-    );
-    crate::context_bootstrap::set_event_private_value(
-        scope,
-        event,
-        EVENT_DISPATCHING_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
 }
 
 fn worker_event_prevent_default_callback(
@@ -748,45 +651,41 @@ fn new_worker_promise_rejection_event<'s>(
     event
 }
 
+fn dispatch_worker_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    checkpoint: bool,
+) {
+    mark_event_trusted(scope, event);
+    if checkpoint {
+        crate::context_bootstrap::dispatch_simple_event_target_event_with_checkpoint(
+            scope,
+            target,
+            event_type,
+            event,
+            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections,
+        );
+    } else {
+        crate::context_bootstrap::dispatch_simple_event_target_event(
+            scope, target, event_type, event,
+        );
+    }
+}
+
 fn dispatch_worker_promise_rejection_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     promise: v8::Local<'s, v8::Promise>,
     reason: Option<v8::Local<'s, v8::Value>>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) -> bool {
     let global = scope.get_current_context().global(scope);
     let event = new_worker_promise_rejection_event(scope, event_type, promise, reason);
-    set_event_dispatch_fields(scope, global, event);
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, event_type);
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event,
-            event_type,
-            "WorkerGlobalScope promise rejection listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
+    dispatch_worker_event(scope, global, event, event_type, false);
 
-    let allows_default = !event_bool_property(scope, event, "defaultPrevented");
-    clear_event_dispatch_fields(scope, event);
-    allows_default
+    !event_bool_property(scope, event, "defaultPrevented")
 }
 
 pub(super) fn report_exception_to_parent(
@@ -891,41 +790,6 @@ fn apply_worker_exception_location_overrides<'s>(
     }
 }
 
-fn invoke_worker_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    listener: &SimpleObjectEventListenerSnapshot<'s>,
-    target: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-    event_type: &str,
-    callback_name: &str,
-) -> Result<(), WorkerExceptionError> {
-    if event_stop_immediate_propagation(scope, event) {
-        return Ok(());
-    }
-    let Some(listener) = listener.prepare_for_invocation(scope, target, event_type) else {
-        return Ok(());
-    };
-    let arguments = [event.into()];
-    let invocation = listener.invocation(target.into(), &arguments, Some(event));
-    match CallbackInvoker::invoke(
-        scope,
-        "event listener",
-        "worker event listener threw",
-        CallbackExceptionLogLevel::Debug,
-        callback_name,
-        invocation,
-    ) {
-        CallbackInvocationOutcome::Returned(_) | CallbackInvocationOutcome::Retired => Ok(()),
-        CallbackInvocationOutcome::Threw(report) => {
-            let exception = report
-                .exception
-                .as_ref()
-                .map(|exception| v8::Global::new(scope, v8::Local::new(scope, exception)));
-            Err(Box::new((*report, exception)))
-        }
-    }
-}
-
 struct WorkerErrorReportingScope(Rc<RefCell<super::WorkerGlobalState>>);
 
 impl Drop for WorkerErrorReportingScope {
@@ -962,17 +826,13 @@ pub(super) fn dispatch_service_worker_lifecycle_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerLifecycleEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_lifecycle_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_lifecycle_event_in_context(scope, global, state, event);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -982,16 +842,13 @@ pub(super) fn dispatch_service_worker_fetch_event(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerFetchEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_fetch_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_fetch_event_in_context(scope, global, state, event, parent_tx);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -1030,17 +887,13 @@ pub(super) fn dispatch_service_worker_message_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerMessageEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_message_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_message_event_in_context(scope, global, state, event);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -1062,16 +915,13 @@ pub(super) fn dispatch_service_worker_notification_event(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerNotificationEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_notification_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_notification_event_in_context(scope, global, state, event, parent_tx);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -1081,16 +931,13 @@ pub(super) fn dispatch_service_worker_push_event(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPushEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_push_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_push_event_in_context(scope, global, state, event, parent_tx);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -1100,16 +947,13 @@ pub(super) fn dispatch_service_worker_sync_event(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerSyncEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_sync_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_sync_event_in_context(scope, global, state, event, parent_tx);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -1119,16 +963,13 @@ pub(super) fn dispatch_service_worker_periodic_sync_event(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPeriodicSyncEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
     let global = ctx.global(scope);
-    dispatch_service_worker_periodic_sync_event_in_context(
-        scope, global, state, event, parent_tx, script_url,
-    );
+    dispatch_service_worker_periodic_sync_event_in_context(scope, global, state, event, parent_tx);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 
@@ -1137,12 +978,9 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerLifecycleEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let event_object = new_service_worker_lifecycle_event(scope, event.kind);
     set_service_worker_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         state.pending_service_worker_lifecycle_events.insert(
@@ -1161,31 +999,7 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
     }
 
     let event_type = event.kind.as_str();
-    let listeners = simple_object_event_listeners_snapshot(scope, global, event_type);
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            event_type,
-            "ServiceWorkerGlobalScope lifecycle listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    clear_event_dispatch_fields(scope, event_object);
+    dispatch_worker_event(scope, global, event_object, event_type, true);
     mark_service_worker_lifecycle_dispatch_finished(state, event.event_id);
     maybe_send_service_worker_lifecycle_completion(state, event.event_id);
 }
@@ -1196,7 +1010,6 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerFetchEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let Some((request, request_signal_id)) =
         new_service_worker_fetch_request(scope, global, &event)
@@ -1243,7 +1056,6 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
     let event_object =
         new_service_worker_fetch_event(scope, &event, request, handled, preload_response);
     set_service_worker_fetch_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         let mut pending = PendingServiceWorkerFetchEvent::fallback(
@@ -1273,39 +1085,12 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
             .insert(event.event_id, pending);
     }
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, "fetch");
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            "fetch",
-            "ServiceWorkerGlobalScope fetch listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-        if event_stop_immediate_propagation(scope, event_object) {
-            break;
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    dispatch_worker_event(scope, global, event_object, "fetch", true);
     let default_prevented_without_response =
         event_bool_property(scope, event_object, "defaultPrevented");
     if default_prevented_without_response {
         mark_service_worker_fetch_default_prevented(state, event.event_id);
     }
-    clear_event_dispatch_fields(scope, event_object);
     mark_service_worker_fetch_dispatch_finished(state, event.event_id);
     settle_service_worker_fetch_handled_after_dispatch(scope, state, event.event_id);
     maybe_send_service_worker_fetch_completion(state, event.event_id, scope);
@@ -1316,8 +1101,6 @@ fn dispatch_service_worker_message_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerMessageEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let (event_type, event_object) = new_service_worker_message_event(scope, &event)
         .unwrap_or_else(|| {
@@ -1327,7 +1110,6 @@ fn dispatch_service_worker_message_event_in_context<'s>(
             )
         });
     set_service_worker_message_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         state.pending_service_worker_message_events.insert(
@@ -1350,31 +1132,7 @@ fn dispatch_service_worker_message_event_in_context<'s>(
         }
     }
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, event_type);
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            event_type,
-            "ServiceWorkerGlobalScope message listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    clear_event_dispatch_fields(scope, event_object);
+    dispatch_worker_event(scope, global, event_object, event_type, true);
     mark_service_worker_message_dispatch_finished(state, event.event_id);
     maybe_send_service_worker_message_completion(state, event.event_id);
 }
@@ -1385,7 +1143,6 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerNotificationEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_notification_event(scope, global, &event) else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerNotificationCompleted(
@@ -1398,7 +1155,6 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
         return;
     };
     set_service_worker_notification_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         let window_interaction_allowed = event.kind.grants_window_interaction();
@@ -1423,31 +1179,7 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
     }
 
     let event_type = event.kind.as_str();
-    let listeners = simple_object_event_listeners_snapshot(scope, global, event_type);
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            event_type,
-            "ServiceWorkerGlobalScope notification listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    clear_event_dispatch_fields(scope, event_object);
+    dispatch_worker_event(scope, global, event_object, event_type, true);
     mark_service_worker_notification_dispatch_finished(state, event.event_id);
     maybe_send_service_worker_notification_completion(state, event.event_id);
 }
@@ -1458,7 +1190,6 @@ fn dispatch_service_worker_push_event_in_context<'s>(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPushEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_push_event(scope, &event) else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerPushCompleted(
@@ -1471,7 +1202,6 @@ fn dispatch_service_worker_push_event_in_context<'s>(
         return;
     };
     set_service_worker_push_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         state.pending_service_worker_push_events.insert(
@@ -1488,31 +1218,7 @@ fn dispatch_service_worker_push_event_in_context<'s>(
         );
     }
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, "push");
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            "push",
-            "ServiceWorkerGlobalScope push listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    clear_event_dispatch_fields(scope, event_object);
+    dispatch_worker_event(scope, global, event_object, "push", true);
     mark_service_worker_push_dispatch_finished(state, event.event_id);
     maybe_send_service_worker_push_completion(state, event.event_id);
 }
@@ -1523,7 +1229,6 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerSyncEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_sync_event(scope, &event) else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerSyncCompleted(
@@ -1538,7 +1243,6 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
         return;
     };
     set_service_worker_sync_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         state.pending_service_worker_sync_events.insert(
@@ -1557,31 +1261,7 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
         );
     }
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, "sync");
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            "sync",
-            "ServiceWorkerGlobalScope sync listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    clear_event_dispatch_fields(scope, event_object);
+    dispatch_worker_event(scope, global, event_object, "sync", true);
     mark_service_worker_sync_dispatch_finished(state, event.event_id);
     maybe_send_service_worker_sync_completion(state, event.event_id);
 }
@@ -1592,7 +1272,6 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPeriodicSyncEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_periodic_sync_event(scope, &event) else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerPeriodicSyncCompleted(
@@ -1607,7 +1286,6 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
         return;
     };
     set_service_worker_periodic_sync_event_id(scope, event_object, event.event_id);
-    set_event_dispatch_fields(scope, global, event_object);
     {
         let mut state = state.borrow_mut();
         state.pending_service_worker_periodic_sync_events.insert(
@@ -1626,31 +1304,7 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
         );
     }
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, "periodicsync");
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event_object,
-            "periodicsync",
-            "ServiceWorkerGlobalScope periodicsync listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    clear_event_dispatch_fields(scope, event_object);
+    dispatch_worker_event(scope, global, event_object, "periodicsync", true);
     mark_service_worker_periodic_sync_dispatch_finished(state, event.event_id);
     maybe_send_service_worker_periodic_sync_completion(state, event.event_id);
 }
@@ -4153,37 +3807,10 @@ fn dispatch_worker_global_message_event<'s>(
     event_type: &str,
     data: v8::Local<'s, v8::Value>,
     ports: v8::Local<'s, v8::Array>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let event = new_worker_message_event(scope, event_type, data, None, ports);
-    set_event_dispatch_fields(scope, global, event);
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, event_type);
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event,
-            event_type,
-            "WorkerGlobalScope message listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
-
-    clear_event_dispatch_fields(scope, event);
+    dispatch_worker_event(scope, global, event, event_type, false);
 }
 
 /// Dispatch a parent `postMessage()` delivery into the worker global.
@@ -4191,8 +3818,6 @@ pub(super) fn dispatch_message_event(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     payload: &V8StructuredClonePayload,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
@@ -4207,9 +3832,7 @@ pub(super) fn dispatch_message_event(
         if let Some((data, ports)) =
             structured_deserialize_value_for_message_event(&mut scope, payload)
         {
-            dispatch_worker_global_message_event(
-                &mut scope, global, "message", data, ports, parent_tx, script_url,
-            );
+            dispatch_worker_global_message_event(&mut scope, global, "message", data, ports);
         } else {
             // `postMessage` delivery failures are reported to the receiver as a
             // `messageerror` event. This matters for secure-context-only host
@@ -4221,15 +3844,7 @@ pub(super) fn dispatch_message_event(
             }
             let data = v8::null(&scope).into();
             let ports = v8::Array::new(&scope, 0);
-            dispatch_worker_global_message_event(
-                &mut scope,
-                global,
-                "messageerror",
-                data,
-                ports,
-                parent_tx,
-                script_url,
-            );
+            dispatch_worker_global_message_event(&mut scope, global, "messageerror", data, ports);
         }
     }
 
@@ -4240,8 +3855,6 @@ pub(super) fn dispatch_shared_worker_connect_event(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     port_id: MessagePortId,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
@@ -4260,33 +3873,9 @@ pub(super) fn dispatch_shared_worker_connect_event(
     let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
     let data = v8str(scope, "").into();
     let event = new_worker_message_event(scope, "connect", data, source, ports);
-    set_event_dispatch_fields(scope, global, event);
 
-    let listeners = simple_object_event_listeners_snapshot(scope, global, "connect");
-    for listener in &listeners {
-        if let Err(error) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event,
-            "connect",
-            "SharedWorkerGlobalScope connect listener",
-        ) {
-            let (report, exception) = *error;
-            let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-            dispatch_worker_exception(
-                scope,
-                global,
-                report,
-                exception,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-                script_url,
-            );
-        }
-    }
+    dispatch_worker_event(scope, global, event, "connect", false);
 
-    clear_event_dispatch_fields(scope, event);
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
 }
 

@@ -43,6 +43,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
         &event_type,
         event,
         None,
+        None,
     );
     rv.set_bool(dispatch_result.uncanceled);
 }
@@ -69,6 +70,30 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     event: v8::Local<'s, v8::Object>,
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
+    dispatch_object_event(scope, target, event_type, event, callback_errors, None)
+}
+
+/// Run the caller's microtask checkpoint while the native event is still
+/// dispatching. ExtendableEvent.waitUntil and Worker error cancellation depend
+/// on this boundary; the shared dispatcher always finishes the event afterward.
+pub(crate) fn dispatch_simple_event_target_event_with_checkpoint<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+    checkpoint: fn(&mut v8::PinScope<'s, '_>),
+) -> SimpleEventDispatchResult {
+    dispatch_object_event(scope, target, event_type, event, None, Some(checkpoint))
+}
+
+fn dispatch_object_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+    callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
+    checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
+) -> SimpleEventDispatchResult {
     let Some(target) = resolve_event_target(scope, target) else {
         return SimpleEventDispatchResult {
             uncanceled: true,
@@ -76,7 +101,15 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
         };
     };
     let registry = SimpleEventListenerRegistry::from_owner(scope, target.listener_owner);
-    dispatch_resolved_event(scope, target, registry, event_type, event, callback_errors)
+    dispatch_resolved_event(
+        scope,
+        target,
+        registry,
+        event_type,
+        event,
+        callback_errors,
+        checkpoint,
+    )
 }
 
 fn dispatch_resolved_event<'s>(
@@ -86,6 +119,7 @@ fn dispatch_resolved_event<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
+    checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
 ) -> SimpleEventDispatchResult {
     let target = target.dispatch_target;
     let mut dispatched = false;
@@ -101,81 +135,69 @@ fn dispatch_resolved_event<'s>(
         None
     };
     if let (true, Some(registry)) = (can_invoke, registry) {
-        'phases: for capture_phase in [true, false] {
-            // DOM clones the listener list for each invocation phase. A listener
-            // added during capture can participate in the subsequent bubble phase.
-            // Reuse only the registry; fetch the current array for each phase
-            // and each registration check after callbacks mutate that array.
-            let listeners =
-                simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
-            for listener in listeners
-                .iter()
-                .filter(|listener| listener.capture == capture_phase)
-            {
-                let Some(listener) = listener.prepare_in_registry(scope, registry, event_type)
-                else {
-                    continue;
-                };
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                let callback_target =
-                    crate::context_bootstrap::shared_event_targets::target_in_realm(
-                        scope,
-                        target,
-                        listener.relevant_context(),
-                    );
-                let Some(callback_event) =
-                    crate::context_bootstrap::navigation_event_worlds::event_in_realm(
-                        scope,
-                        target,
-                        event,
-                        listener.relevant_context(),
-                    )
-                else {
-                    continue;
-                };
-                let callback_arguments = [callback_event.into()];
-                let outcome = invoke_simple_event_listener_collecting_errors(
-                    scope,
-                    event_type,
-                    &format!("simple event target {event_type} listener"),
-                    &listener,
-                    callback_target.into(),
-                    if listener.handler_slot.is_some() {
-                        error_arguments
-                            .as_ref()
-                            .map_or(callback_arguments.as_slice(), |values| values.as_slice())
-                    } else {
-                        &callback_arguments
-                    },
-                    callback_event,
-                    callback_errors.as_deref_mut(),
-                );
-                dispatched |= outcome.invoked;
-                if listener.handler_slot.is_some()
-                    && let Some(returned) = outcome.value
-                {
-                    apply_handler_return_value(
-                        scope,
-                        event,
-                        v8::Local::new(scope, &returned),
-                        error_arguments.is_some(),
-                    );
-                }
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
-                if event_stop_immediate_propagation(scope, event) {
-                    break 'phases;
-                }
-            }
-            if event_internal_bool_flag(
+        // Object-backed EventTargets clone their list once at AT_TARGET.
+        // Capture remains part of listener identity; invocation follows
+        // registration order, including EventHandler entries.
+        let listeners =
+            simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
+        for listener in &listeners {
+            let Some(listener) = listener.prepare_in_registry(scope, registry, event_type) else {
+                continue;
+            };
+            set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
+            let callback_target = crate::context_bootstrap::shared_event_targets::target_in_realm(
                 scope,
-                event,
-                crate::context_bootstrap::EVENT_STOP_PROPAGATION_SLOT,
-            ) {
+                target,
+                listener.relevant_context(),
+            );
+            let Some(callback_event) =
+                crate::context_bootstrap::navigation_event_worlds::event_in_realm(
+                    scope,
+                    target,
+                    event,
+                    listener.relevant_context(),
+                )
+            else {
+                continue;
+            };
+            let callback_arguments = [callback_event.into()];
+            let outcome = invoke_simple_event_listener_collecting_errors(
+                scope,
+                event_type,
+                &format!("simple event target {event_type} listener"),
+                &listener,
+                callback_target.into(),
+                if listener.handler_slot.is_some() {
+                    error_arguments
+                        .as_ref()
+                        .map_or(callback_arguments.as_slice(), |values| values.as_slice())
+                } else {
+                    &callback_arguments
+                },
+                callback_event,
+                callback_errors.as_deref_mut(),
+            );
+            dispatched |= outcome.invoked;
+            if listener.handler_slot.is_some()
+                && let Some(returned) = outcome.value
+            {
+                apply_handler_return_value(
+                    scope,
+                    event,
+                    v8::Local::new(scope, &returned),
+                    error_arguments.is_some(),
+                );
+            }
+            set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
+            if event_stop_immediate_propagation(scope, event) {
                 break;
             }
         }
     }
 
+    if let Some(checkpoint) = checkpoint {
+        checkpoint(scope);
+    }
     crate::context_bootstrap::event_target_dispatch::finish_dispatch(scope, event);
     let default_prevented =
         crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
@@ -183,28 +205,6 @@ fn dispatch_resolved_event<'s>(
         uncanceled: !default_prevented,
         dispatched,
     }
-}
-
-pub(crate) fn invoke_simple_event_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    callback_name: &str,
-    listener: &SimpleObjectEventListenerSnapshot<'s>,
-    callback_this: v8::Local<'s, v8::Value>,
-    arguments: &[v8::Local<'s, v8::Value>],
-    current_event: v8::Local<'s, v8::Object>,
-) -> Option<v8::Global<v8::Value>> {
-    invoke_simple_event_listener_collecting_errors(
-        scope,
-        event_type,
-        callback_name,
-        listener,
-        callback_this,
-        arguments,
-        current_event,
-        None,
-    )
-    .value
 }
 
 struct SimpleEventCallbackResult {

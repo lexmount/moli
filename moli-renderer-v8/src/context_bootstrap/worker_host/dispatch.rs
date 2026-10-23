@@ -3,11 +3,9 @@ use std::pin::pin;
 
 use moli_webapi_declare::WebApiObject;
 
-use super::WORKER_ONERROR_SLOT;
 use crate::context_bootstrap::{
-    dispatch_simple_event_target_event,
-    events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
-    invoke_simple_event_listener, simple_object_event_listeners_snapshot,
+    dispatch_simple_event_target_event, events::construct_original_event,
+    simple_object_event_listeners_snapshot,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::util::v8str;
@@ -219,47 +217,20 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
     };
     let Some(event) = event else { return false };
     crate::context_bootstrap::mark_event_trusted(scope, event);
-    set_event_dispatch_fields(scope, worker, event);
+    crate::context_bootstrap::dispatch_simple_event_target_event_with_checkpoint(
+        scope,
+        worker,
+        "error",
+        event,
+        worker_error_microtask_checkpoint,
+    )
+    .uncanceled
+}
 
-    let listeners = simple_object_event_listeners_snapshot(scope, worker, "error");
-    for listener in listeners {
-        let Some(listener) = listener.prepare_for_invocation(scope, worker, "error") else {
-            continue;
-        };
-        let callback_result = invoke_simple_event_listener(
-            scope,
-            "error",
-            "simple event target error listener",
-            &listener,
-            worker.into(),
-            &[event.into()],
-            event,
-        );
-        if event_kind == WorkerParentErrorEventKind::ErrorEvent
-            && listener.handler_slot.as_deref() == Some(WORKER_ONERROR_SLOT)
-            && let Some(returned) = callback_result
-            && v8::Local::new(scope, &returned).boolean_value(scope)
-        {
-            let _ = crate::context_bootstrap::event_backing(scope, event).set(
-                scope,
-                v8str(scope, "defaultPrevented").into(),
-                v8::Boolean::new(scope, true).into(),
-            );
-        }
-    }
-
-    // Blink runs the microtasks queued by Worker error listeners before it
-    // observes the dispatch result and propagates an uncanceled error to the
-    // owning context. This matters when an error listener resolves a Promise
-    // and the reaction calls preventDefault() on the same event.
+fn worker_error_microtask_checkpoint(scope: &mut v8::PinScope<'_, '_>) {
+    // Blink observes cancellation after microtasks queued by error listeners.
     scope.perform_microtask_checkpoint();
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
-
-    clear_event_dispatch_fields(scope, event);
-    let default_prevented = crate::context_bootstrap::event_backing(scope, event)
-        .get(scope, v8str(scope, "defaultPrevented").into())
-        .is_some_and(|value| value.boolean_value(scope));
-    !default_prevented
 }
 
 fn new_message_event<'s>(

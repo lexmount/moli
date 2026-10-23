@@ -438,7 +438,7 @@ fn call_event_target_listeners_filtered<'s>(
     invocation_target_in_shadow_tree: bool,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
-    capture_only: bool,
+    capture_only: Option<bool>,
     at_target: bool,
 ) -> std::result::Result<DispatchStatus, String> {
     if let EventTargetHandle::ChildWindow(target) = target {
@@ -448,7 +448,7 @@ fn call_event_target_listeners_filtered<'s>(
                 target,
                 event_type,
                 event,
-                capture_only,
+                capture_only.expect("child Window propagation uses a capture filter"),
                 at_target,
             ),
         );
@@ -1059,7 +1059,7 @@ impl HostEventTargetRegistry {
         invocation_target_in_shadow_tree: bool,
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
-        capture_only: bool,
+        capture_only: Option<bool>,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
         let snapshot: Vec<(
@@ -1083,11 +1083,7 @@ impl HostEventTargetRegistry {
             entries
                 .iter()
                 .filter(|entry| !entry.removed)
-                .filter(|entry| {
-                    (at_target && entry.capture == capture_only)
-                        || (capture_only && entry.capture)
-                        || (!capture_only && !entry.capture)
-                })
+                .filter(|entry| capture_only.is_none_or(|capture| entry.capture == capture))
                 .map(|entry| {
                     (
                         entry.id,
@@ -1116,7 +1112,7 @@ impl HostEventTargetRegistry {
                 stage = "event_listener_batch_start",
                 event_type,
                 ?target,
-                capture_only,
+                ?capture_only,
                 at_target,
                 listener_count = snapshot.len(),
             );
@@ -1207,7 +1203,7 @@ impl HostEventTargetRegistry {
                     listener_id,
                     event_type,
                     ?target,
-                    capture_only,
+                    ?capture_only,
                     at_target,
                     listener_index,
                     function_name = function_name.as_str(),
@@ -1388,7 +1384,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                true,
+                Some(true),
                 false,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1444,7 +1440,24 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
 
         let stop_immediate = event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT);
         let stop_prop = event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT);
-        if !stop_immediate {
+        if !stop_immediate && dispatch_target == EventTargetHandle::Window {
+            // A Window dispatches to itself once, in registration order. DOM
+            // Node paths retain their capture/bubble and retargeting passes.
+            let status = registry.call_listeners_filtered(
+                scope,
+                host_ptr,
+                dispatch_target,
+                invocation_targets_in_shadow_tree.contains(&dispatch_target),
+                &event_type,
+                event,
+                None,
+                true,
+            )?;
+            stopped = matches!(
+                status,
+                DispatchStatus::StopPropagation | DispatchStatus::StopImmediate
+            );
+        } else if !stop_immediate {
             if stop_prop {
                 stopped = true;
             }
@@ -1456,7 +1469,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(&dispatch_target),
                 &event_type,
                 event,
-                true,
+                Some(true),
                 true,
             )?;
             if status == DispatchStatus::StopPropagation {
@@ -1473,7 +1486,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                     invocation_targets_in_shadow_tree.contains(&dispatch_target),
                     &event_type,
                     event,
-                    false,
+                    Some(false),
                     true,
                 )?;
                 if status == DispatchStatus::StopImmediate
@@ -1535,7 +1548,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                true,
+                Some(true),
                 true,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1551,7 +1564,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                false,
+                Some(false),
                 true,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1634,7 +1647,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                false,
+                Some(false),
                 false,
             )?;
             if status == DispatchStatus::StopImmediate
@@ -1771,6 +1784,20 @@ fn run_host_event_dispatch<'s>(
         event,
     );
 
+    if dispatch_target == EventTargetHandle::Window {
+        registry.call_listeners_filtered(
+            scope,
+            host_ptr,
+            dispatch_target,
+            invocation_target_in_shadow_tree,
+            event_type,
+            event,
+            None,
+            true,
+        )?;
+        return Ok(());
+    }
+
     let status = registry.call_listeners_filtered(
         scope,
         host_ptr,
@@ -1778,7 +1805,7 @@ fn run_host_event_dispatch<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        true,
+        Some(true),
         true,
     )?;
     if status != DispatchStatus::StopImmediate {
@@ -1789,7 +1816,7 @@ fn run_host_event_dispatch<'s>(
             invocation_target_in_shadow_tree,
             event_type,
             event,
-            false,
+            Some(false),
             true,
         )?;
     }

@@ -1684,3 +1684,97 @@ async fn constructor_message_event_uses_intrinsic_constructor_after_global_repla
     }
     panic!("timed out waiting for MessageEvent constructor path");
 }
+
+#[test]
+fn native_worker_errors_share_dispatch_state_and_handler_cancellation() {
+    ensure_v8();
+    let (mut isolate, ctx) = setup_worker_context();
+    eval_ok(
+        &mut isolate,
+        &ctx,
+        r#"
+        var worker = new Worker('1');
+        var facts = [];
+        var retained;
+        worker.addEventListener('error', function(event) {
+            retained = event;
+            facts.push(this === worker && event.target === worker &&
+                event.currentTarget === worker && event.composedPath()[0] === worker && event.isTrusted);
+            event.stopImmediatePropagation();
+            Promise.resolve().then(() => {
+                facts.push(event.currentTarget === worker && event.composedPath()[0] === worker);
+                event.preventDefault();
+            });
+        }, {once: true});
+        worker.addEventListener('error', () => facts.push('later'), {once: true});
+    "#,
+    );
+    {
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &ctx);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let worker = context
+            .global(scope)
+            .get(scope, crate::util::v8str(scope, "worker").into())
+            .unwrap();
+        let worker = v8::Local::<v8::Object>::try_from(worker).unwrap();
+        let error = v8::null(scope).into();
+        assert!(
+            !crate::context_bootstrap::worker_host::dispatch::dispatch_worker_error_event_with_kind(
+                scope,
+                worker,
+                "probe",
+                "https://worker.test/worker.js",
+                1,
+                1,
+                error,
+                crate::worker::WorkerParentErrorEventKind::ErrorEvent,
+            )
+        );
+    }
+    assert_eq!(
+        eval_ok(
+            &mut isolate,
+            &ctx,
+            r#"(() => {
+        const clean = retained.currentTarget === null && retained.composedPath().length === 0;
+        worker.dispatchEvent(retained);
+        return JSON.stringify([facts, clean, retained.isTrusted]);
+    })()"#
+        ),
+        r#"[[true,true,"later"],true,false]"#
+    );
+    for (returned, uncanceled) in [("true", true), ("false", false), ("1", true)] {
+        eval_ok(
+            &mut isolate,
+            &ctx,
+            &format!("worker.onerror = () => {returned};"),
+        );
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &ctx);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let worker = context
+            .global(scope)
+            .get(scope, crate::util::v8str(scope, "worker").into())
+            .unwrap();
+        let worker = v8::Local::<v8::Object>::try_from(worker).unwrap();
+        let error = v8::null(scope).into();
+        assert_eq!(
+            crate::context_bootstrap::worker_host::dispatch::dispatch_worker_error_event_with_kind(
+                scope,
+                worker,
+                "probe",
+                "https://worker.test/worker.js",
+                1,
+                1,
+                error,
+                crate::worker::WorkerParentErrorEventKind::ErrorEvent,
+            ),
+            uncanceled,
+            "onerror returned {returned}"
+        );
+    }
+    eval_ok(&mut isolate, &ctx, "worker.terminate()");
+}
