@@ -53,8 +53,20 @@
   Object.defineProperty(promise, 'constructor', {get() {throw Error('must not get constructor');}});
   assert(new PromiseRejectionEvent('audit', {promise}).promise === promise, 'native Promise ignores public constructor');
   let thenRead = 0;
-  const resolved = new PromiseRejectionEvent('audit', {promise: {get then() {thenRead++; throw reason;}}}).promise;
-  assert(thenRead === 1 && await resolved.then(() => false, e => e === reason), 'thenable rejection');
+  const thenable = {get then() {thenRead++; throw reason;}};
+  const converted = new PromiseRejectionEvent('audit', {promise: thenable}).promise;
+  assert(converted instanceof Promise && thenRead === 1, 'thenable resolved once');
+  let rejection;try {await converted;} catch (e) {rejection=e;}
+  assert(rejection === reason, 'thenable rejection identity');
+  for (const value of [null, 7, 'promise', true]) {
+    const converted = new PromiseRejectionEvent('audit', {promise: value}).promise;
+    assert(converted instanceof Promise && await converted === value, 'primitive resolution');
+  }
+  for (const bad of [undefined]) {
+    let caught;
+    try { new PromiseRejectionEvent('audit', {promise: bad}); } catch (e) { caught = e; }
+    assert(caught instanceof TypeError, 'promise payload requires an object');
+  }
   assert(new TrackEvent('audit').track === null && new SubmitEvent('audit').submitter === null, 'nullable payload defaults');
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   let caught;
