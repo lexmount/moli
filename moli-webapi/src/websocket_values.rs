@@ -209,6 +209,6 @@ pub struct WebSocketStreamConstructorArgs<'s> {
 pub struct WebSocketStreamOptionsMembers<'s> {
     #[webidl(sequence, converter = "usv_string", default = Vec::new())]
     pub protocols: Vec<String>,
-    #[webidl(interface = crate::interfaces::AbortSignal)]
-    pub signal: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(converter = "raw")]
+    pub signal: Option<crate::abort_signal::ResolvedAbortSignal<'s>>,
 }
