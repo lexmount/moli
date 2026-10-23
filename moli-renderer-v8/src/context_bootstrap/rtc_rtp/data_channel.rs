@@ -1,14 +1,17 @@
 //! Data-channel initialization and native attributes. SCTP establishment and
 //! message transport are not implemented by the signaling frontend.
 
-use super::{rtp_transceivers, SIMPLE_EVENT_TARGET_LISTENERS_SLOT};
+use super::{SIMPLE_EVENT_TARGET_LISTENERS_SLOT, rtp_transceivers};
 use crate::context_bootstrap::media_queries;
-use moli_webapi::rtc::peer_connection::set_string_slot;
-use moli_webapi::rtc::peer_connection::RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT;
 use crate::{
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value, throw_type_error, v8_string, v8str},
+    util::{
+        callback_data_index_value, callback_data_item, get_private_value, set_private_value,
+        throw_type_error, v8_string, v8str,
+    },
     web_api_interfaces, webidl,
 };
+use moli_webapi::rtc::peer_connection::RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT;
+use moli_webapi::rtc::peer_connection::set_string_slot;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiFunctionTemplate)]
@@ -19,7 +22,8 @@ struct PeerPrototype {
 }
 
 pub(super) fn install_peer<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>, prototype: v8::Local<'s, v8::ObjectTemplate>,
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
 ) {
     PeerPrototype::initialize_prototype_template(scope, prototype);
 }
@@ -59,9 +63,8 @@ const VALUES: &[&str] = &[
 struct Init {
     #[webidl(default = true)]
     ordered: bool,
-    #[webidl(converter = "enforce_range_unsigned_short", name = "maxPacketLifeTime")]
+    #[webidl(name = "maxPacketLifeTime")]
     max_packet_lifetime: Option<u16>,
-    #[webidl(converter = "enforce_range_unsigned_short")]
     max_retransmits: Option<u16>,
     #[webidl(default = "", converter = "usv_string")]
     protocol: String,
@@ -185,7 +188,7 @@ pub(super) fn create<'s>(
     if label.len() > usize::from(u16::MAX)
         || options.protocol.len() > usize::from(u16::MAX)
         || (options.negotiated && id.is_none())
-        || id == Some(u16::MAX)
+        || options.id == Some(u16::MAX)
         || (options.max_packet_lifetime.is_some() && options.max_retransmits.is_some())
     {
         throw_type_error(scope, "Invalid RTCDataChannel initialization.");

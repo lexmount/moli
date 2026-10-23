@@ -689,8 +689,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         };
         consumes_request_body =
             !init.body_present && (inherited.body.is_some() || body_stream.is_some());
-        has_stream_body = init.body_stream.is_some()
-            || !init.body_present && inherited.body.is_none() && body_stream.is_some();
+        has_stream_body =
+            init.body_stream.is_some() || !init.body_present && inherited.has_stream_body;
         let method = if init.method_present {
             init.method.clone()
         } else {

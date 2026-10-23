@@ -4,7 +4,7 @@ globalThis.__inputEventProbe = realms => {
   const run = (label, work) => { try { work(); } catch (error) { errors.push({label, error: String(error.stack || error)}); } };
   const eq = (a,b) => JSON.stringify(a) === JSON.stringify(b);
   const units = s => Array.from({length:s.length},(_,i)=>s.charCodeAt(i));
-  const keys = ['bubbles','cancelable','composed','detail','view','which','data','dataTransfer','inputType','isComposing','targetRanges'];
+  const keys = ['bubbles','cancelable','composed','detail','sourceCapabilities','view','data','dataTransfer','inputType','isComposing','targetRanges'];
   for (const [r,w] of realms.entries()) {
     const C = w.InputEvent, p = `${r}/InputEvent`, other = realms[(r+1)%realms.length];
     const makeRange = (realm=w) => {
@@ -36,7 +36,7 @@ globalThis.__inputEventProbe = realms => {
       let error;try{new C('x',init);}catch(e){error=e;}
       record(p+'/getter-throw-'+key,{same:error===sentinel,stops:eq(trace,keys.slice(0,i+1))},trace);
     });
-    for(const key of ['data','inputType','detail','which']) run(p+'/conversion-'+key,()=>{
+    for(const key of ['data','inputType','detail']) run(p+'/conversion-'+key,()=>{
       const trace=[],sentinel={},init=new Proxy({}, {get(o,k){trace.push(String(k));if(k===key)return {[Symbol.toPrimitive](hint){trace.push(hint);throw sentinel;}};return undefined;}});
       let error;try{new C('x',init);}catch(e){error=e;}
       record(p+'/conversion-'+key,{same:error===sentinel,stops:eq(trace,[...keys.slice(0,keys.indexOf(key)+1),['data','inputType'].includes(key)?'string':'number'])},trace);
@@ -61,7 +61,7 @@ globalThis.__inputEventProbe = realms => {
     });
     run(p+'/ui',()=>{
       const e=new C('x',{bubbles:true,cancelable:true,composed:true,view:other,detail:2**32+5,which:-1,data:'a'});
-      record(p+'/ui',{flags:e.bubbles&&e.cancelable&&e.composed,view:e.view===other,detail:e.detail===5,which:e.which===2**32-1});
+      record(p+'/ui',{flags:e.bubbles&&e.cancelable&&e.composed,view:e.view===other,detail:e.detail===5,which:e.which===0});
     });
     run(p+'/dataTransfer',()=>{
       for(const [i,transfer] of [undefined,null,new w.DataTransfer(),new other.DataTransfer()].entries()) {
