@@ -9,6 +9,7 @@ pub(super) struct WebSocketConnectionState {
     pub(super) owner: super::WindowExecutionContextBinding,
     pub(super) resource_loader: Option<crate::network::context::DocumentResourceLoader>,
     pub(super) wrapper: v8::Global<v8::Object>,
+    pub(super) stream_abort: Option<crate::context_bootstrap::WebSocketStreamAbortRegistration>,
     pub(super) connection: Option<WebSocketConnectionHandle>,
     pub(super) url: Url,
     pub(super) frame_id: Option<String>,

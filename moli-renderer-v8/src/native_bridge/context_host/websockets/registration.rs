@@ -149,6 +149,7 @@ impl JsContextHost {
                 owner,
                 resource_loader,
                 wrapper: v8::Global::new(scope, wrapper),
+                stream_abort: None,
                 connection,
                 url,
                 frame_id,

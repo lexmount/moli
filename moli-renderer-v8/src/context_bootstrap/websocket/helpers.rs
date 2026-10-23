@@ -43,11 +43,8 @@ pub(super) fn parse_websocket_protocols<'s>(
     Ok(protocols)
 }
 
-pub(super) fn parse_websocket_stream_protocols(
-    protocols: Vec<String>,
-) -> Result<Vec<String>, String> {
-    validate_subprotocols(&protocols).map_err(websocket_stream_subprotocol_constructor_error)?;
-    Ok(protocols)
+pub(super) fn validate_websocket_stream_protocols(protocols: &[String]) -> Result<(), String> {
+    validate_subprotocols(protocols).map_err(websocket_stream_subprotocol_constructor_error)
 }
 
 fn websocket_dom_string_or_sequence<'s>(

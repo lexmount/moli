@@ -608,7 +608,9 @@ pub(crate) use self::web_storage::{WebStorageEventRecipient, install_storage_ali
 pub(crate) use self::webassembly_runtime::{
     set_current_context_webassembly_default_prototype, webassembly_default_prototype_for_context,
 };
-pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_event};
+pub(crate) use self::websocket::{
+    WebSocketDispatchResult, WebSocketStreamAbortRegistration, dispatch_websocket_event,
+};
 pub(crate) use self::window_events::{
     WINDOW_EVENT_HANDLER_PROPERTIES, clear_simple_window_event_handler_values,
     dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
