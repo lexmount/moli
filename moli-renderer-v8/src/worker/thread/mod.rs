@@ -52,6 +52,7 @@ use super::canvas_blob_tasks::WorkerCanvasBlobTasks;
 use super::codec_tasks::WorkerCodecTaskQueue;
 use super::networking_tasks::WorkerNetworkingTaskQueue;
 use super::web_locks_tasks::WorkerWebLocksTasks;
+use super::websocket_events::WorkerWebSocketEvents;
 use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
     create_script_origin, dispatch_broadcast_channel_event, dispatch_message_event,
@@ -1645,8 +1646,10 @@ async fn worker_main(
         mpsc::unbounded_channel::<WorkerModuleGraphFetchCompletion>();
     let (module_evaluation_tx, mut module_evaluation_rx) =
         mpsc::unbounded_channel::<WorkerModuleEvaluationCompletion>();
-    let (websocket_event_tx, mut websocket_event_rx) =
-        tokio::sync::mpsc::channel::<moli_websocket::Event>(1);
+    let (websocket_event_tx, mut websocket_events) = WorkerWebSocketEvents::new();
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(websocket_events.pulls());
     let (webcrypto_completion_tx, mut webcrypto_completion_rx) =
         mpsc::unbounded_channel::<WorkerWebCryptoCompletion>();
     let (opfs_completion_tx, mut opfs_completion_rx) =
@@ -2052,7 +2055,7 @@ async fn worker_main(
                 completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion.map(Box::new)),
                 completion = module_evaluation_rx.recv() => WorkerLoopWake::ModuleEvaluation(completion),
                 wake = worker_runtime_wake_rx.recv() => WorkerLoopWake::RuntimeWake(wake),
-                event = websocket_event_rx.recv() => WorkerLoopWake::WebSocket(event),
+                event = websocket_events.recv() => WorkerLoopWake::WebSocket(event),
                 completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
                 completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
                 _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
@@ -2066,7 +2069,7 @@ async fn worker_main(
                 completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion.map(Box::new)),
                 completion = module_evaluation_rx.recv() => WorkerLoopWake::ModuleEvaluation(completion),
                 wake = worker_runtime_wake_rx.recv() => WorkerLoopWake::RuntimeWake(wake),
-                event = websocket_event_rx.recv() => WorkerLoopWake::WebSocket(event),
+                event = websocket_events.recv() => WorkerLoopWake::WebSocket(event),
                 completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
                 completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
                 _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
@@ -3490,11 +3493,17 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                if dispatch_worker_websocket_event(scope, &state, event) {
-                    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
-                        scope,
-                    );
-                    drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+                match dispatch_worker_websocket_event(scope, &state, &event) {
+                    crate::context_bootstrap::WebSocketDispatchResult::Backpressured => {
+                        websocket_events.park(event);
+                    }
+                    crate::context_bootstrap::WebSocketDispatchResult::Dispatched => {
+                        perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
+                            scope,
+                        );
+                        drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+                    }
+                    crate::context_bootstrap::WebSocketDispatchResult::Noop => {}
                 }
             }
             WorkerLoopWake::WebSocket(None) => {
