@@ -285,9 +285,7 @@ fn idle_detector_start_callback<'s>(
     if let Some(signal) = signal
         && signal.is_aborted(scope)
     {
-        let reason = signal
-            .reason(scope)
-            .unwrap_or_else(|| crate::native_bridge::abort::abort_error_value(scope));
+        let reason = signal.reason(scope);
         let _ = resolver.reject(scope, reason);
         return;
     }

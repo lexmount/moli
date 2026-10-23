@@ -151,18 +151,20 @@ pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObse
 pub(crate) use self::preload::{
     apply_response_preload_request_metadata, start_document_response_links,
 };
+pub(crate) use self::request::{
+    FetchArgs, RequestInfo, parse_fetch_init, parse_request_redirect_mode_label,
+    request_object_credentials_mode, validate_fetch_body,
+};
+pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
 pub(crate) use self::request::{
     build_cached_request_object, cached_request_from_native, request_constructor_callback,
 };
 pub(crate) use self::request::{
-    FetchArgs, RequestInitValidation, validate_fetch_body, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
-};
-pub(crate) use self::request::{FetchArgumentError, RequestUrlError, convert_fetch_arguments};
-pub(crate) use self::request::{
-    mark_request_input_body_used_for_fetch, request_body_already_used_error, request_headers_guard_for_mode,
-    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
-    try_resolve_request_constructor_url_for_child, validate_request_method_body, validate_request_url_credentials,
+    mark_request_input_body_used_for_fetch, request_body_already_used_error,
+    request_headers_guard_for_mode, try_resolve_request_constructor_url_for_base,
+    try_resolve_request_constructor_url_for_child, validate_request_method_body,
+    validate_request_url_credentials,
 };
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,

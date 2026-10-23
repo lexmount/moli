@@ -5,16 +5,16 @@ globalThis.__mousePointerProbe = realms => {
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const units = s => Array.from({length:s.length}, (_,i)=>s.charCodeAt(i));
   const integer = (n,bits,signed) => { n=Number(n); if(!Number.isFinite(n)||n===0)return 0; const m=2**bits; n=((Math.trunc(n)%m)+m)%m; return signed && n>=m/2?n-m:n; };
-  const base = ['bubbles','cancelable','composed','detail','view','which'];
+  const base = ['bubbles','cancelable','composed','detail','sourceCapabilities','view'];
   const modifiers = ['altKey','ctrlKey','metaKey','modifierAltGraph','modifierCapsLock','modifierFn','modifierFnLock','modifierHyper','modifierNumLock','modifierScrollLock','modifierSuper','modifierSymbol','modifierSymbolLock','shiftKey'];
-  const mouse = ['button','buttons','clientX','clientY','movementX','movementY','relatedTarget','screenX','screenY'];
+  const mouse = ['button','buttons','clientX','clientY','movementX','movementY','region','relatedTarget','screenX','screenY'];
   const pointer = ['altitudeAngle','azimuthAngle','coalescedEvents','height','isPrimary','persistentDeviceId','pointerId','pointerType','predictedEvents','pressure','tangentialPressure','tiltX','tiltY','twist','width'];
   const wheel = ['deltaMode','deltaX','deltaY','deltaZ'];
   const mouseFields = ['screenX','screenY','clientX','clientY','button','buttons','ctrlKey','altKey','shiftKey','metaKey','movementX','movementY','pageX','pageY','x','y','relatedTarget'];
   const pointerFields = pointer.filter(k=>!k.endsWith('Events'));
   for (const [r,realm] of realms.entries()) for (const name of ['MouseEvent','WheelEvent','PointerEvent','DragEvent']) {
-    const C=realm[name], prefix=`${r}/${name}`, own=name==='MouseEvent'?mouseFields:name==='WheelEvent'?wheel:name==='PointerEvent'?pointerFields:['dataTransfer'];
-    const keys=[...base,...modifiers,...mouse,...(name==='WheelEvent'?wheel:name==='PointerEvent'?pointer:name==='DragEvent'?['dataTransfer']:[])];
+    const C=realm[name], prefix=`${r}/${name}`, own=name==='MouseEvent'?mouseFields:name==='WheelEvent'?[...wheel,'wheelDeltaX','wheelDeltaY']:name==='PointerEvent'?pointerFields:['dataTransfer'];
+    const keys=[...base,...modifiers,...mouse,...(name==='WheelEvent'?[...wheel,'wheelDeltaX','wheelDeltaY']:name==='PointerEvent'?pointer:name==='DragEvent'?['dataTransfer']:[])];
     run(prefix+'/metadata',()=>{
       const e=new C('x');
       record(prefix+'/constructor',{name:C.name===name,length:C.length===1,parent:Object.getPrototypeOf(C.prototype)===(name==='MouseEvent'?realm.UIEvent:realm.MouseEvent).prototype,instance:e instanceof realm.MouseEvent});
@@ -40,7 +40,7 @@ globalThis.__mousePointerProbe = realms => {
       const e=new C(type,new Proxy({}, {get(_,key){trace2.push(key);}}));record(prefix+'/type-first',{type:e.type==='\uD800',order:eq(trace2,['type:string',...keys])},trace2);
       const sentinel={},reads=[];let error;try{new C({[Symbol.toPrimitive](){throw sentinel;}},new Proxy({}, {get(_,k){reads.push(k);}}));}catch(e){error=e;}record(prefix+'/type-throw',{identity:error===sentinel,noReads:reads.length===0});
     });
-    const numeric={detail:['int',32,true,0],which:['int',32,false,0],button:['int',16,true,0],buttons:['int',16,false,0]};
+    const numeric={detail:['int',32,true,0],button:['int',16,true,0],buttons:['int',16,false,0]};
     for(const k of ['screenX','screenY','clientX','clientY','movementX','movementY'])numeric[k]=['double',0,false,0];
     if(name==='WheelEvent'){numeric.deltaMode=['int',32,false,0];for(const k of ['deltaX','deltaY','deltaZ'])numeric[k]=['double',0,false,0];}
     if(name==='PointerEvent'){

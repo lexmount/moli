@@ -3,22 +3,22 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
 use crate::web_api_interfaces;
-use crate::webidl::{self, WebIdlDictionarySerialize};
+use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(crate) mod certificate;
 mod configuration;
-mod dictionary_string;
 mod data_channel;
+mod dictionary_string;
 mod dtmf;
 pub(crate) mod encoded_frames;
 mod events;
 mod ice_candidate;
 mod ice_candidate_parser;
 mod ice_error_event;
-mod peer_options;
 mod operations;
 mod payload_events;
+mod peer_options;
 mod rtp_capabilities;
 mod rtp_offer;
 mod rtp_parameters;
@@ -295,7 +295,10 @@ fn rtc_peer_connection_create_offer_callback<'s>(
     let video = parsed.options.offer_to_receive_video.unwrap_or(-1);
     if !(-1..=1).contains(&audio) || !(-1..=1).contains(&video) {
         crate::native_bridge::throw_dom_exception(
-            scope, "InvalidAccessError", 15, "Invalid offer receive count.",
+            scope,
+            "InvalidAccessError",
+            15,
+            "Invalid offer receive count.",
         );
         return;
     }
@@ -359,7 +362,8 @@ fn rtc_peer_connection_set_local_description_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<peer_options::LocalDescriptionArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<peer_options::LocalDescriptionArgs>(scope, &args)
+    else {
         return;
     };
     let pc = rtp_transceivers::target(scope, args.this());

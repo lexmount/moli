@@ -1,5 +1,5 @@
+use super::super::ui::UiEventInit;
 use super::custom::CustomEventInit;
-use super::super::{EventInit, ui::UiEventInit};
 use super::*;
 use crate::{web_api_interfaces, webidl};
 use webidl::WebIdlDictionarySerialize;

@@ -2063,7 +2063,9 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         let req_obj = source.expect("request input source");
         request_like = Some(req_obj);
         let init = parse_fetch_init(scope, args.init)?;
-        if inherited.body_unusable && !init.body_present { return Err(crate::network_host::request_body_already_used_error().into()); }
+        if inherited.body_unusable && !init.body_present {
+            return Err(crate::network_host::request_body_already_used_error().into());
+        }
         signal = init.signal.unwrap_or(inherited.signal);
         body_stream = if init.body_present {
             init.body_stream.clone()
@@ -2073,8 +2075,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         };
         consumes_request_body =
             !init.body_present && (inherited.body.is_some() || body_stream.is_some());
-        has_stream_body = init.body_stream.is_some()
-            || !init.body_present && inherited.body.is_none() && body_stream.is_some();
+        has_stream_body =
+            init.body_stream.is_some() || !init.body_present && inherited.has_stream_body;
         let method = if init.method_present {
             init.method.clone()
         } else {
