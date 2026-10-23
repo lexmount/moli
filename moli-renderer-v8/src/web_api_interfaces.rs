@@ -49,7 +49,7 @@ interfaces! {
     AudioWorkletNode: AudioNode;
     BaseAudioContext: EventTarget;
     BarProp;
-    BatteryManager;
+    BatteryManager: EventTarget;
     BeforeUnloadEvent: Event;
     BiquadFilterNode: AudioNode;
     Blob;
@@ -537,12 +537,12 @@ interfaces! {
     SVGTransform;
     SVGTransformList;
     SVGUseElement: SVGGraphicsElement;
-    Screen;
+    Screen: EventTarget;
     ScreenOrientation: EventTarget;
     SecurityPolicyViolationEvent: Event;
     Selection;
     ServiceWorker: EventTarget;
-    ServiceWorkerContainer;
+    ServiceWorkerContainer: EventTarget;
     ServiceWorkerGlobalScope: WorkerGlobalScope;
     ServiceWorkerRegistration: EventTarget;
     ShadowRoot: DocumentFragment;

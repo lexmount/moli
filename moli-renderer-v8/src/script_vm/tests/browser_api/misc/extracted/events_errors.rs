@@ -705,7 +705,9 @@ fn navigator_battery_status_declares_event_target_methods() {
               navigator.getBattery().then((battery) => {
                 const fakeBattery = Object.create(battery);
                 const summarize = name => {
-                  const descriptor = Object.getOwnPropertyDescriptor(battery, name);
+                  if (Object.hasOwn(battery, name) || battery[name] !== EventTarget.prototype[name])
+                    throw new Error(`inherited EventTarget method ${name}`);
+                const descriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, name);
                   return [
                     !!descriptor,
                     descriptor && descriptor.enumerable,
@@ -728,7 +730,7 @@ fn navigator_battery_status_declares_event_target_methods() {
                   summarize("addEventListener"),
                   summarize("removeEventListener"),
                   summarize("dispatchEvent"),
-                  battery.dispatchEvent({ type: "chargingchange" }),
+                  battery.dispatchEvent(new Event("chargingchange")),
                   String(battery.addEventListener("chargingchange", () => {})),
                   String(battery.removeEventListener("chargingchange", () => {})),
                   methodOutcome("addEventListener", "chargingchange", () => {}),
@@ -747,7 +749,7 @@ fn navigator_battery_status_declares_event_target_methods() {
 
     assert_eq!(
         result,
-        "false|true:false:true:true:function:2:addEventListener|true:false:true:true:function:2:removeEventListener|true:false:true:true:function:1:dispatchEvent|true|undefined|undefined|throw:TypeError|throw:TypeError|throw:TypeError"
+        "false|true:true:true:true:function:2:addEventListener|true:true:true:true:function:2:removeEventListener|true:true:true:true:function:1:dispatchEvent|true|undefined|undefined|throw:TypeError|throw:TypeError|throw:TypeError"
     );
 }
 #[test]

@@ -498,12 +498,14 @@ fn websocket_wpt_target_event_target_listener_options_and_objects() {
                 throw new Error(`WebSocket simple EventTarget internals should not be reflected: ${simpleOwn.join(',')}`);
             }
             const expected = {
-                addEventListener: 'true:true:true:true:function:0:addEventListener',
-                removeEventListener: 'true:true:true:true:function:0:removeEventListener',
-                dispatchEvent: 'true:true:true:true:function:0:dispatchEvent'
+                addEventListener: 'true:true:true:true:function:2:addEventListener',
+                removeEventListener: 'true:true:true:true:function:2:removeEventListener',
+                dispatchEvent: 'true:true:true:true:function:1:dispatchEvent'
             };
             for (const [name, shape] of Object.entries(expected)) {
-                const descriptor = Object.getOwnPropertyDescriptor(socket, name);
+                if (Object.hasOwn(socket, name) || socket[name] !== EventTarget.prototype[name])
+                    throw new Error(`inherited EventTarget method ${name}`);
+                const descriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, name);
                 const actual = [
                     !!descriptor,
                     descriptor && descriptor.enumerable,

@@ -286,7 +286,7 @@ struct StorageUsageDetailsObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::BatteryManager, data_properties, receiver)]
+#[webapi(interface = web_api_interfaces::BatteryManager, data_properties, receiver)]
 struct NavigatorBatteryStatusObjectDeclaration {
     #[webapi(data_property, enumerable)]
     charging: bool,
@@ -297,26 +297,20 @@ struct NavigatorBatteryStatusObjectDeclaration {
     #[webapi(data_property, enumerable)]
     level: f64,
 
-    #[webapi(data_property, enumerable, init = "null")]
+    #[webapi(accessor_property, enumerable, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onchargingchange"), setter_data = v8str(scope, "onchargingchange"))]
     onchargingchange: (),
 
-    #[webapi(data_property, enumerable, init = "null")]
+    #[webapi(accessor_property, enumerable, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onchargingtimechange"), setter_data = v8str(scope, "onchargingtimechange"))]
     onchargingtimechange: (),
 
-    #[webapi(data_property, enumerable, init = "null")]
+    #[webapi(accessor_property, enumerable, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "ondischargingtimechange"), setter_data = v8str(scope, "ondischargingtimechange"))]
     ondischargingtimechange: (),
 
-    #[webapi(data_property, enumerable, init = "null")]
+    #[webapi(accessor_property, enumerable, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onlevelchange"), setter_data = v8str(scope, "onlevelchange"))]
     onlevelchange: (),
 
-    #[webapi(method, length = 2, callback = battery_event_target_noop_callback)]
-    add_event_listener: (),
-
-    #[webapi(method, length = 2, callback = battery_event_target_noop_callback)]
-    remove_event_listener: (),
-
-    #[webapi(method, length = 1, callback = battery_dispatch_event_callback)]
-    dispatch_event: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiObject)]
@@ -608,21 +602,6 @@ pub(in crate::context_bootstrap) fn navigator_get_battery_callback<'s>(
         .expect("Navigator battery status declaration should bind");
     let _ = resolver.resolve(scope, battery.into());
     rv.set(resolver.get_promise(scope).into());
-}
-
-fn battery_event_target_noop_callback<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-}
-
-fn battery_dispatch_event_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(v8::Boolean::new(scope, true).into());
 }
 
 pub(in crate::context_bootstrap) fn navigator_permissions_query_callback<'s>(

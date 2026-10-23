@@ -4061,7 +4061,10 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBKeyRange, "upperBound", 1],
               ];
               for (const [target, name, length] of methods) {
-                const descriptor = Object.getOwnPropertyDescriptor(target, name);
+                const inherited = ["addEventListener", "removeEventListener", "dispatchEvent"].includes(name);
+                if (inherited && (Object.hasOwn(target, name) || target[name] !== EventTarget.prototype[name]))
+                    throw new Error(`${name} should be inherited from EventTarget`);
+                const descriptor = Object.getOwnPropertyDescriptor(inherited ? EventTarget.prototype : target, name);
                 if (!descriptor || typeof descriptor.value !== "function") {
                   throw new Error(`${name} should be a declared function`);
                 }

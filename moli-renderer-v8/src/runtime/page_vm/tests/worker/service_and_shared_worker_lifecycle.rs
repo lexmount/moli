@@ -989,12 +989,14 @@ async fn shared_worker_declared_surface_ignores_reflection_and_spoofing() {
                             throw new Error(`SharedWorker internals should not be reflected: ${reflected.join(",")}`);
                         }
                         const expectedMethods = {
-                            addEventListener: "true:true:true:true:function:0:addEventListener",
-                            removeEventListener: "true:true:true:true:function:0:removeEventListener",
-                            dispatchEvent: "true:true:true:true:function:0:dispatchEvent"
+                            addEventListener: "true:true:true:true:function:2:addEventListener",
+                            removeEventListener: "true:true:true:true:function:2:removeEventListener",
+                            dispatchEvent: "true:true:true:true:function:1:dispatchEvent"
                         };
                         for (const [name, shape] of Object.entries(expectedMethods)) {
-                            const descriptor = Object.getOwnPropertyDescriptor(worker, name);
+                            if (Object.hasOwn(worker, name) || worker[name] !== EventTarget.prototype[name])
+                    throw new Error(`inherited EventTarget method ${name}`);
+                const descriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, name);
                             const actual = [
                                 !!descriptor,
                                 descriptor && descriptor.enumerable,

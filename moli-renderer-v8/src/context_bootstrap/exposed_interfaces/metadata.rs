@@ -19,6 +19,10 @@ pub(in crate::context_bootstrap) const STORAGE_INTERFACE_NAMES: &[&str] = &[
 ];
 
 pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = &[
+    "NetworkInformation",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "ServiceWorker",
     "DOMRectReadOnly",
     "DOMRect",
     "DOMPointReadOnly",
@@ -117,6 +121,10 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
+    "BatteryManager",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "ServiceWorker",
     "PaymentRequestUpdateEvent",
     "PaymentMethodChangeEvent",
     "AuthenticatorAssertionResponse",

@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn event_target_interfaces_inherit_canonical_operations() {
+    let mut vm = new_storage_html_test_vm("https://event-target-inheritance.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/event-target-inheritance.js"
+    ))
+    .expect("interface inheritance matrix should run");
+    assert_eq!(vm.eval("String(!__eventTargetInheritance.pending && __eventTargetInheritance.rows.every(row => row[1]))").unwrap(), "true");
+    assert_eq!(vm.eval("String(__eventTargetInheritance.rows.some(row => row[0] === 'battery: native inheritance'))").unwrap(), "true");
+    vm.eval(
+        r#"(() => {
+        const popup = open('about:blank', 'inherited-event-target');
+        try { __eventTargetInheritance.inspect(popup, 'lightweight popup'); }
+        finally { popup.close(); }
+    })()"#,
+    )
+    .expect("popup should inherit EventTarget operations");
+}
+
+#[test]
 fn event_target_prototype_methods_preserve_native_state_and_realm_semantics() {
     let mut vm = new_parsed_test_vm(
         "https://event-target-prototype.test/",

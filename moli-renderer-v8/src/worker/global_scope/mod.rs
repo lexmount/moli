@@ -51,8 +51,8 @@ use super::{
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
 use crate::context_bootstrap::{
-    WebCryptoRejection, install_simple_event_target_methods,
-    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    WebCryptoRejection, initialize_simple_event_target, simple_object_event_listeners_snapshot,
+    simple_object_event_set_handler,
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::xhr_has_upload_listeners;

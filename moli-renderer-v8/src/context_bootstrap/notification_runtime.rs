@@ -1,8 +1,7 @@
 use super::{
     SIMPLE_EVENT_TARGET_LISTENERS_SLOT, global_constructor_object,
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
-    simple_event_target_remove_event_listener_callback, structured_clone_value_for_storage,
+    structured_clone_value_for_storage,
 };
 use crate::web_api_interfaces;
 use crate::{
@@ -97,27 +96,6 @@ struct NotificationObjectDeclaration<'scope> {
 
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_add_event_listener_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_dispatch_event_callback
-    )]
-    dispatch_event: (),
 
     #[webapi(method, enumerable, callback = notification_close_callback)]
     close: (),
@@ -563,10 +541,6 @@ fn initialize_notification_object<'s>(
         require_interaction: metadata.require_interaction,
         actions: action_array,
         event_listeners: (),
-
-        add_event_listener: (),
-        remove_event_listener: (),
-        dispatch_event: (),
         close: (),
     }
     .initialize(scope, notification)

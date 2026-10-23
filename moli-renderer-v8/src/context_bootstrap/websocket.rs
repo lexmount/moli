@@ -1,8 +1,4 @@
-use super::media_queries::{
-    dispatch_simple_event_target_event, simple_event_target_add_event_listener_callback,
-    simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback, simple_object_event_set_handler,
-};
+use super::media_queries::{dispatch_simple_event_target_event, simple_object_event_set_handler};
 use super::shared::{
     READABLE_STREAM_HWM_SLOT, READABLE_STREAM_PENDING_READS_SLOT,
     SIMPLE_EVENT_TARGET_LISTENERS_SLOT, WRITABLE_STREAM_SINK_SLOT,

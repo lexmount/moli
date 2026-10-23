@@ -186,13 +186,6 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
     }
 }
 
-pub(crate) fn simple_object_event_target_add_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) {
-    simple_object_event_target_add_listener_for_target(scope, args, args.this(), None);
-}
-
 pub(super) fn simple_object_event_target_add_listener_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -307,13 +300,6 @@ fn simple_object_event_target_register_resolved_listener<'s>(
     if event_type == "message" {
         crate::context_bootstrap::flush_pending_worker_messages_for_listener(scope, target);
     }
-}
-
-pub(crate) fn simple_object_event_target_remove_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) {
-    simple_object_event_target_remove_listener_for_target(scope, args, args.this(), None);
 }
 
 pub(super) fn simple_object_event_target_remove_listener_for_target<'s>(

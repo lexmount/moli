@@ -75,19 +75,6 @@ struct WorkerObjectDeclaration {
     #[webapi(slot = WORKER_ONERROR_SLOT, init = "null")]
     onerror_slot: (),
 
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
-
     #[webapi(
         accessor_property,
         enumerable,

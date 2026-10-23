@@ -3,10 +3,8 @@ use super::{
     idb_cursor_continue_primary_key_callback, idb_cursor_delete_callback,
     idb_cursor_update_callback, idb_database_close_callback,
     idb_database_create_object_store_callback, idb_database_delete_object_store_callback,
-    idb_database_transaction_callback, idb_event_target_add_event_listener_callback,
-    idb_event_target_dispatch_event_callback, idb_event_target_remove_event_listener_callback,
-    idb_factory_cmp_callback, idb_factory_databases_callback, idb_factory_delete_database_callback,
-    idb_factory_open_callback,
+    idb_database_transaction_callback, idb_factory_cmp_callback, idb_factory_databases_callback,
+    idb_factory_delete_database_callback, idb_factory_open_callback,
     idb_index_count_callback as idb_index_count_callback_in_current_context,
     idb_index_get_all_callback as idb_index_get_all_callback_in_current_context,
     idb_index_get_all_keys_callback as idb_index_get_all_keys_callback_in_current_context,
@@ -144,10 +142,8 @@ indexed_db_receiver_realm_callback!(
 );
 
 mod constructors;
-mod helpers;
 mod state;
 
 pub(in crate::context_bootstrap) use self::constructors::install_indexed_db_template_bindings;
-use self::helpers::*;
 pub(in crate::context_bootstrap) use self::state::ensure_indexed_db_runtime_state;
 pub(crate) use self::state::{install_worker_indexed_db_runtime_state, window_indexed_db_getter};

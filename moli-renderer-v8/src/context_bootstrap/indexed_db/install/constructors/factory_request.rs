@@ -20,11 +20,7 @@ pub(super) fn install_factory_and_request_template_bindings<'s>(
     prototype: v8::Local<'s, v8::ObjectTemplate>,
     interface_name: &str,
 ) {
-    match interface_name {
-        "IDBFactory" => {
-            IdbFactoryPrototypeDeclaration::initialize_prototype_template(scope, prototype);
-        }
-        "IDBRequest" => install_idb_event_target_methods(scope, prototype),
-        _ => {}
+    if interface_name == "IDBFactory" {
+        IdbFactoryPrototypeDeclaration::initialize_prototype_template(scope, prototype);
     }
 }

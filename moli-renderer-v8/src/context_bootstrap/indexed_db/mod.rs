@@ -28,6 +28,7 @@ use self::backend::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
+pub(crate) use self::event_target::dispatch_indexed_db_event_callback;
 use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;

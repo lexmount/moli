@@ -3,7 +3,6 @@ use super::*;
 mod callbacks;
 mod dispatch;
 mod handlers;
-mod install;
 mod listeners;
 mod state;
 
@@ -20,7 +19,7 @@ pub(crate) use handlers::{
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
     simple_event_target_handler_setter_callback,
 };
-pub(crate) use install::install_simple_event_target_methods;
+pub(crate) use listeners::simple_object_event_target_register_webidl_listener;
 pub(crate) use listeners::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
     simple_event_target_inspector_listener_snapshots, simple_object_event_listeners_snapshot,
@@ -32,10 +31,6 @@ use listeners::{
     simple_object_event_set_handler_in_registry,
     simple_object_event_target_add_listener_for_target,
     simple_object_event_target_remove_listener_for_target,
-};
-pub(crate) use listeners::{
-    simple_object_event_target_add_listener, simple_object_event_target_register_webidl_listener,
-    simple_object_event_target_remove_listener,
 };
 use state::{
     ResolvedSimpleEventTarget, SimpleEventListenerRegistry, resolve_simple_event_target,

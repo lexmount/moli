@@ -204,7 +204,7 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
     )?;
     crate::context_bootstrap::install_worker_indexed_db_runtime_state(scope, global)?;
     crate::context_bootstrap::install_worker_base64_runtime_state(scope, global)?;
-    install_simple_event_target_methods(scope, global);
+    initialize_simple_event_target(scope, global);
 
     let script_url = state.borrow().current_script_url.clone();
     let origin = script_url

@@ -195,7 +195,7 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         SERVICE_WORKER_VERSION_ID_SLOT,
         version_id_value.into(),
     );
-    install_simple_event_target_methods(scope, worker);
+    initialize_simple_event_target(scope, worker);
     Ok(worker)
 }
 

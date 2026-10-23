@@ -97,25 +97,6 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
 
     #[webapi(data_property = "navigationPreload", readonly)]
     navigation_preload: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(
-        method = "addEventListener",
-        callback = service_worker_registration_add_event_listener_callback,
-        length = 2
-    )]
-    add_event_listener: (),
-    #[webapi(
-        method = "removeEventListener",
-        callback = simple_event_target_remove_event_listener_callback,
-        length = 2
-    )]
-    remove_event_listener: (),
-    #[webapi(
-        method = "dispatchEvent",
-        callback = simple_event_target_dispatch_event_callback,
-        length = 1
-    )]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]
@@ -293,27 +274,6 @@ struct ServiceWorkerObjectDeclaration {
 
     #[webapi(method = "postMessage", callback = service_worker_post_message_callback, length = 1)]
     post_message: (),
-
-    #[webapi(
-        method = "addEventListener",
-        callback = service_worker_worker_add_event_listener_callback,
-        length = 2
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method = "removeEventListener",
-        callback = simple_event_target_remove_event_listener_callback,
-        length = 2
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method = "dispatchEvent",
-        callback = simple_event_target_dispatch_event_callback,
-        length = 1
-    )]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]
@@ -2845,22 +2805,6 @@ fn mark_service_worker_worker_event_target<'s>(
     worker: v8::Local<'s, v8::Object>,
 ) {
     initialize_simple_event_target(scope, worker);
-}
-
-fn service_worker_registration_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn service_worker_worker_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_event_target_add_event_listener_callback(scope, args, rv);
 }
 
 fn service_worker_post_message_callback<'s>(

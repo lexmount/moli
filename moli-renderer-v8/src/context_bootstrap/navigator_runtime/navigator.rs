@@ -290,7 +290,6 @@ struct PermissionStatusPrototypeDeclaration {
 #[derive(Default, WebApiObject)]
 #[webapi(
     interface = web_api_interfaces::NetworkInformation,
-    prototype = "Object",
     receiver
 )]
 struct NavigatorConnectionDeclaration {
@@ -312,24 +311,11 @@ struct NavigatorConnectionDeclaration {
     #[webapi(accessor_property, getter = navigator_connection_save_data_getter_callback, enumerable)]
     save_data: (),
 
-    #[webapi(data_property, enumerable, init = "null")]
+    #[webapi(accessor_property, enumerable, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onchange"), setter_data = v8str(scope, "onchange"))]
     onchange: (),
 
-    #[webapi(
-        method,
-        enumerable,
-        length = 2,
-        callback = navigator_connection_event_target_noop_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        length = 2,
-        callback = navigator_connection_event_target_noop_callback
-    )]
-    remove_event_listener: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiObject)]
@@ -401,7 +387,7 @@ struct NavigatorUaDataPrototypeMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorkerContainer, prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ServiceWorkerContainer)]
 struct ServiceWorkerContainerDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
@@ -450,15 +436,6 @@ struct ServiceWorkerContainerDeclaration {
         length = 0
     )]
     get_registrations: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_remove_event_listener_callback)]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 
     #[webapi(
         accessor_property,
@@ -805,13 +782,6 @@ fn navigator_connection_save_data_getter_callback<'s>(
             .data_saver
             .unwrap_or(DEFAULT_CONNECTION_SAVE_DATA),
     );
-}
-
-fn navigator_connection_event_target_noop_callback<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
 }
 
 fn navigator_get_autoplay_policy_callback<'s>(

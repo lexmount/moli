@@ -307,6 +307,15 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    // IndexedDB retains its transaction-owner dispatch scope while sharing the
+    // public EventTarget operation with every other interface.
+    if crate::web_api_interfaces::IDBDatabase::is_instance(scope, args.this())
+        || crate::web_api_interfaces::IDBRequest::is_instance(scope, args.this())
+        || crate::web_api_interfaces::IDBTransaction::is_instance(scope, args.this())
+    {
+        crate::context_bootstrap::dispatch_indexed_db_event_callback(scope, args, rv);
+        return;
+    }
     if is_simple_event_target(scope, args.this()) {
         simple_event_target_dispatch_event_callback(scope, args, rv);
         return;

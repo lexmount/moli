@@ -1,33 +1,6 @@
 use super::*;
-use crate::context_bootstrap::{
-    simple_object_event_target_add_listener, simple_object_event_target_remove_listener,
-};
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_event_target_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !require_idb_event_target(scope, args.this()) {
-        return;
-    }
-    simple_object_event_target_add_listener(scope, &args);
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn idb_event_target_remove_event_listener_callback<
-    's,
->(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !require_idb_event_target(scope, args.this()) {
-        return;
-    }
-    simple_object_event_target_remove_listener(scope, &args);
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn idb_event_target_dispatch_event_callback<'s>(
+pub(crate) fn dispatch_indexed_db_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

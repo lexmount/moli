@@ -376,7 +376,7 @@ pub(in crate::context_bootstrap) fn install_worker_performance_runtime_state<'s>
     )
     .bind(scope)
     .map_err(|error| anyhow!("failed to create worker performance: {error}"))?;
-    install_simple_event_target_methods(scope, performance);
+    initialize_simple_event_target(scope, performance);
 
     set_private_value(scope, global, WINDOW_PERFORMANCE_SLOT, performance.into());
     Ok(())
@@ -431,7 +431,7 @@ pub(super) fn create_performance_object<'s>(
         PERFORMANCE_NAVIGATION_NAME_SEED_SLOT,
         navigation_entry_name.into(),
     );
-    install_simple_event_target_methods(scope, performance);
+    initialize_simple_event_target(scope, performance);
 
     performance
 }

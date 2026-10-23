@@ -9,7 +9,7 @@ use crate::{
         SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
         apply_local_window_location_navigation, clear_simple_window_event_handler_values,
         deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
-        install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
+        initialize_simple_event_target, install_navigation_bootstrap_entry_for_holder,
         install_simple_window_event_handlers, install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
         scoped_indexed_db_factory, sync_document_location_runtime_state_from_window,
@@ -803,6 +803,9 @@ impl JsContextHost {
             .bridge
             .bindings
             .instantiate_window_shell(scope, host_ptr);
+        crate::web_api_interfaces::Window::DESCRIPTOR
+            .initialize(scope, window)
+            .ok()?;
         if let Some(dom_exception) = global_constructor_object(scope, "DOMException") {
             // Lightweight popups share the opener's V8 realm, so their
             // synthetic Window shell must expose the same realm constructor
@@ -866,7 +869,7 @@ impl JsContextHost {
             }
         }
         let _ = install_storage_aliases_for_window(scope, window);
-        install_simple_event_target_methods(scope, window);
+        initialize_simple_event_target(scope, window);
         install_simple_window_event_handlers(scope, window);
         let _ = LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);

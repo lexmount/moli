@@ -1,8 +1,4 @@
-use super::media_queries::{
-    dispatch_simple_event_target_event, simple_event_target_add_event_listener_callback,
-    simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback,
-};
+use super::media_queries::dispatch_simple_event_target_event;
 use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{
@@ -145,16 +141,6 @@ struct OfflineAudioContextObjectDeclaration<'scope> {
     state: &'static str,
     #[webapi(data_property)]
     destination: v8::Local<'scope, v8::Object>,
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]

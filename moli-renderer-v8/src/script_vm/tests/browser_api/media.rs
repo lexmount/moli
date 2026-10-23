@@ -2567,11 +2567,12 @@ fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
 
   return JSON.stringify({
     ctxKeys: Object.keys(ctx).join(","),
+    inheritedEvents: ["addEventListener", "removeEventListener", "dispatchEvent"].every(name => !Object.hasOwn(ctx, name) && ctx[name] === EventTarget.prototype[name]),
     oscKeys: Object.keys(osc).join(","),
     compKeys: Object.keys(comp).join(","),
     analyserKeys: Object.keys(analyser).join(","),
     paramKeys: Object.keys(osc.frequency).join(","),
-    ctx: ["addEventListener", "removeEventListener", "dispatchEvent"].map(name => describe(ctx, name)),
+    ctx: ["addEventListener", "removeEventListener", "dispatchEvent"].map(name => describe(EventTarget.prototype, name)),
     graph: ["connect", "disconnect"].map(name => describe(AudioNode.prototype, name)),
     shared: [ctx.destination, osc, comp, analyser].every(node =>
       ["connect", "disconnect"].every(name =>
@@ -2586,7 +2587,7 @@ fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"ctxKeys":"addEventListener,removeEventListener,dispatchEvent","oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:0","removeEventListener:true:true:true:function:removeEventListener:0","dispatchEvent:true:true:true:function:dispatchEvent:0"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:false:true:true:function:start:1","param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
+        r#"{"ctxKeys":"","inheritedEvents":true,"oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:2","removeEventListener:true:true:true:function:removeEventListener:2","dispatchEvent:true:true:true:function:dispatchEvent:1"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:false:true:true:function:start:1","param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
     );
 }
 

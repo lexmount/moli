@@ -11,9 +11,7 @@ use super::{
         document_referrer_policy_for_native_document,
     },
     shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
-    simple_object_event_set_handler,
+    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
     worker_host::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
         materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
@@ -60,19 +58,6 @@ struct SharedWorkerObjectDeclaration<'scope> {
 
     #[webapi(slot = SHARED_WORKER_ONERROR_SLOT, init = "null")]
     onerror_slot: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 
     #[webapi(
         accessor_property,
