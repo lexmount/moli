@@ -706,6 +706,10 @@ fn rejects_removed_version_and_help_subcommands() {
 
 #[test]
 fn standard_version_and_help_flags_remain_available() {
+    assert_eq!(
+        moli_protocol::version::MOLI_VERSION,
+        env!("CARGO_PKG_VERSION")
+    );
     for (flag, expected_kind) in [
         ("--version", clap::error::ErrorKind::DisplayVersion),
         ("--help", clap::error::ErrorKind::DisplayHelp),

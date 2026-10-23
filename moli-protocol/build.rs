@@ -1,7 +1,17 @@
-use std::process::Command;
+use std::{fs, path::Path, process::Command};
 use vergen_gitcl::{Emitter, Gitcl};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let moli_manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../moli/Cargo.toml");
+    println!("cargo:rerun-if-changed={}", moli_manifest_path.display());
+    let moli_manifest: toml::Table = fs::read_to_string(moli_manifest_path)?.parse()?;
+    let moli_version = moli_manifest
+        .get("package")
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .ok_or("Moli's package.version must be a string")?;
+    println!("cargo:rustc-env=MOLI_VERSION={moli_version}");
+
     let git = Gitcl::builder().sha(false).build();
     Emitter::default()
         .fail_on_error()

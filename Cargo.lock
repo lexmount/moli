@@ -3244,6 +3244,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
+ "toml",
  "tracing",
  "url",
  "v8",

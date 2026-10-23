@@ -63,6 +63,7 @@ moli-storage-service = { path = "../moli-storage-service" }
 moli-v8-init = { path = "../moli-v8-init" }
 
 [build-dependencies]
+toml = { version = "1.1", default-features = false, features = ["parse", "std"] }
 vergen-gitcl = "10.0.2"
 
 [lints]

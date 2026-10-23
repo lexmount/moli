@@ -219,6 +219,7 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         json!("ws://127.0.0.1:9222/devtools/browser/moli-browser")
     );
     assert_eq!(version["Browser"], json!(version::PRODUCT));
+    assert_eq!(version["Moli-Version"], json!(version::MOLI_VERSION));
     assert_eq!(
         version["Protocol-Version"],
         json!(version::PROTOCOL_VERSION)

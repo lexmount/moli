@@ -23,6 +23,7 @@ use super::{
 pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResponse {
     axum::Json(json!({
         "Browser": version::PRODUCT,
+        "Moli-Version": version::MOLI_VERSION,
         "Protocol-Version": version::PROTOCOL_VERSION,
         "User-Agent": state.fetch_config.user_agent(),
         "V8-Version": version::js_version(),
