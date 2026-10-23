@@ -87,8 +87,9 @@ pub fn build_overconstrained_error<'s>(
     constraint: &str,
     message: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = ObjectDeclaration::new(v8_string(scope, constraint)?, v8_string(scope, message)?)
-        .bind(scope)
+    let object = build_dom_exception_instance(scope, "OverconstrainedError")?;
+    ObjectDeclaration::new(v8_string(scope, constraint)?, v8_string(scope, message)?)
+        .initialize(scope, object)
         .ok()?;
     capture_dom_exception_stack(scope, object);
     Some(object)

@@ -14,6 +14,7 @@ pub type WebIdlCallbackInvocation<'s> = for<'i> fn(
 /// Bridges value bindings to the embedder without retaining its host or V8 handles.
 /// Callbacks execute in the current (callee) realm, including for borrowed methods.
 pub struct RealmCallbacks {
+    pub new_interface_instance: Option<for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, &str) -> Option<v8::Local<'s, v8::Object>>>,
     pub call_function: Option<for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Function>, v8::Local<'s, v8::Value>, &[v8::Local<'s, v8::Value>], &str) -> Option<v8::Local<'s, v8::Value>>>,
     pub is_window_named_properties_object: Option<for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool>,
     /// Synchronizes a live SVG point from its owner before reading or writing it.

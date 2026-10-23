@@ -16,7 +16,6 @@ pub use overconstrained_error::{
 pub use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub use web_transport_error::{
     WebTransportErrorClonePayload, WebTransportErrorSource, build_web_transport_error,
-
     build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
     web_transport_error_constructor_callback,
 };
@@ -30,6 +29,62 @@ const QUOTA_EXCEEDED_ERROR_QUOTA_SLOT: &str = "__lmQuotaExceededErrorQuota";
 const QUOTA_EXCEEDED_ERROR_REQUESTED_SLOT: &str = "__lmQuotaExceededErrorRequested";
 const WEBSOCKET_ERROR_CLOSE_CODE_SLOT: &str = "__lmWebSocketErrorCloseCode";
 const WEBSOCKET_ERROR_REASON_SLOT: &str = "__lmWebSocketErrorReason";
+
+pub fn install_dom_exception_error_classifier(isolate: &mut v8::Isolate) {
+    isolate.set_is_js_api_wrapper_native_error_callback(is_dom_exception_wrapper);
+}
+
+unsafe extern "C" fn is_dom_exception_wrapper(
+    _isolate: *mut v8::RealIsolate,
+    object: v8::Local<'_, v8::Object>,
+) -> bool {
+    // V8 has already excluded Proxies and ordinary JS objects. Read only the
+    // native interface identity; author properties and prototypes are irrelevant.
+    let scope = std::pin::pin!(unsafe { v8::CallbackScope::new(object) });
+    let scope = &mut scope.init();
+    web_api_interfaces::DOMException::is_instance(scope, object)
+}
+
+fn build_dom_exception_instance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    interface: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // Use the cached interface template without invoking its public constructor.
+    // A plain Object with a DOMException prototype cannot reach V8's native hook.
+    let prototype = global_constructor_prototype(scope, interface)?;
+    let callback = scope
+        .get_current_context()
+        .get_slot::<crate::RealmCallbacks>()
+        .and_then(|callbacks| callbacks.new_interface_instance);
+    let object = callback
+        .and_then(|callback| callback(scope, interface))
+        .unwrap_or_else(|| fallback_dom_exception_instance(scope));
+    (object.set_prototype(scope, prototype.into()) == Some(true)).then_some(object)
+}
+
+struct DomExceptionFallbackTemplate(v8::Global<v8::ObjectTemplate>);
+
+fn bind_dom_exception_declaration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    interface: &str,
+    declaration: &impl moli_webapi_declare::WebApiObjectDeclaration<'s>,
+) -> v8::Local<'s, v8::Object> {
+    if let Some(object) = build_dom_exception_instance(scope, interface) {
+        declaration
+            .initialize(scope, object)
+            .expect("native exception declaration should initialize");
+        return object;
+    }
+
+    // Facade and standalone host contexts may not register this interface.
+    // Preserve their declaration/prototype policy, but allocate an API wrapper
+    // so the same native error classifier can recognize the result.
+    let object = fallback_dom_exception_instance(scope);
+    declaration
+        .bind_into(scope, object)
+        .expect("native exception declaration should bind");
+    object
+}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMException")]
@@ -534,22 +589,15 @@ fn websocket_error_declaration<'s>(
 
 /// Create exception data without inventing a construction or deserialization stack.
 pub fn build_dom_exception_object<'s>(
-
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Object> {
-    // The embedding resolver uses its canonical realm cache. It must not
-    // consult an author-controlled Window property, including after detach.
-    if let Some(prototype) = global_constructor_prototype(scope, "DOMException") {
-        let exception = v8::Object::new(scope);
-        initialize_dom_exception(scope, exception, message, name);
-        let _ = exception.set_prototype(scope, prototype.into());
-        return exception;
-    }
-    dom_exception_declaration(scope, message, name)
-        .bind(scope)
-        .expect("DOMException declaration should bind")
+    // Retained native methods can throw after their WindowProxy is detached,
+    // before DOMException was first exposed in that realm. Use its intrinsic
+    // template/prototype rather than looking up the detached WindowProxy.
+    let declaration = dom_exception_declaration(scope, message, name);
+    bind_dom_exception_declaration(scope, "DOMException", &declaration)
 }
 
 pub fn new_dom_exception_value<'s>(
@@ -690,9 +738,8 @@ pub fn build_quota_exceeded_error_object<'s>(
     quota: Option<f64>,
     requested: Option<f64>,
 ) -> v8::Local<'s, v8::Object> {
-    let exception = QuotaExceededErrorObjectDeclaration::new(v8_string(scope, message))
-        .bind(scope)
-        .expect("QuotaExceededError declaration should bind");
+    let declaration = QuotaExceededErrorObjectDeclaration::new(v8_string(scope, message));
+    let exception = bind_dom_exception_declaration(scope, "QuotaExceededError", &declaration);
     QuotaExceededErrorOptions { quota, requested }
         .initialize_snapshot(scope, exception)
         .expect("QuotaExceededError options");
@@ -729,9 +776,8 @@ pub fn new_websocket_error_value<'s>(
     reason: &str,
 ) -> v8::Local<'s, v8::Value> {
     let message = v8_string(scope, message);
-    let exception = websocket_error_declaration(scope, message, close_code, reason)
-        .bind(scope)
-        .expect("WebSocketError declaration should bind");
+    let declaration = websocket_error_declaration(scope, message, close_code, reason);
+    let exception = bind_dom_exception_declaration(scope, "WebSocketError", &declaration);
     capture_dom_exception_stack(scope, exception);
     exception.into()
 }
@@ -757,4 +803,21 @@ pub fn websocket_error_close_info<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
     Some((close_code, reason))
+}
+
+fn fallback_dom_exception_instance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> v8::Local<'s, v8::Object> {
+    let template = if let Some(template) = scope.get_slot::<DomExceptionFallbackTemplate>() {
+        v8::Local::new(scope, &template.0)
+    } else {
+        let template = v8::ObjectTemplate::new(scope);
+        template.set_internal_field_count(1);
+        let cached = v8::Global::new(scope, template);
+        scope.set_slot(DomExceptionFallbackTemplate(cached));
+        template
+    };
+    template
+        .new_instance(scope)
+        .expect("native exception fallback instance should allocate")
 }

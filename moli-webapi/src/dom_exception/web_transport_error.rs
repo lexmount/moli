@@ -159,8 +159,11 @@ pub fn build_web_transport_error_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: &WebTransportErrorClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    global_constructor_prototype(scope, "WebTransportError")?;
-    declaration(scope, payload)?.bind(scope).ok()
+    let object = build_dom_exception_instance(scope, "WebTransportError")?;
+    declaration(scope, payload)?
+        .initialize(scope, object)
+        .ok()?;
+    Some(object)
 }
 
 pub fn build_web_transport_error<'s>(

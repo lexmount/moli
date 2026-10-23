@@ -126,9 +126,7 @@ pub fn build_rtc_sdp_error<'s>(
     message: &str,
     line_number: i32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = ObjectDeclaration::new(v8_string(scope, message)?)
-        .bind(scope)
-        .ok()?;
+    let object = build_dom_exception_instance(scope, "RTCError")?;
     ErrorInit {
         error_detail: ErrorDetail::SdpSyntaxError,
         received_alert: None,
@@ -137,6 +135,9 @@ pub fn build_rtc_sdp_error<'s>(
         sent_alert: None,
     }
     .initialize_snapshot(scope, object)?;
+    ObjectDeclaration::new(v8_string(scope, message)?)
+        .initialize(scope, object)
+        .ok()?;
 
     capture_dom_exception_stack(scope, object);
     Some(object)

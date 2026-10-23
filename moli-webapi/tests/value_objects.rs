@@ -114,6 +114,7 @@ fn install_values(
     install_realm_callbacks(
         scope,
         RealmCallbacks {
+            new_interface_instance: None,
             call_function: None,
             is_window_named_properties_object: None,
             point_accessed: |_, _| {},
