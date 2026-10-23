@@ -331,20 +331,15 @@ fn matches_script_and_form_content_types() {
     assert!(!is_json_mime("text/json+blah"));
     assert!(!is_json_mime("image/json"));
 
-    assert!(is_media_source_type_supported(
-        "video/mp4; codecs=\"avc1.42E01E\""
-    ));
-    assert!(is_media_source_type_supported(
-        "Video/MP4; codecs=\"mp4a.40.2, avc1.64001f\""
-    ));
+    assert!(!media_source_available());
     assert!(!is_media_source_type_supported(
-        "video/mp4; codecs=\"hev1.1.6.L93.B0\""
+        "video/mp4; codecs=\"avc1.42E01E\""
     ));
     assert!(!is_media_source_type_supported(
         "video/webm; codecs=\"avc1.42E01E\""
     ));
     assert!(!is_media_source_type_supported(
-        "notvideo/mp4; codecs=\"avc1.42E01E\""
+        "video/webm; codecs=\"vp09.00.10.08\""
     ));
 }
 

@@ -183,7 +183,7 @@ fn zhihu_capability_probe_fixture_matches_stable_moli_baseline() {
     assert_eq!(value["touch"]["touchEvent"], "function");
     assert_eq!(value["touch"]["touchCtor"], "function");
     assert_eq!(value["mediaSource"]["MediaSourceType"], "function");
-    assert_eq!(value["mediaSource"]["avc1"], true);
+    assert_eq!(value["mediaSource"]["avc1"], false);
     assert_eq!(value["crypto"]["cryptoType"], "object");
     assert_eq!(value["crypto"]["getRandomValuesType"], "function");
     let sample = value["crypto"]["sample"]
@@ -416,7 +416,7 @@ fn zhihu_bot_detection_harness_fixture_matches_stable_moli_baseline() {
     assert_eq!(value["mediaSource"]["ctorType"], "function");
     assert_eq!(value["mediaSource"]["name"], "MediaSource");
     assert_eq!(value["mediaSource"]["staticName"], "isTypeSupported");
-    assert_eq!(value["mediaSource"]["avc1"], true);
+    assert_eq!(value["mediaSource"]["avc1"], false);
     assert_eq!(value["mediaSource"]["vp09"], false);
     assert_eq!(value["mediaSource"]["instanceOf"], true);
     assert_eq!(value["mediaSource"]["prototypeMatches"], true);

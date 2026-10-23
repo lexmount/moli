@@ -2147,6 +2147,47 @@ fn media_source_constructor_preserves_prototype_chain_and_static_surface() {
     );
 }
 #[test]
+fn media_source_support_claim_requires_an_operational_mse_surface() {
+    let mut vm = new_storage_test_vm("https://media-source-capability.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const types = [
+    'video/mp4; codecs="avc1.42E01E"',
+    'video/mp4; codecs="mp4a.40.2, avc1.640028"'
+  ];
+  globalThis.__mediaSourceCapabilityResult = 'pending';
+  const probes = types.map(contentType => ({
+    mediaSource: MediaSource.isTypeSupported(contentType),
+    decoding: navigator.mediaCapabilities.decodingInfo({
+      type: 'media-source',
+      video: { contentType, width: 1920, height: 1080, bitrate: 5000000, framerate: 30 }
+    }),
+    file: navigator.mediaCapabilities.decodingInfo({
+      type: 'file',
+      video: { contentType, width: 1920, height: 1080, bitrate: 5000000, framerate: 30 }
+    })
+  }));
+  Promise.all(probes.flatMap(probe => [probe.decoding, probe.file])).then(capabilities => {
+    globalThis.__mediaSourceCapabilityResult = JSON.stringify(probes.map((probe, index) => [
+      probe.mediaSource,
+      capabilities[index * 2].supported,
+      capabilities[index * 2 + 1].supported
+    ]));
+  });
+})()
+"#,
+    )
+    .expect("MediaSource capability coherence probe should evaluate");
+
+    assert_eq!(
+        vm.eval("String(globalThis.__mediaSourceCapabilityResult)")
+            .expect("MediaSource capability promises should settle"),
+        "[[false,false,true],[false,false,true]]"
+    );
+}
+#[test]
 fn media_source_is_type_supported_applies_webidl_conversion() {
     let mut vm = new_storage_test_vm("https://media-source-webidl.test/");
 
@@ -2183,7 +2224,7 @@ fn media_source_is_type_supported_applies_webidl_conversion() {
 
     assert_eq!(
         result,
-        "throw:TypeError|throw:TypeError|throw:RangeError|false|true|1"
+        "throw:TypeError|throw:TypeError|throw:RangeError|false|false|1"
     );
 }
 #[test]
