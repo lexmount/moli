@@ -8,12 +8,32 @@ use webidl::WebIdlDictionarySerialize;
 pub(super) struct PromiseRejectionInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
-    // The shared Promise converter retains actual Promises across realms and
-    // resolves other values; a then getter failure rejects that Promise.
-    #[webidl(required, converter = "raw")]
+    #[webidl(with = rejection_promise_member)]
     promise: v8::Local<'s, v8::Promise>,
     #[webidl(converter = "raw", snapshot_default = v8::undefined(scope).into())]
     reason: Option<v8::Local<'s, v8::Value>>,
+}
+
+fn rejection_promise_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Result<v8::Local<'s, v8::Promise>, webidl::WebIdlError> {
+    let context = webidl::Context::member("PromiseRejectionEventInit", name);
+    let value = webidl::property_result(scope, object, name, context)?
+        .filter(|value| !value.is_undefined())
+        .ok_or_else(|| webidl::WebIdlError::missing_required(context))?;
+    // Chromium preserves native Promise identity, including cross-realm values,
+    // and resolves other inputs with an intrinsic capability.
+    if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+        Ok(promise)
+    } else {
+        webidl::convert(
+            scope,
+            value,
+            webidl::Context::member("PromiseRejectionEventInit", name),
+        )
+    }
 }
 
 #[derive(webidl::WebIdlDictionary)]

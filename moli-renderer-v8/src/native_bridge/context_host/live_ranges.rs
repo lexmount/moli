@@ -1,6 +1,11 @@
 use super::*;
 
 impl JsContextHost {
+    #[cfg(test)]
+    pub(crate) fn live_ranges_is_empty(&mut self) -> bool {
+        self.range_record_registry.active_is_empty()
+    }
+
     pub(crate) fn needs_live_tree_boundary_updates(
         &mut self,
         mut removed_roots: impl Iterator<Item = DomHandle>,

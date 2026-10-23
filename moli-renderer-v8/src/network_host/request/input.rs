@@ -154,6 +154,7 @@ pub(crate) struct RequestInputSnapshot {
     pub(crate) priority: moli_fetch::FetchPriorityHint,
     pub(crate) duplex: String,
     pub(crate) body: Option<bytes::Bytes>,
+    pub(crate) has_stream_body: bool,
     pub(crate) body_unusable: bool,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) signal: Option<v8::Global<v8::Object>>,
@@ -247,6 +248,7 @@ fn request_input_snapshot_inner<'s>(
         keepalive,
         priority,
         duplex,
+        has_stream_body: body.is_none() && body_stream_object(scope, object).is_some(),
         body,
         body_unusable: false,
         headers,
@@ -319,6 +321,10 @@ fn request_input_snapshot_from_private_slots<'s>(
         keepalive,
         priority,
         duplex,
+        // A byte-backed Request also exposes a stream. Its immutable source,
+        // rather than the public stream, determines the Fetch body restrictions.
+        has_stream_body: body_stream_object(scope, object).is_some()
+            && network_body_source_from_object(scope, object).is_none(),
         body,
         body_unusable,
         headers,

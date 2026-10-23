@@ -1175,7 +1175,10 @@ fn window_scroll_callback<'s>(
         };
     // Conversion runs in the function's realm, before entering the receiver's
     // Window. A getter can scroll, remove or navigate that Window.
-    let Some(options) = crate::scroll_options::try_coordinates(scope, &args).map_err(|error| webidl::throw_error(scope, &error)).ok() else {
+    let Some(options) = crate::scroll_options::try_coordinates(scope, &args)
+        .map_err(|error| webidl::throw_error(scope, &error))
+        .ok()
+    else {
         return;
     };
     let promise = if let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) {

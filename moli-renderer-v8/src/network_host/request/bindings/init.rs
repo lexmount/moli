@@ -98,14 +98,15 @@ pub(super) fn request_initial_state<'s>(
     let body_stream = body
         .is_none()
         .then(|| {
-            input_object.filter(|input| is_branded_request_object(scope, *input))
+            input_object
+                .filter(|input| is_branded_request_object(scope, *input))
                 .and_then(|input| body_stream_object(scope, input))
                 .map(|stream| v8::Global::new(scope, stream))
         })
         .flatten();
     let inherited_body_stream = body_stream.is_some();
     let inherited_body_source = body_stream.as_ref().and_then(|_| {
-        let input = v8::Local::<v8::Object>::try_from(args.get(0)).ok()?;
+        let input = input_object?;
         network_body_source_from_object(scope, input).map(|source| v8::Global::new(scope, source))
     });
     let inherited_body_unusable = inherited
@@ -151,16 +152,22 @@ pub(super) fn apply_request_init_overrides<'s>(
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
     let validation = parsed.validation();
-    if let Some(mode) = validation.mode { state.mode = mode.as_ref().to_owned(); }
-    if let Some(cache) = parsed.cache { state.cache = cache.0.to_owned(); }
+    if let Some(mode) = validation.mode {
+        state.mode = mode.as_ref().to_owned();
+    }
+    if let Some(cache) = parsed.cache {
+        state.cache = cache.0.to_owned();
+    }
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
         state.method = normalize_fetch_request_method(&method)?;
     }
-    let init_body_stream = parsed.body
+    let init_body_stream = parsed
+        .body
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .filter(|object| crate::web_api_interfaces::ReadableStream::is_instance(scope, *object));
-    let body_from_init = parsed.body
+    let body_from_init = parsed
+        .body
         .filter(|_| init_body_stream.is_none())
         .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
         .transpose()?
