@@ -11,6 +11,7 @@ mod cache_query_init;
 mod chrome;
 mod clipboard_storage;
 mod console;
+mod container_queries;
 mod crypto_misc;
 mod crypto_subtle_aes;
 mod crypto_subtle_digest;
