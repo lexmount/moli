@@ -226,13 +226,15 @@ fn event_target_native_aliases_preserve_shared_world_targets_and_handler_state()
         });
         globalThis.navigationAlias = makeAlias(navigation);
         globalThis.signalAlias = makeAlias(mainSignal);
+        globalThis.mainEntry = navigation.currentEntry;
+        globalThis.entryAlias = makeAlias(mainEntry);
         true;
     "#,
     )
     .unwrap();
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let global = scope.get_current_context().global(scope);
-        for name in ["navigationAlias", "signalAlias"] {
+        for name in ["navigationAlias", "signalAlias", "entryAlias"] {
             let value = global
                 .get(scope, crate::util::v8str(scope, name).into())
                 .unwrap();
@@ -249,6 +251,8 @@ fn event_target_native_aliases_preserve_shared_world_targets_and_handler_state()
                 Object.getOwnPropertyDescriptor(navigation, 'onnavigate')],
             [mainSignal, signalAlias, 'abort', 'onabort',
                 Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'onabort')],
+            [mainEntry, entryAlias, 'dispose', 'ondispose',
+                Object.getOwnPropertyDescriptor(mainEntry, 'ondispose')],
         ];
         globalThis.mainHandlers = mainSpecs.map(([target, alias, type, slot, descriptor]) => {
             const handler = function(event) {
@@ -265,7 +269,9 @@ fn event_target_native_aliases_preserve_shared_world_targets_and_handler_state()
     vm.eval_in_isolated_context(isolated, r#"
         globalThis.worldFacts = [];
         globalThis.worldEvents = [];
-        globalThis.worldSpecs = [[navigation, 'navigate', 'onnavigate'], [worldSignal, 'abort', 'onabort']];
+        globalThis.worldEntry = navigation.currentEntry;
+        globalThis.worldSpecs = [[navigation, 'navigate', 'onnavigate'],
+            [worldSignal, 'abort', 'onabort'], [worldEntry, 'dispose', 'ondispose']];
         globalThis.worldHandlers = worldSpecs.map(([target, type, slot]) => {
             const record = function(event) {
                 worldEvents.push(event);
@@ -287,9 +293,9 @@ fn event_target_native_aliases_preserve_shared_world_targets_and_handler_state()
         event.pageOnly = 42;
         return [EventTarget.prototype.dispatchEvent.call(alias, event), event.defaultPrevented,
             event.target === target, event.currentTarget === null, event.composedPath().length === 0];
-    }))"#).unwrap(), "[[false,true,true,true,true],[false,true,true,true,true]]");
+    }))"#).unwrap(), "[[false,true,true,true,true],[false,true,true,true,true],[false,true,true,true,true]]");
     assert_eq!(vm.eval_in_isolated_context(isolated, r#"String(
-        worldFacts.length === 4 && worldFacts.every(row => row.every(Boolean)) &&
+        worldFacts.length === 6 && worldFacts.every(row => row.every(Boolean)) &&
         worldEvents.every(event => event.defaultPrevented && event.currentTarget === null &&
             event.composedPath().length === 0) && worldSpecs.every(([target, type, slot], index) => {
                 if (target[slot] !== worldHandlers[index]) return false;
@@ -303,9 +309,9 @@ fn event_target_native_aliases_preserve_shared_world_targets_and_handler_state()
         const event = new CustomEvent(type, {detail: 7, cancelable: true});
         event.pageOnly = 42;
         return EventTarget.prototype.dispatchEvent.call(alias, event) && !event.defaultPrevented;
-    }) && mainFacts.length === 4 && mainFacts.every(row => row.every(Boolean)) && aliasTraps === 0)"#).unwrap(), "true");
+    }) && mainFacts.length === 6 && mainFacts.every(row => row.every(Boolean)) && aliasTraps === 0)"#).unwrap(), "true");
     assert_eq!(
-        vm.eval_in_isolated_context(isolated, "String(worldFacts.length === 4)")
+        vm.eval_in_isolated_context(isolated, "String(worldFacts.length === 6)")
             .unwrap(),
         "true"
     );
@@ -328,5 +334,227 @@ fn event_target_native_aliases_preserve_shared_world_targets_and_handler_state()
         )
         .unwrap(),
         "[true,true,true,true]"
+    );
+    vm.eval(
+        r#"
+        globalThis.mainDisposeFacts = [];
+        mainEntry.ondispose = function(event) {
+            mainDisposeFacts.push(this === mainEntry, event.target === mainEntry,
+                event.currentTarget === mainEntry, event.isTrusted);
+        };
+        true;
+    "#,
+    )
+    .unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        globalThis.worldDisposeFacts = [];
+        worldEntry.ondispose = function(event) {
+            worldDisposeFacts.push(this === worldEntry, event.target === worldEntry,
+                event.currentTarget === worldEntry, event.isTrusted);
+        };
+        true;
+    "#,
+    )
+    .unwrap();
+    vm.eval("history.replaceState({}, '', '#disposed-entry')")
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(mainDisposeFacts)").unwrap(),
+        "[true,true,true,true]"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(worldDisposeFacts)")
+            .unwrap(),
+        "[true,true,true,true]"
+    );
+}
+
+#[test]
+fn fixed_event_dispatch_targets_are_receiver_local_with_shared_listeners() {
+    for fixed_first in [false, true] {
+        let mut vm = new_storage_html_test_vm("https://shared-dispatch-policy.test/");
+        vm.eval(
+            r#"
+            globalThis.owner = new EventTarget();
+            globalThis.wrapper = new EventTarget();
+            globalThis.ownerTarget = new EventTarget();
+            globalThis.wrapperTarget = new EventTarget();
+            globalThis.traps = 0;
+            globalThis.alias = new Proxy(wrapper, {
+                get() {traps++; throw Error('get trap');},
+                getPrototypeOf() {traps++; throw Error('prototype trap');}
+            });
+            true;
+        "#,
+        )
+        .unwrap();
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let object = |name| {
+                let value = global
+                    .get(scope, crate::util::v8str(scope, name).into())
+                    .unwrap();
+                v8::Local::<v8::Object>::try_from(value).unwrap()
+            };
+            let owner = object("owner");
+            let wrapper = object("wrapper");
+            let target = object("ownerTarget");
+            let proxy = v8::Local::<v8::Proxy>::try_from(object("alias")).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            if fixed_first {
+                crate::context_bootstrap::bind_dispatch_target(scope, owner, target);
+            }
+            crate::context_bootstrap::bind_shared_target(scope, owner, owner);
+            crate::context_bootstrap::bind_shared_target(scope, wrapper, owner);
+            if !fixed_first {
+                crate::context_bootstrap::bind_dispatch_target(scope, owner, target);
+            }
+            for target in [owner, wrapper] {
+                crate::context_bootstrap::install_simple_event_target_handlers(
+                    scope,
+                    target,
+                    &["onprobe"],
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+        vm.eval(r#"
+            globalThis.expectedTarget = ownerTarget;
+            globalThis.calls = [];
+            globalThis.otherCalls = 0;
+            for (const target of [ownerTarget, wrapperTarget])
+                target.addEventListener('probe', () => otherCalls++);
+            globalThis.observe = function(event) {
+                calls.push(this === expectedTarget && event.target === expectedTarget &&
+                    event.currentTarget === expectedTarget && event.composedPath()[0] === expectedTarget);
+            };
+            owner.addEventListener('probe', observe);
+            EventTarget.prototype.addEventListener.call(alias, 'probe', observe);
+            owner.onprobe = observe;
+            Object.getOwnPropertyDescriptor(wrapper, 'onprobe').set.call(alias, observe);
+            globalThis.checkDispatch = receiver => {
+                calls.length = 0;
+                const event = new Event('probe');
+                if (!EventTarget.prototype.dispatchEvent.call(receiver, event) ||
+                    calls.length !== 3 || !calls.every(Boolean) ||
+                    event.target !== expectedTarget || event.currentTarget !== null ||
+                    event.composedPath().length !== 0 || otherCalls !== 0)
+                    throw Error('shared listener storage / receiver dispatch policy');
+            };
+            checkDispatch(owner);
+            expectedTarget = wrapper;
+            checkDispatch(wrapper);
+            checkDispatch(alias);
+            true;
+        "#).unwrap();
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let wrapper = global
+                .get(scope, crate::util::v8str(scope, "alias").into())
+                .unwrap();
+            let target = global
+                .get(scope, crate::util::v8str(scope, "wrapperTarget").into())
+                .unwrap();
+            crate::context_bootstrap::bind_dispatch_target(
+                scope,
+                v8::Local::<v8::Object>::try_from(wrapper).unwrap(),
+                v8::Local::<v8::Object>::try_from(target).unwrap(),
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            vm.eval(
+                r#"(() => {
+            expectedTarget = wrapperTarget;
+            checkDispatch(wrapper);
+            checkDispatch(alias);
+            expectedTarget = ownerTarget;
+            checkDispatch(owner);
+            const handler = Object.getOwnPropertyDescriptor(wrapper, 'onprobe');
+            handler.set.call(alias, null);
+            if (owner.onprobe !== observe || handler.get.call(wrapper) !== null) return false;
+            EventTarget.prototype.removeEventListener.call(alias, 'probe', observe);
+            calls.length = 0;
+            owner.dispatchEvent(new Event('probe'));
+            return calls.length === 1 && calls[0] && traps === 0;
+        })()"#
+            )
+            .unwrap(),
+            "true",
+            "fixed_first={fixed_first}"
+        );
+    }
+}
+
+#[test]
+fn model_context_native_aliases_project_shared_listener_targets_into_worlds() {
+    let mut vm = new_storage_html_test_vm("https://model-context-native-worlds.test/");
+    vm.eval(
+        r#"
+        globalThis.model = document.modelContext;
+        globalThis.traps = 0;
+        globalThis.alias = new Proxy(model, {
+            get() {traps++; throw Error('get trap');},
+            getPrototypeOf() {traps++; throw Error('prototype trap');}
+        });
+        true;
+    "#,
+    )
+    .unwrap();
+    let isolated = vm
+        .create_isolated_world("native-model-context", false)
+        .unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        globalThis.model = document.modelContext;
+        globalThis.facts = [];
+        model.addEventListener('probe', function(event) {
+            facts.push(this === model && event.target === model &&
+                event.currentTarget === model && event.composedPath()[0] === model &&
+                event instanceof CustomEvent && event.detail === 7 && event.pageOnly === undefined);
+            event.preventDefault();
+        }, {once: true});
+        true;
+    "#,
+    )
+    .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let value = global
+            .get(scope, crate::util::v8str(scope, "alias").into())
+            .unwrap();
+        moli_webapi_declare::register_web_api_proxy(
+            scope,
+            v8::Local::<v8::Proxy>::try_from(value).unwrap(),
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        const facts = [];
+        function listener(event) {
+            facts.push(this === model && event.target === model && event.currentTarget === model &&
+                event.composedPath()[0] === model && event.pageOnly === 42);
+        }
+        const {addEventListener: add, removeEventListener: remove, dispatchEvent: dispatch} = EventTarget.prototype;
+        add.call(alias, 'probe', listener);
+        model.addEventListener('probe', listener);
+        const event = new CustomEvent('probe', {detail: 7, cancelable: true});
+        event.pageOnly = 42;
+        if (dispatch.call(alias, event) || !event.defaultPrevented || event.target !== model ||
+            event.currentTarget !== null || event.composedPath().length !== 0) return false;
+        remove.call(alias, 'probe', listener);
+        return model.dispatchEvent(new Event('probe')) && facts.length === 1 && facts[0] && traps === 0;
+    })()"#).unwrap(), "true");
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+            .unwrap(),
+        "[true]"
     );
 }

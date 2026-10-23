@@ -1,6 +1,9 @@
 //! Resolve object-backed EventTarget identities independently of realm projection.
 //! Shared wrappers retain one listener list and one dispatch state, while each
 //! wrapper keeps its own EventHandler properties and callback realms.
+//! A fixed dispatch target belongs to the native receiver, independently of
+//! its listener owner. Sharing a registry never inherits another receiver's
+//! fixed target; registered native Proxies use their backing receiver's policy.
 
 use super::{history_runtime::native, media_queries};
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
@@ -50,6 +53,9 @@ pub(super) fn resolve_event_target<'s>(
     })
 }
 
+/// Set this native receiver's logical dispatch target. Shared wrappers keep
+/// their own policy, regardless of the order of this and `bind_shared_target`.
+/// Bind each receiver explicitly if several wrappers need the same fixed target.
 pub(crate) fn bind_dispatch_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -79,7 +85,9 @@ pub(super) fn shared_target_owner<'s>(
     get_private_object(scope, target, OWNER).unwrap_or(target)
 }
 
-pub(super) fn bind_shared_target<'s>(
+/// Share listener storage and register the wrapper for realm projection.
+/// This does not copy or inherit the owner's fixed dispatch target or handlers.
+pub(crate) fn bind_shared_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     wrapper: v8::Local<'s, v8::Object>,
     owner: v8::Local<'s, v8::Object>,

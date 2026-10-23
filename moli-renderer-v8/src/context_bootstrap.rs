@@ -98,7 +98,7 @@ mod platform_object_worlds;
 mod session_history;
 mod shared_event_targets;
 #[cfg(test)]
-pub(crate) use shared_event_targets::bind_dispatch_target;
+pub(crate) use shared_event_targets::{bind_dispatch_target, bind_shared_target};
 mod world_wrappers;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
