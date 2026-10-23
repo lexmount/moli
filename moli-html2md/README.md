@@ -64,20 +64,27 @@ and cell line breaks and paragraph boundaries use inline `<br>` tags. Attribute
 newlines are encoded or normalized so they cannot break a table row. GFM supplies
 missing trailing cells in short rows; the converter does not allocate a padded grid.
 
-Tables with `role="presentation"` or `role="none"` retain ordinary block expansion,
-in DOM order with blank lines between cells, even when structurally simple. Role
-matching ignores ASCII case and surrounding HTML whitespace. The same fallback
-applies to complex tables: non-unit spans, multiple `thead` rows, rows wider than
-an explicit header, or cells containing nested tables, lists, headings, quotes
-or preformatted blocks. Inner simple tables can still produce GFM when their
-containing layout table is expanded. Other roles, borders and CSS do not select
-another conversion path. Complex layouts remain readable blocks instead of raw
-HTML tables.
+Tables with `role="presentation"` or `role="none"` retain ordinary block
+expansion, in DOM order with blank lines between cells, even when structurally
+simple. Role matching ignores ASCII case and surrounding HTML whitespace. Nested
+layout wrappers expand into readable blocks. Tables with header cells, captions,
+explicit data roles, header relationships or real cell spans retain their
+authored structure. These tables use content-only HTML for non-unit spans,
+multiple `thead` rows, rows wider than an explicit header, or cells containing
+nested tables, lists, headings, quotes or preformatted blocks. This retains
+header, cell and nested-table associations that Markdown pipe tables cannot
+express. Inner simple tables can still produce GFM when a presentational or
+layout-only containing table is expanded. Scripts, styles and event handlers are
+omitted from HTML fallback output.
 
 Supported output includes headings, paragraphs, emphasis, strikethrough, links,
-images, lists, blockquotes, hard breaks, media source links, readable form values,
-separated form choices, and fenced code. Inline HTML is used when
+images, lists, blockquotes, hard breaks, media source links, separated form choices,
+readable form values, and fenced code. Inline HTML is used when
 Markdown delimiters cannot express an emphasis boundary.
+Superscripts and subscripts retain their HTML markers. Complete author-supplied
+TeX spans retain their commands and indices. Native MathML retains mathematical
+markup and presentation attributes, with alternate annotations omitted, so
+fractions, roots, matrices and powers do not collapse into ambiguous plain text.
 Script/style/head/noscript/template subtrees are omitted.
 
 `max_depth` counts the supplied root as depth zero; nodes at or beyond the limit
@@ -90,8 +97,10 @@ spaces and blank lines. Empty blocks still separate surrounding text.
 
 This is a structural content dump. It omits non-rendered serialized state blobs
 but retains content in collapsed panels and inactive tabs. It does not evaluate
-stylesheets, layout, or JavaScript, and cannot preserve all HTML presentation (for example, arbitrary
-ordered-list numbering or table spanning). DOM snapshots used by Moli's optional
+stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
+through the optional DOM query. The converter
+cannot preserve all HTML presentation (for example, arbitrary ordered-list numbering).
+DOM snapshots used by Moli's optional
 strip/base/frame transformations remain the responsibility of the caller.
 
 ## Verification
@@ -99,16 +108,16 @@ strip/base/frame transformations remain the responsibility of the caller.
 `cargo test -p moli-html2md` covers an independent arena DOM, immutability,
 whitespace, escaping, code, tables, depth limits, and 20,000 nested nodes on a
 64 KiB thread stack. The [Turndown differential suite](tests/turndown/README.md)
-pins 147 upstream fixtures and 50 additional cases. It compares rendered meaning,
-checks DOM immutability, and explicitly asserts 13 documented differences that
-preserve Moli's handling of literal text, code, emphasis, and list boundaries.
-Targeted regressions also cover empty elements, links, attributes in headings and
-tables, code whitespace and language names, list numbering, and loose lists.
-An operation-count regression checks nested table fallback at 64, 128 and 256
-levels with 256 text bytes per level, both with and without headers. It bounds
-bytes copied during fragment materialization by output size; completed blocks
-move into parent buffers without copying their text. A repeated flatten/copy
-regression fails without timing thresholds.
+pins 147 upstream fixtures and 50 additional cases. It compares rendered
+meaning, checks DOM immutability, and explicitly asserts 13 documented
+differences that preserve Moli's handling of literal text, code, emphasis, and
+list boundaries. Targeted regressions also cover empty elements, links,
+attributes in headings and tables, code whitespace and language names, list
+numbering, and loose lists. An operation-count regression checks nested table
+fallback at 64, 128 and 256 levels with 256 text bytes per level, both with and
+without headers. It bounds bytes copied during fragment materialization by
+output size; completed blocks move into parent buffers without copying their
+text. A repeated flatten/copy regression fails without timing thresholds.
 Dropping 20,000 nested fragments is also tested on a 64 KiB thread stack.
 Emphasis tests cover adjacent links that can use Markdown delimiters and
 intraword link boundaries that still require inline HTML.
@@ -133,10 +142,15 @@ JavaScript and inline HTML document URLs are excluded.
 
 SVG title children are tooltip metadata, not body text. They supply a name only
 when an SVG has no emitted content; title elements outside SVG are omitted.
-Author-supplied TeX keeps its commands across transparent inline wrappers.
-MathML and superscript/subscript retain their structure; alternate visual copies
-do not duplicate an equation. Code omits embedded copy controls and scripts.
+Code omits embedded copy controls and scripts.
 
 Backslash-delimited inline TeX becomes inline dollar math. Invisible separators
 keep adjacent formulas distinct across empty wrappers. They also separate a
 closing `$` from an immediately following digit, which some math readers require.
+
+Linked preformatted source retains HTML when needed to keep link and line-anchor
+positions. Its language marker and physical newlines are preserved; a standalone
+`pre` HTML block accepts blank lines. Complex HTML tables use physical row and
+cell boundaries without blank lines. Plain heading wrappers remain Markdown
+headings. Captured headings, list items and quotations contain their own fragment
+targets rather than appending them to the preceding block.

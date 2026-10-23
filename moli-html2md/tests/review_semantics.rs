@@ -23,6 +23,12 @@ impl moli_html2md::Dom for Counted {
     fn attribute(&self, node: usize, name: &str) -> Option<&str> {
         self.tree.attribute(node, name)
     }
+    fn has_block_layout(&self, node: usize) -> bool {
+        self.tree.attribute(node, "style") == Some("display:block")
+    }
+    fn has_text_boundary(&self, node: usize) -> bool {
+        self.tree.attribute(node, "style") == Some("display:inline-block")
+    }
 }
 
 fn markdown(html: &str) -> String {
@@ -113,6 +119,58 @@ fn formulas_keep_their_order_across_output_boundaries() {
             .unwrap_or_else(|| panic!("missing {item}: {result}"));
         end += start + item.len();
     }
+}
+
+#[test]
+fn code_controls_are_omitted_in_both_markdown_and_html_paths() {
+    for source in [
+        "<pre><code>run();<a href='/api'>call()</a><button>Copy</button></code></pre>",
+        "<table><tr><td colspan='2'><pre><code>run();<a href='/api'>call()</a><button>Copy</button></code></pre></td></tr></table>",
+    ] {
+        let result = markdown(source);
+        assert!(result.contains("run();"), "{result}");
+        assert!(result.contains("call()"), "{result}");
+        assert!(result.contains("/api"), "{result}");
+        assert!(!result.contains("Copy"), "{result}");
+    }
+}
+
+#[test]
+fn referenced_targets_do_not_turn_presentational_tables_into_data_tables() {
+    let result = markdown(
+        "<a href='#details'>Details</a><table role='presentation' id='details'>\
+         <tr><td><h2>Heading</h2></td><td>Content</td></tr></table>",
+    );
+    assert!(!result.contains("<table"), "{result}");
+    assert!(result.contains("id=\"details\""), "{result}");
+    assert!(result.contains("Heading"), "{result}");
+    assert!(result.contains("Content"), "{result}");
+}
+
+#[test]
+fn anchored_nested_tables_keep_linear_dom_work() {
+    let count = |depth| {
+        let source = format!(
+            "<a href='#target'>Target</a>{}<span id='target'>Value</span>{}",
+            "<table><tr><td>".repeat(depth),
+            "</td></tr></table>".repeat(depth)
+        );
+        let dom = Counted {
+            tree: Tree::parse(&source),
+            visits: Cell::new(0),
+        };
+        let result = moli_html2md::Converter::new(moli_html2md::Options {
+            max_depth: usize::MAX,
+            ..Default::default()
+        })
+        .convert(&dom, dom.tree.root);
+        assert!(result.contains("id=\"target\""), "{result}");
+        assert_eq!(result.matches("Value").count(), 1);
+        dom.visits.get()
+    };
+    let small = count(32);
+    let large = count(128);
+    assert!(large <= small * 5, "{small} -> {large}");
 }
 
 #[test]
@@ -564,4 +622,340 @@ fn math_boundaries_survive_empty_wrappers_and_coalesced_styles() {
                 .any(|e| matches!(e, Event::InlineMath(_)))
         );
     }
+}
+
+#[test]
+fn invalid_and_default_cell_spans_keep_simple_tables_in_markdown() {
+    for attr in ["colspan", "rowspan"] {
+        for value in ["", "invalid", "-2", "1", " 1 ", "+1", "1tail"] {
+            let result = markdown(&format!(
+                "<table><tr><th>A</th><th>B</th></tr><tr><td {attr}='{value}'>X</td><td>Y</td></tr></table>"
+            ));
+            assert!(!result.contains("<table"), "{attr}={value}: {result}");
+            assert!(result.contains("X") && result.contains("Y"), "{result}");
+        }
+    }
+    for attr in ["rowspan='0'", "colspan='2'", "rowspan='2'"] {
+        let result = markdown(&format!(
+            "<table><tr><td {attr}>Merged</td><td>Next</td></tr></table>"
+        ));
+        assert!(result.contains("<table"), "{attr}: {result}");
+    }
+}
+
+#[test]
+fn html_media_omits_empty_posters_and_redundant_css_wrappers() {
+    let result = markdown(
+        "<table><tr><td colspan='2'><video src='/movie.mp4' poster=''></video></td></tr></table>",
+    );
+    assert!(result.contains("movie.mp4"), "{result}");
+    assert!(!result.contains("<img"), "{result}");
+}
+
+#[test]
+fn html_keeps_css_boundaries_without_wrapping_existing_block_tags() {
+    let dom = Counted {
+        tree: Tree::parse(
+            "<table style='display:block'><tr><td colspan='2' style='display:block'><p style='display:block'>Paragraph</p><span style='display:block'>Box</span></td></tr></table>",
+        ),
+        visits: Cell::new(0),
+    };
+    let result = convert(&dom, dom.tree.root);
+    assert!(!result.starts_with("<div>"), "{result}");
+    assert!(!result.contains("<div><p"), "{result}");
+    assert!(result.contains("<div>Box</div>"), "{result}");
+}
+
+#[test]
+fn complex_layouts_expand_but_semantic_data_tables_keep_cell_structure() {
+    let result = markdown(
+        "<table><tr><td><h2>Article</h2><table><tr><td>First story</td></tr><tr><td>Second story</td></tr></table></td></tr></table>",
+    );
+    assert!(!result.contains("<table"), "{result}");
+    for text in ["## Article", "First story", "Second story"] {
+        assert!(result.contains(text), "{result}");
+    }
+    for source in [
+        "<table><tr><th>Name</th><th>Items</th></tr><tr><td>Ada</td><td><ul><li>One</li><li>Two</li></ul></td></tr></table>",
+        "<table><caption>Results</caption><tr><td rowspan='2'>A</td><td>B</td></tr><tr><td>C</td></tr></table>",
+    ] {
+        let result = markdown(source);
+        assert!(result.contains("<table"), "{result}");
+    }
+}
+
+#[test]
+fn linked_preformatted_source_keeps_language_lines_and_links() {
+    let result = markdown(
+        "<pre><code class='language-rust'>let x = <a href='/type'>Type</a>;\n\nlet y = x &amp; 1;\n</code></pre>",
+    );
+    assert!(result.contains("language-rust"), "{result}");
+    assert!(result.contains("\n\nlet y"), "{result}");
+    assert!(result.contains("href=\"/type\""), "{result}");
+    assert!(!result.contains("&#10;"), "{result}");
+}
+
+#[test]
+fn component_heading_wrappers_remain_markdown_headings() {
+    let result = markdown(
+        "<h2><div>Title <span>text</span></div></h2><h3><a href='/story'><div>Story</div></a></h3>",
+    );
+    assert_eq!(result, "## Title text\n\n### [Story](/story)");
+}
+
+#[test]
+fn referenced_targets_belong_to_their_captured_blocks() {
+    let result = markdown(
+        "<a href='#second'>Second</a><a href='#title'>Title</a><a href='#quote'>Quote</a><ul><li>Alpha</li><li id='second'>Beta</li></ul><h2 id='title'>Heading</h2><blockquote id='quote'>Quoted text</blockquote>",
+    );
+    let html = rendered_html(&result);
+    assert!(
+        html.contains("<li><a id=\"second\"></a>Beta</li>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<h2><a id=\"title\"></a>Heading</h2>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<blockquote>\n<p><a id=\"quote\"></a>Quoted text</p>"),
+        "{html}"
+    );
+}
+
+#[test]
+fn nested_heading_wrappers_have_linear_work_and_keep_every_title() {
+    let count = |depth| {
+        let html = format!(
+            "{}Title{}",
+            "<h2><div>".repeat(depth),
+            "</div></h2>".repeat(depth)
+        );
+        let dom = Counted {
+            tree: Tree::parse(&html),
+            visits: Cell::new(0),
+        };
+        let result = convert(&dom, dom.tree.root);
+        assert_eq!(result.matches("Title").count(), 1, "{result}");
+        dom.visits.get()
+    };
+    let small = count(20);
+    let large = count(80);
+    assert!(large <= small * 5, "{small} -> {large}");
+}
+
+#[test]
+fn table_and_code_root_targets_exist_once_in_every_output_shape() {
+    for element in [
+        "<table id='target'><tr><td>a</td><td>b</td></tr></table>",
+        "<table id='target'><tr><td><h2>Article</h2><p>Body</p></td></tr></table>",
+        "<table id='target'><caption>Data</caption><tr><td colspan='2'>Body</td></tr></table>",
+        "<pre id='target'>source</pre>",
+        "<code id='target'>source</code>",
+    ] {
+        let result = markdown(&format!("<a href='#target'>Go</a>{element}"));
+        assert_eq!(result.matches("id=\"target\"").count(), 1, "{result}");
+        assert!(result.contains("#target"), "{result}");
+    }
+    let result = markdown(
+        "<a href='#keep'>Go</a><table id='unused'><caption>Data</caption><tr><td id='keep'><pre id='noise'><span id='L2'>Line</span><a name='obsolete'>link</a></pre></td></tr></table>",
+    );
+    assert_eq!(result.matches("id=\"keep\"").count(), 1, "{result}");
+    for unwanted in ["unused", "noise", "L2", "obsolete"] {
+        assert!(!result.contains(unwanted), "{result}");
+    }
+}
+
+#[test]
+fn linked_source_roundtrips_punctuation_leading_lines_and_default_language() {
+    use moli_html2md::{Converter, Options};
+    let source =
+        "<pre>\n\nfn new_from_iter&lt;I&gt;(v: &amp;[T]) { *x }\n<a href='/ref'>name</a>\n</pre>";
+    let dom = Tree::parse(source);
+    let result = Converter::new(Options {
+        default_code_language: Some("rust".into()),
+        ..Options::default()
+    })
+    .convert(&dom, dom.root);
+    assert!(result.contains("language-rust"), "{result}");
+    for entity in ["&#95;", "&#42;", "&#91;"] {
+        assert!(!result.contains(entity), "{result}");
+    }
+    let rendered = Tree::parse(&rendered_html(&result));
+    let text = |tree: &Tree| {
+        tree.nodes
+            .iter()
+            .filter_map(|n| n.text.as_deref())
+            .collect::<String>()
+    };
+    assert_eq!(text(&rendered), text(&dom), "{result}");
+}
+
+#[test]
+fn merged_headerless_data_is_preserved_without_treating_empty_hints_as_headers() {
+    let result =
+        markdown("<table><tr><td rowspan='2'>Group</td><td>A</td></tr><tr><td>B</td></tr></table>");
+    assert!(result.contains("rowspan=\"2\""), "{result}");
+    let result = markdown("<table><tr><td scope='' headers=' '><h2>Article</h2></td></tr></table>");
+    assert_eq!(result, "## Article");
+    let result = markdown(
+        "<table><caption>Resources</caption><tr><td colspan='2'><video poster='/cover.jpg'></video><img src='' aria-label='Home'></td></tr></table>",
+    );
+    assert!(result.contains("/cover.jpg"), "{result}");
+    assert!(result.contains("Home"), "{result}");
+}
+
+#[test]
+fn fallback_targets_and_media_preserve_navigation_without_duplicate_ids() {
+    for html in [
+        "<a href='#fig'>F</a><table><caption>C</caption><tr><td><img id='fig' src='/a.png' alt='Chart' title='Details'></td></tr></table>",
+        "<a href='#note'>N</a><table><caption>C</caption><tr><td><textarea id='note'>x</textarea></td></tr></table>",
+        "<a href='#x'>X</a><p id='x'>P</p><table><caption>C</caption><tr><td id='x'>Cell</td></tr></table>",
+    ] {
+        let output = markdown(html);
+        let target = if html.contains("#fig") {
+            "fig"
+        } else if html.contains("#note") {
+            "note"
+        } else {
+            "x"
+        };
+        assert_eq!(
+            output.matches(&format!("id=\"{target}\"")).count(),
+            1,
+            "{output}"
+        );
+        if target == "fig" {
+            assert!(output.contains("title=\"Details\""), "{output}");
+        }
+    }
+    let output = markdown(
+        "<a href='#one'>1</a><a href='#two'>2</a><table><caption>C</caption><tr><td><a id='one' name='two' href='/x'>linked text</a><span id='unreferenced'>plain</span><video poster=' ' src='/v.mp4'></video></td></tr></table>",
+    );
+    let html = rendered_html(&output);
+    assert_eq!(output.matches("id=\"two\"").count(), 1, "{output}");
+    assert!(
+        output.find("id=\"two\"").unwrap() < output.find("href=\"/x\"").unwrap(),
+        "{output}"
+    );
+
+    assert!(
+        html.contains("href=\"/x\" id=\"one\">linked text</a>"),
+        "{html}"
+    );
+    assert!(
+        !output.contains("<span>plain") && !output.contains("<img"),
+        "{output}"
+    );
+    for span in ["", "colspan='2'"] {
+        let output = markdown(&format!(
+            "<table><caption>C</caption><tr><td {span}><video poster='/cover.jpg' src='blob:id'><a href='/v.mp4'>Download</a></video></td></tr></table>"
+        ));
+        let html = rendered_html(&output);
+        assert!(
+            html.contains("/cover.jpg") && html.contains("href=\"/v.mp4\""),
+            "{output}"
+        );
+    }
+}
+
+#[test]
+fn computed_boundaries_supplement_structure_without_rewriting_code() {
+    for (source, expected) in [
+        (
+            "<ul><li style='display:block'>A</li><li style='display:block'>B</li></ul>",
+            "- A\n- B",
+        ),
+        (
+            "<ul><li><a href='/a' style='display:block'>A</a></li><li><span style='display:block'>B</span></li></ul>",
+            "- [A](/a)\n- B",
+        ),
+        (
+            "<select><option style='display:block'>A</option><option style='display:block'>B</option></select>",
+            "A\nB",
+        ),
+    ] {
+        let dom = Counted {
+            tree: Tree::parse(source),
+            visits: Cell::new(0),
+        };
+        assert_eq!(convert(&dom, dom.tree.root), expected, "{source}");
+    }
+    for layout in ["display:inline-block", "display:block"] {
+        let source = format!(
+            "<pre><code>let v = <span style='{layout}'>f</span>(<a href='/doc'>x</a>);</code></pre>"
+        );
+        let dom = Counted {
+            tree: Tree::parse(&source),
+            visits: Cell::new(0),
+        };
+        let result = convert(&dom, dom.tree.root);
+        assert!(
+            result.contains("let v = f(<a href=\"/doc\">x</a>);"),
+            "{result}"
+        );
+        assert!(!result.contains("<div>"), "{result}");
+    }
+}
+
+#[test]
+fn role_tokens_use_html_spaces_and_media_names_prefer_accessible_labels() {
+    for role in ["presentation", "none"] {
+        let source = format!(
+            "<table role='\u{a0}{role}\u{a0}'><tr><th>H</th></tr><tr><td colspan='2'>X</td></tr></table>"
+        );
+        assert!(markdown(&source).contains("<table>"));
+    }
+    for tag in ["audio", "video", "iframe"] {
+        let result = markdown(&format!(
+            "<{tag} src='/media' title='Tooltip' aria-label='Description'></{tag}>"
+        ));
+        assert!(result.contains("[Description](/media)"), "{result}");
+    }
+}
+
+#[test]
+fn independent_inline_boxes_request_spaces_through_the_adapter_contract() {
+    let dom = Counted {
+        tree: Tree::parse(
+            "<span style='display:inline-block'>A</span><span style='display:inline-block'>B</span>",
+        ),
+        visits: Cell::new(0),
+    };
+    assert_eq!(convert(&dom, dom.tree.root), "A B");
+}
+
+#[test]
+fn fallback_keeps_code_boxes_and_ignores_column_boxes() {
+    for (style, expected) in [
+        ("display:inline-block", "run <code>ls</code> now"),
+        ("display:block", "run<div><code>ls</code></div>now"),
+    ] {
+        let source = format!(
+            "<table><caption>C</caption><colgroup style='display:block'><col style='display:block'></colgroup><tr><td colspan='2'>run<code style='{style}'>ls</code>now</td></tr></table>"
+        );
+        let dom = Counted {
+            tree: Tree::parse(&source),
+            visits: Cell::new(0),
+        };
+        let result = convert(&dom, dom.tree.root);
+        assert!(result.contains(expected), "{result}");
+        assert_eq!(
+            result.matches("<div>").count(),
+            usize::from(style == "display:block"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn content_after_a_nested_list_can_make_the_outer_list_loose() {
+    assert_eq!(
+        markdown("<ul><li>a<ul><li>b</li></ul>c</li><li>d</li></ul>"),
+        "- a\n  - b\n\n  c\n\n- d"
+    );
+    assert_eq!(
+        markdown("<ul><li>a<ul><li>b</li></ul></li><li>d</li></ul>"),
+        "- a\n  - b\n- d"
+    );
 }
