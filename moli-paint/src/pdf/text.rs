@@ -139,6 +139,14 @@ pub(super) fn draw(
         .map(|v| skrifa::instance::NormalizedCoord::from_bits(*v))
         .collect();
     let metrics = face.glyph_metrics(skrifa::instance::Size::new(font_size), coords.as_slice());
+    // Parley/glifo embolden is in font units; PDF stroke widths are pixels.
+    let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0) * font_size
+        / f32::from(
+            face.head()
+                .map_err(|error| PdfError::Encoding(error.to_string()))?
+                .units_per_em()
+                .max(1),
+        );
     let mut batches: Vec<(bool, Vec<usize>)> = Vec::new();
     let mut start = 0;
     while start < run.glyphs.len() {
@@ -187,7 +195,7 @@ pub(super) fn draw(
                 * Affine::skew(-skew as f64, 0.0);
             let local = glyph_matrix
                 .transform_rect_bbox(local)
-                .inflate(run.glyph_embolden.x as f64, run.glyph_embolden.y as f64);
+                .inflate(f64::from(embolden), f64::from(embolden));
             bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));
         }
         let bounds = bounds.unwrap().intersect(clip);
@@ -263,7 +271,6 @@ pub(super) fn draw(
                 }
             })
             .collect();
-        let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
         // `-webkit-text-stroke`: a separate stroke-only pass, before or after
         // the fill per `paint-order`. Only the first drawn pass carries the
         // searchable text; the other is emitted as outlines.

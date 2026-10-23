@@ -500,3 +500,30 @@ fn text_stroke_is_exported_as_a_pdf_stroke_with_one_semantic_copy() {
         }));
     }
 }
+
+#[test]
+fn text_stroke_pdf_embolden_scales_font_units_to_pixels() {
+    let mut snapshot = snapshot();
+    let mut run = text(&mut snapshot, "Bold", 35.0, false);
+    let data = &snapshot.font(run.font).unwrap().font;
+    use skrifa::raw::TableProvider;
+    let face = skrifa::FontRef::from_index(data.data.as_ref(), data.index).unwrap();
+    let upem = f32::from(face.head().unwrap().units_per_em());
+    run.glyph_embolden = moli_layout::PaintPoint::new(upem / run.font_size, upem / run.font_size);
+    run.stroke = Some(moli_layout::PaintTextStroke {
+        width: 2.0,
+        color: PaintColor::BLACK,
+        paint_first: false,
+    });
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    let doc = document(&snapshot, &options());
+    assert_eq!(extracted(&doc, &[1]), "Bold");
+    assert!(content_operations(&doc).iter().any(|op| {
+        op.operator == "w"
+            && op
+                .operands
+                .first()
+                .and_then(|o| o.as_float().ok())
+                .is_some_and(|width| (width - 4.0).abs() < 0.001)
+    }));
+}
