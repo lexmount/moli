@@ -85,6 +85,45 @@ pub(super) fn paint_glyph_run(
     };
     let glyph_transform = backend_glyph_transform(run.glyph_skew_radians);
     let glyph_embolden = backend_glyph_embolden(run.glyph_embolden);
+    let transform = device_transform(run.transform, scale);
+    let glyphs = || {
+        run.glyphs.iter().map(|glyph| anyrender::Glyph {
+            id: glyph.id,
+            x: glyph.x,
+            y: glyph.y,
+        })
+    };
+    let stroke = run.stroke.and_then(|stroke| {
+        let width = finite_nonnegative(stroke.width);
+        (width > 0.0 && stroke.color.alpha > 0.0).then_some((stroke, width))
+    });
+    // `-webkit-text-stroke` is centered on the glyph outline. The backend's
+    // stroked glyph path does not take an embolden amount, so synthetic bold
+    // widens the stroke by the outline expansion instead (the same model the
+    // PDF backend uses for emboldened fills).
+    let paint_stroke = |scene: &mut _| {
+        if let Some((stroke, width)) = stroke {
+            let embolden = glyph_embolden.x.max(glyph_embolden.y).max(0.0);
+            PaintScene::draw_glyphs(
+                scene,
+                &font.font,
+                run.font_size,
+                false,
+                &run.normalized_coords,
+                Vec2::ZERO,
+                &Stroke::new(f64::from(width) + 2.0 * embolden),
+                to_backend_color(stroke.color),
+                1.0,
+                transform,
+                glyph_transform,
+                glyphs(),
+            );
+        }
+    };
+    let stroke_first = stroke.is_some_and(|(stroke, _)| stroke.paint_first);
+    if stroke_first {
+        paint_stroke(scene);
+    }
     scene.draw_glyphs(
         &font.font,
         run.font_size,
@@ -94,14 +133,13 @@ pub(super) fn paint_glyph_run(
         Fill::NonZero,
         to_backend_color(color),
         1.0,
-        device_transform(run.transform, scale),
+        transform,
         glyph_transform,
-        run.glyphs.iter().map(|glyph| anyrender::Glyph {
-            id: glyph.id,
-            x: glyph.x,
-            y: glyph.y,
-        }),
+        glyphs(),
     );
+    if !stroke_first {
+        paint_stroke(scene);
+    }
 }
 
 pub(super) fn paint_text_decoration(

@@ -53,6 +53,7 @@ fn text(snapshot: &mut PaintSnapshot, text: &str, baseline: f32, cjk: bool) -> P
             clusters,
         }),
         transform: PaintTransform2D::IDENTITY,
+        stroke: None,
     }
 }
 fn document(snapshot: &PaintSnapshot, options: &PdfOptions) -> lopdf::Document {
@@ -456,4 +457,46 @@ fn pdf_rejects_nonfinite_image_repeat_bounds() {
         pdf_snapshot(&snapshot, &options()),
         Err(PdfError::Encoding(_))
     ));
+}
+
+fn content_operations(doc: &lopdf::Document) -> Vec<lopdf::content::Operation> {
+    doc.objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .map(|stream| {
+            stream
+                .decompressed_content()
+                .unwrap_or_else(|_| stream.content.clone())
+        })
+        .filter_map(|bytes| lopdf::content::Content::decode(&bytes).ok())
+        .flat_map(|content| content.operations)
+        .collect()
+}
+
+#[test]
+fn text_stroke_is_exported_as_a_pdf_stroke_with_one_semantic_copy() {
+    for paint_first in [false, true] {
+        let mut snapshot = snapshot();
+        let mut run = text(&mut snapshot, "Stroke", 35.0, false);
+        run.stroke = Some(moli_layout::PaintTextStroke {
+            width: 2.0,
+            color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            paint_first,
+        });
+        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+        let doc = document(&snapshot, &options());
+        assert_eq!(extracted(&doc, &[1]), "Stroke", "paint_first={paint_first}");
+        let operations = content_operations(&doc);
+        let stroked_text = operations.iter().any(|op| {
+            op.operator == "Tr" && op.operands.first().and_then(|o| o.as_i64().ok()) == Some(1)
+        });
+        let stroked_path = operations.iter().any(|op| op.operator == "S");
+        assert!(
+            stroked_text || stroked_path,
+            "missing stroke operator, paint_first={paint_first}"
+        );
+        assert!(operations.iter().any(|op| {
+            op.operator == "w" && op.operands.first().and_then(|o| o.as_float().ok()) == Some(2.0)
+        }));
+    }
 }

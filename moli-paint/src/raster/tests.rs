@@ -497,6 +497,7 @@ fn malformed_clip_and_font_references_are_structured_errors() {
             y: 1.0,
         }],
         transform: moli_layout::PaintTransform2D::IDENTITY,
+        stroke: None,
     }));
     assert_eq!(
         raster_snapshot(&glyph),
@@ -532,6 +533,7 @@ fn raster_synthetic_oblique_box(skew_degrees: f32) -> RasterImage {
             y: 50.0,
         }],
         transform: moli_layout::PaintTransform2D::IDENTITY,
+        stroke: None,
     }));
     raster_snapshot(&snapshot).expect("synthetic oblique fixture should rasterize")
 }
@@ -584,5 +586,130 @@ fn nested_paths_preserve_nonzero_and_evenodd_fill_rules() {
         let image = raster_snapshot(&snapshot).unwrap();
         assert_eq!(pixel(&image, 1, 1), [0, 0, 0, 255]);
         assert_eq!(pixel(&image, 8, 8), center);
+    }
+}
+
+fn raster_stroked_ahem_box(
+    stroke: Option<moli_layout::PaintTextStroke>,
+    embolden: f32,
+) -> RasterImage {
+    let mut snapshot = snapshot(80, 60, 1.0);
+    let font = peniko::FontData::new(
+        Blob::from(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+            ))
+            .to_vec(),
+        ),
+        0,
+    );
+    let font = snapshot.intern_font(&font);
+    snapshot.push_fragment(PaintFragment::GlyphRun(moli_layout::PaintGlyphRun {
+        text: None,
+        font,
+        font_size: 50.0,
+        normalized_coords: Vec::new(),
+        color: PaintColor::BLACK,
+        glyph_skew_radians: None,
+        glyph_embolden: moli_layout::PaintPoint::new(embolden, embolden),
+        // The fixture's .notdef glyph is a deterministic 600 x 800 box:
+        // x 20..50, y 10..50 at 50px.
+        glyphs: vec![moli_layout::PaintGlyph {
+            id: 0,
+            x: 20.0,
+            y: 50.0,
+        }],
+        transform: moli_layout::PaintTransform2D::IDENTITY,
+        stroke,
+    }));
+    raster_snapshot(&snapshot).expect("stroked glyph fixture should rasterize")
+}
+
+const RED: PaintColor = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+
+fn is_red(px: [u8; 4]) -> bool {
+    px[0] > 200 && px[1] < 60 && px[2] < 60
+}
+
+fn is_black(px: [u8; 4]) -> bool {
+    px[0] < 60 && px[1] < 60 && px[2] < 60
+}
+
+#[test]
+fn text_stroke_is_centered_on_the_outline_and_painted_over_the_fill() {
+    let plain = raster_stroked_ahem_box(None, 0.0);
+    assert_eq!(pixel(&plain, 17, 30), [255, 255, 255, 255]);
+    assert!(is_black(pixel(&plain, 21, 30)));
+
+    let image = raster_stroked_ahem_box(
+        Some(moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: RED,
+            paint_first: false,
+        }),
+        0.0,
+    );
+    // Outer half (4px) outside the outline.
+    assert!(is_red(pixel(&image, 17, 30)), "{:?}", pixel(&image, 17, 30));
+    assert_eq!(pixel(&image, 14, 30), [255, 255, 255, 255]);
+    // Inner half is painted over the fill with the default paint-order.
+    assert!(is_red(pixel(&image, 21, 30)), "{:?}", pixel(&image, 21, 30));
+    assert!(is_black(pixel(&image, 35, 30)));
+}
+
+#[test]
+fn paint_order_stroke_fill_paints_the_stroke_beneath_the_fill() {
+    let image = raster_stroked_ahem_box(
+        Some(moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: RED,
+            paint_first: true,
+        }),
+        0.0,
+    );
+    assert!(is_red(pixel(&image, 17, 30)), "{:?}", pixel(&image, 17, 30));
+    // The fill covers the inner half of the stroke.
+    assert!(is_black(pixel(&image, 21, 30)), "{:?}", pixel(&image, 21, 30));
+    assert!(is_black(pixel(&image, 35, 30)));
+}
+
+#[test]
+fn text_stroke_follows_synthetic_bold_outline_expansion() {
+    let stroke = Some(moli_layout::PaintTextStroke {
+        width: 2.0,
+        color: RED,
+        paint_first: true,
+    });
+    let regular = raster_stroked_ahem_box(stroke, 0.0);
+    let bold = raster_stroked_ahem_box(stroke, 3.0);
+    // Regular: outer stroke edge at x=19; synthetic bold moves the fill edge
+    // out by 3px and the stroke must still surround it.
+    assert_eq!(pixel(&regular, 16, 30), [255, 255, 255, 255]);
+    assert!(is_red(pixel(&bold, 16, 30)), "{:?}", pixel(&bold, 16, 30));
+    assert!(is_black(pixel(&bold, 18, 30)), "{:?}", pixel(&bold, 18, 30));
+}
+
+#[test]
+fn transparent_or_zero_width_text_stroke_paints_nothing() {
+    let plain = raster_stroked_ahem_box(None, 0.0);
+    for stroke in [
+        moli_layout::PaintTextStroke {
+            width: 0.0,
+            color: RED,
+            paint_first: false,
+        },
+        moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: PaintColor::TRANSPARENT,
+            paint_first: false,
+        },
+        moli_layout::PaintTextStroke {
+            width: f32::NAN,
+            color: RED,
+            paint_first: false,
+        },
+    ] {
+        assert_eq!(raster_stroked_ahem_box(Some(stroke), 0.0), plain);
     }
 }

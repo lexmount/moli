@@ -100,10 +100,14 @@ pub(super) fn draw(
     page_index: usize,
     invisible: bool,
 ) -> Result<(), PdfError> {
+    let text_stroke = run.stroke.filter(|stroke| {
+        !invisible && stroke.width.is_finite() && stroke.width > 0.0 && stroke.color.alpha > 0.0
+    });
+    let has_fill = run.color.alpha > 0.0;
     if run.glyphs.is_empty()
         || !run.font_size.is_finite()
         || run.font_size <= 0.0
-        || run.color.alpha <= 0.0
+        || (!has_fill && text_stroke.is_none())
         || clip.width() <= 0.0
         || clip.height() <= 0.0
     {
@@ -259,27 +263,59 @@ pub(super) fn draw(
                 }
             })
             .collect();
-        let mut paint = fill(run.color);
-        if invisible {
-            paint.opacity = krilla::num::NormalizedF32::ZERO;
+        let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
+        // `-webkit-text-stroke`: a separate stroke-only pass, before or after
+        // the fill per `paint-order`. Only the first drawn pass carries the
+        // searchable text; the other is emitted as outlines.
+        let draw_stroke = |surface: &mut Surface<'_>, outlined: bool| {
+            if let Some(stroke) = text_stroke {
+                let paint = fill(stroke.color);
+                surface.set_fill(None);
+                surface.set_stroke(Some(Stroke {
+                    paint: paint.paint,
+                    opacity: paint.opacity,
+                    width: stroke.width + 2.0 * embolden,
+                    ..Default::default()
+                }));
+                surface.draw_glyphs(
+                    Point::from_xy(0.0, 0.0),
+                    &glyphs,
+                    font.clone(),
+                    source_text,
+                    font_size,
+                    outlined,
+                );
+            }
+        };
+        let stroke_first = text_stroke.is_some_and(|stroke| stroke.paint_first);
+        if stroke_first || !has_fill {
+            draw_stroke(surface, outlined);
         }
-        surface.set_stroke(
-            (run.glyph_embolden.x > 0.0 || run.glyph_embolden.y > 0.0).then(|| Stroke {
+        if has_fill {
+            let mut paint = fill(run.color);
+            if invisible {
+                paint.opacity = krilla::num::NormalizedF32::ZERO;
+            }
+            surface.set_stroke((embolden > 0.0).then(|| Stroke {
                 paint: paint.paint.clone(),
                 opacity: paint.opacity,
-                width: 2.0 * run.glyph_embolden.x.max(run.glyph_embolden.y),
+                width: 2.0 * embolden,
                 ..Default::default()
-            }),
-        );
-        surface.set_fill(Some(paint));
-        surface.draw_glyphs(
-            Point::from_xy(0.0, 0.0),
-            &glyphs,
-            font.clone(),
-            source_text,
-            font_size,
-            outlined,
-        );
+            }));
+            surface.set_fill(Some(paint));
+            surface.draw_glyphs(
+                Point::from_xy(0.0, 0.0),
+                &glyphs,
+                font.clone(),
+                source_text,
+                font_size,
+                outlined || stroke_first,
+            );
+            if !stroke_first {
+                draw_stroke(surface, true);
+            }
+        }
+        surface.set_stroke(None);
         surface.pop();
     }
     Ok(())

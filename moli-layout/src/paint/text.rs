@@ -222,6 +222,12 @@ fn project_text_phase<N>(
                     clusters,
                 }),
                 transform,
+                // Clip masks (background-clip: text) use the glyph fill only.
+                stroke: if phase == TextPaintPhase::ClipMask {
+                    None
+                } else {
+                    glyph_run.style().brush.stroke
+                },
             };
             let brush = &glyph_run.style().brush;
             if phase == TextPaintPhase::Foreground {
