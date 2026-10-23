@@ -104,3 +104,4 @@ mod event_prototype_attributes;
 
 mod event_target_prototype;
 mod named_node_map_receivers;
+mod xpath_result_bindings;
