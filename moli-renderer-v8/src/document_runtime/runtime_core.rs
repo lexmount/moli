@@ -111,7 +111,7 @@ impl DocumentRuntime {
             timeouts: HostTimeoutScheduler::default(),
             events: HostEventTargetRegistry::default(),
             mutations: MutationCoordinator,
-            meta_refresh_scheduler: super::meta_refresh::MetaRefreshScheduler::default(),
+            meta_refresh_scheduler: crate::meta_refresh_scheduler::MetaRefreshScheduler::default(),
             custom_element_reaction_depth: 0,
             structural_mutation_depth: 0,
             dom_content_loaded_dispatched: false,

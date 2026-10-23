@@ -72,6 +72,7 @@ mod live_document_parser;
 mod live_stylesheet;
 pub(crate) mod local_executor;
 mod message_port_runtime;
+mod meta_refresh_scheduler;
 mod module_runtime;
 mod module_script_continuation;
 mod modulepreload;

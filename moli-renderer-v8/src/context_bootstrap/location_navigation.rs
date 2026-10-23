@@ -195,6 +195,34 @@ pub(crate) fn navigate_top_level_meta_refresh(
             && location_href_slot(scope, location).as_deref() == Some(target.as_str()))
 }
 
+/// Classify a delayed child refresh against the URL at execution time, including
+/// exact fragment targets that must keep the current Document.
+pub(crate) fn navigate_child_meta_refresh<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    target: &url::Url,
+    delay_ms: u32,
+) {
+    let Some(current_href) = location_href_slot(scope, location) else {
+        return;
+    };
+    let Ok(current_url) = url::Url::parse(&current_href) else {
+        return;
+    };
+    let kind = meta_refresh_navigation_kind(&current_url, target, delay_ms);
+    let same_document_fragment = kind == LocationNavigationKind::Assign
+        && is_same_document_fragment_navigation(Some(&current_url), target);
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        kind,
+        Some(target.to_string()),
+        None,
+        true,
+        same_document_fragment,
+    );
+}
+
 pub(crate) fn navigate_location_object_with_source_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,

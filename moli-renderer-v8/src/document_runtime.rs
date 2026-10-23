@@ -53,6 +53,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::dom::native::ShadowRootBindingSnapshot;
+pub(crate) use crate::meta_refresh_scheduler::MetaRefreshNavigation;
 use crate::{
     dom::{
         NodeId,
@@ -78,7 +79,6 @@ pub(crate) use devtools_mutations::{
     DevToolsDomChildListMutationFact, DevToolsDomMutationFact, DevToolsDomPrepublishedRemoval,
 };
 pub(crate) use inspector_issues::PendingInspectorIssue;
-pub(crate) use meta_refresh::MetaRefreshNavigation;
 use parser_blocking::{ParserInsertionWork, PendingParserBlockingWork, PendingParserInsertion};
 pub(crate) use parser_modulepreload::MainDocumentModulepreloadFetchOutcome;
 pub(crate) use script_lifecycle::{
@@ -762,7 +762,7 @@ pub(super) struct DocumentRuntime {
     timeouts: HostTimeoutScheduler,
     events: HostEventTargetRegistry,
     mutations: MutationCoordinator,
-    meta_refresh_scheduler: meta_refresh::MetaRefreshScheduler,
+    meta_refresh_scheduler: crate::meta_refresh_scheduler::MetaRefreshScheduler,
     custom_element_reaction_depth: usize,
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
