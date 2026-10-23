@@ -469,14 +469,15 @@ async fn child_navigation_retires_local_window_owned_xhr() {
               error.code,
               Object.getPrototypeOf(error) === __getRetiredChildXhrExceptionPrototype(),
               Object.getPrototypeOf(Object.getPrototypeOf(error)) === __retiredChildErrorPrototype,
-              !(error instanceof DOMException)
+              !(error instanceof DOMException),
+              Error.isError(error)
             ].join("|");
           }
         })()
         "#,
         )
         .expect("calling open on a retained old-child XHR wrapper should fail closed");
-    assert_eq!(stale_open, "InvalidStateError|11|true|true|true");
+    assert_eq!(stale_open, "InvalidStateError|11|true|true|true|true");
     assert!(
         vm._context_host
             .borrow()
