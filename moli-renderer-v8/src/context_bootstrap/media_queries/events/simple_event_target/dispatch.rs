@@ -23,7 +23,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
 >(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-    target: ResolvedEventTarget<'s>,
+    target: ResolvedSimpleEventTarget<'s>,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some((event, event_type)) =
@@ -36,7 +36,14 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
         return;
     };
 
-    let dispatch_result = dispatch_resolved_event(scope, target, &event_type, event, None);
+    let dispatch_result = dispatch_resolved_event(
+        scope,
+        target.identity,
+        Some(target.registry),
+        &event_type,
+        event,
+        None,
+    );
     rv.set_bool(dispatch_result.uncanceled);
 }
 
@@ -68,17 +75,18 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
             dispatched: false,
         };
     };
-    dispatch_resolved_event(scope, target, event_type, event, callback_errors)
+    let registry = SimpleEventListenerRegistry::from_owner(scope, target.listener_owner);
+    dispatch_resolved_event(scope, target, registry, event_type, event, callback_errors)
 }
 
 fn dispatch_resolved_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: ResolvedEventTarget<'s>,
+    registry: Option<SimpleEventListenerRegistry<'s>>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
-    let listener_owner = target.listener_owner;
     let target = target.dispatch_target;
     let mut dispatched = false;
     let can_invoke =
@@ -92,18 +100,19 @@ fn dispatch_resolved_event<'s>(
     } else {
         None
     };
-    if can_invoke {
+    if let (true, Some(registry)) = (can_invoke, registry) {
         'phases: for capture_phase in [true, false] {
             // DOM clones the listener list for each invocation phase. A listener
             // added during capture can participate in the subsequent bubble phase.
+            // Reuse only the registry; fetch the current array for each phase
+            // and each registration check after callbacks mutate that array.
             let listeners =
-                simple_object_event_listeners_snapshot(scope, listener_owner, event_type);
+                simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
             for listener in listeners
                 .iter()
                 .filter(|listener| listener.capture == capture_phase)
             {
-                let Some(listener) =
-                    listener.prepare_for_invocation(scope, listener_owner, event_type)
+                let Some(listener) = listener.prepare_in_registry(scope, registry, event_type)
                 else {
                     continue;
                 };

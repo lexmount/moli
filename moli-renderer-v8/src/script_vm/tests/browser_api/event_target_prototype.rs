@@ -558,3 +558,53 @@ fn model_context_native_aliases_project_shared_listener_targets_into_worlds() {
         "[true]"
     );
 }
+
+#[test]
+fn simple_event_target_registry_reuse_preserves_reentrant_listener_mutations() {
+    let mut vm = new_storage_html_test_vm("https://event-listener-registry.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        for (const make of [() => new EventTarget(), () => new FileReader()]) {
+            const target = make();
+            const trace = [];
+            const controller = new AbortController();
+            const victim = () => trace.push('victim');
+            const late = () => trace.push('late');
+            target.addEventListener('probe', () => {
+                trace.push('capture');
+            }, {capture: true, once: true});
+            target.addEventListener('probe', () => {
+                trace.push('first');
+                target.removeEventListener('probe', victim);
+                target.addEventListener('probe', victim);
+                controller.abort();
+            }, {once: true});
+            target.addEventListener('probe', victim);
+            target.addEventListener('probe', () => trace.push('aborted'), {signal: controller.signal});
+            target.addEventListener('probe', () => {
+                trace.push('once');
+                target.dispatchEvent(new Event('probe'));
+            }, {once: true});
+            target.addEventListener('probe', late);
+            target.dispatchEvent(new Event('probe'));
+            if (trace.join(',') !== 'capture,first,once,late,victim,late') return false;
+            trace.length = 0;
+            target.dispatchEvent(new Event('probe'));
+            if (trace.join(',') !== 'late,victim') return false;
+            target.removeEventListener('probe', late);
+            target.removeEventListener('probe', victim);
+            trace.length = 0;
+            target.dispatchEvent(new Event('probe'));
+            if (trace.length !== 0) return false;
+        }
+        const reader = new FileReader();
+        const trace = [];
+        reader.addEventListener('load', () => {
+            reader.onload = () => trace.push('new');
+        }, {once: true});
+        reader.onload = () => trace.push('old');
+        reader.dispatchEvent(new Event('load'));
+        reader.onload = null;
+        reader.dispatchEvent(new Event('load'));
+        return trace.join(',') === 'new';
+    })()"#).unwrap(), "true");
+}

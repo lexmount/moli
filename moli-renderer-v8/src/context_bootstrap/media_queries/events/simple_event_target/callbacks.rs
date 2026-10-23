@@ -8,7 +8,12 @@ pub(crate) fn simple_event_target_add_event_listener_callback<'s>(
     let Some(target) = resolve_simple_event_target(scope, args.this()) else {
         return;
     };
-    simple_object_event_target_add_listener_for_target(scope, &args, target.listener_owner);
+    simple_object_event_target_add_listener_for_target(
+        scope,
+        &args,
+        target.identity.listener_owner,
+        Some(target.registry),
+    );
 }
 
 pub(crate) fn simple_event_target_remove_event_listener_callback<'s>(
@@ -19,7 +24,12 @@ pub(crate) fn simple_event_target_remove_event_listener_callback<'s>(
     let Some(target) = resolve_simple_event_target(scope, args.this()) else {
         return;
     };
-    simple_object_event_target_remove_listener_for_target(scope, &args, target.listener_owner);
+    simple_object_event_target_remove_listener_for_target(
+        scope,
+        &args,
+        target.identity.listener_owner,
+        Some(target.registry),
+    );
 }
 
 pub(crate) fn simple_event_target_dispatch_event_callback<'s>(
