@@ -129,7 +129,7 @@ async def start_moli_serve(
             stderr=asyncio.subprocess.PIPE,
             start_new_session=subprocess_starts_new_session(),
         )
-    except Exception:
+    except BaseException:
         shutil.rmtree(data_dir, ignore_errors=True)
         raise
     logs: list[str] = []
