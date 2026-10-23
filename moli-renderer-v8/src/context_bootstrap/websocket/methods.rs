@@ -4,6 +4,7 @@ use super::helpers::{
     websocket_ready_state,
 };
 use super::payload::{WebSocketSendPayload, websocket_send_payload};
+use super::transport::close_websocket_stream_transport;
 use super::*;
 use crate::webidl;
 use moli_websocket::validate_websocket_close_request;
@@ -137,11 +138,8 @@ pub(super) fn websocket_stream_close_callback<'s>(
             return;
         }
     };
-    if let Some(socket_id) = websocket_id(scope, args.this())
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let _ = host.close_websocket(socket_id, close.code, close.reason);
+    if let Some(socket_id) = websocket_id(scope, args.this()) {
+        close_websocket_stream_transport(scope, socket_id, close.code, close.reason);
     }
     rv.set_undefined();
 }

@@ -77,6 +77,7 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Worker",
     "WebSocket",
     "WebSocketError",
+    "WebSocketStream",
     "AbortSignal",
     "AbortController",
     "Observable",

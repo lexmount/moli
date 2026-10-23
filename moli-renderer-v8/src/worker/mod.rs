@@ -57,7 +57,8 @@ pub(crate) use global_scope::{
     register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
     register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
     send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
-    start_worker_font_face_fetch, try_worker_xhr_abort_callback,
+    set_worker_websocket_stream_abort_registration, start_worker_font_face_fetch,
+    take_worker_websocket_stream_abort_registration, try_worker_xhr_abort_callback,
     try_worker_xhr_reschedule_timeout_after_timeout_change, try_worker_xhr_send_callback,
     try_worker_xhr_terminate_fetch, worker_allows_eval_code_generation_by_csp,
     worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
@@ -70,7 +71,7 @@ pub(crate) use global_scope::{
     worker_opfs_handle_registry, worker_realm_secure_context_available, worker_referrer_policy,
     worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
     worker_termination_requested, worker_trusted_types_for_script_requirements,
-    worker_uses_shared_worker_agent_cluster,
+    worker_uses_shared_worker_agent_cluster, worker_websocket_wrapper,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
