@@ -123,11 +123,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "context_bootstrap/websocket/constructor.rs",
-        1,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
         "network_host/body_source.rs",
         1,
         DirectCallOwner::BrowserAlgorithm,

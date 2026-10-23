@@ -1,3 +1,4 @@
+use super::abort::remove_websocket_stream_abort;
 use super::helpers::{
     set_websocket_value_slot, websocket_dom_exception_value, websocket_id, websocket_object_slot,
     websocket_value_slot,
@@ -65,6 +66,7 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
             extensions,
             ..
         } => {
+            remove_websocket_stream_abort(scope, stream);
             let source = new_websocket_stream_readable_source(scope, *socket_id);
             let readable = new_lazy_readable_stream_object(scope, source, 1.0, None);
             let sink = new_websocket_stream_writable_sink(scope, stream, *socket_id);
@@ -129,6 +131,7 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
             }
         }
         WebSocketEvent::Error { message, .. } => {
+            remove_websocket_stream_abort(scope, stream);
             let error = new_websocket_error_object(scope, message, Some(1006), "");
             set_websocket_value_slot(scope, stream, WEBSOCKET_STREAM_ERROR_SLOT, error);
             if let Some(readable) =
@@ -163,6 +166,7 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
             was_clean,
             ..
         } => {
+            remove_websocket_stream_abort(scope, stream);
             if *was_clean {
                 let mut had_interrupted_write = false;
                 if let Some(readable) =
