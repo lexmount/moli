@@ -9,7 +9,7 @@ import statistics
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 
 MIB = 1024 * 1024
@@ -428,7 +428,7 @@ def write_stress_report(
     summary, report = build_report(payload, d3_path.read_text(encoding="utf-8"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result_href = html.escape(
-        os.path.relpath(result_path.resolve(), output_path.parent.resolve()),
+        quote(Path(os.path.relpath(result_path.resolve(), output_path.parent.resolve())).as_posix()),
         quote=True,
     )
     report = report.replace("__RESULT_HREF__", result_href)
