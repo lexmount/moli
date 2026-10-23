@@ -86,6 +86,36 @@ fn nested_accessible_labels_do_not_rescan_the_whole_tree() {
 }
 
 #[test]
+fn code_excludes_interactive_controls_without_guessing_class_names() {
+    let result = markdown(
+        "<pre><code>run();<button>Copy</button><span role='button'>Copy again</span>\
+         <span class='copy-button'>literal_code</span><button class='unrelated'>Menu</button>\
+         </code></pre>",
+    );
+    assert!(result.contains("run();literal_code"), "{result}");
+    for excluded in ["Copy", "Menu"] {
+        assert!(!result.contains(excluded), "{result}");
+    }
+}
+
+#[test]
+fn formulas_keep_their_order_across_output_boundaries() {
+    let result = markdown(
+        r"<p>$a_1$<img src='/plot.png' alt='Plot'>$b_2$<code>literal</code>
+           $c_3$<a href='/target'>Link</a>$d_4$<br>$e_5$</p><blockquote>$f_6$</blockquote>",
+    );
+    let mut end = 0;
+    for item in [
+        "$a_1$", "plot.png", "$b_2$", "literal", "$c_3$", "Link", "$d_4$", "$e_5$", "$f_6$",
+    ] {
+        let start = result[end..]
+            .find(item)
+            .unwrap_or_else(|| panic!("missing {item}: {result}"));
+        end += start + item.len();
+    }
+}
+
+#[test]
 fn textarea_uses_its_content_not_a_nonstandard_value_attribute() {
     for value in ["unrelated", ""] {
         let result = markdown(&format!(
@@ -360,4 +390,178 @@ fn authored_image_alternatives_survive_naming_exclusions() {
         markdown("<img src='/fallback.png' srcset='a.png ((x), b.png 2x'>"),
         "![](b.png)"
     );
+}
+
+#[test]
+fn mixed_currency_inequalities_and_multiline_math_keep_math_payloads() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    for (source, expected) in [
+        ("<p>Pay $5 for $x_i$.</p>", "x_i"),
+        ("<p>$0&lt;x&lt;1$</p>", "0< x<1"),
+        ("<p>\\(n&lt;k\\)</p>", "n< k"),
+        ("<p>$$a\n- b$$</p>", "a - b"),
+        ("<table><tr><td>$$a\n- b$$</td></tr></table>", "a - b"),
+        (r"<p>$$a \% + b$$</p>", r"a \% + b"),
+        ("<p>$$a\n# b\n\n&gt; c$$</p>", "a # b > c"),
+        ("<p>$$a % a comment\n- b$$</p>", "a - b"),
+    ] {
+        let result = markdown(source);
+        let math: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+            .filter_map(|event| match event {
+                Event::InlineMath(t) | Event::DisplayMath(t) => Some(t.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(math.len(), 1, "{source}: {result}, {math:?}");
+        assert_eq!(math[0].trim(), expected, "{result}");
+        let html = rendered_html(&result);
+        for unwanted in ["<ul>", "<blockquote>", "<h1>"] {
+            assert!(!html.contains(unwanted), "{html}");
+        }
+    }
+}
+
+#[test]
+fn mathml_operators_survive_commonmark_as_literal_math_text() {
+    let result = markdown(
+        r"<math><mi>A</mi><mo>\</mo><mi>B</mi><mo>*</mo><mi>C</mi><mo>*</mo><mo>_</mo><mi>D</mi><mo>_</mo><mo>~</mo><mo>`</mo><mo>[</mo></math>",
+    );
+    let html = rendered_html(&result);
+    assert!(html.contains("<mo>\\</mo>"), "{html}");
+    for unexpected in ["<em>", "<strong>", "&lt;/mo&gt;"] {
+        assert!(!html.contains(unexpected), "{html}");
+    }
+}
+
+#[test]
+fn math_comments_literals_and_inline_markup_keep_distinct_boundaries() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    for (source, expected) in [
+        ("<p>$a%b$</p>", "a"),
+        ("<p>$5%$</p>", "5"),
+        ("<p>$%c\nx$</p>", "x"),
+        (r"<p>$\verb|50%|$</p>", r"\verb|50%|"),
+        (r"<p>$\verb|a  b|$</p>", r"\verb|a  b|"),
+        (r"<p>$\text{a&lt;2}$</p>", r"\text{a<2}"),
+        (r"<p>$\mbox{a&lt;2}$</p>", r"\mbox{a<2}"),
+    ] {
+        let result = markdown(source);
+        let math: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+            .filter_map(|e| match e {
+                Event::InlineMath(x) => Some(x.into_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(math, vec![expected], "{source}: {result}");
+    }
+    for source in [
+        "<p>$[a](b)$</p>",
+        "<p>$x<a href='/d'>l</a>y$</p>",
+        "<math><mi>$</mi><mn>5</mn><mo>-</mo><mi>$</mi><mn>3</mn></math>",
+    ] {
+        let result = markdown(source);
+        assert!(
+            !Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+                .any(|e| matches!(e, Event::InlineMath(_) | Event::DisplayMath(_))),
+            "{result}"
+        );
+        if source.contains("href") {
+            assert!(rendered_html(&result).contains("href=\"/d\""), "{result}");
+        }
+    }
+}
+
+#[test]
+fn tex_delimiters_control_spaces_and_empty_comments_survive_math_readers() {
+    use pulldown_cmark::{Event, Options as O, Parser};
+    for (source, expected, display) in [
+        (r"<p>\(x_i\)2</p>", "x_i", false),
+        (r"<p>\[y_1=2\]</p>", "y_1=2", true),
+        (r"<p>$$a\ $$</p>", "a\\ ", true),
+        (r"<p>\(x\ \)</p>", "x\\ {}", false),
+        (r"<p>$\textrm{a&lt;2}$</p>", r"\textrm{a<2}", false),
+        (r"<p>$\text {a&lt;2}$</p>", r"\text{a<2}", false),
+    ] {
+        let result = markdown(source);
+        let payloads: Vec<_> = Parser::new_ext(&result, O::ENABLE_MATH)
+            .filter_map(|e| match e {
+                Event::InlineMath(v) => Some((v.into_string(), false)),
+                Event::DisplayMath(v) => Some((v.into_string(), true)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            payloads,
+            vec![(expected.to_owned(), display)],
+            "{source}: {result}"
+        );
+    }
+    for source in [
+        r"<p>$%a$ b $%c$</p>",
+        r"<p>$\text{&lt;img src=x onerror=alert(1)&gt;}$</p>",
+        r"<p>$\textbf{&lt;b&gt;x}$</p>",
+        r"<p>$\hbox {&lt;b&gt;}$</p>",
+        r"<p>$\text{a{&lt;b&gt;}}$</p>",
+        r"<p>$\text{&lt;b&gt;$</p>",
+        r"<p>$\verb*|&lt;b&gt;|$</p>",
+        r"<p>$\verb&lt;b&gt;x&lt;$</p>",
+        r"<p>$\verb*&lt;img src=x&gt;a&lt;$</p>",
+        r"<p>$\verb|&lt;b&gt;|$</p>",
+        "<p>$$\\verb|a\n- b$$</p>",
+    ] {
+        let result = markdown(source);
+        assert!(
+            !Parser::new_ext(&result, O::ENABLE_MATH)
+                .any(|e| matches!(e, Event::InlineMath(_) | Event::DisplayMath(_))),
+            "{result}"
+        );
+        let html = rendered_html(&result);
+        assert!(
+            !html.contains("<img") && !html.contains("<b>") && !html.contains("<li>"),
+            "{html}"
+        );
+    }
+}
+
+#[test]
+fn adjacent_math_keeps_independent_delimiter_runs() {
+    for (source, expected) in [
+        (r"<p>\(a\)\(b\)</p>", "$a$<!-- -->$b$"),
+        (r"<p>$a$\(b\)</p>", "$a$<!-- -->$b$"),
+        (r"<p>\[a\]\[b\]</p>", "$$a$$<!-- -->$$b$$"),
+    ] {
+        assert_eq!(markdown(source), expected);
+    }
+}
+
+#[test]
+fn math_boundaries_survive_empty_wrappers_and_coalesced_styles() {
+    use pulldown_cmark::{Event, Options, Parser};
+    for source in [
+        r"<p>\(a\)<b></b>\(b\)</p>",
+        r"<p><b>\(a\)</b><b>\(b\)</b></p>",
+        r"<p>$a$<i></i>$b$</p>",
+    ] {
+        let result = markdown(source);
+        let values: Vec<_> = Parser::new_ext(&result, Options::ENABLE_MATH)
+            .filter_map(|e| match e {
+                Event::InlineMath(v) => Some(v.into_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, ["a", "b"], "{source}: {result}");
+        assert!(result.contains("$<!-- -->$"), "{result}");
+    }
+    for source in [
+        r"<p>\(x\)2</p>",
+        r"<p>\(x\)<i></i>2</p>",
+        r"<p>$x$<i></i>2</p>",
+    ] {
+        let result = markdown(source);
+        assert_eq!(result, "$x$<!-- -->2", "{source}");
+        assert!(
+            Parser::new_ext(&result, Options::ENABLE_MATH)
+                .any(|e| matches!(e, Event::InlineMath(_)))
+        );
+    }
 }

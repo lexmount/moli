@@ -490,11 +490,11 @@ mod tests {
         for (html, expected) in [
             (
                 "<a href='/a' title='one\n  two'>link</a>",
-                "[link](/a \"one\ntwo\")",
+                "[link](/a \"one&#10;two\")",
             ),
             (
                 "<img src='/i' alt='one\n  two' title='one\n  two'>",
-                "![one\ntwo](/i \"one\ntwo\")",
+                "![one two](/i \"one&#10;two\")",
             ),
             (
                 "<h2><a href='/a' title='one\n  two'>link</a></h2>",

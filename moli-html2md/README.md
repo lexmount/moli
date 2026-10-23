@@ -133,3 +133,10 @@ JavaScript and inline HTML document URLs are excluded.
 
 SVG title children are tooltip metadata, not body text. They supply a name only
 when an SVG has no emitted content; title elements outside SVG are omitted.
+Author-supplied TeX keeps its commands across transparent inline wrappers.
+MathML and superscript/subscript retain their structure; alternate visual copies
+do not duplicate an equation. Code omits embedded copy controls and scripts.
+
+Backslash-delimited inline TeX becomes inline dollar math. Invisible separators
+keep adjacent formulas distinct across empty wrappers. They also separate a
+closing `$` from an immediately following digit, which some math readers require.
