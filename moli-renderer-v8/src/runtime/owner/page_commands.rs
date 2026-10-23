@@ -163,12 +163,98 @@ impl RendererOwnerHandle {
                     },
                 ))
             }
+            RendererPageCommand::CompletePostLoadReadyTasks { timeout_ms } => {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "post-load ready task completion",
+                ) {
+                    Ok(deadline) => deadline,
+                    Err(error) => return Err(error).into(),
+                };
+                self.complete_post_load_ready_tasks_turn(
+                    token,
+                    deadline,
+                    super::super::page_turn_scheduler::MAX_POST_LOAD_READY_PAGE_TURNS,
+                    admitted_page_turn_count_on_bound_owner_local_store(token).unwrap_or(0),
+                    true,
+                    capture_policy,
+                )
+                .await
+            }
             command => {
                 return self
                     .run_live_page_command_turn_inline(token, command, capture_policy)
                     .await;
             }
         }
+    }
+
+    pub(super) async fn complete_post_load_ready_tasks_turn(
+        &self,
+        token: RendererPageToken,
+        deadline: Instant,
+        remaining_page_turns: usize,
+        observed_page_turn_count: u64,
+        signal_scheduler: bool,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    ) -> RenderRuntimeDispatchOutcome {
+        let current_page_turn_count = admitted_page_turn_count_on_bound_owner_local_store(token)
+            .unwrap_or(observed_page_turn_count);
+        let completed_turns = current_page_turn_count.wrapping_sub(observed_page_turn_count);
+        let completed_turns = usize::try_from(completed_turns).unwrap_or(usize::MAX);
+        let remaining_page_turns = remaining_page_turns.saturating_sub(completed_turns);
+        let readiness = page_turn_readiness_after_restore_on_bound_owner_local_store(token);
+        let deadline_reached = Instant::now() >= deadline;
+        let should_continue = !deadline_reached
+            && remaining_page_turns > 0
+            && matches!(readiness, Some(PageOwnerTurnReadiness::Runnable));
+        if should_continue {
+            if signal_scheduler {
+                self.signal_internal_page_turn_source(
+                    token,
+                    RendererOwnerWakeSource::SchedulerContinuation,
+                );
+            }
+            return RenderRuntimeDispatchOutcome::ContinueAfterPageWakeOrDeadline {
+                turn: Box::new(RenderRuntimeTurn::CompletePostLoadReadyTasks {
+                    token,
+                    deadline,
+                    remaining_page_turns,
+                    observed_page_turn_count: current_page_turn_count,
+                    signal_scheduler: false,
+                    capture_policy,
+                }),
+                wake_token: token,
+                ready_at: deadline,
+            };
+        }
+
+        let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
+            Ok(entry) => entry,
+            Err(error) => return Err(error).into(),
+        };
+        let completion = if !matches!(readiness, Some(PageOwnerTurnReadiness::Runnable)) {
+            RendererPostLoadReadyCompletion::Idle
+        } else if deadline_reached {
+            RendererPostLoadReadyCompletion::DeadlineReached
+        } else if remaining_page_turns == 0
+            && matches!(readiness, Some(PageOwnerTurnReadiness::Runnable))
+        {
+            RendererPostLoadReadyCompletion::TurnBudgetExhausted
+        } else {
+            RendererPostLoadReadyCompletion::Idle
+        };
+        self.complete_live_page_command_turn(
+            token,
+            entry,
+            RendererPageReply::PostLoadReadyCompletion(completion),
+            true,
+            None,
+            None,
+            capture_policy,
+        )
+        .await
     }
 
     pub(super) fn begin_live_page_runtime_expression_await(
@@ -1134,6 +1220,7 @@ impl RendererOwnerHandle {
                         RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                             token,
                             vm_creation_id,
+                            target_stage: stage,
                             follow_count,
                             completion,
                         },

@@ -405,6 +405,9 @@ impl Page {
             RendererPageReply::PrintToPdf(_) => "a print to PDF reply",
             RendererPageReply::CaptureScreenshot(_) => "a capture screenshot reply",
             RendererPageReply::CaptureScreencastFrame(_) => "a capture screencast frame reply",
+            RendererPageReply::PostLoadReadyCompletion(_) => {
+                "a post-load readiness completion reply"
+            }
             RendererPageReply::Unit => "a unit reply",
             RendererPageReply::NativeCommandReady(_) => "an unsettled native frontend reply",
             RendererPageReply::NativeCommandPublished => "a published native frontend reply",

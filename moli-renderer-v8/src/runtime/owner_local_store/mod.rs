@@ -1544,6 +1544,9 @@ impl RendererOwnerLocalStore {
                             lifecycle_gate,
                             trigger,
                         );
+                        if !matches!(&scheduled_turn, RendererPageScheduledTurn::SpentWake) {
+                            turn_scheduler.record_admitted_turn();
+                        }
                         Ok((entry, trigger, scheduled_turn))
                     }
                     ScheduledPageTurnCheckout::NotScheduled => {
@@ -1675,6 +1678,14 @@ impl RendererOwnerLocalStore {
             });
         }
         Some(PageOwnerTurnReadiness::Idle)
+    }
+
+    fn admitted_page_turn_count(&self, token: RendererPageToken) -> Option<u64> {
+        self.page_hosts
+            .get(&token.local_host_id)?
+            .pages
+            .get(&token.page_id)
+            .map(|slot| slot.turn_scheduler.admitted_turn_count())
     }
 
     fn next_page_task_deadline(&self) -> Option<std::time::Instant> {

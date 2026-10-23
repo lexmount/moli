@@ -67,14 +67,17 @@ impl Browser {
             "a lifecycle decider requires DCL, load, or done"
         );
         let decider = RendererLifecycleDecider::new(decider);
-        self.fetch_document_to_base_stage(
-            request,
-            wait_until,
-            deadline,
-            RendererReplyBoundary::Stage,
-            Some(decider),
-            raw_document_policy,
-        )
-        .await
+        let fetched = self
+            .fetch_document_to_base_stage(
+                request,
+                wait_until,
+                deadline,
+                RendererReplyBoundary::Stage,
+                Some(decider),
+                raw_document_policy,
+            )
+            .await?;
+        self.finish_fetched_document_readiness(fetched, wait_until, deadline)
+            .await
     }
 }

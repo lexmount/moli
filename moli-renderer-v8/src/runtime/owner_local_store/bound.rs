@@ -367,6 +367,14 @@ pub(in crate::runtime) fn page_turn_readiness_after_restore_on_bound_owner_local
     })
 }
 
+pub(in crate::runtime) fn admitted_page_turn_count_on_bound_owner_local_store(
+    token: RendererPageToken,
+) -> Option<u64> {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        session.store.admitted_page_turn_count(token)
+    })
+}
+
 pub(in crate::runtime) fn renderer_output_fence_for_tail_on_bound_owner_local_store(
     token: RendererPageToken,
 ) -> Option<RendererOutputFence> {

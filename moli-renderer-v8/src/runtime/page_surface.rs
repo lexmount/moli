@@ -5245,6 +5245,11 @@ pub enum RendererPageCommand {
     SetNetworkOffline(bool),
     SetBypassServiceWorker(bool),
     SetBlockedUrlPatterns(Vec<String>),
+    /// Consume a bounded number of Page turns that are already runnable after
+    /// Load without waiting for future task deadlines.
+    CompletePostLoadReadyTasks {
+        timeout_ms: u64,
+    },
     MsToNextTimeout,
     #[cfg(debug_assertions)]
     #[doc(hidden)]
@@ -5261,6 +5266,13 @@ pub enum RendererSetDocumentContentResult {
     Updated,
     FrameNotFound,
     DocumentNotFound,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RendererPostLoadReadyCompletion {
+    Idle,
+    TurnBudgetExhausted,
+    DeadlineReached,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6098,6 +6110,7 @@ pub enum RendererPageReply {
     PageDiagnosticsSnapshot(RendererPageDiagnosticsSnapshot),
     InputDispatchOutcome(RendererInputDispatchOutcome),
     SetDocumentContentResult(RendererSetDocumentContentResult),
+    PostLoadReadyCompletion(RendererPostLoadReadyCompletion),
     ScrollIntoViewResult(RendererScrollIntoViewResult),
     Bool(bool),
     OptionalBool(Option<bool>),

@@ -9,8 +9,33 @@ use crate::{
     network::ResourceRequestClient,
     renderer::{RendererDocumentQuerySelectorNode, RendererPageCommand, RendererPageReply},
 };
+use moli_renderer_v8::RendererPostLoadReadyCompletion;
 
 impl Page {
+    pub(crate) async fn complete_post_load_ready_tasks(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<RendererPostLoadReadyCompletion> {
+        // The renderer owns a second copy of the host deadline. Round a
+        // positive remainder up so that copy cannot expire before the host's
+        // absolute deadline merely because the wire format uses milliseconds.
+        let timeout_ms = timeout
+            .as_micros()
+            .div_ceil(1_000)
+            .min(u128::from(u64::MAX)) as u64;
+        let reply = self
+            .dispatch_page_command_async(RendererPageCommand::CompletePostLoadReadyTasks {
+                timeout_ms,
+            })
+            .await?;
+        expect_page_reply!(
+            reply,
+            "complete post-load ready tasks",
+            "a post-load completion status",
+            RendererPageReply::PostLoadReadyCompletion(completion) => Ok(completion),
+        )
+    }
+
     pub async fn ms_to_next_timeout(&mut self) -> Result<Option<u64>> {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::MsToNextTimeout)

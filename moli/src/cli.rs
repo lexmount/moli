@@ -180,7 +180,8 @@ pub struct FetchArgs {
         alias = "wait-until",
         value_name = "WAIT",
         value_enum,
-        default_value = "done"
+        default_value = "done",
+        help = "Readiness target. 'done' reaches Load, then drains a finite tail of already-runnable work within the original strict timeout"
     )]
     pub wait_until: FetchWaitUntil,
 
@@ -741,6 +742,8 @@ pub enum FetchWaitUntil {
     Load,
     NetworkIdle,
     DomStable,
+    /// Load plus a finite tail of already-runnable work; the timeout remains
+    /// the strict deadline for the complete fetch.
     Done,
 }
 

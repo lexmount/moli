@@ -498,6 +498,173 @@ async fn fetch_done_does_not_wait_for_future_interval_timers() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fetch_done_consumes_load_queued_zero_delay_task_without_waiting_for_background_timers()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+
+    let page = tokio::time::timeout(
+        Duration::from_secs(1),
+        browser.fetch_with_wait_until(
+            &server.url("/runtime/post-load-ready-task"),
+            RenderedDomWaitUntil::Done,
+            Duration::from_millis(750),
+        ),
+    )
+    .await
+    .context("done should consume work queued directly by load without waiting")??;
+
+    let html = page.serialize_html_async().await?;
+    assert!(
+        html.contains("<table id=\"live-demo\"><tbody><tr><td>ready</td></tr></tbody></table>"),
+        "the zero-delay task and its microtask should reach the snapshot: {html}"
+    );
+    assert!(
+        html.contains("data-order=\"interval,throw,content"),
+        "ready timers must retain their ordinary FIFO prefix: {html}"
+    );
+    assert!(!html.contains("data-fallback=\"ran\""), "html={html}");
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn post_load_ready_task_completion_honors_zero_deadline() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch_with_wait_until(
+            &server.url("/runtime/post-load-ready-task"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_millis(750),
+        )
+        .await?;
+
+    let started = std::time::Instant::now();
+    let completion = page.complete_post_load_ready_tasks(Duration::ZERO).await?;
+
+    assert_eq!(
+        completion,
+        moli_renderer_v8::RendererPostLoadReadyCompletion::DeadlineReached
+    );
+
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "an expired completion budget must not start a bounded drain"
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn post_load_ready_task_completion_reports_idle_before_an_expired_deadline() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch_with_wait_until(
+            &server.url("/static"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_millis(750),
+        )
+        .await?;
+
+    assert_eq!(
+        page.complete_post_load_ready_tasks(Duration::ZERO).await?,
+        moli_renderer_v8::RendererPostLoadReadyCompletion::Idle
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
+async fn arm_post_load_ready_chain(page: &mut Page, hops: usize) -> Result<()> {
+    let expression = format!(
+        r#"(() => {{
+            delete document.body.dataset.chainComplete;
+            document.body.dataset.completedHops = '0';
+            let remaining = {hops};
+            const advance = () => {{
+                remaining -= 1;
+                document.body.dataset.completedHops = String({hops} - remaining);
+                if (remaining === 0) {{
+                    document.body.dataset.chainComplete = 'yes';
+                }} else {{
+                    setTimeout(advance, 0);
+                }}
+            }};
+            setTimeout(advance, 0);
+            return 'armed';
+        }})()"#
+    );
+    page.evaluate_runtime_expression_async(&expression).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn post_load_ready_task_completion_counts_real_page_turns() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch_with_wait_until(
+            &server.url("/static"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_millis(750),
+        )
+        .await?;
+
+    arm_post_load_ready_chain(&mut page, 16).await?;
+    let completion = page
+        .complete_post_load_ready_tasks(Duration::from_millis(750))
+        .await?;
+    assert_eq!(
+        completion,
+        moli_renderer_v8::RendererPostLoadReadyCompletion::Idle
+    );
+    let html = page.serialize_html_async().await?;
+    assert!(
+        html.contains("data-chain-complete=\"yes\"") && html.contains("data-completed-hops=\"16\""),
+        "the exact policy boundary must complete: {html}"
+    );
+
+    // Use a chain that is comfortably longer than the product limit. A task
+    // can become runnable between the expression command and this command's
+    // admission, so a 17-hop chain is not a stable witness for a 16-turn
+    // budget: that head task may already have run. The long chain still
+    // exercises the reader-visible contract—a finite drain returns while
+    // runnable work remains—without depending on command scheduling order.
+    arm_post_load_ready_chain(&mut page, 64).await?;
+    assert_eq!(
+        page.complete_post_load_ready_tasks(Duration::from_millis(750))
+            .await?,
+        moli_renderer_v8::RendererPostLoadReadyCompletion::TurnBudgetExhausted
+    );
+    let html = page.serialize_html_async().await?;
+    assert!(!html.contains("data-chain-complete=\"yes\""), "html={html}");
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_load_stops_before_load_queued_zero_delay_task() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let page = browser
+        .fetch_with_wait_until(
+            &server.url("/runtime/post-load-ready-task"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_millis(750),
+        )
+        .await?;
+    assert!(
+        page.script_execution()
+            .global("__postLoadContentTaskRan")
+            .is_none(),
+        "Load must return its lifecycle-bound snapshot without the Done-only drain"
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fetch_allow_http_error_materializes_error_status_pages() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
@@ -6018,4 +6185,73 @@ navigator.serviceWorker.onmessage = event => {
         ),
         _ => ("404 Not Found", "text/plain", "not found"),
     }
+}
+
+async fn assert_done_post_load_work_respects_fetch_deadline(navigation: bool) -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/start", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(request) = read_http_request_head(&mut stream).await else {
+                    return;
+                };
+                let path = request_path(&request).unwrap_or_default();
+                let body = if path == "/slow" {
+                    tokio::time::sleep(Duration::from_millis(1200)).await;
+                    "<main>replacement</main>".to_owned()
+                } else {
+                    let callback = if navigation {
+                        "location.href = '/slow'"
+                    } else {
+                        "const until = Date.now() + 1200; while (Date.now() < until) {}"
+                    };
+                    format!(
+                        "<!doctype html><body><main>original</main><script>addEventListener('load', () => setTimeout(() => {{ {callback} }}, 0));</script></body>"
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    let browser = Browser::new(AppConfig::default())?;
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_millis(850),
+        browser.fetch_with_wait_until(&url, RenderedDomWaitUntil::Done, Duration::from_millis(350)),
+    )
+    .await;
+    server.abort();
+    assert!(
+        started.elapsed() < Duration::from_millis(850),
+        "the fetch call itself must return before the outer bound, even if an inner poll blocks"
+    );
+    let result = result.context("Done exceeded the caller's absolute fetch deadline")?;
+    let error = match result {
+        Ok(_) => anyhow::bail!("post-load work should exhaust the original fetch budget"),
+        Err(error) => error,
+    };
+    let timeout = error
+        .downcast_ref::<super::FetchReadinessTimeout>()
+        .context("post-load timeout must retain its typed fetch failure")?;
+    assert_eq!(timeout.timeout(), Duration::from_millis(350));
+    assert_eq!(
+        timeout.phase().to_string(),
+        "completing post-load ready tasks"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_done_deadline_includes_busy_post_load_script() -> Result<()> {
+    assert_done_post_load_work_respects_fetch_deadline(false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_done_deadline_includes_post_load_navigation() -> Result<()> {
+    assert_done_post_load_work_respects_fetch_deadline(true).await
 }

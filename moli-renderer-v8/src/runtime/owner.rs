@@ -15,6 +15,7 @@ use super::owner_local_store::{
     RendererPageCreationResolution, RendererPageScheduledTurn, RendererPageToken,
     RendererPageTurnAdmission, RendererPageTurnCheckoutError, RendererPendingPageCreation,
     RendererPreparedDocumentResidence, RetiringPageEntry,
+    admitted_page_turn_count_on_bound_owner_local_store,
     advance_document_lifecycle_one_page_turn_via_local_task,
     advance_dom_stable_wait_turn_on_entry_via_local_task,
     advance_network_idle_wait_turn_on_entry_via_local_task,
@@ -785,6 +786,14 @@ enum RenderRuntimeTurn {
         deadline: Instant,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
+    CompletePostLoadReadyTasks {
+        token: RendererPageToken,
+        deadline: Instant,
+        remaining_page_turns: usize,
+        observed_page_turn_count: u64,
+        signal_scheduler: bool,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    },
     ClaimLivePageTopLevelNavigationHandoff {
         token: RendererPageToken,
         handoff: RendererTopLevelNavigationHandoff,
@@ -798,6 +807,7 @@ enum RenderRuntimeTurn {
     ContinueLivePagePendingLocationNavigationPhaseOne {
         token: RendererPageToken,
         vm_creation_id: u64,
+        target_stage: PageVmInitStage,
         follow_count: usize,
         completion: LivePagePendingNavigationCompletion,
     },
@@ -835,7 +845,8 @@ impl RenderRuntimeTurn {
             | Self::WaitLivePageScriptTruthy { token, .. }
             | Self::WaitLivePageRuntimeExpressionAwait { token, .. }
             | Self::WaitLivePageSubresourceResponse { token, .. }
-            | Self::WaitLivePageChildFrameLifecycle { token, .. } => Some(*token),
+            | Self::WaitLivePageChildFrameLifecycle { token, .. }
+            | Self::CompletePostLoadReadyTasks { token, .. } => Some(*token),
             _ => None,
         }
     }
@@ -848,7 +859,8 @@ impl RenderRuntimeTurn {
             | Self::WaitLivePageScriptTruthy { deadline, .. }
             | Self::WaitLivePageRuntimeExpressionAwait { deadline, .. }
             | Self::WaitLivePageSubresourceResponse { deadline, .. }
-            | Self::WaitLivePageChildFrameLifecycle { deadline, .. } => Some(*deadline),
+            | Self::WaitLivePageChildFrameLifecycle { deadline, .. }
+            | Self::CompletePostLoadReadyTasks { deadline, .. } => Some(*deadline),
             _ => None,
         }
     }
@@ -909,6 +921,7 @@ impl RenderRuntimeTurn {
             Self::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token,
                 vm_creation_id,
+                target_stage,
                 follow_count,
                 completion,
             } => {
@@ -917,6 +930,7 @@ impl RenderRuntimeTurn {
                     Self::ContinueLivePagePendingLocationNavigationPhaseOne {
                         token,
                         vm_creation_id,
+                        target_stage,
                         follow_count,
                         completion,
                     },
@@ -1298,6 +1312,7 @@ mod tests {
             turn: RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token: parser_token,
                 vm_creation_id: 1,
+                target_stage: PageVmInitStage::Load,
                 follow_count: 0,
                 completion: LivePagePendingNavigationCompletion::Background,
             },

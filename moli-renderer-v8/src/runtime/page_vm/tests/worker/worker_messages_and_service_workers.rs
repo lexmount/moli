@@ -952,6 +952,10 @@ async fn worker_pending_activity_diagnostics_split_loading_and_running_worker_is
                     1
                 );
                 assert_eq!(
+                    loading_snapshot.diagnostics.pending_subresource_requests, 0,
+                    "Worker bootstrap is runtime readiness, not an in-flight network request"
+                );
+                assert_eq!(
                     loading_snapshot
                         .diagnostics
                         .dedicated_worker_running_worker_isolate_count,
@@ -970,6 +974,7 @@ async fn worker_pending_activity_diagnostics_split_loading_and_running_worker_is
                     running_snapshot.diagnostics.dedicated_worker_loading_count,
                     0
                 );
+                assert_eq!(running_snapshot.diagnostics.pending_subresource_requests, 0);
                 assert_eq!(
                     running_snapshot
                         .diagnostics

@@ -28,6 +28,7 @@ impl RendererOwnerHandle {
         };
         let navigation_reply_policy = residence.request.navigation_reply_policy;
         let reply_boundary = residence.request.reply_boundary;
+        let target_stage = residence.request.stage;
         let advance = commit_prepared_document_response_on_entry_via_local_task(
             self.state.local_executor.clone(),
             entry,
@@ -84,6 +85,7 @@ impl RendererOwnerHandle {
                             RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                                 token,
                                 vm_creation_id,
+                                target_stage,
                                 follow_count: 0,
                                 completion,
                             },
@@ -135,6 +137,7 @@ impl RendererOwnerHandle {
                         RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                             token,
                             vm_creation_id: entry.page_vm().creation_id,
+                            target_stage,
                             follow_count: 0,
                             completion:
                                 LivePagePendingNavigationCompletion::PublishedPageCreation {
