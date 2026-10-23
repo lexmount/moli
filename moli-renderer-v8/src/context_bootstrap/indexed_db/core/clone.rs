@@ -11,13 +11,17 @@ use crate::{
     dom::native::SelectedFile,
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
-        HOST_OBJECT_TAG_FILE_LIST, HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_GEOMETRY,
-        HOST_OBJECT_TAG_IMAGE_BITMAP, HOST_OBJECT_TAG_IMAGE_DATA, HOST_OBJECT_TAG_IMAGE_DATA_GRAPH,
-        HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR, blob_clone_payload_from_object,
-        build_blob_object_from_clone_payload, read_crypto_key_payload, read_geometry_clone_payload,
+        HOST_OBJECT_TAG_DOM_EXCEPTION, HOST_OBJECT_TAG_FILE_LIST,
+        HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_GEOMETRY, HOST_OBJECT_TAG_IMAGE_BITMAP,
+        HOST_OBJECT_TAG_IMAGE_DATA, HOST_OBJECT_TAG_IMAGE_DATA_GRAPH,
+        HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR, HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR,
+        blob_clone_payload_from_object, build_blob_object_from_clone_payload,
+        read_crypto_key_payload, read_dom_exception_payload, read_geometry_clone_payload,
         read_image_bitmap_payload, read_image_data_graph_payload, read_image_data_payload,
-        read_web_transport_error_payload, write_crypto_key_payload, write_geometry_clone_payload,
-        write_image_bitmap_payload, write_image_data_payload, write_web_transport_error_payload,
+        read_quota_exceeded_error_payload, read_web_transport_error_payload,
+        write_crypto_key_payload, write_dom_exception_payload, write_geometry_clone_payload,
+        write_image_bitmap_payload, write_image_data_payload, write_quota_exceeded_error_payload,
+        write_web_transport_error_payload,
     },
 };
 use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
@@ -102,6 +106,16 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("DOMException")
+                if write_dom_exception_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
+            }
+            Some("QuotaExceededError")
+                if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
+            }
             Some("WebTransportError") => {
                 if let Some(payload) = web_transport_error_clone_payload_from_object(scope, object)
                 {
@@ -299,6 +313,10 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
+            HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
+                read_quota_exceeded_error_payload(scope, deserializer)
+            }
             HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR => {
                 let payload = read_web_transport_error_payload(deserializer)?;
                 build_web_transport_error_from_clone_payload(scope, &payload)
