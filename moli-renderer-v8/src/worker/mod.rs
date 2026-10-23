@@ -34,6 +34,7 @@ pub(crate) use file_reading_tasks::{
 };
 pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) mod web_locks_tasks;
+mod websocket_events;
 
 pub(crate) type WorkerScriptUpdateResources =
     std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;
@@ -42,6 +43,7 @@ pub(crate) use bitmap_tasks::{WorkerBitmapTaskProducer, register_worker_bitmap_t
 pub(crate) use canvas_blob_tasks::queue_worker_canvas_blob_task;
 pub(crate) use codec_tasks::queue_worker_codec_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
+pub(crate) use websocket_events::signal_worker_websocket_stream_pull;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
