@@ -19,7 +19,7 @@ fn exception_constructors_preserve_utf16_and_conversion_order() {
         assert_eq!(result[realm]["failures"], serde_json::json!([]), "{result}");
         assert_eq!(
             result[realm]["rows"].as_array().unwrap().len(),
-            188,
+            202,
             "{result}"
         );
     }

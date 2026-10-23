@@ -24,7 +24,7 @@ function exceptionConstructorStringsProbe(realm) {
     }
     const Derived = class extends Constructor {};
     const value = Reflect.construct(Constructor, args(values[6]), Derived);
-    check(label + ': derived construction', Object.getPrototypeOf(value) === Derived.prototype && value instanceof realm.DOMException);
+    check(label + ': derived construction', Object.getPrototypeOf(value) === Derived.prototype && value instanceof realm.DOMException && realm.Error.isError(value));
     check(label + ': derived message UTF-16', units(value.message), units(values[6]));
     for (const input of [null, false, 42, -0, 12n]) {
       check(label + ': primitive message ' + String(input), Reflect.construct(Constructor, [input]).message, String(input));
@@ -136,6 +136,14 @@ function exceptionConstructorStringsProbe(realm) {
     let caught;
     try{new realm.WebSocketError('',{reason:'x'.repeat(124)});}catch(error){caught=error;}
     check('WebSocketError: 124 UTF-8 bytes rejected',caught instanceof realm.DOMException && caught.name==='SyntaxError');
+  }
+  if (realm.document) {
+    for (const [index,message] of values.entries()) {
+      const rtc=new realm.RTCError({errorDetail:'dtls-failure'},message);
+      const constraint=new realm.OverconstrainedError(message,message);
+      check('RTCError: existing UTF-16 control '+index,units(rtc.message),units(message));
+      check('OverconstrainedError: existing UTF-16 control '+index,[units(constraint.message),units(constraint.constraint)],[units(message),units(message)]);
+    }
   }
   return {rows,failures};
 }
