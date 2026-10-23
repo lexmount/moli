@@ -13,12 +13,6 @@ pub(crate) enum WebSocketDispatchResult {
     Backpressured,
 }
 
-impl WebSocketDispatchResult {
-    pub(crate) fn dispatched(self) -> bool {
-        matches!(self, Self::Dispatched)
-    }
-}
-
 pub(crate) fn dispatch_websocket_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     socket: v8::Local<'s, v8::Object>,

@@ -324,11 +324,13 @@ fn websocket_stream_source_pull_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(socket_id) = websocket_id(scope, args.this())
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &*host_ptr };
-        host.signal_websocket_stream_pull(socket_id);
+    if let Some(socket_id) = websocket_id(scope, args.this()) {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let host = unsafe { &*host_ptr };
+            host.signal_websocket_stream_pull(socket_id);
+        } else {
+            crate::worker::signal_worker_websocket_stream_pull(scope, socket_id);
+        }
     }
     rv.set_undefined();
 }
