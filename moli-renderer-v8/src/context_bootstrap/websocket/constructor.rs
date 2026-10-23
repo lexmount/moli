@@ -63,6 +63,8 @@ struct WebSocketObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WebSocketStream)]
 struct WebSocketStreamObjectDeclaration<'scope> {
+    #[webapi(slot = WEBSOCKET_STREAM_CLOSE_REQUESTED_SLOT, init = false)]
+    close_requested: (),
     #[webapi(slot = WEBSOCKET_STREAM_URL_SLOT)]
     url: v8::Local<'scope, v8::String>,
     #[webapi(slot = WEBSOCKET_STREAM_OPENED_SLOT)]
@@ -350,10 +352,10 @@ fn websocket_stream_constructor_callback_inner<'s>(
     };
     let options = parsed.options;
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'WebSocketStream': runtime is unavailable.",
-        );
+        let stream = args.this();
+        if construct_worker_websocket_stream(scope, stream, &parsed.url, options).is_some() {
+            rv.set(stream.into());
+        }
         return;
     };
     let Some((owner, frame_id, document_url)) =
@@ -393,24 +395,11 @@ fn websocket_stream_constructor_callback_inner<'s>(
     }
     let protocols = options.protocols;
     let signal = options.signal;
-    let Some(opened_resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(closed_resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
     let stream = args.this();
-    WebSocketStreamObjectDeclaration::new(
-        v8_string(scope, url.as_str()).unwrap_or_else(|| v8::String::empty(scope)),
-        opened_resolver.get_promise(scope),
-        opened_resolver,
-        closed_resolver.get_promise(scope),
-        closed_resolver,
-    )
-    .initialize(scope, stream)
-    .expect("WebSocketStream object declaration should initialize");
+    if initialize_websocket_stream_object(scope, stream, &url).is_none() {
+        rv.set_undefined();
+        return;
+    }
     if signal.is_some_and(|signal| signal.is_aborted(scope)) {
         reject_websocket_stream_abort(scope, stream);
         rv.set(stream.into());
@@ -433,4 +422,88 @@ fn websocket_stream_constructor_callback_inner<'s>(
         install_websocket_stream_abort(scope, socket_id, signal);
     }
     rv.set(stream.into());
+}
+
+fn initialize_websocket_stream_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    url: &url::Url,
+) -> Option<()> {
+    let opened = v8::PromiseResolver::new(scope)?;
+    let closed = v8::PromiseResolver::new(scope)?;
+    WebSocketStreamObjectDeclaration::new(
+        v8_string(scope, url.as_str()).unwrap_or_else(|| v8::String::empty(scope)),
+        opened.get_promise(scope),
+        opened,
+        closed.get_promise(scope),
+        closed,
+    )
+    .initialize(scope, stream)
+    .expect("WebSocketStream object declaration should initialize");
+    Some(())
+}
+
+fn construct_worker_websocket_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    raw_url: &str,
+    options: WebSocketStreamOptionsMembers<'s>,
+) -> Option<()> {
+    let Some(document_url) = crate::worker::worker_current_script_url(scope) else {
+        throw_type_error(
+            scope,
+            "Failed to construct 'WebSocketStream': runtime is unavailable.",
+        );
+        return None;
+    };
+    let url = match normalize_websocket_stream_url(&document_url, raw_url) {
+        Ok(url) => url,
+        Err(message) => {
+            throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
+            return None;
+        }
+    };
+    let csp_outcome = crate::worker::check_worker_websocket_csp(scope, &document_url, &url)?;
+    if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(&document_url, &url) {
+        throw_websocket_dom_exception(
+            scope,
+            "SecurityError",
+            18,
+            "Failed to construct 'WebSocketStream': An insecure WebSocket connection may not be initiated from a secure origin.",
+        );
+        return None;
+    }
+    if let Err(message) = validate_websocket_stream_protocols(&options.protocols) {
+        throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
+        return None;
+    }
+    initialize_websocket_stream_object(scope, stream, &url)?;
+    if options
+        .signal
+        .is_some_and(|signal| signal.is_aborted(scope))
+    {
+        reject_websocket_stream_abort(scope, stream);
+        return Some(());
+    }
+    let Some(socket_id) = crate::worker::register_worker_websocket(
+        scope,
+        stream,
+        document_url,
+        url,
+        options.protocols,
+        csp_outcome,
+    ) else {
+        throw_type_error(
+            scope,
+            "Failed to construct 'WebSocketStream': runtime is unavailable.",
+        );
+        return None;
+    };
+    WebSocketStreamRegisteredSocketDeclaration::new(socket_id as f64)
+        .initialize(scope, stream)
+        .expect("WebSocketStream registered socket declaration should initialize");
+    if let Some(signal) = options.signal {
+        install_websocket_stream_abort(scope, socket_id, signal);
+    }
+    Some(())
 }

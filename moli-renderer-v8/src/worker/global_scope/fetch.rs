@@ -1648,6 +1648,7 @@ pub(crate) fn register_worker_websocket<'s>(
         socket_id,
         WorkerWebSocketState {
             wrapper: v8::Global::new(scope, wrapper),
+            stream_abort: None,
             connection,
             document_url,
             url,
@@ -1658,6 +1659,50 @@ pub(crate) fn register_worker_websocket<'s>(
         },
     );
     Some(socket_id)
+}
+
+pub(crate) fn set_worker_websocket_stream_abort_registration(
+    scope: &mut v8::PinScope<'_, '_>,
+    socket_id: u64,
+    registration: crate::context_bootstrap::WebSocketStreamAbortRegistration,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(connection) = state.websockets.get_mut(&socket_id) else {
+        return false;
+    };
+    connection.stream_abort = Some(registration);
+    true
+}
+
+pub(crate) fn take_worker_websocket_stream_abort_registration(
+    scope: &mut v8::PinScope<'_, '_>,
+    socket_id: u64,
+) -> Option<crate::context_bootstrap::WebSocketStreamAbortRegistration> {
+    let state = get_worker_state(scope)?;
+    state
+        .borrow_mut()
+        .websockets
+        .get_mut(&socket_id)?
+        .stream_abort
+        .take()
+}
+
+pub(crate) fn worker_websocket_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    socket_id: u64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
+    if state.closed {
+        return None;
+    }
+    state
+        .websockets
+        .get(&socket_id)
+        .map(|entry| v8::Local::new(scope, &entry.wrapper))
 }
 
 pub(crate) fn send_worker_websocket_text(

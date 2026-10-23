@@ -3,7 +3,8 @@ use super::helpers::{
     set_websocket_value_slot, websocket_dom_exception_value, websocket_id, websocket_object_slot,
     websocket_value_slot,
 };
-use super::payload::{WebSocketSendPayload, websocket_stream_send_payload_from_value};
+use super::payload::websocket_stream_send_payload_from_value;
+use super::transport::{close_websocket_stream_transport, send_websocket_stream_payload};
 use super::*;
 use crate::context_bootstrap::constructors::{
     new_websocket_error_value, websocket_error_close_info,
@@ -75,6 +76,17 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
     stream: v8::Local<'s, v8::Object>,
     event: &WebSocketEvent,
 ) -> WebSocketDispatchResult {
+    // Local close stops admitting further frames to the readable. Preserve
+    // chunks already queued there, while releasing a parked transport frame
+    // so the closing handshake does not depend on another consumer read.
+    if matches!(
+        event,
+        WebSocketEvent::TextMessage { .. } | WebSocketEvent::BinaryMessage { .. }
+    ) && websocket_value_slot(scope, stream, WEBSOCKET_STREAM_CLOSE_REQUESTED_SLOT)
+        .is_some_and(|value| value.is_true())
+    {
+        return WebSocketDispatchResult::Noop;
+    }
     match event {
         WebSocketEvent::HandshakeResponse { .. } => WebSocketDispatchResult::Noop,
         WebSocketEvent::Open {
@@ -357,18 +369,8 @@ fn websocket_stream_sink_write_callback<'s>(
             return;
         }
     };
-    let admission = if let Some(socket_id) = websocket_id(scope, args.this())
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &*host_ptr };
-        match payload {
-            WebSocketSendPayload::Text(text) => host.send_websocket_text(socket_id, text),
-            WebSocketSendPayload::Binary(bytes) => host.send_websocket_binary(socket_id, bytes),
-            WebSocketSendPayload::Blob(data) => host.send_websocket_blob(socket_id, data),
-        }
-    } else {
-        None
-    };
+    let admission = websocket_id(scope, args.this())
+        .and_then(|socket_id| send_websocket_stream_payload(scope, socket_id, payload));
     if admission.is_some() {
         // The transport may already have queued its terminal event when command
         // admission fails. Keep the write pending until that owner's Close or
@@ -521,11 +523,8 @@ fn websocket_stream_sink_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(socket_id) = websocket_id(scope, args.this())
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let _ = host.close_websocket(socket_id, None, String::new());
+    if let Some(socket_id) = websocket_id(scope, args.this()) {
+        close_websocket_stream_transport(scope, socket_id, None, String::new());
     }
     if let Some(close_promise) = websocket_stream_sink_close_promise(scope, args.this()) {
         rv.set(close_promise);
@@ -570,11 +569,8 @@ fn close_websocket_stream_with_reason<'s>(
 ) {
     let (close_code, reason) =
         websocket_error_close_info(scope, reason).unwrap_or((None, String::new()));
-    if let Some(socket_id) = websocket_id(scope, target)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let _ = host.close_websocket(socket_id, close_code, reason);
+    if let Some(socket_id) = websocket_id(scope, target) {
+        close_websocket_stream_transport(scope, socket_id, close_code, reason);
     }
 }
 
