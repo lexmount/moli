@@ -126,18 +126,7 @@ pub(crate) fn build_rtc_sdp_error<'s>(
     message: &str,
     line_number: i32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance(
-        scope, "RTCError",
-    )
-    .ok()?;
-    let prototype =
-        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
-            scope, "RTCError",
-        )
-        .ok()?;
-    if object.set_prototype(scope, prototype.into()) != Some(true) {
-        return None;
-    }
+    let object = build_dom_exception_instance(scope, "RTCError")?;
     ErrorInit {
         error_detail: ErrorDetail::SdpSyntaxError,
         received_alert: None,
