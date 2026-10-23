@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from moli_frontend_smoke.dom import (
     dom_hash,
     first_difference,
@@ -185,3 +187,28 @@ def test_difference_reports_first_json_path() -> None:
     assert first_difference(left, right) == "$.children[0].nodeValue"
     assert "-      \"nodeValue\": \"left\"" in unified_dom_diff(left, right)
     assert dom_hash(left) != dom_hash(right)
+
+
+@pytest.mark.parametrize("logical,physical", [
+    ("border-start-start-radius", "border-top-left-radius"),
+    ("border-start-end-radius", "border-top-right-radius"),
+    ("border-end-start-radius", "border-bottom-left-radius"),
+    ("border-end-end-radius", "border-bottom-right-radius"),
+])
+def test_normalize_preserves_logical_corner_radius_cascade(logical: str, physical: str) -> None:
+    # In horizontal-tb/LTR these declarations target the same corner; the last
+    # declaration wins. Reversing them changes the resulting radius from 2px to 1px.
+    first = normalize_dom_node(_element_with_style(f"{logical}: 1px; {physical}: 2px;"))
+    second = normalize_dom_node(_element_with_style(f"{physical}: 2px; {logical}: 1px;"))
+    assert first_difference(first, second) is not None
+    assert dom_hash(first) != dom_hash(second)
+
+
+def test_normalize_still_reorders_independent_physical_corners() -> None:
+    first = normalize_dom_node(_element_with_style(
+        "border-top-left-radius: 1px; border-bottom-right-radius: 2px;"
+    ))
+    second = normalize_dom_node(_element_with_style(
+        "border-bottom-right-radius: 2px; border-top-left-radius: 1px;"
+    ))
+    assert dom_hash(first) == dom_hash(second)
