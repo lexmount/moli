@@ -21,7 +21,7 @@
   const modifierMembers = ['altKey','ctrlKey','metaKey','modifierAltGraph','modifierCapsLock',
     'modifierFn','modifierFnLock','modifierHyper','modifierNumLock','modifierScrollLock',
     'modifierSuper','modifierSymbol','modifierSymbolLock','shiftKey'];
-  const eventOrder = ['bubbles','cancelable','composed','detail','view','which',
+  const eventOrder = ['bubbles','cancelable','composed','detail','sourceCapabilities','view',
     ...modifierMembers,'changedTouches','targetTouches','touches'];
   const touchOrder = ['altitudeAngle','azimuthAngle','clientX','clientY','force','identifier',
     'pageX','pageY','radiusX','radiusY','rotationAngle','screenX','screenY','target','touchType'];
@@ -164,15 +164,14 @@
     });
     check(p+'typed UIEvent state',()=>{
       const e=make({view:realms[1-ownerIndex],detail:4294967297.9,which:-1,bubbles:1,cancelable:1,composed:1});
-      return e.view===realms[1-ownerIndex] && e.detail===1 && e.which===4294967295 &&
+      return e.view===realms[1-ownerIndex] && e.detail===1 && e.which===0 &&
         e.bubbles && e.cancelable && e.composed;
     });
     for (const view of [{},target,new Proxy(owner,{})]) {
       check(p+'invalid view '+String(view),()=>raises(owner,()=>make({view})));
     }
-    for (const key of ['detail','which']) {
-      check(p+key+' symbol rejects',()=>raises(owner,()=>make({[key]:Symbol()})));
-    }
+    check(p+'detail symbol rejects',()=>raises(owner,()=>make({detail:Symbol()})));
+    check(p+'legacy which is ignored',()=>make({get which(){throw Error('ignored member');}}).which===0);
     check(p+'modifier states',()=>{
       const init=Object.fromEntries(modifierMembers.map(key=>[key,true]));const e=make(init);
       return flags.every(key=>e[key]) && modifiers.every(key=>e.getModifierState(key)) &&

@@ -8,13 +8,11 @@ fn scroll_dictionaries_preserve_conversion_order_and_silent_cancellation() {
     ] {
         let mut vm = new_storage_html_test_vm("https://scroll-dictionary.test/");
         vm.set_layout_policy(policy);
-        assert_eq!(
-            vm.eval(include_str!(
-                "../../../../tests/fixtures/scroll-options-dictionary.js"
-            ))
-            .unwrap(),
-            "true"
-        );
+        vm.eval(&format!(
+            "globalThis.scrollDictionaryResult='pending'; ({}).then(value=>scrollDictionaryResult=value,error=>scrollDictionaryResult=String(error.stack||error));",
+            include_str!("../../../../tests/fixtures/scroll-options-dictionary.js"),
+        )).unwrap();
+        assert_eq!(vm.eval("String(scrollDictionaryResult)").unwrap(), "true");
     }
 }
 

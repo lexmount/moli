@@ -44,8 +44,10 @@ impl<'s> SessionDescriptionInit<'s> {
         sdp: v8::Local<'s, v8::String>,
     ) -> Self {
         Self {
-            r#type: Some(<SdpType as webidl::WebIdlEnum>::parse_token(&kind.to_rust_string_lossy(scope))
-                .expect("native RTCSdpType")),
+            r#type: Some(
+                <SdpType as webidl::WebIdlEnum>::parse_token(&kind.to_rust_string_lossy(scope))
+                    .expect("native RTCSdpType"),
+            ),
             sdp: DictionaryDomString::from_value(sdp),
         }
     }

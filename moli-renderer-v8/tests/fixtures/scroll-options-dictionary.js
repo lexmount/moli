@@ -1,4 +1,4 @@
-(() => {
+(async () => {
   const assert=(value,label)=>{if(!value)throw Error(label);};
   document.body.style.cssText='width:5000px;height:5000px;margin:0';
   const box=document.createElement('div');box.style.cssText='width:100px;height:100px;overflow:auto';
@@ -9,24 +9,33 @@
   cases.push([box,'scrollIntoView',['behavior','block','container','inline']]);
   for(const [object,method,members] of cases) {
     for(const key of members) for(const sentinel of [{},null,undefined,7]) {
-      const reads=[];let caught=false;
-      try {object[method](new Proxy({}, {get(_,name) {
+      const reads=[];let caught=false,error;
+      try {await object[method](new Proxy({}, {get(_,name) {
         reads.push(name); if(name===key) throw sentinel;return undefined;
-      }, has() {throw Error('Get required');}}));} catch(e) {caught=true;}
-      assert(!caught, method+' silently cancels conversion failure');
+      }, has() {throw Error('Get required');}}));} catch(e) {caught=true;error=e;}
+      assert(object===window ? caught && error===sentinel : !caught,
+        method+' Window rejects while legacy Element conversion cancels');
       assert(reads.join()===members.slice(0,members.indexOf(key)+1).join(),method+' conversion order/short circuit: '+reads);
     }
     const reads=[];
-    object[method](new Proxy({}, {get(_,name) {reads.push(name);return 'invalid';}}));
+    let error;
+    try {await object[method](new Proxy({}, {get(_,name) {reads.push(name);return 'invalid';}}));}
+    catch(e) {error=e;}
+    assert(object===window ? error instanceof TypeError : error===undefined,
+      method+' invalid enum boundary');
     assert(reads.join()==='behavior',method+' invalid enum must stop conversion');
   }
   window.scrollTo(10,20);
   for(const init of [1,true,'init',1n,Symbol(),{behavior:'invalid',left:99,top:99}]) {
-    window.scrollTo(init);
+    let error;
+    try {await window.scrollTo(init);} catch(e) {error=e;}
+    assert(error instanceof TypeError,'invalid Window dictionary rejects');
     assert(scrollX===10 && scrollY===20,'failed one-argument dictionary must not change position');
   }
   let later=0;
-  window.scrollTo({get left(){throw 7;},get top(){later++;return 99;}});
+  let failure;
+  try {await window.scrollTo({get left(){throw 7;},get top(){later++;return 99;}});} catch(e) {failure=e;}
+  assert(failure===7,'Window preserves conversion exception identity');
   assert(later===0 && scrollX===10 && scrollY===20,'abrupt conversion cannot partially scroll');
   for(const object of [window,box]) for(const method of ['scrollTo','scrollBy']) {
     const reads=[];const options=function(){};
@@ -34,7 +43,10 @@
     object[method](options);
     assert(reads.join()==='behavior,left,top',method+' callable dictionary branch');
     let first=0,second=0;
-    object[method]({valueOf(){first++;throw 7;}},{valueOf(){second++;return 2;}});
+    let error;
+    try {await object[method]({valueOf(){first++;throw 7;}},{valueOf(){second++;return 2;}});}
+    catch(e) {error=e;}
+    assert(object===window ? error===7 : error===undefined,method+' numeric error boundary');
     assert(first===1 && second===0,method+' numeric overload stops at first error');
   }
   window.scrollTo(10,20);

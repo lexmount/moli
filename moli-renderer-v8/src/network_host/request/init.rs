@@ -405,18 +405,6 @@ fn parse_request_priority_webidl(value: &str) -> Option<RequestPriorityWebIdl> {
         .map(RequestPriorityWebIdl)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn request_priority_webidl_enum_is_case_sensitive() {
-        assert!(<RequestPriorityWebIdl as webidl::WebIdlEnum>::parse_token("high").is_some());
-        assert!(<RequestPriorityWebIdl as webidl::WebIdlEnum>::parse_token("HIGH").is_none());
-    }
-}
-
-
 fn parse_request_cache_webidl(value: &str) -> Option<RequestCacheWebIdl> {
     Some(RequestCacheWebIdl(match value {
         "default" => "default",
@@ -442,4 +430,15 @@ fn parse_referrer_policy_webidl(value: &str) -> Option<ReferrerPolicyWebIdl> {
         "unsafe-url" => "unsafe-url",
         _ => return None,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_priority_webidl_enum_is_case_sensitive() {
+        assert!(<RequestPriorityWebIdl as webidl::WebIdlEnum>::parse_token("high").is_some());
+        assert!(<RequestPriorityWebIdl as webidl::WebIdlEnum>::parse_token("HIGH").is_none());
+    }
 }

@@ -72,44 +72,6 @@ pub(in crate::context_bootstrap) fn initialize_legacy_ui_event<'s>(
         .expect("legacy UIEvent state should initialize");
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "CompositionEventInit", snapshot)]
-pub(super) struct CompositionEventInit<'s> {
-    #[webidl(inherit)]
-    ui: UiEventInit<'s>,
-    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
-    data: webidl::DomString16,
-}
-
-impl CompositionEventInit<'_> {
-    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        self.ui.event_flags()
-    }
-}
-
-pub(super) fn initialize_composition_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: CompositionEventInit<'s>,
-) {
-    init.initialize_snapshot(scope, event)
-        .expect("CompositionEvent state should initialize");
-}
-
-pub(super) fn parse_ui_event_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<UiEventInit<'s>> {
-    super::parse_event_dictionary(scope, args, "UIEvent")
-}
-
-pub(super) fn parse_composition_event_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<CompositionEventInit<'s>> {
-    super::parse_event_dictionary(scope, args, "CompositionEvent")
-}
-
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct CompositionEventData<'s> {

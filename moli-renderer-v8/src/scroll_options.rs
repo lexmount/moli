@@ -87,11 +87,9 @@ pub(crate) fn try_coordinates<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Result<ScrollCoordinates, webidl::WebIdlError> {
     if args.length() >= 2 {
-        webidl::try_parse_args::<ScrollNumericArgs>(scope, args).map(|args| {
-            ScrollCoordinates {
-                left: Some(args.x),
-                top: Some(args.y),
-            }
+        webidl::try_parse_args::<ScrollNumericArgs>(scope, args).map(|args| ScrollCoordinates {
+            left: Some(args.x),
+            top: Some(args.y),
         })
     } else {
         webidl::try_parse_args::<ScrollToArgs>(scope, args).map(|args| ScrollCoordinates {

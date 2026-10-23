@@ -69,9 +69,9 @@ impl<'s> SubclassInit<'s> {
             | EventSubclassKind::PageTransitionEvent => {
                 Self::Values(values::ValueEventInit::parse(scope, args, kind)?)
             }
-            EventSubclassKind::ClipboardChangeEvent => Self::ClipboardChange(
-                data::parse_clipboard_change_event_init(scope, args)?,
-            ),
+            EventSubclassKind::ClipboardChangeEvent => {
+                Self::ClipboardChange(data::parse_clipboard_change_event_init(scope, args)?)
+            }
             EventSubclassKind::InputEvent
             | EventSubclassKind::TouchEvent
             | EventSubclassKind::CapturedMouseEvent => {

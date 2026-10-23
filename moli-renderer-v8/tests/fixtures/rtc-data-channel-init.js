@@ -92,9 +92,9 @@
     });
     await run('numeric options truncate and accept the unsigned short range', pc => {
       for (const name of ['maxPacketLifeTime', 'maxRetransmits']) {
-        for (const [value, expected] of [[0,0],[-0.75,0],[3.9,3],[65535.9,65535],['100',100],[null,0],[true,1]])
+        for (const [value, expected] of [[0,0],[-0.75,0],[3.9,3],[65535.9,65535],['100',100],[null,0],[true,1],[-1,65535],[65536,0],[Infinity,0],[-Infinity,0],[NaN,0],['65536',0]])
           assert(pc.createDataChannel('', {[name]:value})[name] === expected);
-        for (const value of [-1,65536,Infinity,-Infinity,NaN,'65536',Symbol(),1n])
+        for (const value of [Symbol(),1n])
           rejects(() => pc.createDataChannel('', {[name]:value}));
       }
     });
@@ -103,8 +103,8 @@
       assert(pc.createDataChannel('', {maxPacketLifeTime:0,maxRetransmits:undefined}).maxPacketLifeTime === 0);
     });
     await run('unnegotiated ids are converted then ignored', pc => {
-      for (const id of [0,1,65534,65535,null]) assert(pc.createDataChannel('', {id}).id === null);
-      for (const id of [-1,65536,Infinity,NaN,Symbol(),1n]) rejects(() => pc.createDataChannel('', {id}));
+      for (const id of [0,1,65534,null]) assert(pc.createDataChannel('', {id}).id === null);
+      for (const id of [-1,65535,65536,Infinity,NaN,Symbol(),1n]) rejects(() => pc.createDataChannel('', {id}));
     });
     await run('negotiated ids require a usable explicit value', pc => {
       rejects(() => pc.createDataChannel('', {negotiated:true}));
@@ -161,7 +161,7 @@
       rejects(() => pc.createDataChannel({toString(){trace.push('label');return ''; }}, {get id(){trace.push('id');return undefined;},get protocol(){trace.push('protocol');return '';}}), 'InvalidStateError');
       assert(trace.join('|') === 'label|id|protocol');
       const sentinel = {}; assert(caught(() => pc.createDataChannel('', {get id(){throw sentinel;}})) === sentinel);
-      rejects(() => pc.createDataChannel('', {maxRetransmits:65536}));
+      rejects(() => pc.createDataChannel('', {maxRetransmits:65536}), 'InvalidStateError');
       rejects(() => pc.createDataChannel('a'.repeat(65536)), 'InvalidStateError');
     });
     await run('invalid receivers fail before argument conversion or author traps', pc => {

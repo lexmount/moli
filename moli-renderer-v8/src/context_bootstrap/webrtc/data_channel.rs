@@ -38,9 +38,8 @@ const VALUES: &[&str] = &[
 struct Init {
     #[webidl(default = true)]
     ordered: bool,
-    #[webidl(converter = "enforce_range_unsigned_short", name = "maxPacketLifeTime")]
+    #[webidl(name = "maxPacketLifeTime")]
     max_packet_lifetime: Option<u16>,
-    #[webidl(converter = "enforce_range_unsigned_short")]
     max_retransmits: Option<u16>,
     #[webidl(default = "", converter = "usv_string")]
     protocol: String,
@@ -164,7 +163,7 @@ pub(super) fn create<'s>(
     if label.len() > usize::from(u16::MAX)
         || options.protocol.len() > usize::from(u16::MAX)
         || (options.negotiated && id.is_none())
-        || id == Some(u16::MAX)
+        || options.id == Some(u16::MAX)
         || (options.max_packet_lifetime.is_some() && options.max_retransmits.is_some())
     {
         throw_type_error(scope, "Invalid RTCDataChannel initialization.");

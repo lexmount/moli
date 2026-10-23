@@ -38,12 +38,18 @@
       assert(missing.id===null,'missing or undefined id snapshot default');missing.close();
     }
     for(const [id,expected] of [[null,0],[false,0],[true,1],['7',7]]) {
-      const converted=live.createDataChannel('converted',{negotiated:true,id});
-      assert(converted.id===expected,'non-nullable id numeric conversion');converted.close();
+      const isolated=new RTCPeerConnection();
+      try {
+        const converted=isolated.createDataChannel('converted',{negotiated:true,id});
+        assert(converted.id===expected,'non-nullable id numeric conversion');
+      } finally {isolated.close();}
     }
     let idReads=0;
-    const coerced=live.createDataChannel('coerced',{negotiated:true,id:{valueOf(){idReads++;return 7;}}});
-    assert(coerced.id===7 && idReads===1,'id conversion once');coerced.close();
+    const isolated=new RTCPeerConnection();
+    try {
+      const coerced=isolated.createDataChannel('coerced',{negotiated:true,id:{valueOf(){idReads++;return 7;}}});
+      assert(coerced.id===7 && idReads===1,'id conversion once');
+    } finally {isolated.close();}
     for(const init of [{id:-1},{id:65536},{id:65535},{negotiated:true},{negotiated:true,id:undefined},{maxPacketLifeTime:1,maxRetransmits:1}]){
       let caught;try{live.createDataChannel('bad',init);}catch(e){caught=e;}
       assert(caught instanceof TypeError,'invalid channel options');

@@ -12,7 +12,14 @@
     assert(position().join()==='30,40','absolute fallback must use state after conversion');
     object.scrollBy({get behavior(){object.scrollTo(50,60);return 'instant';},left:5,top:7});
     assert(position().join()==='55,67','relative scroll must use state after conversion');
-    object.scrollTo({left:99,get top(){throw 7;}});
+    let failure;
+    const failed=object.scrollTo({left:99,get top(){throw 7;}});
+    if(object===window) {
+      assert(failed instanceof Promise,'Window conversion returns a Promise');
+      failed.catch(error=>{failure=error;});
+      yield;
+      assert(failure===7,'Window conversion rejection identity');
+    }
     assert(position().join()==='55,67','failed later member cannot partially scroll');
     object.scrollTo(Infinity,NaN);
     assert(position().join()==='0,0','native nonfinite normalization');

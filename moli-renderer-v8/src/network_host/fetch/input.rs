@@ -37,7 +37,9 @@ pub(super) fn parse_window_fetch_input<'s>(
     if let Some(inherited) = inherited {
         let req_obj = source.expect("request input source");
         let init = parse_fetch_init(scope, args.init)?;
-        if inherited.body_unusable && !init.body_present { return Err(crate::network_host::request_body_already_used_error().into()); }
+        if inherited.body_unusable && !init.body_present {
+            return Err(crate::network_host::request_body_already_used_error().into());
+        }
         let body_stream = if init.body_present {
             init.body_stream.clone()
         } else {
@@ -71,8 +73,8 @@ pub(super) fn parse_window_fetch_input<'s>(
             .or_else(|| moli_fetch::RequestMode::from_str(&inherited.mode).ok())
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &method)?;
-        let has_stream_body = init.body_stream.is_some()
-            || !init.body_present && inherited.body.is_none() && body_stream.is_some();
+        let has_stream_body =
+            init.body_stream.is_some() || !init.body_present && inherited.has_stream_body;
         validate_fetch_body(
             body.is_some() || body_stream.is_some(),
             has_stream_body,
@@ -130,7 +132,10 @@ pub(super) fn parse_window_fetch_input<'s>(
         })
     } else {
         let init = parse_fetch_init(scope, args.init)?;
-        let request_mode = init.validation.mode.unwrap_or(moli_fetch::RequestMode::Cors);
+        let request_mode = init
+            .validation
+            .mode
+            .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &init.method)?;
         validate_fetch_body(
             init.body.is_some() || init.body_stream.is_some(),

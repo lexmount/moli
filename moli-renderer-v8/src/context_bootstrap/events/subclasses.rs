@@ -14,8 +14,8 @@ mod navigation_init;
 mod payload;
 mod pointer;
 mod security_policy;
-mod values;
 mod touch;
+mod values;
 pub(crate) use touch::construct_native_touch_event;
 
 pub(in crate::context_bootstrap::events) use basic::initialize_text_event;
@@ -23,7 +23,6 @@ pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;
 pub(in crate::context_bootstrap) use data::{
     navigation_precommit_controller_for_event, run_navigate_event_precommit_handlers,
 };
-pub(in crate::context_bootstrap) use input::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use interaction::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use keyboard::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use pointer::{
