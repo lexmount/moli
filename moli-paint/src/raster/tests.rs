@@ -589,11 +589,11 @@ fn nested_paths_preserve_nonzero_and_evenodd_fill_rules() {
     }
 }
 
-fn raster_stroked_ahem_box(
+fn ahem_run(
+    snapshot: &mut PaintSnapshot,
     stroke: Option<moli_layout::PaintTextStroke>,
     embolden: f32,
-) -> RasterImage {
-    let mut snapshot = snapshot(80, 60, 1.0);
+) -> moli_layout::PaintGlyphRun {
     let font = peniko::FontData::new(
         Blob::from(
             include_bytes!(concat!(
@@ -604,10 +604,9 @@ fn raster_stroked_ahem_box(
         ),
         0,
     );
-    let font = snapshot.intern_font(&font);
-    snapshot.push_fragment(PaintFragment::GlyphRun(moli_layout::PaintGlyphRun {
+    moli_layout::PaintGlyphRun {
         text: None,
-        font,
+        font: snapshot.intern_font(&font),
         font_size: 50.0,
         normalized_coords: Vec::new(),
         color: PaintColor::BLACK,
@@ -622,7 +621,16 @@ fn raster_stroked_ahem_box(
         }],
         transform: moli_layout::PaintTransform2D::IDENTITY,
         stroke,
-    }));
+    }
+}
+
+fn raster_stroked_ahem_box(
+    stroke: Option<moli_layout::PaintTextStroke>,
+    embolden: f32,
+) -> RasterImage {
+    let mut snapshot = snapshot(80, 60, 1.0);
+    let run = ahem_run(&mut snapshot, stroke, embolden);
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
     raster_snapshot(&snapshot).expect("stroked glyph fixture should rasterize")
 }
 
@@ -670,7 +678,11 @@ fn paint_order_stroke_fill_paints_the_stroke_beneath_the_fill() {
     );
     assert!(is_red(pixel(&image, 17, 30)), "{:?}", pixel(&image, 17, 30));
     // The fill covers the inner half of the stroke.
-    assert!(is_black(pixel(&image, 21, 30)), "{:?}", pixel(&image, 21, 30));
+    assert!(
+        is_black(pixel(&image, 21, 30)),
+        "{:?}",
+        pixel(&image, 21, 30)
+    );
     assert!(is_black(pixel(&image, 35, 30)));
 }
 
@@ -681,13 +693,22 @@ fn text_stroke_follows_synthetic_bold_outline_expansion() {
         color: RED,
         paint_first: true,
     });
+    // The fixture font has 1000 units per em, and emboldened fills are expanded
+    // in font units before scaling, so an amount of 40 grows the 50px fill by
+    // 2px per side: fill edge x=18, stroke 17..19 under it -> red 17, black 18.
     let regular = raster_stroked_ahem_box(stroke, 0.0);
-    let bold = raster_stroked_ahem_box(stroke, 3.0);
-    // Regular: outer stroke edge at x=19; synthetic bold moves the fill edge
-    // out by 3px and the stroke must still surround it.
-    assert_eq!(pixel(&regular, 16, 30), [255, 255, 255, 255]);
-    assert!(is_red(pixel(&bold, 16, 30)), "{:?}", pixel(&bold, 16, 30));
+    let bold = raster_stroked_ahem_box(stroke, 40.0);
+    let bold_fill = raster_stroked_ahem_box(None, 40.0);
+    assert_eq!(pixel(&regular, 17, 30), [255, 255, 255, 255]);
+    assert!(
+        is_black(pixel(&bold_fill, 18, 30)),
+        "{:?}",
+        pixel(&bold_fill, 18, 30)
+    );
+    assert_eq!(pixel(&bold_fill, 17, 30), [255, 255, 255, 255]);
+    assert!(is_red(pixel(&bold, 17, 30)), "{:?}", pixel(&bold, 17, 30));
     assert!(is_black(pixel(&bold, 18, 30)), "{:?}", pixel(&bold, 18, 30));
+    assert_eq!(pixel(&bold, 16, 30), [255, 255, 255, 255]);
 }
 
 #[test]
@@ -712,4 +733,31 @@ fn transparent_or_zero_width_text_stroke_paints_nothing() {
     ] {
         assert_eq!(raster_stroked_ahem_box(Some(stroke), 0.0), plain);
     }
+}
+
+#[test]
+fn limitation_text_shadow_excludes_the_text_stroke() {
+    // Pins current behavior: the shadow fills the glyph outline only. Chromium
+    // also shadows the -webkit-text-stroke outline (x 56..60 here).
+    let mut snapshot = snapshot(100, 60, 1.0);
+    let run = ahem_run(
+        &mut snapshot,
+        Some(moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: RED,
+            paint_first: false,
+        }),
+        0.0,
+    );
+    snapshot.push_fragment(PaintFragment::TextShadow(moli_layout::PaintTextShadow {
+        run: run.clone(),
+        color: PaintColor::new(0.0, 1.0, 0.0, 1.0),
+        offset: moli_layout::PaintPoint::new(40.0, 0.0),
+        blur_radius: 0.0,
+    }));
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    let image = raster_snapshot(&snapshot).expect("shadowed glyph should rasterize");
+    assert_eq!(pixel(&image, 75, 30), [0, 255, 0, 255]);
+    assert_eq!(pixel(&image, 58, 30), [255, 255, 255, 255]);
+    assert!(is_red(pixel(&image, 17, 30)));
 }

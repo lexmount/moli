@@ -99,11 +99,10 @@ pub(super) fn paint_glyph_run(
     });
     // `-webkit-text-stroke` is centered on the glyph outline. The backend's
     // stroked glyph path does not take an embolden amount, so synthetic bold
-    // widens the stroke by the outline expansion instead (the same model the
-    // PDF backend uses for emboldened fills).
+    // widens the stroke by the fill's outline expansion instead.
     let paint_stroke = |scene: &mut _| {
         if let Some((stroke, width)) = stroke {
-            let embolden = glyph_embolden.x.max(glyph_embolden.y).max(0.0);
+            let embolden = rendered_fill_embolden(&font.font, run.font_size, glyph_embolden);
             PaintScene::draw_glyphs(
                 scene,
                 &font.font,
@@ -211,6 +210,31 @@ pub(super) fn paint_text_decoration(
                 &path,
             );
         }
+    }
+}
+
+/// Outline expansion, in glyph-space pixels, that the backend actually applies
+/// to an emboldened (and therefore unhinted) fill.
+///
+/// glifo caches unhinted fill outlines at units-per-em size and applies the
+/// embolden amount there before scaling to `font_size`, so the rendered
+/// expansion is `embolden * font_size / units_per_em`. Stroked outlines are
+/// cached at `font_size`, so the stroke widening has to use the same scaled
+/// amount to stay centered on the visible fill edge.
+fn rendered_fill_embolden(font: &peniko::FontData, font_size: f32, embolden: Vec2) -> f64 {
+    use skrifa::raw::TableProvider;
+    let amount = embolden.x.max(embolden.y).max(0.0);
+    if amount == 0.0 {
+        return 0.0;
+    }
+    let units_per_em = skrifa::FontRef::from_index(font.data.as_ref(), font.index)
+        .ok()
+        .and_then(|face| face.head().ok())
+        .map(|head| head.units_per_em())
+        .filter(|&upem| upem > 0);
+    match units_per_em {
+        Some(upem) => amount * f64::from(finite_nonnegative(font_size)) / f64::from(upem),
+        None => 0.0,
     }
 }
 
