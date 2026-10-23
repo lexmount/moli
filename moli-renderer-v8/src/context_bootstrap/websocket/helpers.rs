@@ -43,31 +43,8 @@ pub(super) fn parse_websocket_protocols<'s>(
     Ok(protocols)
 }
 
-pub(super) fn parse_websocket_stream_protocols<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> Result<Vec<String>, WebSocketProtocolParseError> {
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    if value.is_undefined() {
-        return Ok(Vec::new());
-    }
-    let sequence = webidl::convert::<webidl::Sequence<webidl::UsvString>>(
-        scope,
-        value,
-        webidl::Context::member("WebSocketStreamOptions", "protocols"),
-    )
-    .map_err(WebSocketProtocolParseError::Conversion)?;
-    let protocols = sequence
-        .0
-        .into_iter()
-        .map(|value| value.0)
-        .collect::<Vec<_>>();
-    validate_subprotocols(&protocols)
-        .map_err(websocket_stream_subprotocol_constructor_error)
-        .map_err(WebSocketProtocolParseError::Validation)?;
-    Ok(protocols)
+pub(super) fn validate_websocket_stream_protocols(protocols: &[String]) -> Result<(), String> {
+    validate_subprotocols(protocols).map_err(websocket_stream_subprotocol_constructor_error)
 }
 
 fn websocket_dom_string_or_sequence<'s>(

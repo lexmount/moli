@@ -35,6 +35,10 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     // WebMCP retains native registration/invocation abort algorithms here.
     // Page-supplied execute functions use WindowWebIdlCallbackFunction instead.
     ("context_bootstrap/web_mcp/state.rs", 1),
+    // The connection owns this browser-created abort algorithm only during
+    // its handshake. AbortSignal stores a weak handle; retirement drops the
+    // connection root. This never retains a page-supplied callback.
+    ("context_bootstrap/websocket/abort.rs", 1),
     // Shared strong/weak handle representation for browser-created abort
     // algorithms. The Window and worker stores still own these handles;
     // page-supplied abort listeners remain in the typed EventTarget registry.
@@ -134,11 +138,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         // Pending promise settlement and cancellation continuations use the
         // native Promise API; the remaining calls run stream algorithms.
         4,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
-        "context_bootstrap/websocket/constructor.rs",
-        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
