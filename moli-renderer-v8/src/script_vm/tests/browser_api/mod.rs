@@ -86,3 +86,4 @@ mod event_prototype_attributes;
 
 mod named_node_map_receivers;
 mod node_native_aliases;
+mod parent_node_bindings;

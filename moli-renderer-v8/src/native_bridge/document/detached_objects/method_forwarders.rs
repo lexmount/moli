@@ -84,13 +84,6 @@ pub(in crate::native_bridge) fn detached_insert_before_method_callback<'a>(
     }
 }
 
-pub(in crate::native_bridge::document) fn detached_move_before_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let _ = detached_method_forward(scope, args, "__detachedMoveBefore");
-}
 pub(in crate::native_bridge) fn detached_remove_child_method_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -254,12 +247,6 @@ pub(in crate::native_bridge) fn detached_clone_node_method_callback<'a>(
         None => rv.set_undefined(),
     }
 }
-detached_bridge_method_forwarder!(detached_append_method_callback, "__detachedAppend");
-detached_bridge_method_forwarder!(detached_prepend_method_callback, "__detachedPrepend");
-detached_bridge_method_forwarder!(
-    detached_replace_children_method_callback,
-    "__detachedReplaceChildren"
-);
 detached_bridge_method_forwarder!(detached_before_method_callback, "__detachedBefore");
 detached_bridge_method_forwarder!(detached_after_method_callback, "__detachedAfter");
 detached_bridge_method_forwarder!(
