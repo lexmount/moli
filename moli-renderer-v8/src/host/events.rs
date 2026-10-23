@@ -43,6 +43,13 @@ struct EventListenerEntry {
     removed: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ListenerFilter {
+    Capturing,
+    Bubbling,
+    All,
+}
+
 pub(crate) struct EventListenerRegistration {
     callback_id: crate::native_bridge::EventCallbackId,
     function_name: String,
@@ -438,7 +445,7 @@ fn call_event_target_listeners_filtered<'s>(
     invocation_target_in_shadow_tree: bool,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
-    capture_only: Option<bool>,
+    capture_only: bool,
     at_target: bool,
 ) -> std::result::Result<DispatchStatus, String> {
     if let EventTargetHandle::ChildWindow(target) = target {
@@ -448,7 +455,7 @@ fn call_event_target_listeners_filtered<'s>(
                 target,
                 event_type,
                 event,
-                capture_only.expect("child Window propagation uses a capture filter"),
+                capture_only,
                 at_target,
             ),
         );
@@ -460,7 +467,11 @@ fn call_event_target_listeners_filtered<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        capture_only,
+        if capture_only {
+            ListenerFilter::Capturing
+        } else {
+            ListenerFilter::Bubbling
+        },
         at_target,
     )
 }
@@ -1059,7 +1070,7 @@ impl HostEventTargetRegistry {
         invocation_target_in_shadow_tree: bool,
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
-        capture_only: Option<bool>,
+        filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
         let snapshot: Vec<(
@@ -1083,7 +1094,11 @@ impl HostEventTargetRegistry {
             entries
                 .iter()
                 .filter(|entry| !entry.removed)
-                .filter(|entry| capture_only.is_none_or(|capture| entry.capture == capture))
+                .filter(|entry| match filter {
+                    ListenerFilter::Capturing => entry.capture,
+                    ListenerFilter::Bubbling => !entry.capture,
+                    ListenerFilter::All => true,
+                })
                 .map(|entry| {
                     (
                         entry.id,
@@ -1112,7 +1127,7 @@ impl HostEventTargetRegistry {
                 stage = "event_listener_batch_start",
                 event_type,
                 ?target,
-                ?capture_only,
+                ?filter,
                 at_target,
                 listener_count = snapshot.len(),
             );
@@ -1203,7 +1218,7 @@ impl HostEventTargetRegistry {
                     listener_id,
                     event_type,
                     ?target,
-                    ?capture_only,
+                    ?filter,
                     at_target,
                     listener_index,
                     function_name = function_name.as_str(),
@@ -1384,7 +1399,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                Some(true),
+                true,
                 false,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1450,7 +1465,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(&dispatch_target),
                 &event_type,
                 event,
-                None,
+                ListenerFilter::All,
                 true,
             )?;
             stopped = matches!(
@@ -1469,7 +1484,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(&dispatch_target),
                 &event_type,
                 event,
-                Some(true),
+                true,
                 true,
             )?;
             if status == DispatchStatus::StopPropagation {
@@ -1486,7 +1501,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                     invocation_targets_in_shadow_tree.contains(&dispatch_target),
                     &event_type,
                     event,
-                    Some(false),
+                    false,
                     true,
                 )?;
                 if status == DispatchStatus::StopImmediate
@@ -1548,7 +1563,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                Some(true),
+                true,
                 true,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1564,7 +1579,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                Some(false),
+                false,
                 true,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1647,7 +1662,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                Some(false),
+                false,
                 false,
             )?;
             if status == DispatchStatus::StopImmediate
@@ -1792,7 +1807,7 @@ fn run_host_event_dispatch<'s>(
             invocation_target_in_shadow_tree,
             event_type,
             event,
-            None,
+            ListenerFilter::All,
             true,
         )?;
         return Ok(());
@@ -1805,7 +1820,7 @@ fn run_host_event_dispatch<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        Some(true),
+        ListenerFilter::Capturing,
         true,
     )?;
     if status != DispatchStatus::StopImmediate {
@@ -1816,7 +1831,7 @@ fn run_host_event_dispatch<'s>(
             invocation_target_in_shadow_tree,
             event_type,
             event,
-            Some(false),
+            ListenerFilter::Bubbling,
             true,
         )?;
     }
