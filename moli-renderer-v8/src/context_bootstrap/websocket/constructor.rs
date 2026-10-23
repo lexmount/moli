@@ -1,7 +1,7 @@
+use super::abort::install_websocket_stream_abort;
 use super::helpers::{
     WebSocketProtocolParseError, normalize_websocket_stream_url, normalize_websocket_url,
-    parse_websocket_protocols, parse_websocket_stream_protocols, throw_websocket_dom_exception,
-    websocket_id, websocket_object_slot,
+    parse_websocket_protocols, throw_websocket_dom_exception, validate_websocket_stream_protocols,
 };
 use super::realm::{effective_websocket_document_scope, websocket_constructor_relevant_context};
 use super::stream::reject_websocket_stream_abort;
@@ -12,7 +12,6 @@ use moli_webapi::websocket_values::WebSocketStreamConstructorArgs;
 use moli_webapi_declare::WebApiObject;
 use moli_websocket::websocket_url_is_potentially_trustworthy;
 
-const WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT: &str = "__moliWebSocketStreamAbortStream";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WebSocket)]
@@ -73,13 +72,6 @@ struct WebSocketStreamRegisteredSocketDeclaration {
     socket_id: f64,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebSocketStreamAbortListenerDataDeclaration<'scope> {
-    #[webapi(slot = WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT)]
-    stream: v8::Local<'scope, v8::Object>,
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WebSocket")]
 struct WebSocketConstructorArgs<'s> {
@@ -131,35 +123,6 @@ pub(in crate::context_bootstrap) fn websocket_stream_constructor_callback<'s>(
 }
 
 pub(in crate::context_bootstrap) use moli_webapi::websocket_values::websocket_error_constructor_callback;
-
-fn websocket_stream_abort_signal_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(entry) = v8::Local::<v8::Object>::try_from(args.data()).ok() else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(stream) =
-        websocket_object_slot(scope, entry, WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    if websocket_object_slot(scope, stream, WEBSOCKET_STREAM_READABLE_SLOT).is_some() {
-        rv.set_undefined();
-        return;
-    }
-    if let Some(socket_id) = websocket_id(scope, stream)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let _ = host.close_websocket(socket_id, None, String::new());
-    }
-    reject_websocket_stream_abort(scope, stream);
-    rv.set_undefined();
-}
 
 fn websocket_constructor_callback_inner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -336,9 +299,8 @@ fn websocket_stream_constructor_callback_inner<'s>(
         );
         return;
     };
-    let host = unsafe { &mut *host_ptr };
     let Some((owner, environment, is_secure_context)) =
-        effective_websocket_document_scope(scope, host)
+        effective_websocket_document_scope(scope, unsafe { &mut *host_ptr })
     else {
         throw_type_error(
             scope,
@@ -353,7 +315,7 @@ fn websocket_stream_constructor_callback_inner<'s>(
             return;
         }
     };
-    let csp_outcome = host.check_document_connect_csp_for_owner(
+    let csp_outcome = unsafe { &mut *host_ptr }.check_document_connect_csp_for_owner(
         scope,
         owner.dispatch_scope(),
         &environment.document_url,
@@ -369,13 +331,11 @@ fn websocket_stream_constructor_callback_inner<'s>(
         );
         return;
     }
-    let protocols = match parse_websocket_stream_protocols(options.protocols) {
-        Ok(protocols) => protocols,
-        Err(message) => {
-            throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
-            return;
-        }
-    };
+    if let Err(message) = validate_websocket_stream_protocols(&options.protocols) {
+        throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
+        return;
+    }
+    let protocols = options.protocols;
     let signal = options.signal;
     let Some(opened_resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
@@ -395,12 +355,12 @@ fn websocket_stream_constructor_callback_inner<'s>(
     )
     .initialize(scope, stream)
     .expect("WebSocketStream object declaration should initialize");
-    if signal.is_some_and(|signal| host.abort_signal_aborted(scope, signal)) {
+    if signal.is_some_and(|signal| signal.is_aborted(scope)) {
         reject_websocket_stream_abort(scope, stream);
         rv.set(stream.into());
         return;
     }
-    let socket_id = host.register_websocket_for_document(
+    let socket_id = unsafe { &mut *host_ptr }.register_websocket_for_document(
         scope,
         stream,
         owner,
@@ -413,40 +373,7 @@ fn websocket_stream_constructor_callback_inner<'s>(
         .initialize(scope, stream)
         .expect("WebSocketStream registered socket declaration should initialize");
     if let Some(signal) = signal {
-        install_websocket_stream_abort_listener(scope, stream, signal);
+        install_websocket_stream_abort(scope, socket_id, signal);
     }
     rv.set(stream.into());
-}
-
-fn install_websocket_stream_abort_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stream: v8::Local<'s, v8::Object>,
-    signal: v8::Local<'s, v8::Object>,
-) {
-    let entry = WebSocketStreamAbortListenerDataDeclaration::new(stream)
-        .bind(scope)
-        .expect("WebSocketStream abort listener data declaration should bind");
-    let Some(listener) = v8::Function::builder(websocket_stream_abort_signal_callback)
-        .data(entry.into())
-        .length(1)
-        .build(scope)
-    else {
-        return;
-    };
-    let Some(add_event_listener) = signal
-        .get(scope, v8str(scope, "addEventListener").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
-    let options = moli_webapi::abort_signal::abort_listener_options(scope);
-    let _ = add_event_listener.call(
-        scope,
-        signal.into(),
-        &[
-            v8str(scope, "abort").into(),
-            listener.into(),
-            options.into(),
-        ],
-    );
 }
