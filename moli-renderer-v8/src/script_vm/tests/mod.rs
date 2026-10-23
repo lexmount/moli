@@ -2423,6 +2423,7 @@ mod data_transfer_native_receivers;
 mod exception_constructor_strings;
 
 mod encrypted_media;
+mod exception_constructor_strings;
 mod hyperlink_null_url_protocol;
 mod idb_rejected_request;
 mod idb_sqlite_factory;

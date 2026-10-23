@@ -9,6 +9,8 @@ use moli_websocket_types::{WebSocketCloseValidationError, close_info_code_from_n
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "WebSocketCloseInfo")]
 pub struct WebSocketCloseInfo {
+    // Finish all dictionary conversions before applying close-code semantics.
+    // The protocol helper preserves Blink's observed truncating clamp behavior.
     #[webidl(converter = "unrestricted_double")]
     close_code: Option<f64>,
     #[webidl(default = "", converter = "usv_string")]
