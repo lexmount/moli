@@ -542,8 +542,11 @@ async fn websocket_stream_close_owns_rejected_native_admission() {
                 __closeWriter.write('later').catch(error => __closeEvents.push(`later:${error === __interruptedWrite}`));
                 "checked"
             "#)?;
-            // On main, promise rejection reporting runs at the task's existing
-            // microtask checkpoint rather than through a separate Page task.
+            while page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::PromiseRejection,
+                ), &loader,
+            ).await? {}
             assert_eq!(page_vm.vm_mut().eval("__closeEvents.join('|')")?,
                 "goodbye|closed:true:1000:goodbye|write:InvalidStateError:true|writer:true|later:true");
             Ok::<_, anyhow::Error>(())
