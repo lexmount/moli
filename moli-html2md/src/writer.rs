@@ -26,6 +26,7 @@ struct OpenStyle<'a> {
 pub(crate) struct Writer<'a> {
     // Blocks are immutable fragments; inline edits only touch the local tail.
     prefix: Output,
+    content_revision: usize,
     output: String,
     desired: Vec<Style<'a>>,
     emitted: Vec<OpenStyle<'a>>,
@@ -97,6 +98,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn text(&mut self, text: &str) {
+        self.content_revision += usize::from(text.chars().any(|c| !c.is_whitespace()));
         self.flush_code();
         for ch in text.chars() {
             if is_space(ch) {
@@ -153,6 +155,7 @@ impl<'a> Writer<'a> {
         }
         let text = text.trim_matches(is_space);
         if !text.is_empty() {
+            self.content_revision += 1;
             if self.code.is_none() {
                 self.prepare_inline('`');
                 self.code = Some(String::new());
@@ -181,6 +184,7 @@ impl<'a> Writer<'a> {
         }
         self.flush_code();
         if preformatted {
+            self.content_revision += 1;
             self.prepare_inline('`');
             self.code = Some(text.replace("\r\n", " ").replace(['\n', '\r'], " "));
             return;
@@ -203,6 +207,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn image(&mut self, alt: &str, src: &str, title: Option<&str>) {
+        self.content_revision += 1;
         self.flush_code();
         self.prepare_inline('!');
         self.output.push_str("![");
@@ -236,6 +241,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn hard_break(&mut self) {
+        self.content_revision += 1;
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -250,6 +256,7 @@ impl<'a> Writer<'a> {
             self.boundary(before.max(after));
             return;
         }
+        self.content_revision += 1;
         // Closing styles before detaching the tail keeps all inline edit
         // offsets local to the current String, never inside a finished block.
         self.boundary(before);
@@ -270,6 +277,10 @@ impl<'a> Writer<'a> {
         self.output.truncate(end);
         self.prefix.push_text(self.output.into());
         self.prefix
+    }
+
+    pub(crate) fn content_mark(&self) -> usize {
+        self.content_revision
     }
 
     fn is_empty(&self) -> bool {
