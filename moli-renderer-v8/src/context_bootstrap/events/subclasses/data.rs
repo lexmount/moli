@@ -802,7 +802,6 @@ pub(in crate::context_bootstrap::events) fn initialize_navigate_event_methods<'s
         .expect("NavigateEvent methods declaration should initialize");
 }
 
-
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ClipboardChangeEventInit")]
 pub(super) struct ClipboardChangeEventInitMembers<'scope> {

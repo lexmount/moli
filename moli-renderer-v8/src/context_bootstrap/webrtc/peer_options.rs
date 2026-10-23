@@ -34,4 +34,3 @@ pub(super) struct LocalDescriptionArgs<'s> {
     #[webidl(dictionary)]
     pub(super) description: session_description::SessionDescriptionInit<'s>,
 }
-

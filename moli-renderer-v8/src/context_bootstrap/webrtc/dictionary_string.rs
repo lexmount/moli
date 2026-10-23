@@ -40,3 +40,7 @@ impl<'s> moli_webapi_declare::WebApiValue<'s> for DictionaryDomString<'s> {
         Some(self.0.unwrap_or_else(|| v8str(scope, "")).into())
     }
 }
+
+impl webidl::WebIdlSnapshotValue for DictionaryDomString<'_> {
+    const SNAPSHOT_KIND: webidl::SnapshotKind = webidl::SnapshotKind::Scalar;
+}

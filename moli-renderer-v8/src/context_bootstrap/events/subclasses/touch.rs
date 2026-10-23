@@ -18,7 +18,11 @@ pub(crate) fn construct_native_touch_event<'s>(
     define_event_property(scope, state, "composed", composed.into());
     EventModifierInit::with_event_flags(true, true, true).initialize(scope, state);
     touch_runtime::initialize_touch_event_lists(
-        scope, state, &touches, &target_touches, &changed_touches,
+        scope,
+        state,
+        &touches,
+        &target_touches,
+        &changed_touches,
     );
     web_api_interfaces::initialize(scope, state, web_api_interfaces::TouchEvent::NAME).ok()?;
     let kind = v8::Integer::new(scope, super::EventSubclassKind::TouchEvent as i32);
