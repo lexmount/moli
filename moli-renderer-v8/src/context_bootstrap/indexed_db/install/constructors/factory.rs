@@ -15,7 +15,7 @@ struct IdbFactoryPrototypeDeclaration {
     cmp: (),
 }
 
-pub(super) fn install_factory_and_request_template_bindings<'s>(
+pub(super) fn install_factory_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     prototype: v8::Local<'s, v8::ObjectTemplate>,
     interface_name: &str,
