@@ -18,8 +18,8 @@ const WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT: &str = "__moliWebSocketStream
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WebSocketError")]
 struct WebSocketErrorConstructorArgs {
-    #[webidl(default = "", converter = "dom_string")]
-    message: String,
+    #[webidl(default = Vec::new(), converter = "dom_string16")]
+    message: Vec<u16>,
     #[webidl(dictionary)]
     init: WebSocketCloseInfo,
 }
@@ -192,14 +192,12 @@ pub(in crate::context_bootstrap) fn websocket_error_constructor_callback<'s>(
             return;
         }
     };
-
-    initialize_websocket_error(
-        scope,
-        args.this(),
-        &parsed.message,
-        close.code,
-        &close.reason,
-    );
+    let Some(message) =
+        v8::String::new_from_two_byte(scope, &parsed.message, v8::NewStringType::Normal)
+    else {
+        return;
+    };
+    initialize_websocket_error(scope, args.this(), message, close.code, &close.reason);
     rv.set(args.this().into());
 }
 
