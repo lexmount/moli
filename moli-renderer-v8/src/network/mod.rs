@@ -24,7 +24,10 @@ pub use backend::{
     BrowserResourceRuntimeOwnerError, BrowserResourceRuntimeOwnerRegistrar,
     BrowserResourceRuntimeOwnerRegistration, SharedMemoryResourceCacheDiagnostics,
 };
-pub(crate) use backend::{BrowserResourceRuntimeBinding, BrowserResourceRuntimeOwnerRoot};
+pub(crate) use backend::{
+    BrowserResourceRuntimeBinding, BrowserResourceRuntimeOwnerRoot, CorsPreflightCacheKey,
+    CorsPreflightResult,
+};
 pub use devtools_resource_load::{
     RendererNetworkResourceLoadOutcome, RendererNetworkResourceLoadPreparation,
     RendererNetworkResourceLoadResponse, RendererPreparedNetworkResourceLoad,
