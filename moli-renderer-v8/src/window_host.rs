@@ -18,8 +18,9 @@ use super::{
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
         ComputedStyleDescriptor, ComputedStylePseudoKey, ComputedStyleTargetKey, JsContextHost,
-        PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
-        RuntimeObservableContextToken, WindowExecutionContextOwner, WindowTaskTarget,
+        OwnerDispatchScope, PendingWindowMessage, PendingWindowMessageEndpoint,
+        PendingWindowMessageSource, RuntimeObservableContextToken, WindowExecutionContextOwner,
+        WindowOperationReceiver, WindowOperationReceiverCaptureError, WindowTaskTarget,
         active_child_window_handle, active_lightweight_popup_id,
         current_or_live_delegate_node_arg_handle,
         element::{
@@ -51,7 +52,6 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
-use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -210,6 +210,44 @@ struct IdleDeadlinePrototypeDeclaration {
     time_remaining: (),
 }
 
+pub(crate) fn capture_window_event_target_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
+) -> Result<Option<WindowOperationReceiver>, ()> {
+    // EventTarget branding already ran in the generated binding. Freeze the
+    // Window owner here, before argument conversion can replace its realm.
+    if !web_api_interfaces::Window::is_instance(scope, receiver) {
+        return Ok(None);
+    }
+    match WindowOperationReceiver::capture_and_authorize(scope, receiver, host) {
+        Ok(receiver) => Ok(Some(receiver)),
+        Err(WindowOperationReceiverCaptureError::IllegalInvocation) => {
+            throw_type_error(scope, "Illegal invocation");
+            Err(())
+        }
+        Err(WindowOperationReceiverCaptureError::CrossOrigin) => {
+            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+            Err(())
+        }
+    }
+}
+
+fn captured_window_event_target(
+    receiver: WindowOperationReceiver,
+    host: &JsContextHost,
+) -> Option<EventTargetHandle> {
+    let binding = receiver.resolve_live_binding(host)?;
+    match binding.dispatch_scope() {
+        OwnerDispatchScope::Child(handle) => host
+            .current_child_window_event_target(handle)
+            .map(EventTargetHandle::ChildWindow),
+        OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
+            Some(EventTargetHandle::Window)
+        }
+    }
+}
+
 pub(super) fn event_target_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -223,10 +261,55 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
+        return;
+    };
     let parsed = parse_listener_args::<AddEventListenerArgs>(scope, &args, "addEventListener");
     let Some(call) = parsed else {
         return;
     };
+    register_dom_event_target_listener(scope, args.this(), host_ptr, window_receiver, call);
+}
+
+/// Native algorithms enter after Web IDL conversion, without consulting an
+/// author-visible addEventListener method or converting dictionary members twice.
+pub(crate) fn register_event_target_webidl_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    call: AddEventListenerArgs<'s>,
+) {
+    if is_simple_event_target(scope, receiver) {
+        if let Some(listener) = call.listener {
+            crate::context_bootstrap::simple_object_event_target_register_webidl_listener(
+                scope,
+                receiver,
+                call.event_type,
+                listener,
+                call.options.options,
+                call.options.signal,
+            );
+        }
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Ok(window_receiver) =
+        capture_window_event_target_receiver(scope, receiver, unsafe { &*host_ptr })
+    else {
+        return;
+    };
+    register_dom_event_target_listener(scope, receiver, host_ptr, window_receiver, call);
+}
+
+fn register_dom_event_target_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    window_receiver: Option<WindowOperationReceiver>,
+    call: AddEventListenerArgs<'s>,
+) {
+    let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
     };
@@ -239,16 +322,13 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         return;
     }
-    let child_window_target = child_window_handle(scope, args.this());
-    let target = if let Some(handle) = child_window_target {
-        let Some(target) = host.current_child_window_event_target(handle) else {
-            // Detachment clears the Window's listeners and execution context,
-            // but retained references still have a valid EventTarget receiver.
+    let target = if let Some(receiver) = window_receiver {
+        let Some(target) = captured_window_event_target(receiver, host) else {
             return;
         };
-        Some(EventTargetHandle::ChildWindow(target))
+        Some(target)
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_object(scope, receiver, host_ptr, host)
     };
     let Some(target) = target else {
         throw_type_error(scope, "Illegal invocation");
@@ -279,7 +359,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         define_non_enumerable_static_bool_property(
             scope,
-            args.this(),
+            receiver,
             DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
             true,
         );
@@ -294,7 +374,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
             capture,
         );
     }
-    if child_window_target.is_none() && call.event_type == "animationstart" {
+    if !matches!(target, EventTargetHandle::ChildWindow(_)) && call.event_type == "animationstart" {
         queue_animation_start_for_listener_target(scope, host_ptr, target);
     }
 }
@@ -2088,7 +2168,15 @@ fn event_target_handle_from_this<'s>(
     host_ptr: *mut JsContextHost,
     host: &JsContextHost,
 ) -> Option<EventTargetHandle> {
-    let this = args.this();
+    event_target_handle_from_object(scope, args.this(), host_ptr, host)
+}
+
+fn event_target_handle_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    this: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    host: &JsContextHost,
+) -> Option<EventTargetHandle> {
     let global = scope.get_current_context().global(scope);
     if this.strict_equals(global.into()) {
         return Some(EventTargetHandle::Window);
