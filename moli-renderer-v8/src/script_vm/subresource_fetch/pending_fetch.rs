@@ -40,6 +40,10 @@ pub(super) fn request_for_pending_subresource(
         .dispatch
         .as_ref()
         .map(|dispatch| &dispatch.request)
+        .or(match &pending.continuation {
+            PendingSubresourceContinuation::Beacon(beacon) => Some(&beacon.request),
+            _ => None,
+        })
         .or_else(|| {
             pending
                 .continuation

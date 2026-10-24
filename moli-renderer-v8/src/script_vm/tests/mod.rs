@@ -2294,6 +2294,7 @@ mod audio_event_interfaces;
 mod audio_node_interfaces;
 mod audio_param_node_interfaces;
 mod audio_source_interfaces;
+mod beacon_request_policy;
 mod bitmap_renderer;
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_range;
@@ -2663,23 +2664,3 @@ mod path2d_native;
 mod vtt_cue_api;
 
 mod beacon_receiver_owner;
-
-mod frame_owner_origin_access;
-
-async fn drain_content_security_policy_violation_tasks_for_test(
-    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
-) -> usize {
-    let mut count = 0;
-    while vm
-        .run_one_exact_selected_page_task_executor_turn(
-            crate::runtime::PageSelectedTaskTestSelector::MiscPlatformApi,
-            loader,
-        )
-        .await
-        .expect("focused CSP fixture should run the selected native task")
-    {
-        count += 1;
-    }
-    count
-}
