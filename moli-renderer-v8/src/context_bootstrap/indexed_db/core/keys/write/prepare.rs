@@ -3,70 +3,74 @@ use super::*;
 pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
-    handle: TransactionHandle,
-    store_name: &str,
+    transaction: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
     explicit_key: Option<Key>,
-) -> Result<PreparedObjectStoreWrite<'s>, PreparedObjectStoreWriteError> {
-    let key_path = store
-        .get(scope, v8str(scope, "keyPath").into())
-        .and_then(|value| key_path_from_js_value(scope, value));
-    let auto_increment = object_bool_property(scope, store, "autoIncrement").unwrap_or(false);
-    if key_path.is_some() && explicit_key.is_some() {
-        return Err(PreparedObjectStoreWriteError::DomException {
-            message: "Failed to execute the operation: the store uses in-line keys and does not accept a key argument.",
-            name: "DataError",
-        });
-    }
-    match key_path {
+) -> Option<PreparedObjectStoreWrite> {
+    let metadata = indexed_db_object_store_metadata(scope, store)?;
+    let info = metadata.info();
+    let serialized = serialize_js_value_for_transaction(scope, transaction, value)?;
+    let key = match &info.key_path {
         Some(key_path) => {
-            if let Some(key) = derive_object_store_key_from_value(scope, store, value) {
-                return Ok(PreparedObjectStoreWrite {
-                    key: Some(key),
-                    value,
-                });
+            if explicit_key.is_some() {
+                return invalid_write(
+                    scope,
+                    "The store uses in-line keys and does not accept a key argument.",
+                );
             }
-            if !auto_increment {
-                return Err(PreparedObjectStoreWriteError::DomException {
-                    message: "Failed to execute the operation: the value does not contain the object store keyPath.",
-                    name: "DataError",
-                });
+            let clone = deserialize_js_value(scope, &serialized)?;
+            match extract_object_store_key_from_value(scope, clone, key_path) {
+                ExtractedObjectStoreKey::Key(key) => PreparedObjectStoreKey::Explicit(key),
+                ExtractedObjectStoreKey::Invalid => {
+                    return invalid_write(
+                        scope,
+                        "The value at the object store keyPath is not a valid key.",
+                    );
+                }
+                ExtractedObjectStoreKey::Missing => {
+                    if !info.auto_increment {
+                        return invalid_write(
+                            scope,
+                            "The value does not contain the object store keyPath.",
+                        );
+                    }
+                    let KeyPath::String(key_path) = key_path else {
+                        return invalid_write(
+                            scope,
+                            "A compound keyPath cannot accept generated keys.",
+                        );
+                    };
+                    if !can_inject_key_path_into_value(scope, clone, key_path) {
+                        return invalid_write(
+                            scope,
+                            "The value cannot accept a generated inline key.",
+                        );
+                    }
+                    PreparedObjectStoreKey::GenerateInline {
+                        key_path: key_path.clone(),
+                    }
+                }
             }
-            let generated_key =
-                with_indexed_db_manager(scope, |manager| manager.generate_key(handle, store_name))
-                    .map_err(PreparedObjectStoreWriteError::Backend)?;
-            let KeyPath::String(key_path) = key_path else {
-                return Err(PreparedObjectStoreWriteError::DomException {
-                    message: "Failed to execute the operation: compound keyPath stores cannot accept generated inline keys.",
-                    name: "InvalidAccessError",
-                });
-            };
-            let value = inject_key_path_into_value(scope, value, &key_path, &generated_key)?;
-            Ok(PreparedObjectStoreWrite {
-                key: Some(generated_key),
-                value,
-            })
         }
-        None => {
-            if explicit_key.is_none() && !auto_increment {
-                return Err(PreparedObjectStoreWriteError::DomException {
-                    message: "Failed to execute the operation: a key is required for stores without autoIncrement.",
-                    name: "DataError",
-                });
+        None => match explicit_key {
+            Some(key) => PreparedObjectStoreKey::Explicit(key),
+            None if info.auto_increment => PreparedObjectStoreKey::Generate,
+            None => {
+                return invalid_write(scope, "A key is required for stores without autoIncrement.");
             }
-            let key = if let Some(key) = explicit_key {
-                Some(key)
-            } else if auto_increment {
-                Some(
-                    with_indexed_db_manager(scope, |manager| {
-                        manager.generate_key(handle, store_name)
-                    })
-                    .map_err(PreparedObjectStoreWriteError::Backend)?,
-                )
-            } else {
-                None
-            };
-            Ok(PreparedObjectStoreWrite { key, value })
-        }
-    }
+        },
+    };
+    Some(PreparedObjectStoreWrite {
+        key,
+        value: serialized,
+    })
+}
+
+fn invalid_write(
+    scope: &mut v8::PinScope<'_, '_>,
+    message: &str,
+) -> Option<PreparedObjectStoreWrite> {
+    let error = dom_exception_value(scope, message, "DataError");
+    scope.throw_exception(error);
+    None
 }

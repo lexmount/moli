@@ -1,12 +1,13 @@
 use super::{
-    CursorDirection, CursorSnapshotEntry, DatabaseHandle, DatabaseInfo,
+    CursorDirection, CursorSnapshotEntry, DatabaseHandle, DatabaseInfo, ExtractedObjectStoreKey,
     INDEXED_DB_DATABASE_CLOSED_SLOT, INDEXED_DB_DATABASE_HANDLE_SLOT, INDEXED_DB_DATABASE_KEY_SLOT,
     INDEXED_DB_REQUEST_ERROR_SLOT, INDEXED_DB_REQUEST_READY_STATE_SLOT,
-    INDEXED_DB_REQUEST_RESULT_SLOT, INDEXED_DB_TRANSACTION_HANDLE_SLOT, IdbKeyRangeQuery,
+    INDEXED_DB_REQUEST_RESULT_SLOT, INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+    INDEXED_DB_TRANSACTION_FINISHED_SLOT, INDEXED_DB_TRANSACTION_HANDLE_SLOT, IdbKeyRangeQuery,
     IndexEntry, IndexInfo, IndexedDbError, IndexedDbExecutionOwner, IndexedDbExternalObject,
     IndexedDbManager, IndexedDbObjectStoreMetadata, IndexedDbRuntimeArray, IndexedDbStorageScope,
-    IndexedDbValue, IndexedDbWrapperKind, Key, KeyPath, ObjectStoreInfo, PreparedObjectStoreWrite,
-    PreparedObjectStoreWriteError, TransactionHandle, TransactionMode,
+    IndexedDbValue, IndexedDbWrapperKind, Key, KeyPath, ObjectStoreInfo, PreparedObjectStoreKey,
+    PreparedObjectStoreWrite, TransactionHandle, TransactionMode,
     context_host_ptr_from_global_bridge, global_constructor_prototype,
     indexed_db_database_store_metadata, indexed_db_object_store_metadata, indexed_db_runtime_array,
     indexed_db_typed_execution_owner, indexed_db_typed_storage_scope, new_null_prototype_object,
@@ -19,7 +20,8 @@ use super::{
     remove_indexed_db_database_store_metadata, replace_indexed_db_database_metadata,
     replace_indexed_db_runtime_array, set_indexed_db_database_index_metadata,
     set_indexed_db_database_store_metadata, set_indexed_db_internal_object_property,
-    set_indexed_db_object_store_metadata, set_indexed_db_request_surface_value, v8_string, v8str,
+    set_indexed_db_object_store_metadata, set_indexed_db_request_surface_value,
+    set_indexed_db_slot_value, v8_string, v8str,
 };
 use std::collections::BTreeSet;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};

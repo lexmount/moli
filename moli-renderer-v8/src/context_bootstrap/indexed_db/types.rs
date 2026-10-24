@@ -1,4 +1,4 @@
-use super::{IndexedDbError, IndexedDbValue, Key};
+use super::{IndexedDbValue, Key};
 
 #[derive(Debug, Clone)]
 pub(super) struct IdbKeyRangeQuery {
@@ -22,15 +22,19 @@ pub(super) struct CursorSnapshotEntry {
     pub(super) value: Option<IndexedDbValue>,
 }
 
-pub(super) struct PreparedObjectStoreWrite<'s> {
-    pub(super) key: Option<Key>,
-    pub(super) value: v8::Local<'s, v8::Value>,
+pub(super) struct PreparedObjectStoreWrite {
+    pub(super) key: PreparedObjectStoreKey,
+    pub(super) value: IndexedDbValue,
 }
 
-pub(super) enum PreparedObjectStoreWriteError {
-    Backend(IndexedDbError),
-    DomException {
-        message: &'static str,
-        name: &'static str,
-    },
+pub(super) enum PreparedObjectStoreKey {
+    Explicit(Key),
+    Generate,
+    GenerateInline { key_path: String },
+}
+
+pub(super) enum ExtractedObjectStoreKey {
+    Key(Key),
+    Missing,
+    Invalid,
 }

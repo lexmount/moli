@@ -352,14 +352,11 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<IndexedDbValue> {
-    let mut should_throw_data_clone_error = false;
     let external_objects = Rc::new(RefCell::new(Vec::new()));
     let serialized = {
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
         let context = scope.get_current_context();
         let serializer = v8::ValueSerializer::new(
-            &scope,
+            scope,
             Box::new(IndexedDbStructuredCloneSerializer {
                 external_objects: Rc::clone(&external_objects),
             }),
@@ -367,26 +364,55 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
         serializer.write_header();
         match serializer.write_value(context, value) {
             Some(true) => Some(serializer.release()),
-            _ => {
-                should_throw_data_clone_error =
-                    scope.has_caught() && scope.can_continue() && !scope.has_terminated();
-                None
-            }
+            _ => None,
         }
     };
     if let Some(wire_bytes) = serialized {
         let external_objects = external_objects.borrow().clone();
         return Some(IndexedDbValue::new(wire_bytes, external_objects));
     }
-    if should_throw_data_clone_error {
-        let exception = dom_exception_value(
-            scope,
-            "The value could not be cloned for IndexedDB storage.",
-            "DataCloneError",
-        );
-        scope.throw_exception(exception);
-    }
     None
+}
+
+/// Serialization invokes getters while the transaction cannot accept requests.
+/// Restore its state before propagating the original exception, including throws
+/// of null or undefined. An explicit abort during serialization stays finished.
+pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value_for_transaction<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<IndexedDbValue> {
+    let inactive = v8::Boolean::new(scope, false).into();
+    set_indexed_db_slot_value(
+        scope,
+        transaction,
+        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+        inactive,
+    );
+    v8::tc_scope!(let scope, scope);
+    let serialized = serialize_js_value(scope, value);
+    if scope.can_continue() {
+        let exception = scope.exception();
+        scope.reset();
+        if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+            .unwrap_or(false)
+        {
+            let active = v8::Boolean::new(scope, true).into();
+            set_indexed_db_slot_value(
+                scope,
+                transaction,
+                INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+                active,
+            );
+        }
+        if let Some(exception) = exception {
+            scope.throw_exception(exception);
+        }
+    }
+    if scope.has_caught() {
+        scope.rethrow();
+    }
+    serialized
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value<'s>(

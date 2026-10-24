@@ -2,9 +2,6 @@ use super::*;
 use crate::context_bootstrap::indexed_db::indexed_db_transaction_mode;
 use moli_indexeddb::TransactionMode;
 
-mod enqueue;
-mod execute;
-
 pub(super) fn object_store_write_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -14,68 +11,82 @@ pub(super) fn object_store_write_callback<'s>(
     add_only: bool,
 ) {
     let store = args.this();
-    let Some((request, transaction)) = create_store_request(scope, store) else {
+    let Some(transaction) = object_store_active_transaction(scope, store) else {
         return;
     };
     if indexed_db_transaction_mode(scope, transaction) == Some(TransactionMode::ReadOnly) {
-        discard_unreturned_request(scope, request);
         let error = dom_exception_value(scope, "The transaction is readonly.", "ReadOnlyError");
         scope.throw_exception(error);
         return;
     }
-    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
-        rv.set(request.into());
-        return;
+    let explicit_key = {
+        v8::tc_scope!(let scope, scope);
+        match parse_idb_key(scope, key) {
+            Ok(key) => key,
+            Err(error) => {
+                error.throw(scope);
+                scope.rethrow();
+                return;
+            }
+        }
     };
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
+    // Key conversion can invoke getters too, including one that aborts the transaction.
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
         .unwrap_or(false)
     {
-        enqueue::enqueue_deferred_object_store_write(
+        throw_inactive(scope);
+        return;
+    }
+    let Some(prepared) = prepare_object_store_write(scope, store, transaction, value, explicit_key)
+    else {
+        return;
+    };
+    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
+        return;
+    };
+    let handle = if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
+        .unwrap_or(false)
+    {
+        let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
+            throw_inactive(scope);
+            return;
+        };
+        Some(handle)
+    } else {
+        None
+    };
+    let Some((request, _)) = create_store_request(scope, store) else {
+        throw_inactive(scope);
+        return;
+    };
+    if let Some(handle) = handle {
+        execute_object_store_write_request(
+            scope,
+            store,
+            request,
+            handle,
+            &store_name,
+            &prepared,
+            add_only,
+        );
+    } else {
+        enqueue_transaction_operation(
             scope,
             transaction,
             store,
             request,
             &store_name,
-            value,
-            key,
-            add_only,
+            IndexedDbTransactionOperation::ObjectStoreWrite { prepared, add_only },
         );
-        rv.set(request.into());
-        return;
     }
-    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-        discard_unreturned_request(scope, request);
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return;
-    };
-    v8::tc_scope!(let scope, scope);
-    if execute::execute_started_object_store_write(
+    rv.set(request.into());
+}
+
+fn throw_inactive(scope: &mut v8::PinScope<'_, '_>) {
+    let error = dom_exception_value(
         scope,
-        store,
-        request,
-        handle,
-        &store_name,
-        value,
-        key,
-        add_only,
-    ) {
-        rv.set(request.into());
-    } else if scope.can_continue() {
-        // Preserve the original exception while removing the request which
-        // create_store_request admitted before synchronous validation.
-        let exception = scope.exception();
-        scope.reset();
-        discard_unreturned_request(scope, request);
-        if let Some(exception) = exception {
-            scope.throw_exception(exception);
-        }
-    }
-    if scope.has_caught() {
-        scope.rethrow();
-    }
+        "The transaction is not active.",
+        "TransactionInactiveError",
+    );
+    scope.throw_exception(error);
 }

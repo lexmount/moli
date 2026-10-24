@@ -26,12 +26,13 @@ globalThis.__idbRejectedRequestRun = (async () => {
         tx.addEventListener('complete', () => completions++);
         tx.addEventListener('error', () => requestErrors++);
         const done = finished(tx);
+        const marker = new realm.Error('clone getter');
         for (const method of ['put','add']) {
           for (const [j, value] of [function(){}, new realm.Event('not-cloneable'),
-            {get payload(){getterReads++; throw new realm.Error('clone getter');}}].entries()) {
+            {get payload(){getterReads++; throw marker;}}].entries()) {
             let error;
             try {store[method](value, `${method}-rejected-${j}`);} catch (e) {error=e;}
-            check(`${i}: ${method} rejection ${j}`, error instanceof realm.DOMException && error.name === 'DataCloneError');
+            check(`${i}: ${method} rejection ${j}`, j === 2 ? error === marker : error instanceof realm.DOMException && error.name === 'DataCloneError');
           }
         }
         store.put('accepted', 'safe'); await done;

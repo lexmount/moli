@@ -6,102 +6,81 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
     store_name: &str,
-    value: v8::Local<'s, v8::Value>,
-    key_value: v8::Local<'s, v8::Value>,
+    prepared: &PreparedObjectStoreWrite,
     add_only: bool,
-) {
-    let explicit_key = match parse_idb_key(scope, key_value) {
-        Ok(key) => key,
-        Err(error) => {
-            let error = error.into_value(scope);
+) -> bool {
+    v8::tc_scope!(let scope, scope);
+    let result = execute_prepared_write(scope, store, handle, store_name, prepared, add_only);
+    if scope.has_caught() {
+        if scope.can_continue()
+            && let Some(error) = scope.exception()
+        {
+            scope.reset();
             store_request_error(scope, request, error);
-            return;
         }
-    };
-    let prepared =
-        match prepare_object_store_write(scope, store, handle, store_name, value, explicit_key) {
-            Ok(prepared) => prepared,
-            Err(PreparedObjectStoreWriteError::DomException { message, name }) => {
-                let error = dom_exception_value(scope, message, name);
-                store_request_error(scope, request, error);
-                return;
-            }
-            Err(PreparedObjectStoreWriteError::Backend(error)) => {
-                let error = request_error_object(scope, &error);
-                store_request_error(scope, request, error);
-                return;
-            }
-        };
-    let Some(value_bytes) = serialize_js_value(scope, prepared.value) else {
-        return;
-    };
-    let Some(primary_key) = prepared.key.clone() else {
-        let error = dom_exception_value(
-            scope,
-            "Failed to execute the operation: a key is required for stores without autoIncrement.",
-            "DataError",
-        );
-        store_request_error(scope, request, error);
-        return;
-    };
-    if let Err(error) = enforce_object_store_unique_constraints(
-        scope,
-        store,
-        handle,
-        store_name,
-        &primary_key,
-        prepared.value,
-    ) {
-        let error = request_error_object(scope, &error);
-        store_request_error(scope, request, error);
-        return;
+        return false;
     }
-    let quota_check = match storage_bucket_quota_check_for_object_store(scope, store) {
-        Some(Ok(quota)) => Some(quota),
-        Some(Err(error)) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
-            return;
-        }
-        None => None,
-    };
-    let result = if add_only {
-        with_indexed_db_manager(scope, |manager| {
-            if let Some(quota) = quota_check {
-                manager.add_with_quota(
-                    handle,
-                    store_name,
-                    prepared.key.clone(),
-                    value_bytes,
-                    quota.quota_check,
-                )
-            } else {
-                manager.add(handle, store_name, prepared.key.clone(), value_bytes)
-            }
-        })
-    } else {
-        with_indexed_db_manager(scope, |manager| {
-            if let Some(quota) = quota_check {
-                manager.put_with_quota(
-                    handle,
-                    store_name,
-                    prepared.key.clone(),
-                    value_bytes,
-                    quota.quota_check,
-                )
-            } else {
-                manager.put(handle, store_name, prepared.key.clone(), value_bytes)
-            }
-        })
-    };
     match result {
         Ok(key) => {
-            let js_key = key_to_js_value(scope, &key);
-            store_request_success(scope, request, js_key);
+            let key = key_to_js_value(scope, &key);
+            store_request_success(scope, request, key);
+            true
         }
         Err(error) => {
             let error = request_error_object(scope, &error);
             store_request_error(scope, request, error);
+            false
         }
     }
+}
+
+fn execute_prepared_write<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    handle: TransactionHandle,
+    store_name: &str,
+    prepared: &PreparedObjectStoreWrite,
+    add_only: bool,
+) -> Result<Key, IndexedDbError> {
+    let value = deserialize_js_value(scope, &prepared.value).ok_or_else(|| {
+        IndexedDbError::Serialization("Failed to read a prepared IndexedDB value.".into())
+    })?;
+    // Only storage execution can consume the generator; synchronous rejection
+    // and waiting for another transaction cannot change its state.
+    let key = match &prepared.key {
+        PreparedObjectStoreKey::Explicit(key) => key.clone(),
+        PreparedObjectStoreKey::Generate | PreparedObjectStoreKey::GenerateInline { .. } => {
+            with_indexed_db_manager(scope, |manager| manager.generate_key(handle, store_name))?
+        }
+    };
+    let value_bytes = if let PreparedObjectStoreKey::GenerateInline { key_path } = &prepared.key {
+        inject_key_path_into_value(scope, value, key_path, &key).ok_or_else(|| {
+            IndexedDbError::Serialization("Failed to inject a prepared inline key.".into())
+        })?;
+        serialize_js_value(scope, value).ok_or_else(|| {
+            IndexedDbError::Serialization("Failed to store a prepared IndexedDB value.".into())
+        })?
+    } else {
+        prepared.value.clone()
+    };
+    enforce_object_store_unique_constraints(scope, store, handle, store_name, &key, value)?;
+    let quota = storage_bucket_quota_check_for_object_store(scope, store).transpose()?;
+    with_indexed_db_manager(scope, |manager| match (add_only, quota) {
+        (true, Some(quota)) => manager.add_with_quota(
+            handle,
+            store_name,
+            Some(key),
+            value_bytes,
+            quota.quota_check,
+        ),
+        (false, Some(quota)) => manager.put_with_quota(
+            handle,
+            store_name,
+            Some(key),
+            value_bytes,
+            quota.quota_check,
+        ),
+        (true, None) => manager.add(handle, store_name, Some(key), value_bytes),
+        (false, None) => manager.put(handle, store_name, Some(key), value_bytes),
+    })
 }

@@ -78,29 +78,66 @@ fn value_at_string_key_path<'s>(
     }
     let mut current = value;
     for segment in key_path.split('.') {
+        if current.is_string() && segment == "length" {
+            let text = v8::Local::<v8::String>::try_from(current).ok()?;
+            current = v8::Number::new(scope, text.length() as f64).into();
+            continue;
+        }
         let Ok(object) = v8::Local::<v8::Object>::try_from(current) else {
             return None;
         };
-        let next = object.get(
-            scope,
-            v8_string(scope, segment)
-                .unwrap_or_else(|| v8::String::empty(scope))
-                .into(),
-        )?;
+        let property = v8_string(scope, segment).unwrap_or_else(|| v8::String::empty(scope));
+        // Ordinary key paths only inspect the clone's own data properties.
+        // The specification also exposes these intrinsic Blob/File attributes.
+        let host_attribute = matches!(
+            (
+                moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()),
+                segment
+            ),
+            (Some("Blob" | "File"), "size" | "type") | (Some("File"), "name" | "lastModified")
+        );
+        if !host_attribute && object.has_own_property(scope, property.into()) != Some(true) {
+            return None;
+        }
+        let next = object.get(scope, property.into())?;
+        if next.is_undefined() {
+            return None;
+        }
         current = next;
     }
     Some(current)
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn derive_object_store_key_from_value<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn extract_object_store_key_from_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    store: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
-) -> Option<Key> {
-    let key_path = store
-        .get(scope, v8str(scope, "keyPath").into())
-        .and_then(|value| key_path_from_js_value(scope, value))?;
-    extract_index_keys_from_value(scope, value, &key_path, false)
-        .into_iter()
-        .next()
+    key_path: &KeyPath,
+) -> ExtractedObjectStoreKey {
+    if let KeyPath::Sequence(paths) = key_path {
+        let mut keys = Vec::with_capacity(paths.len());
+        for path in paths {
+            match extract_object_store_key_from_value(scope, value, &KeyPath::String(path.clone()))
+            {
+                ExtractedObjectStoreKey::Key(key) => keys.push(key),
+                other => return other,
+            }
+        }
+        let key = Key::Array(keys);
+        return if key.validate_depth().is_ok() {
+            ExtractedObjectStoreKey::Key(key)
+        } else {
+            ExtractedObjectStoreKey::Invalid
+        };
+    }
+    let KeyPath::String(path) = key_path else {
+        return ExtractedObjectStoreKey::Missing;
+    };
+    let Some(value) = value_at_string_key_path(scope, value, path) else {
+        return ExtractedObjectStoreKey::Missing;
+    };
+    match parse_idb_key(scope, value) {
+        Ok(Some(key)) => ExtractedObjectStoreKey::Key(key),
+        Ok(None) => ExtractedObjectStoreKey::Missing,
+        Err(_) => ExtractedObjectStoreKey::Invalid,
+    }
 }
