@@ -234,16 +234,28 @@ Dokument und Stil haben genau eine verbindliche Datenquelle: die Integration aus
 
 Die folgenden Messwerte zeigen Molis derzeitigen Funktionsumfang. Sie decken reale Websites, Automatisierungsclients, Prüfungen des Chromium-/WPT-Verhaltens und eine große nextest-Regressionssuite ab.
 
-### Gemischter Crawling-Test im öffentlichen Web
+### Extraktion von Webinhalten
 
-Getestet wurden 192 öffentliche URLs großer chinesischer und internationaler Websites. Als Erfolg zählte ausschließlich eine Seite, die nach Ausführung von JavaScript inhaltlich verwertbare Ergebnisse lieferte — ein bloßer HTTP-200-Status, eine Verifizierungsseite, eine Anmeldesperre, eine leere Antwort oder eine reine App-Hülle galten nicht als Erfolg.
+<details open>
+<summary><strong>LexBench Web Fetch · 430 Aufgaben</strong></summary>
 
-| Browser | Verwertbare Seiten | Erfolgsquote | Medianzeit | Median-RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+Fünf Web-Fetch-Methoden werden anhand derselben 430 Aufgaben aus sieben Kategorien verglichen. Eine Aufgabe gilt nur als bestanden, wenn Inhalt, Struktur, Ressourcenadressen oder Dateidaten die jeweiligen Anforderungen erfüllen.
+
+| Methode | Bestandene Aufgaben | Erfolgsquote |
+| --- | ---: | ---: |
+| Moli-Entwicklungsbuild (WebFetch-Korrekturen) | **385/430** | **89.53%** |
+| Chrome for Testing 155.0.8059.39 | 233/430 | 54.19% |
+| Lightpanda 1.0.0 | 227/430 | 52.79% |
+| Obscura 0.2.4 | 222/430 | 51.63% |
+| Kitesurf (gehostet) | 194/430 | 45.12% |
+
+Die Aufrufe liefen vom 9. bis 15. Oktober 2026. Die Moli-Zeile zeigt einen unveröffentlichten Entwicklungsstand nach Version 1.1.17 (Commits `a737f2ae` und `0d9a7ceb`; 56 der 430 Aufgaben wurden mit dem zweiten Commit erneut ausgeführt). Das ist nicht das Release-Binärprogramm von Moli 1.1.17.
+
+Die Aufgaben stammen aus den Suiten von [`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch). [`browser-eval`](https://github.com/lexmount/browser-eval) stellt die 430 Aufgaben zusammen, korrigiert sie, führt sie aus und erstellt den Bericht.
+
+[Vollständiger Bericht, Aufgaben und Fehlernachweise (Chinesisch)](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo?version=ver_7c1cd4072edf4403a8ec3c64205f878f).
+
+</details>
 
 ### Beispiel eines Agenten-Workloads
 

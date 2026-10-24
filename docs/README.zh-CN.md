@@ -233,16 +233,28 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 下面的实测数据展示了 Moli 目前的能力区间。测试覆盖真实网站、自动化客户端、Chromium/WPT 行为验证，以及大规模的 nextest 回归测试套件。
 
-### 公开网页混合抓取测试
+### 网页内容提取
 
-测试对象是 192 个公开 URL，覆盖中国国内和国际主流网站。判定成功的标准是：页面必须生成有实际意义的 JavaScript 执行后内容——仅仅返回 HTTP 200、验证质询页面、登录墙、空响应，或者只有外壳的应用界面，都不计入成功。
+<details open>
+<summary><strong>LexBench Web Fetch · 430 道任务</strong></summary>
 
-| 浏览器 | 有效页面 | 成功率 | 中位耗时 | RSS 中位数 |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+五种 Web Fetch 方法使用相同的 430 道任务，覆盖七类场景。只有返回的正文、结构、资源地址或文件字节满足题目要求，才算通过。
+
+| 方法 | 通过任务数 | 通过率 |
+| --- | ---: | ---: |
+| Moli 开发版（含 WebFetch 修复） | **385/430** | **89.53%** |
+| Chrome for Testing 155.0.8059.39 | 233/430 | 54.19% |
+| Lightpanda 1.0.0 | 227/430 | 52.79% |
+| Obscura 0.2.4 | 222/430 | 51.63% |
+| Kitesurf（托管服务） | 194/430 | 45.12% |
+
+各方法的调用时间为 2026 年 10 月 9 日至 15 日。Moli 这一行来自 1.1.17 之后、尚未发布的开发版（提交 `a737f2ae` 和 `0d9a7ceb`；430 道任务中有 56 道在后一个提交上重跑），不是 Moli 1.1.17 正式版二进制。
+
+题目取自 [`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch) 的评测套件；[`browser-eval`](https://github.com/lexmount/browser-eval) 负责组装和修订 430 道题的集合，并执行评测和生成报告。
+
+[完整报告、任务要求及失败证据](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo?version=ver_7c1cd4072edf4403a8ec3c64205f878f)
+
+</details>
 
 ### 智能体工作负载样例
 

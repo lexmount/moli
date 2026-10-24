@@ -298,18 +298,28 @@ Moli는 Chromium 래퍼가 아닌 독립형 브라우저 커널입니다. Rust�
 다음 측정값은 Moli의 현재 기능 범위를 보여 줍니다. 실제 웹사이트, 자동화 클라이언트,
 Chromium/WPT 동작 검사, 대규모 nextest 회귀 테스트 모음을 다룹니다.
 
-### 혼합 공개 웹 크롤 테스트
+### 웹 콘텐츠 추출
 
-이 테스트는 중국과 국제 주요 사이트의 공개 URL 192개를 다룹니다. JavaScript 실행 뒤
-의미 있는 콘텐츠를 생성해야만 페이지를 성공으로 계산합니다. HTTP 200, 챌린지 페이지,
-로그인 차단벽, 빈 응답, 셸만 있는 애플리케이션은 성공으로 계산하지 않습니다.
+<details open>
+<summary><strong>LexBench Web Fetch · 430개 작업</strong></summary>
 
-| 브라우저 | 유효 페이지 | 성공률 | 중앙 시간 | 중앙 RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43초** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43초 | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97초 | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30초 | 39 MiB |
+5개 Web Fetch 방식을 7개 유형의 동일한 430개 작업으로 비교합니다. 본문, 구조, 리소스 주소 또는 파일 바이트가 작업 요구사항을 충족해야 통과합니다.
+
+| 방식 | 통과 작업 수 | 통과율 |
+| --- | ---: | ---: |
+| Moli 개발 빌드(WebFetch 수정 포함) | **385/430** | **89.53%** |
+| Chrome for Testing 155.0.8059.39 | 233/430 | 54.19% |
+| Lightpanda 1.0.0 | 227/430 | 52.79% |
+| Obscura 0.2.4 | 222/430 | 51.63% |
+| Kitesurf (호스팅) | 194/430 | 45.12% |
+
+각 방식은 2026년 10월 9일부터 15일까지 호출했습니다. Moli 행은 1.1.17 이후의 미배포 개발 빌드입니다(커밋 `a737f2ae`, `0d9a7ceb`; 430개 작업 중 56개를 두 번째 커밋에서 다시 실행). Moli 1.1.17 릴리스 바이너리가 아닙니다.
+
+작업은 [`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch) 스위트에서 가져옵니다. [`browser-eval`](https://github.com/lexmount/browser-eval)이 430개 작업을 구성하고 수정한 뒤 실행하고 보고서를 만듭니다.
+
+[전체 보고서, 작업 요구사항 및 실패 증거(중국어)](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo?version=ver_7c1cd4072edf4403a8ec3c64205f878f).
+
+</details>
 
 ### 에이전트 워크로드 예시
 

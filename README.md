@@ -309,19 +309,28 @@ The following measurements show Moli's current capability envelope. They cover
 real websites, automation clients, Chromium/WPT behavior checks, and a large
 nextest regression suite.
 
-### Mixed public-web crawl test
+### Web content extraction
 
-The test covers 192 public URLs from major Chinese and international sites. A
-page only counts as successful if it produces meaningful content after
-JavaScript runs — an HTTP 200, challenge page, login wall, empty response, or
-shell-only application does not count.
+<details open>
+<summary><strong>LexBench Web Fetch · 430 tasks</strong></summary>
 
-| Browser | Useful pages | Success rate | Median time | Median RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+Five web-fetch methods are compared on the same 430 tasks across seven families. A task passes only when its requested content, structure, resource addresses or file bytes meet the task requirements.
+
+| Method | Tasks passed | Pass rate |
+| --- | ---: | ---: |
+| Moli development build (WebFetch fixes) | **385/430** | **89.53%** |
+| Chrome for Testing 155.0.8059.39 | 233/430 | 54.19% |
+| Lightpanda 1.0.0 | 227/430 | 52.79% |
+| Obscura 0.2.4 | 222/430 | 51.63% |
+| Kitesurf (hosted) | 194/430 | 45.12% |
+
+Calls were made from October 9 to 15, 2026. The Moli row is an unreleased development build after v1.1.17 (commits `a737f2ae` and `0d9a7ceb`; 56 of the 430 tasks were rerun on the later commit). It is not the Moli 1.1.17 release binary.
+
+Tasks are drawn from the [`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch) suites. [`browser-eval`](https://github.com/lexmount/browser-eval) assembles and corrects the 430-task cohort, runs it, and builds the report.
+
+[Full report, task contracts and failure evidence (Chinese)](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo?version=ver_7c1cd4072edf4403a8ec3c64205f878f).
+
+</details>
 
 ### Sample agent workload
 

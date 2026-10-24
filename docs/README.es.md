@@ -235,16 +235,28 @@ El documento y los estilos tienen una única fuente de verdad: la integración d
 
 Las siguientes mediciones muestran las capacidades actuales de Moli. Cubren sitios web reales, clientes de automatización, verificaciones del comportamiento de Chromium/WPT y una batería grande de regresión con nextest.
 
-### Prueba de rastreo mixto de la web pública
+### Extracción de contenido web
 
-La prueba cubre 192 URLs públicas de sitios importantes de China y del resto del mundo. Para contar como éxito, una página tiene que generar contenido realmente útil después de ejecutar JavaScript: un simple 200 OK, una página de verificación, un muro de login, una respuesta vacía o una interfaz de aplicación que solo muestre su esqueleto básico no cuentan como resultado válido.
+<details open>
+<summary><strong>LexBench Web Fetch · 430 tareas</strong></summary>
 
-| Navegador | Páginas útiles | Tasa de éxito | Tiempo mediano | RSS mediana |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+Se comparan cinco métodos de Web Fetch con las mismas 430 tareas de siete categorías. Solo se aprueba cuando el contenido, la estructura, las direcciones de recursos o los bytes del archivo cumplen los requisitos de la tarea.
+
+| Método | Tareas aprobadas | Porcentaje |
+| --- | ---: | ---: |
+| Compilación de desarrollo de Moli (correcciones de WebFetch) | **385/430** | **89.53%** |
+| Chrome for Testing 155.0.8059.39 | 233/430 | 54.19% |
+| Lightpanda 1.0.0 | 227/430 | 52.79% |
+| Obscura 0.2.4 | 222/430 | 51.63% |
+| Kitesurf (alojado) | 194/430 | 45.12% |
+
+Las llamadas se realizaron del 9 al 15 de octubre de 2026. La fila de Moli corresponde a una compilación de desarrollo posterior a la versión 1.1.17 y aún no publicada (commits `a737f2ae` y `0d9a7ceb`; 56 de las 430 tareas se repitieron con el segundo commit). No es el binario publicado como Moli 1.1.17.
+
+Las tareas proceden de las suites de [`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch). [`browser-eval`](https://github.com/lexmount/browser-eval) compone y corrige el conjunto de 430 tareas, lo ejecuta y genera el informe.
+
+[Informe completo, requisitos y evidencias de fallos (en chino)](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo?version=ver_7c1cd4072edf4403a8ec3c64205f878f).
+
+</details>
 
 ### Ejemplo de carga de trabajo de un agente
 
