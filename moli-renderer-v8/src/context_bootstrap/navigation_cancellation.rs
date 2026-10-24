@@ -9,9 +9,7 @@ use super::{
         cancel_active_cross_document_navigation,
         cancel_pending_same_document_navigation_finishes_including_reentrant,
     },
-    navigation_window::{
-        navigation_unload_event_active, runtime_window_dispatch_scope, window_navigation_for_holder,
-    },
+    navigation_window::{navigation_unload_event_active, window_navigation_for_holder},
 };
 use crate::native_bridge::{
     JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget, WindowExecutionContextBinding,
@@ -222,13 +220,20 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let dispatch_scope = runtime_window_dispatch_scope(scope, window);
+    // A removal callback may have installed a new Window for this frame.
+    // Settle the captured old Navigation, but cancel native work only while
+    // this Window's execution context still owns the frame.
+    let Some(dispatch_scope) =
+        super::window_accessors::window_current_dispatch_scope(scope, window, host)
+    else {
+        return;
+    };
     if window_navigation_is_stopping(scope, window)
         && match dispatch_scope {
-            Some(OwnerDispatchScope::Child(handle)) => {
+            OwnerDispatchScope::Child(handle) => {
                 host.child_browsing_context_has_pending_cross_document_traversal(handle)
             }
-            Some(OwnerDispatchScope::LightweightPopup(popup_id)) => {
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
                 host.lightweight_popup_has_pending_history_traversal(popup_id)
             }
             _ => false,
@@ -239,15 +244,14 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
         return;
     }
     match dispatch_scope {
-        Some(crate::native_bridge::OwnerDispatchScope::Top) => {
+        crate::native_bridge::OwnerDispatchScope::Top => {
             host.cancel_pending_location_navigation();
         }
-        Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) => {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.cancel_pending_child_browsing_context_navigation(handle);
         }
-        Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
             host.cancel_pending_lightweight_popup_navigation(popup_id);
         }
-        _ => {}
     }
 }

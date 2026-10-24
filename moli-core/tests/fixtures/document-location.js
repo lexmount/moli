@@ -100,9 +100,9 @@
       check(mode + ':active-open-keeps-location', current.location === currentLocation);
     }
     const expectedEvents = {
-      remove: [],
-      'ancestor-remove': [],
-      reinsert: [],
+      remove: ['pagehide', 'unload'],
+      'ancestor-remove': ['pagehide', 'unload'],
+      reinsert: ['pagehide', 'unload'],
       'ancestor-open': ['pagehide', 'unload'],
       'ancestor-navigation': ['beforeunload', 'pagehide', 'unload'],
       navigate: ['beforeunload', 'pagehide', 'unload'],
