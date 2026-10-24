@@ -563,6 +563,7 @@ fn translate_fragment(fragment: &mut PaintFragment, translation: Affine) {
         PaintFragment::GlyphRun(run) => &mut run.transform,
         PaintFragment::Image(image) => &mut image.transform,
         PaintFragment::SvgImage(image) => &mut image.transform,
+        PaintFragment::BackdropFilter { transform, .. } => transform,
         PaintFragment::PopLayer => return,
     };
     *matrix = PaintTransform2D::new(
