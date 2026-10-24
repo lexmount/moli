@@ -1,16 +1,13 @@
 use super::{JsContextHost, lightweight_popup_id_from_window};
 use crate::{
     context_bootstrap::{
-        SIMPLE_EVENT_TARGET_LISTENERS_SLOT, WINDOW_EVENT_HANDLER_PROPERTIES,
+        WINDOW_EVENT_HANDLER_PROPERTIES, clear_simple_event_target_listeners,
         clear_simple_window_event_handler_values, simple_object_event_activate_uncompiled_handler,
         simple_object_event_set_handler, window_event_handler_properties,
     },
     host::UncompiledEventHandler,
     native_bridge::OwnerDispatchScope,
-    util::{
-        context_host_ptr_from_global_bridge, get_private_value, new_null_prototype_object,
-        set_private_value,
-    },
+    util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
 };
 use std::collections::HashMap;
 
@@ -229,12 +226,6 @@ pub(super) fn clear_lightweight_popup_window_document_event_state<'s>(
     {
         document.content_event_handlers.attributes.clear();
     }
-    let registry = new_null_prototype_object(scope);
-    set_private_value(
-        scope,
-        window,
-        SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-        registry.into(),
-    );
+    clear_simple_event_target_listeners(scope, window);
     clear_simple_window_event_handler_values(scope, window);
 }

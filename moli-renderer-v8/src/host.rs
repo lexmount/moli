@@ -38,7 +38,7 @@ pub(super) use self::events::{
 };
 pub(crate) use self::events::{
     EventHandlerCspAdmission, EventHandlerPropertyState, EventListenerInspectorSnapshot,
-    EventListenerRegistration, UncompiledEventHandler,
+    EventListenerRegistration, ListenerFilter, UncompiledEventHandler,
 };
 pub(super) use self::scripts::{
     CommittedInlineClassicScript, FailedDynamicScript, HostScriptScheduler, ModuleFailurePolicy,

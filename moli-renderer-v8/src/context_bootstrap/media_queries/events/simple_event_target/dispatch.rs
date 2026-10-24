@@ -212,14 +212,12 @@ fn dispatch_resolved_event<'s>(
                 target,
                 listener.relevant_context(),
             );
-            let Some(callback_event) =
-                crate::context_bootstrap::navigation_event_worlds::event_in_realm(
-                    scope,
-                    target,
-                    event,
-                    listener.relevant_context(),
-                )
-            else {
+            let Some(callback_event) = crate::context_bootstrap::event_worlds::event_in_realm(
+                scope,
+                target,
+                event,
+                listener.relevant_context(),
+            ) else {
                 continue;
             };
             let callback_arguments = [callback_event.into()];
@@ -243,11 +241,15 @@ fn dispatch_resolved_event<'s>(
             if listener.handler_slot.is_some()
                 && let Some(returned) = outcome.value
             {
-                apply_handler_return_value(
+                apply_event_handler_return_value(
                     scope,
                     event,
                     v8::Local::new(scope, &returned),
-                    error_arguments.is_some(),
+                    if error_arguments.is_some() {
+                        EventHandlerType::OnErrorEventHandler
+                    } else {
+                        EventHandlerType::EventHandler
+                    },
                 );
             }
             set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
@@ -264,7 +266,6 @@ fn dispatch_resolved_event<'s>(
 }
 
 pub(crate) struct SimpleEventListenerInvocationResult {
-    pub(crate) dispatched: bool,
     pub(crate) did_throw: bool,
 }
 
@@ -274,31 +275,25 @@ pub(crate) fn invoke_simple_event_target_listeners<'s>(
     target: v8::Local<'s, v8::Object>,
     event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
-    capture_phase: bool,
+    filter: crate::host::ListenerFilter,
     handler_arguments: &[v8::Local<'s, v8::Value>],
     handler_type: EventHandlerType,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventListenerInvocationResult {
-    let mut dispatched = false;
     let mut did_throw = false;
     let Some(identity) = resolve_event_target(scope, target) else {
-        return SimpleEventListenerInvocationResult {
-            dispatched: false,
-            did_throw: false,
-        };
+        return SimpleEventListenerInvocationResult { did_throw: false };
     };
     let Some(registry) = SimpleEventListenerRegistry::from_owner(scope, identity.listener_owner)
     else {
-        return SimpleEventListenerInvocationResult {
-            dispatched: false,
-            did_throw: false,
-        };
+        return SimpleEventListenerInvocationResult { did_throw: false };
     };
     let listeners = simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
-    for listener in listeners
-        .iter()
-        .filter(|listener| listener.capture == capture_phase)
-    {
+    for listener in listeners.iter().filter(|listener| match filter {
+        crate::host::ListenerFilter::Capturing => listener.capture,
+        crate::host::ListenerFilter::Bubbling => !listener.capture,
+        crate::host::ListenerFilter::All => true,
+    }) {
         let Some(listener) = listener.prepare_in_registry(scope, registry, event_type) else {
             continue;
         };
@@ -337,7 +332,6 @@ pub(crate) fn invoke_simple_event_target_listeners<'s>(
             callback_event,
             callback_errors.as_deref_mut(),
         );
-        dispatched |= outcome.invoked;
         did_throw |= outcome.did_throw;
         if listener.handler_slot.is_some()
             && let Some(returned) = outcome.value
@@ -354,10 +348,7 @@ pub(crate) fn invoke_simple_event_target_listeners<'s>(
             break;
         }
     }
-    SimpleEventListenerInvocationResult {
-        dispatched,
-        did_throw,
-    }
+    SimpleEventListenerInvocationResult { did_throw }
 }
 
 fn finish_event_dispatch<'s>(

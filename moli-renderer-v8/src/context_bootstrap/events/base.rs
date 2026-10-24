@@ -147,14 +147,6 @@ pub(in crate::context_bootstrap) fn set_event_initialized(
     );
 }
 
-pub(in crate::context_bootstrap) fn set_event_dispatch_fields<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-) {
-    set_event_dispatch_fields_with_original_target(scope, target, target, event);
-}
-
 pub(in crate::context_bootstrap) fn set_event_dispatch_fields_with_original_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

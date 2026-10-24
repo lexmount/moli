@@ -7,14 +7,14 @@ mod credential_json_options;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
+mod dom_rect_factory_descriptors;
 mod message_port_transfer;
+mod offline_audio_float;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;
 mod visual_viewport_receiver;
-mod writable_stream_native_receivers;
-mod dom_rect_factory_descriptors;
-mod offline_audio_float;
 mod webtransport_stream_interface_exposure;
+mod writable_stream_native_receivers;
 
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
 use super::{
@@ -2248,7 +2248,6 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
     (info.width, info.height)
 }
 
-
 mod element_animation_native_receivers;
 
 mod attr_accessors;
@@ -2301,13 +2300,13 @@ mod credential_interfaces;
 
 mod audio_param_native_receivers;
 
-mod css_keyframes_mutations;
-mod css_keyframes_receivers;
 mod credential_signals;
 mod cross_origin_symbol_fallback;
 mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod css_animation_interfaces;
+mod css_keyframes_mutations;
+mod css_keyframes_receivers;
 mod device_events;
 mod document_shadow_handler_receivers;
 mod document_svg_root;
@@ -2490,8 +2489,8 @@ mod svg_length_validation;
 
 mod svg_image_aspect_ratio_receivers;
 
-mod svg_number_list_native_receivers;
 mod svg_marker_orient;
+mod svg_number_list_native_receivers;
 mod svg_number_validation;
 mod svg_path_data;
 mod svg_redraw_methods;
@@ -2536,7 +2535,6 @@ mod webrtc_local_description;
 mod webrtc_signaling_state;
 mod websocket;
 
-
 mod webtransport_frontend;
 mod window_cross_origin_getters;
 mod window_event_receivers;
@@ -2562,7 +2560,6 @@ mod streams_sync_protocol;
 mod performance_user_timing;
 
 mod xml_serializer_receivers;
-
 
 mod window_promise_method_receivers;
 mod window_restricted_accessors;

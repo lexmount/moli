@@ -33,7 +33,7 @@ async fn detached_css_faces_can_be_registered_manually_before_or_after_native_cl
                     crate::protocol_types::OptionalResourceFetchMask::FONT,
                 );
             }
-            let (mut vm, _completions) =
+            let (mut vm, mut completions) =
                 new_parsed_test_vm_with_loader_and_resource_completion_queue(
                     "https://font-selection-order.test/",
                     "<!doctype html><span id=probe style='display:inline-block;font:40px OrderFace'>AAAA</span>",
@@ -45,6 +45,7 @@ async fn detached_css_faces_can_be_registered_manually_before_or_after_native_cl
                 style.textContent='@font-face{{font-family:OrderFace;src:url(data:font/ttf;base64,{wide})}}';document.head.append(style);
                 globalThis.face=[...document.fonts][0];face.load();
             "#)).unwrap();
+            complete_local_font_resources(&mut vm, &mut completions);
             assert_eq!(
                 vm.eval("String(probe.getBoundingClientRect().width)")
                     .unwrap(),
@@ -77,11 +78,18 @@ async fn detached_css_faces_can_be_registered_manually_before_or_after_native_cl
     }
 }
 
-#[test]
-fn css_faces_with_shared_sources_keep_independent_mutable_descriptors() {
+#[tokio::test]
+async fn css_faces_with_shared_sources_keep_independent_mutable_descriptors() {
     let (_, wide) = order_font_data();
     for detached in [false, true] {
-        let mut vm = order_vm();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let (mut vm, mut completions) =
+            new_parsed_test_vm_with_loader_and_resource_completion_queue(
+                "https://font-selection-order.test/",
+                ORDER_DOCUMENT,
+                &loader,
+            );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
         vm.eval(&format!(r#"
             globalThis.style=document.createElement('style');
             const rule='@font-face{{font-family:OrderFace;src:url(data:font/ttf;base64,{wide})}}';
@@ -89,6 +97,7 @@ fn css_faces_with_shared_sources_keep_independent_mutable_descriptors() {
             globalThis.faces=[...document.fonts];document.fonts.load('40px OrderFace','AAAA');
             globalThis.moved=document.createElement('span');moved.textContent='AAAA';moved.style.cssText='display:inline-block;font:40px Moved';document.body.append(moved);
         "#)).unwrap();
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("String(probe.getBoundingClientRect().width)")
                 .unwrap(),
@@ -346,11 +355,18 @@ fn shared_font_faces_have_independent_selection_order_in_each_document() {
     assert_eq!(widths(&mut vm), "80,160");
 }
 
-#[test]
-fn duplicate_css_font_declarations_keep_registration_until_last_member_leaves() {
+#[tokio::test]
+async fn duplicate_css_font_declarations_keep_registration_until_last_member_leaves() {
     let (_, wide) = order_font_data();
     for removed in [0, 1] {
-        let mut vm = order_vm();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let (mut vm, mut completions) =
+            new_parsed_test_vm_with_loader_and_resource_completion_queue(
+                "https://font-selection-order.test/",
+                ORDER_DOCUMENT,
+                &loader,
+            );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
         vm.eval(&format!(
             r#"
             const style=document.createElement('style');
@@ -361,6 +377,7 @@ fn duplicate_css_font_declarations_keep_registration_until_last_member_leaves() 
         "#
         ))
         .unwrap();
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(vm.eval("originalFaces.length===2&&originalFaces[0]!==originalFaces[1]&&originalFaces.every(face=>face.status==='loaded')").unwrap(), "true");
         assert_eq!(
             vm.eval("String(probe.getBoundingClientRect().width)")

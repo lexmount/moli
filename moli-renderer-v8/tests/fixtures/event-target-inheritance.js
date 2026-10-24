@@ -5,7 +5,8 @@
     rows.push([label, !!condition]);
     if (!condition) throw Error(label);
   };
-  const inspect = (target, label) => {
+  const inspect = (target, label, realm = globalThis) => {
+    const {EventTarget, Event} = realm;
     check(target instanceof EventTarget, label + ': native inheritance');
     for (const name of methods) {
       check(!Object.hasOwn(target, name), label + ': no own ' + name);

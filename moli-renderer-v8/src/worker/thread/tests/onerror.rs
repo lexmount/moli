@@ -177,7 +177,7 @@ fn expected_synthetic_onerror() -> serde_json::Value {
         ),
         (
             "capture",
-            serde_json::json!(["capture", "before", handler, "after"]),
+            serde_json::json!(["before", handler, "after", "capture"]),
             false,
         ),
     ] {
@@ -269,9 +269,6 @@ async fn worker_onerror_native_errors_use_ordered_handlers_and_intrinsic_event_d
             let actual: serde_json::Value =
                 serde_json::from_str(&expect_post_json(message)).unwrap();
             let mut trace = Vec::new();
-            if mode == "capture" {
-                trace.push(serde_json::json!("capture"));
-            }
             trace.push(serde_json::json!("before"));
             if mode != "stopImmediate" {
                 if matches!(mode, "replace" | "object") {
@@ -280,6 +277,9 @@ async fn worker_onerror_native_errors_use_ordered_handlers_and_intrinsic_event_d
                     trace.push(serde_json::json!({"handler":true,"args":5,"same":true,"receiver":true,"message":true,"url":true,"location":true}));
                 }
                 trace.push(serde_json::json!({"after":true,"prevented":!matches!(mode,"clear"|"reactivate"),"errorEvent":true,"trusted":true}));
+            }
+            if mode == "capture" {
+                trace.push(serde_json::json!("capture"));
             }
             assert_eq!(
                 actual,

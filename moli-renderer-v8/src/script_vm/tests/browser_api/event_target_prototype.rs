@@ -12,7 +12,7 @@ fn event_target_interfaces_inherit_canonical_operations() {
     vm.eval(
         r#"(() => {
         const popup = open('about:blank', 'inherited-event-target');
-        try { __eventTargetInheritance.inspect(popup, 'lightweight popup'); }
+        try { __eventTargetInheritance.inspect(popup, 'popup', popup); }
         finally { popup.close(); }
     })()"#,
     )
