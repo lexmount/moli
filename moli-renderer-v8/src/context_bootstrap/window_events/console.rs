@@ -121,6 +121,18 @@ pub(in crate::context_bootstrap) fn console_noop_callback(
     rv.set_undefined();
 }
 
+pub(in crate::context_bootstrap) fn console_label_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some((method, arguments)) = console_label_arguments(scope, &args) else {
+        return;
+    };
+    call_original_console_method_with_arguments(scope, &arguments, method);
+    rv.set_undefined();
+}
+
 pub(in crate::context_bootstrap) fn console_profile_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -153,6 +165,19 @@ fn call_original_console_method<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     method_name: &'static str,
 ) {
+    let mut forwarded_args = Vec::with_capacity(args.length().max(0) as usize);
+    for index in 0..args.length() {
+        forwarded_args.push(args.get(index));
+    }
+    let method_name = v8str(scope, method_name);
+    call_original_console_method_with_arguments(scope, &forwarded_args, method_name);
+}
+
+fn call_original_console_method_with_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    forwarded_args: &[v8::Local<'s, v8::Value>],
+    method_name: v8::Local<'s, v8::String>,
+) {
     let global = scope.get_current_context().global(scope);
     let Some(original_console) = get_private_value(scope, global, WINDOW_ORIGINAL_CONSOLE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -160,22 +185,18 @@ fn call_original_console_method<'s>(
         return;
     };
     let Some(method) = original_console
-        .get(scope, v8str(scope, method_name).into())
+        .get(scope, method_name.into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
         return;
     };
 
-    let mut forwarded_args = Vec::with_capacity(args.length().max(0) as usize);
-    for index in 0..args.length() {
-        forwarded_args.push(args.get(index));
-    }
     let suppress_page_stack_hook = forwarded_args.iter().any(|value| value.is_native_error())
         && error_prepare_stack_trace_has_page_hook(scope);
     if suppress_page_stack_hook {
         scope.set_prepare_stack_trace_callback(inspector_console_stack_without_page_hook);
     }
-    let _ = method.call(scope, original_console.into(), &forwarded_args);
+    let _ = method.call(scope, original_console.into(), forwarded_args);
     if suppress_page_stack_hook {
         scope.clear_prepare_stack_trace_callback();
     }
