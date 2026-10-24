@@ -1686,7 +1686,7 @@ impl ResourceRequestClient {
             .snapshot()
             .apply_to_request(request)?;
         request.validate_request_mode_for_url(&request.url)?;
-        Ok(request)
+        Ok(self.resource_runtime.client().prepare_request(request))
     }
 }
 

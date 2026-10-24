@@ -2975,7 +2975,7 @@ dependencies = [
  "moli-web-bot-auth",
  "moli-web-mime",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "rcgen",
  "regex",
  "serde",
