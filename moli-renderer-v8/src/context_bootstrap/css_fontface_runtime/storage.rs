@@ -295,10 +295,34 @@ fn sync_font_face_set_matching_order<'s>(
         }
         slots
     };
-    let connected = slots(connected);
+    let mut connected = slots(connected);
     let manual = slots(manual);
     // SAFETY: the native font service cannot call V8 while borrowed.
     let host = unsafe { &*host_ptr };
+    if !connected.is_empty()
+        && let Some(root) = host
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+        && let Some(resources) =
+            crate::layout_renderer::current_native_stylesheet_resources(host, root)
+    {
+        let cascade_order = resources
+            .web_fonts()
+            .iter()
+            .filter_map(|resource| resource.web_font())
+            .enumerate()
+            .map(|(index, font)| (font.registration_slot(), index))
+            .collect::<std::collections::HashMap<_, _>>();
+        // Only native matching uses cascade order. FontFaceSet's public array
+        // above retains document order, followed by manual insertion order.
+        connected.sort_by_key(|slot| {
+            cascade_order
+                .get(slot.as_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+    }
     if host.with_font_services(document, |services| {
         services.set_web_font_order(&connected, &manual)
     }) {
