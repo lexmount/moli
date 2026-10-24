@@ -10,8 +10,7 @@ struct XmlHttpRequestTemplateMethodsDeclaration {
     #[webapi(
         method = "open",
         length = 2,
-        callback = xhr_open_callback,
-        receiver = web_api_interfaces::XMLHttpRequest::is_instance
+        callback = xhr_open_callback
     )]
     open: (),
 
