@@ -9,9 +9,7 @@ use super::{
         cancel_active_cross_document_navigation,
         cancel_pending_same_document_navigation_finishes_including_reentrant,
     },
-    navigation_window::{
-        navigation_unload_event_active, runtime_window_dispatch_scope, window_navigation_for_holder,
-    },
+    navigation_window::{navigation_unload_event_active, window_navigation_for_holder},
 };
 use crate::native_bridge::{
     OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
@@ -227,35 +225,39 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let dispatch_scope = runtime_window_dispatch_scope(scope, window);
-    if window_navigation_is_stopping(scope, window)
-        && match dispatch_scope {
-            Some(OwnerDispatchScope::Child(handle)) => {
-                host.child_browsing_context_has_pending_cross_document_traversal(handle)
-            }
-            Some(OwnerDispatchScope::LightweightPopup(popup_id)) => {
-                host.lightweight_popup_has_pending_history_traversal(popup_id)
-            }
-            _ => false,
+    // A removal callback may have installed a new Window for this frame.
+    // Settle the captured old Navigation, but cancel native work only while
+    // this Window's execution context still owns the frame.
+    let Some(dispatch_scope) =
+        super::window_accessors::window_current_dispatch_scope(scope, window, host)
+    else {
+        return;
+    };
+    let is_stopping = window_navigation_is_stopping(scope, window);
+    let preserve_traversal = match dispatch_scope {
+        OwnerDispatchScope::Child(handle) => {
+            (preserve_child_traversal || is_stopping)
+                && host.child_browsing_context_has_pending_cross_document_traversal(handle)
         }
-    {
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            is_stopping && host.lightweight_popup_has_pending_history_traversal(popup_id)
+        }
+        OwnerDispatchScope::Top => false,
+    };
+    if preserve_traversal {
         // stop() still aborts the Navigation API signal and method promises,
         // but cannot cancel the physical cross-document history traversal.
         return;
     }
     match dispatch_scope {
-        Some(crate::native_bridge::OwnerDispatchScope::Top) => {
+        crate::native_bridge::OwnerDispatchScope::Top => {
             host.cancel_pending_location_navigation();
         }
-        Some(crate::native_bridge::OwnerDispatchScope::Child(handle))
-            if !preserve_child_traversal
-                || !host.child_browsing_context_has_pending_cross_document_traversal(handle) =>
-        {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.cancel_pending_child_browsing_context_navigation(handle);
         }
-        Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
             host.cancel_pending_lightweight_popup_navigation(popup_id);
         }
-        _ => {}
     }
 }
