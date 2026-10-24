@@ -5,11 +5,11 @@ pub(super) fn xhr_abort_callback(
     args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if crate::worker::try_worker_xhr_abort_callback(scope, &args) {
+    let xhr = xhr_receiver_target(scope, args.this());
+    if crate::worker::try_worker_xhr_abort_callback(scope, xhr) {
         return;
     }
 
-    let xhr = args.this();
     super::super::delivery::cancel_xhr_timeout(scope, xhr);
     super::super::delivery::clear_xhr_progress_throttle(scope, xhr);
     super::super::delivery::clear_xhr_timeout_start(scope, xhr);

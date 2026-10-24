@@ -23,7 +23,7 @@ struct XmlHttpRequestConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable, receiver)]
 struct XmlHttpRequestPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = xhr_number_getter, data = callback_data_index_value(scope, 0))]
     ready_state: (),
@@ -37,7 +37,6 @@ struct XmlHttpRequestPrototypeAccessorsDeclaration {
         accessor_property,
         getter = xhr_string_getter,
         setter = xhr_response_type_setter,
-        receiver = web_api_interfaces::XMLHttpRequest::is_instance,
         data = callback_data_index_value(scope, 4)
     )]
     response_type: (),
@@ -71,14 +70,14 @@ struct XmlHttpRequestPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable, receiver)]
 struct XmlHttpRequestResponseXmlAccessorDeclaration {
     #[webapi(accessor_property = "responseXML", getter = xhr_response_xml_getter, data = callback_data_index_value(scope, 7))]
     response_xml: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLHttpRequestEventTarget, enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequestEventTarget, enumerable, receiver)]
 struct XmlHttpRequestEventTargetPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = xhr_value_getter, setter = xhr_value_setter, data = callback_data_index_value(scope, 12))]
     onload: (),
@@ -155,10 +154,7 @@ fn xhr_number_getter(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        rv.set(v8::Number::new(scope, 0.0).into());
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(key) = callback_data_item(
         scope,
         &args,
@@ -177,14 +173,7 @@ fn xhr_string_getter(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        rv.set(
-            v8_string(scope, "")
-                .map(|value| value.into())
-                .unwrap_or_else(|| v8::undefined(scope).into()),
-        );
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(key) = callback_data_item(
         scope,
         &args,
@@ -216,9 +205,7 @@ fn xhr_response_text_getter(
     args: v8::FunctionCallbackArguments<'_>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let response_type = xhr_state_string_property(scope, xhr, XHR_RESPONSE_TYPE_SLOT)
         .as_deref()
         .and_then(XmlHttpRequestResponseType::parse)
@@ -241,9 +228,7 @@ fn xhr_response_xml_getter(
     args: v8::FunctionCallbackArguments<'_>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let response_type = xhr_state_string_property(scope, xhr, XHR_RESPONSE_TYPE_SLOT)
         .as_deref()
         .and_then(XmlHttpRequestResponseType::parse)
@@ -266,10 +251,7 @@ fn xhr_bool_getter(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(key) = callback_data_item(
         scope,
         &args,
@@ -288,10 +270,7 @@ fn xhr_value_getter(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        rv.set_null();
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(key) = callback_data_item(
         scope,
         &args,
@@ -313,10 +292,7 @@ fn xhr_upload_getter(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        rv.set_undefined();
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     rv.set(
         xhr_upload_object(scope, xhr)
             .map(|object| object.into())
@@ -329,9 +305,7 @@ fn xhr_timeout_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(parsed) = webidl::parse_args::<XhrTimeoutArgs>(scope, &args) else {
         return;
     };
@@ -354,9 +328,7 @@ fn xhr_response_type_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(parsed) = webidl::parse_args::<XhrResponseTypeArgs>(scope, &args) else {
         return;
     };
@@ -394,9 +366,7 @@ fn xhr_with_credentials_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let ready_state = xhr_state_number_property(scope, xhr, XHR_READY_STATE_SLOT).unwrap_or(0.0);
     let send_flag = xhr_state_bool_property(scope, xhr, XHR_SEND_FLAG_SLOT).unwrap_or(false);
     if ready_state as u32 != 0 && (ready_state as u32 != 1 || send_flag) {
@@ -417,9 +387,7 @@ fn xhr_value_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(xhr) = args.this().to_object(scope) else {
-        return;
-    };
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(key) = callback_data_item(
         scope,
         &args,

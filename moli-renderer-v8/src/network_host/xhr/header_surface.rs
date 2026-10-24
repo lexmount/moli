@@ -30,7 +30,7 @@ pub(super) fn xhr_set_request_header_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let xhr = args.this();
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(parsed) = webidl::parse_args::<XhrSetRequestHeaderArgs>(scope, &args) else {
         return;
     };
@@ -106,7 +106,7 @@ pub(super) fn xhr_get_all_response_headers_callback(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let xhr = args.this();
+    let xhr = xhr_receiver_target(scope, args.this());
     let headers_json = xhr_state_string_property(scope, xhr, XHR_RESPONSE_HEADERS_SLOT)
         .unwrap_or_else(|| "[]".to_owned());
 
@@ -136,7 +136,7 @@ pub(super) fn xhr_get_response_header_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let xhr = args.this();
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(parsed) = webidl::parse_args::<XhrHeaderNameArgs>(scope, &args) else {
         rv.set_null();
         return;
@@ -171,7 +171,7 @@ pub(super) fn xhr_override_mime_type_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let xhr = args.this();
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(parsed) = webidl::parse_args::<XhrOverrideMimeTypeArgs>(scope, &args) else {
         return;
     };

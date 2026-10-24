@@ -624,17 +624,14 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
   fake.__lmXhrTimeout = 888;
   fake.__lmXhrWithCredentials = true;
 
-  let fakeResponseType;
-  try { fakeResponseType = fake.responseType; }
-  catch (error) { fakeResponseType = error.name; }
-  const fakeValues = [
-    fake.readyState,
-    fake.status,
-    fakeResponseType,
-    fake.timeout,
-    fake.withCredentials,
-    fake.upload === undefined ? 'undefined' : typeof fake.upload
-  ].join('|');
+  const fakeValues = [];
+  for (const name of ['readyState', 'status', 'responseType', 'timeout', 'withCredentials', 'upload']) {
+    try { fakeValues.push(String(fake[name])); }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      fakeValues.push(error.name);
+    }
+  }
 
   xhr.open('GET', '/state');
   return JSON.stringify({
@@ -649,7 +646,7 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
       typeof upload.onload,
       listenerHits
     ].join('|'),
-    fakeValues
+    fakeValues: fakeValues.join('|')
   });
 })()
 "#,
@@ -658,7 +655,7 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"ownNamesBefore":{"xhr":[],"upload":[],"xhrPrototype":[],"eventTargetPrototype":[]},"realValues":"1|0|json|250|true|function|function|1","fakeValues":"0|0|TypeError|0|false|undefined"}"#
+        r#"{"ownNamesBefore":{"xhr":[],"upload":[],"xhrPrototype":[],"eventTargetPrototype":[]},"realValues":"1|0|json|250|true|function|function|1","fakeValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
     );
 }
 

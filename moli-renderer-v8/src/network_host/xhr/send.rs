@@ -34,11 +34,11 @@ pub(super) fn xhr_send_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if crate::worker::try_worker_xhr_send_callback(scope, &args) {
+    let xhr = xhr_receiver_target(scope, args.this());
+    if crate::worker::try_worker_xhr_send_callback(scope, &args, xhr) {
         return;
     }
 
-    let xhr = args.this();
     let body = match convert_xhr_send_body_from_args(scope, &args) {
         Ok(body) => body,
         Err(error) => {

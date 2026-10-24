@@ -18,6 +18,7 @@ mod opaque_response;
 mod open_url_encoding;
 mod open_validation;
 mod query_realms;
+mod receivers;
 mod redirect_filter;
 mod response_headers;
 mod response_type;

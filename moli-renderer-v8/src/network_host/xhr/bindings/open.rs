@@ -21,7 +21,7 @@ pub(super) fn xhr_open_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let xhr = args.this();
+    let xhr = xhr_receiver_target(scope, args.this());
     let Some(parsed) = webidl::parse_args::<XhrOpenArgs>(scope, &args) else {
         return;
     };

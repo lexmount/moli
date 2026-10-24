@@ -268,12 +268,12 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
 pub(crate) fn try_worker_xhr_send_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
+    xhr: v8::Local<'s, v8::Object>,
 ) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
 
-    let xhr = args.this();
     let body = match convert_xhr_send_body_from_args(scope, args) {
         Ok(body) => body,
         Err(error) => {
@@ -844,12 +844,12 @@ fn worker_xhr_open_generation_changed(
 
 pub(crate) fn try_worker_xhr_abort_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+    xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
-    if !try_worker_xhr_terminate_fetch(scope, args.this()) {
+    if !try_worker_xhr_terminate_fetch(scope, xhr) {
         return false;
     }
-    crate::network_host::finish_xhr_abort(scope, args.this());
+    crate::network_host::finish_xhr_abort(scope, xhr);
     true
 }
 

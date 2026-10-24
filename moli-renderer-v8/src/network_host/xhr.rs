@@ -15,6 +15,17 @@ use crate::web_api_interfaces;
 use crate::worker::WORKER_STATE_SLOT;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+// Generated guards validate the interface. Resolve native aliases before XHR
+// slots, owner realms, Blob capture and async jobs use the backing object.
+fn xhr_receiver_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let receiver = v8::Local::new(scope, receiver);
+    moli_webapi_declare::web_api_object_target(scope, receiver)
+        .expect("generated XMLHttpRequest receiver validation")
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ProgressEvent)]
 struct ProgressEventPrototypeDeclaration {
