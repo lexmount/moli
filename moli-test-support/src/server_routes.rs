@@ -2201,12 +2201,20 @@ pub(super) fn build_router() -> Router {
             get(asset_parse_time_async_task_first_script),
         )
         .route(
+            "/assets/parse_time_async_task_first_executed",
+            get(asset_parse_time_async_task_first_executed),
+        )
+        .route(
             "/assets/parse_time_async_task_second.js",
             get(asset_parse_time_async_task_second_script),
         )
         .route(
             "/assets/parse_time_async_task_visibility_first.js",
             get(asset_parse_time_async_task_visibility_first_script),
+        )
+        .route(
+            "/assets/parse_time_async_task_visibility_first_executed",
+            get(asset_parse_time_async_task_visibility_first_executed),
         )
         .route(
             "/assets/parse_time_async_task_visibility_second.js",

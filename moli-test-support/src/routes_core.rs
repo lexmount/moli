@@ -4515,8 +4515,20 @@ pub(super) async fn asset_parse_time_async_task_first_script() -> Response {
     javascript_response(PARSE_TIME_ASYNC_TASK_FIRST_JS)
 }
 
-pub(super) async fn asset_parse_time_async_task_second_script() -> Response {
-    sleep(Duration::from_millis(5)).await;
+pub(super) async fn asset_parse_time_async_task_first_executed(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.parse_time_async_task_first_executed.signal();
+    StatusCode::NO_CONTENT
+}
+
+pub(super) async fn asset_parse_time_async_task_second_script(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    // Async fetch completion order is independent of source order. Admit this
+    // response only after the first script has queued its microtask, so the
+    // fixture checks task cleanup without relying on a short network delay.
+    state.parse_time_async_task_first_executed.wait().await;
     javascript_response(PARSE_TIME_ASYNC_TASK_SECOND_JS)
 }
 
@@ -4524,8 +4536,22 @@ pub(super) async fn asset_parse_time_async_task_visibility_first_script() -> Res
     javascript_response(PARSE_TIME_ASYNC_TASK_VISIBILITY_FIRST_JS)
 }
 
-pub(super) async fn asset_parse_time_async_task_visibility_second_script() -> Response {
-    sleep(Duration::from_millis(5)).await;
+pub(super) async fn asset_parse_time_async_task_visibility_first_executed(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state
+        .parse_time_async_task_visibility_first_executed
+        .signal();
+    StatusCode::NO_CONTENT
+}
+
+pub(super) async fn asset_parse_time_async_task_visibility_second_script(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    state
+        .parse_time_async_task_visibility_first_executed
+        .wait()
+        .await;
     javascript_response(PARSE_TIME_ASYNC_TASK_VISIBILITY_SECOND_JS)
 }
 
