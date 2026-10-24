@@ -292,7 +292,17 @@ fn send_synchronous_network_xhr(
         "xmlhttprequest",
         prepared.initiator_url.clone(),
     );
-    let request = prepared.request().with_request_mode(RequestMode::Cors);
+    let mut request = prepared.request().with_request_mode(RequestMode::Cors);
+    let csp = crate::network_host::WindowCspRequestContext::capture(scope, host, prepared.owner)
+        .expect("synchronous XHR prepared a live Document request authority");
+    if let Some(check) = csp.redirect_check(
+        scope,
+        &prepared.document_url,
+        &prepared.resolved_url,
+        host.resource_completion_sender(),
+    ) {
+        request = request.with_redirect_check(check);
+    }
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),

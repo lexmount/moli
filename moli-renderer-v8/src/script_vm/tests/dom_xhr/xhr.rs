@@ -216,7 +216,7 @@ fn pending_fetch_continuation<'s>(
     host: &crate::native_bridge::PageScriptHost,
 ) -> crate::types::PendingSubresourceContinuation {
     let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
-    crate::types::PendingSubresourceContinuation::Fetch(Box::new(
+    crate::types::PendingSubresourceContinuation::Fetch(
         crate::types::PendingWindowFetchContinuation::new(
             v8::Global::new(scope, resolver),
             crate::context_bootstrap::FetchResourceTiming::capture(
@@ -237,7 +237,7 @@ fn pending_fetch_continuation<'s>(
             moli_fetch::RequestRedirectMode::Follow,
             String::new(),
         ),
-    ))
+    )
 }
 
 #[test]
@@ -2913,7 +2913,6 @@ __xhrGate.send();
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
-            preload_state: Default::default(),
         },
         network_request_headers: None,
     })
@@ -3007,6 +3006,12 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                     body_source_id,
                 );
                 let xhr = streaming_xhr_probe(scope);
+                let csp = crate::network_host::WindowCspRequestContext::capture(
+                    scope,
+                    &context_host.borrow(),
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                )
+                .expect("streaming XHR fixture has a Document request context");
 
                 context_host
                     .borrow_mut()
@@ -3044,6 +3049,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 v8::Global::new(scope, xhr),
                                 false,
                                 String::new(),
+                                csp,
                             ),
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
@@ -4247,6 +4253,12 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
             let _stream =
                 crate::network_host::pending_network_body_stream(scope, body_owner, body_source_id);
             let xhr = streaming_xhr_probe(scope);
+            let csp = crate::network_host::WindowCspRequestContext::capture(
+                scope,
+                &context_host.borrow(),
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("streaming XHR fixture has a Document request context");
 
             context_host
                 .borrow_mut()
@@ -4290,6 +4302,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                             v8::Global::new(scope, xhr),
                             false,
                             String::new(),
+                            csp,
                         ),
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,

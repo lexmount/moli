@@ -938,6 +938,7 @@ impl PageScriptHost {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_async_subresource_event_source(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         execution_context: super::WindowExecutionContextBinding,
         resource_loader: &crate::network::context::DocumentResourceLoader,
         event_source: v8::Global<v8::Object>,
@@ -948,6 +949,12 @@ impl PageScriptHost {
         mut info: PendingSubresourceFetchInfo,
         request_started: bool,
     ) -> (u64, ResourceLoadLease) {
+        let csp = crate::network_host::WindowCspRequestContext::capture(
+            scope,
+            self,
+            execution_context.dispatch_scope(),
+        )
+        .expect("active Document authority required for EventSource CSP");
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         let request_origin = resource_loader.fetch_context().request_origin();
@@ -976,7 +983,9 @@ impl PageScriptHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::EventSource(event_source),
+                continuation: PendingSubresourceContinuation::EventSource(Box::new(
+                    crate::types::PendingEventSourceRequest { event_source, csp },
+                )),
                 deferred_request_started: false,
                 blob_url_entry: None,
             },
@@ -1605,6 +1614,7 @@ impl PageScriptHost {
 
     pub(crate) fn record_pending_subresource_xhr(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         execution_context: super::WindowExecutionContextBinding,
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
@@ -1615,6 +1625,12 @@ impl PageScriptHost {
         blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
+        let csp = crate::network_host::WindowCspRequestContext::capture(
+            scope,
+            self,
+            execution_context.dispatch_scope(),
+        )
+        .expect("active Document authority required for XHR CSP");
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
@@ -1641,6 +1657,7 @@ impl PageScriptHost {
                     xhr,
                     use_cors_preflight,
                     initiator_url,
+                    csp,
                 ),
                 deferred_request_started: false,
                 blob_url_entry,
@@ -1734,6 +1751,7 @@ impl PageScriptHost {
 
     pub(crate) fn record_async_subresource_xhr(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         execution_context: super::WindowExecutionContextBinding,
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
@@ -1745,6 +1763,12 @@ impl PageScriptHost {
         mut info: PendingSubresourceFetchInfo,
         publish_request_started: bool,
     ) -> u64 {
+        let csp = crate::network_host::WindowCspRequestContext::capture(
+            scope,
+            self,
+            execution_context.dispatch_scope(),
+        )
+        .expect("active Document authority required for XHR CSP");
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
@@ -1773,6 +1797,7 @@ impl PageScriptHost {
                     xhr,
                     use_cors_preflight,
                     initiator_url,
+                    csp,
                 ),
                 deferred_request_started: false,
                 blob_url_entry: None,
@@ -1869,23 +1894,14 @@ impl PageScriptHost {
                     .map(|state| &state.pending)
             })?;
         let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
-        if !policy.has_policies() {
-            return None;
-        }
-        let report_context = report_context.clone();
-        let completion_tx = self.resource_completion_sender();
-        redirect_state.redirect_check(
-            policy.clone(),
-            pending.info.document_url.clone(),
-            pending.info.url.clone(),
-            move |violation| {
-                let _ = completion_tx.send_async_subresource_event(
-                    crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
-                        report_context: Box::new(report_context.clone()),
-                        violation: Box::new(violation),
-                    },
-                );
-            },
+        crate::network_host::window_csp_redirect_check(
+            policy,
+            redirect_state,
+            report_context,
+            &pending.info.document_url,
+            &pending.info.url,
+            crate::content_security_policy::ContentSecurityPolicySourceLocation::default(),
+            self.resource_completion_sender(),
         )
     }
 
@@ -2084,12 +2100,12 @@ impl PageScriptHost {
             .streaming_subresource_fetches
             .values_mut()
             .find(|state| state.body_source_id == body_source_id)?;
-        let PendingSubresourceContinuation::EventSource(event_source) = &state.pending.continuation
+        let PendingSubresourceContinuation::EventSource(request) = &state.pending.continuation
         else {
             return None;
         };
         let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
-        let event_source = v8::Local::new(scope, event_source);
+        let event_source = v8::Local::new(scope, &request.event_source);
         let parser = state.event_source_parser.as_mut()?;
         state.body_capture.append(bytes);
         let messages = parser.push(bytes);

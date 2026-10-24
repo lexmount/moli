@@ -405,6 +405,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let xhr_id = {
         let mut state = state.borrow_mut();
         let xhr_id = next_xhr_id(&mut state);
+
         state.pending_xhrs.insert(
             xhr_id,
             PendingWorkerXhr {
@@ -441,8 +442,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         let mut request = request;
         if let Some(body) = request.body.as_ref() {
             let upload_tx = completion_tx.clone();
-            let observer = moli_fetch::UploadObserver::new(body.len() as u64, move |event| {
-                let _ = upload_tx.send(WorkerXhrEvent::Upload { xhr_id, event });
+            let observer = moli_fetch::UploadObserver::new_browser(body.len() as u64, move |event| {
+                let _ = upload_tx.send(WorkerXhrEvent::Upload { xhr_id, report: event });
             });
             request = request.with_upload_observer(observer);
         }
@@ -471,6 +472,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         })));
         let _ = completion_tx.send(WorkerXhrEvent::ResourceTiming { xhr_id: Some(xhr_id), timing });
     });
+
 
     true
 }
@@ -531,7 +533,12 @@ fn send_synchronous_worker_xhr(
     control: ControlledXhrContext,
 ) {
     let timing = prepared.timing.clone();
+    let mut control = control;
+    if control.connect_policy.has_policies() {
+        control.csp_source_location = crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
+    }
     let request_url_text = prepared.resolved_url.to_string();
+
 
     let request = worker_xhr_request(&state.borrow(), &prepared);
     let cancel = state.borrow().network_cancel.child_for_subrequest();
@@ -595,6 +602,7 @@ fn send_synchronous_worker_xhr(
     match result.map(|completion| completion.result) {
         Ok(Ok(mut response)) => {
             response.headers = filter_cors_exposed_response_headers(
+
                 timing.origin(),
                 &response.head(),
                 prepared.credentials_mode,
@@ -679,7 +687,7 @@ pub(in crate::worker) fn drain_worker_xhr_event(
                 timing.publish(scope);
             }
         }
-        WorkerXhrEvent::Upload { xhr_id, event } => {
+        WorkerXhrEvent::Upload { xhr_id, report: event } => {
             let xhr = {
                 let state = state.borrow();
                 let Some(pending) = state.pending_xhrs.get(&xhr_id) else {
@@ -723,6 +731,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
         }
         return;
     }
+
 
     let Some(pending) = state.borrow_mut().pending_xhrs.remove(&completion.xhr_id) else {
         return;

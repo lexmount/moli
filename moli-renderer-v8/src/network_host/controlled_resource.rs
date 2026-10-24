@@ -48,6 +48,7 @@ pub(crate) struct ControlledResourceLoad {
     cancel: FetchCancelHandle,
     interception: crate::network::interception_output::ResourceInterceptionContext,
     connect_policy: Option<DocumentConnectPolicySnapshot>,
+    csp_source_location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
     csp_violations: Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
     preflight_headers: Vec<(String, String)>,
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
@@ -126,6 +127,7 @@ impl ControlledResourceLoad {
             cancel,
             interception,
             connect_policy: None,
+            csp_source_location: Default::default(),
             csp_violations: Vec::new(),
             preflight_headers: Vec::new(),
             initial_decision: None,
@@ -320,9 +322,10 @@ impl ControlledResourceLoad {
         )
         .with_request_body_bytes(self.info.request_body_bytes.clone())
         .with_redirect(redirect)
-        .with_keepalive(
-            self.load.disposition() == crate::network::loads::ResourceLoadDisposition::Keepalive,
-        )
+        .with_keepalive(matches!(
+            self.load.disposition(),
+            crate::network::loads::ResourceLoadDisposition::Keepalive { .. }
+        ))
     }
 
     fn check_request(&mut self) -> Result<(), String> {
@@ -342,8 +345,7 @@ impl ControlledResourceLoad {
             })
         {
             violation.blocked_uri = self.request.redirect_chain()[0].from_url.to_string();
-            crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
-                .apply_to(&mut violation);
+            self.csp_source_location.apply_to(&mut violation);
             self.csp_violations.push(violation);
         }
         if let Some(policy) = &self.connect_policy
@@ -367,8 +369,7 @@ impl ControlledResourceLoad {
                 "XMLHttpRequest",
             );
             if self.interception.is_worker() {
-                crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
-                    .apply_to(&mut violation);
+                self.csp_source_location.apply_to(&mut violation);
                 self.csp_violations.push(violation);
             }
             return Err(message);
@@ -449,8 +450,7 @@ impl ControlledResourceLoad {
                 );
             }
             if self.interception.worker_control_closed() {
-                if self.load.disposition()
-                    != crate::network::loads::ResourceLoadDisposition::Keepalive
+                if !matches!(self.load.disposition(), crate::network::loads::ResourceLoadDisposition::Keepalive { .. })
                 {
                     return Err("net::ERR_ABORTED".into());
                 }
