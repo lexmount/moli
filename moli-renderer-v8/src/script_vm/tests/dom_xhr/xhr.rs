@@ -85,7 +85,13 @@ async fn same_origin_window_fetch_and_xhr_post_send_origin_on_wire() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
-    let server = StaticHttpServer::spawn(1).await;
+    let server = StaticHttpServer::spawn_with_raw_responder(2, |index, _| {
+        if index == 0 {
+            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"xhr\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+        } else {
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+        }
+    }).await;
     let base_url = server.base_url();
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader(
@@ -129,10 +135,12 @@ async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
     .await;
 
     let requests = server.finish().await;
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].target, "/first/resource");
+    assert_eq!(requests[0].header_value("authorization"), None);
+    assert_eq!(requests[1].target, "/first/resource");
     assert_eq!(
-        requests[0].header_value("authorization"),
+        requests[1].header_value("authorization"),
         Some("Basic YWxpY2U6c2VjcmV0")
     );
 }

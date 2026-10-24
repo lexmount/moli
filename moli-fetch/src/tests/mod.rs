@@ -7,6 +7,7 @@ mod cookie_context;
 mod cookie_store;
 mod header_bytes;
 mod header_eof;
+mod http_authentication;
 mod mixed_transport;
 mod referrer_redirects;
 mod request_security;

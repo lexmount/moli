@@ -32,6 +32,7 @@ moli-url-policy = { path = "../moli-url-policy" }
 moli-web-bot-auth = { path = "../moli-web-bot-auth" }
 moli-web-mime = { path = "../moli-web-mime" }
 parking_lot = "0.12"
+percent-encoding = "2.3"
 regex = "1"
 serde = { version = "1.0.228", features = ["derive"] }
 sfv = "0.15.0"

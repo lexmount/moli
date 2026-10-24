@@ -255,21 +255,6 @@ pub(crate) fn outgoing_request_header_bytes_for_url(
         ));
     }
 
-    if let Some(auth) = request.auth()
-        && auth.target == RequestAuthTarget::Server
-        && auth.scheme == RequestAuthScheme::Basic
-        && !header_present(&outgoing, "authorization")
-    {
-        outgoing.push((
-            "Authorization".to_owned(),
-            format!(
-                "Basic {}",
-                encode_basic_auth(&auth.username, &auth.password)
-            )
-            .into_bytes(),
-        ));
-    }
-
     outgoing
 }
 
@@ -664,7 +649,14 @@ pub(crate) fn configure_easy(
         .configure(easy, request.allows_credentials_for_url(request_url))?;
     easy.useragent(request.browser_identity(config).user_agent())
         .context("failed to set curl user-agent")?;
-    easy.url(request_url.as_str())
+    // Browser URL credentials are selected only after an eligible 401. Do
+    // not let libcurl independently turn userinfo into a preemptive header.
+    let mut transport_url = request_url.clone();
+    if request.request_origin().is_some() {
+        let _ = transport_url.set_username("");
+        let _ = transport_url.set_password(None);
+    }
+    easy.url(transport_url.as_str())
         .with_context(|| anyhow!("failed to set curl request url to {}", request_url))?;
 
     match request.method.as_str() {
@@ -761,7 +753,7 @@ pub(crate) fn configure_easy(
             .context("failed to suppress curl default content-type")?;
     }
 
-    if let Some(auth) = request.auth()
+    if let Some(auth) = request.transport_auth_for_url(request_url)
         && request.auth_requires_buffered_transport()
     {
         let mut methods = Auth::new();

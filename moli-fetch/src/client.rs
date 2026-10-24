@@ -21,6 +21,7 @@ pub struct FetchClientHandle {
     cookie_store: SharedBrowserCookieStore,
     runtime: FetchRuntimeHandle,
     dictionaries: crate::compression_dictionary::SharedDictionaryStore,
+    http_authentication: crate::http_authentication::SharedHttpAuthenticationCache,
 }
 
 /// Unique structured-concurrency owner for one fetch client.
@@ -199,6 +200,12 @@ impl FetchClientHandle {
     /// the first transport hop. Redirects select against their new URL.
     pub fn prepare_request(&self, request: Request) -> Request {
         let url = request.url.clone();
+        let request = crate::http_authentication::HttpAuthenticationCache::prepare_owned(
+            &self.http_authentication,
+            &self.config,
+            request,
+            &url,
+        );
         crate::compression_dictionary::DictionaryStore::prepare_owned(
             &self.dictionaries,
             &self.config,
@@ -285,17 +292,20 @@ impl FetchClient {
         let client_hint_preferences =
             Arc::new(parking_lot::Mutex::new(ClientHintPreferences::default()));
         let dictionaries = Arc::default();
+        let http_authentication = Arc::default();
         let runtime_owner = FetchRuntimeOwner::new_with_network_state(
             config,
             Arc::clone(&cookie_store),
             Arc::clone(&client_hint_preferences),
             Arc::clone(&dictionaries),
+            Arc::clone(&http_authentication),
         );
         let handle = FetchClientHandle {
             config: config.clone(),
             runtime: runtime_owner.handle(),
             cookie_store,
             dictionaries,
+            http_authentication,
         };
         Self {
             handle,
