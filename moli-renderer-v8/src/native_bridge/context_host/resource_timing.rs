@@ -74,22 +74,6 @@ impl ResourceTimingBufferRegistry {
 pub(crate) struct SharedResourceTimingBufferRegistry(Rc<RefCell<ResourceTimingBufferRegistry>>);
 
 impl SharedResourceTimingBufferRegistry {
-    pub(crate) fn note_resource_timing_entry_queued(&self, id: ResourceTimingBufferId) {
-        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id)
-            && !state.can_add_to_primary()
-        {
-            state.dropped_entries_count = state.dropped_entries_count.saturating_add(1);
-        }
-    }
-
-    pub(crate) fn resource_timing_dropped_entries_count(&self, id: ResourceTimingBufferId) -> u64 {
-        self.0
-            .borrow()
-            .buffers
-            .get(&id)
-            .map_or(0, |state| state.dropped_entries_count)
-    }
-
     pub(crate) fn new() -> Self {
         Self(Rc::new(RefCell::new(
             ResourceTimingBufferRegistry::default(),

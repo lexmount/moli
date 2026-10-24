@@ -33,14 +33,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::PaymentMethodChangeEvent,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::RTCEncodedAudioFrame::DESCRIPTOR,
-        kind: ConstructorKind::RtcEncodedAudioFrame,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::RTCEncodedVideoFrame::DESCRIPTOR,
-        kind: ConstructorKind::RtcEncodedVideoFrame,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
         kind: ConstructorKind::PictureInPictureEvent,
     },

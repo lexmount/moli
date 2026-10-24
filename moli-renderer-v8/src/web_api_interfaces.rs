@@ -502,8 +502,6 @@ interfaces! {
     QuotaExceededError: DOMException;
     RTCDataChannel: EventTarget;
     RTCIceCandidate;
-    RTCEncodedAudioFrame;
-    RTCEncodedVideoFrame;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;

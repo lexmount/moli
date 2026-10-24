@@ -231,22 +231,6 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::PaymentMethodChangeEvent => {
             build_value_event_template(scope, ValueEventKind::PaymentMethodChange)
         }
-        ConstructorKind::RtcEncodedAudioFrame => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::RTCEncodedAudioFrame,
-                super::super::webrtc::encoded_frames::audio_constructor
-            ))
-            .length(1)
-            .build(scope)
-        }
-        ConstructorKind::RtcEncodedVideoFrame => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::RTCEncodedVideoFrame,
-                super::super::webrtc::encoded_frames::video_constructor
-            ))
-            .length(1)
-            .build(scope)
-        }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
         }
