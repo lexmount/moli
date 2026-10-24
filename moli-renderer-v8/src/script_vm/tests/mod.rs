@@ -2561,7 +2561,6 @@ mod webrtc_local_description;
 mod webrtc_signaling_state;
 mod websocket;
 mod websocket_stream_dictionary;
-mod webtransport_stream_interface_exposure;
 
 mod webtransport_frontend;
 mod window_cross_origin_getters;
@@ -2574,8 +2573,8 @@ mod window_getter_consolidation;
 mod window_receiver_access;
 mod worklet_interfaces;
 
-mod websocket_close_dictionary;
 mod report_body_interface_exposure;
+mod websocket_close_dictionary;
 
 mod document_range_factory_realm;
 
