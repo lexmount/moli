@@ -286,9 +286,10 @@ fn send_worker_content_security_policy_report_for_state(
     let cancel = moli_fetch::FetchCancelHandle::new();
     let Some(load) = loader.register_load(
         ResourceLoadKind::CspReport,
-        ResourceLoadDisposition::Keepalive,
+        ResourceLoadDisposition::Keepalive { body_bytes: request.body.as_ref().map_or(0, bytes::Bytes::len) },
         Some(cancel.clone()),
     ) else {
+
         return;
     };
     let info = PendingSubresourceFetchInfo {
