@@ -158,6 +158,7 @@ mod window_open_empty_url;
 mod window_open_named_targets;
 mod window_open_referrer;
 mod window_open_special_targets;
+mod window_stop_requests;
 mod worker_listener_invocation;
 mod worker_options;
 
