@@ -305,7 +305,11 @@ fn prepare_xhr_response(
         set_xhr_response_head(scope, xhr, head, status_text);
         if xhr_is_async(scope, xhr) {
             let generation = xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT);
-            super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::HeadersReceived);
+            super::super::events::xhr_fire_readystatechange(
+                scope,
+                xhr,
+                XhrReadyState::HeadersReceived,
+            );
             if scope.is_execution_terminating()
                 || xhr_is_aborted(scope, xhr)
                 || xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT) != generation

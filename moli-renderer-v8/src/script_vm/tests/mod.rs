@@ -2596,7 +2596,6 @@ mod streams_sync_protocol;
 
 mod performance_user_timing;
 
-mod rtc_encoded_frames;
 mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
