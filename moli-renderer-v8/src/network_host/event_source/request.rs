@@ -264,7 +264,7 @@ pub(crate) fn start_event_source_request<'s>(
         return;
     }
 
-    let request = match build_event_source_request(&prepared) {
+    let mut request = match build_event_source_request(&prepared) {
         Ok(request) => request,
         Err(error) => {
             record_prepared_event_source_failure(
@@ -288,6 +288,9 @@ pub(crate) fn start_event_source_request<'s>(
         true,
     );
     set_event_source_active_request_id(scope, event_source, Some(registered.internal_id));
+    if let Some(check) = host.window_fetch_redirect_check(registered.internal_id) {
+        request = request.with_redirect_check(check);
+    }
     spawn_async_subresource_fetch(
         registered.load.task_runner(),
         host.resource_completion_sender(),
@@ -416,7 +419,7 @@ fn dispatch_service_worker_event_source<'s>(
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {
-        redirect_check: None,
+        redirect_check: host.window_fetch_redirect_check(registered.internal_id),
         internal_id: registered.internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
@@ -489,10 +492,13 @@ fn register_event_source_request<'s>(
     cancel_handle: Option<FetchCancelHandle>,
     request_started: bool,
 ) -> RegisteredEventSourceRequest {
+    let execution_context = prepared.execution_context.duplicate(scope);
+    let event_source = v8::Global::new(scope, event_source);
     let (internal_id, load) = host.record_async_subresource_event_source(
-        prepared.execution_context.duplicate(scope),
+        scope,
+        execution_context,
         &prepared.resource_loader,
-        v8::Global::new(scope, event_source),
+        event_source,
         cancel_handle,
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),

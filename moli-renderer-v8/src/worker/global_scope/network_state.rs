@@ -158,6 +158,8 @@ impl PendingWorkerFetchNetworkRecord {
 
 pub(in crate::worker) struct PendingWorkerXhr {
     pub(super) timing: WorkerResourceTiming,
+    pub(in crate::worker) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
+    pub(in crate::worker) redirect_csp_state: crate::network_host::FetchCspRedirectState,
     pub(in crate::worker) xhr: v8::Global<v8::Object>,
     pub(in crate::worker) document_url: Url,
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,

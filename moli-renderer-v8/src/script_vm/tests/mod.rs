@@ -262,9 +262,12 @@ fn register_pending_window_xhr_for_test(
     let owner = execution_context.owner();
     let realm_token = execution_context.realm_token();
     let url = Url::parse("https://xhr-execution-context.test/pending").unwrap();
+    let xhr = v8::Object::new(scope);
+    let xhr = v8::Global::new(scope, xhr);
     let internal_id = host.record_async_subresource_xhr(
+        scope,
         execution_context,
-        v8::Global::new(scope, v8::Object::new(scope)),
+        xhr,
         false,
         Some(cancel_handle),
         moli_fetch::RequestCredentialsMode::SameOrigin,

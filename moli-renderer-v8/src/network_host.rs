@@ -84,7 +84,9 @@ pub(crate) use self::browser_response::{
     LocalUrlError, local_url_response, local_url_response_result,
     local_url_response_with_blob_entry,
 };
-pub(crate) use self::csp_redirect::FetchCspRedirectState;
+pub(crate) use self::csp_redirect::{
+    FetchCspRedirectState, WindowCspRequestContext, window_csp_redirect_check,
+};
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
     send_content_security_policy_reports_for_lightweight_popup,
