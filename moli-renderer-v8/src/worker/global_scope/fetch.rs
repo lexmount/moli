@@ -725,6 +725,11 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         if inherited.body_unusable && !init.body_present {
             return Err(crate::network_host::request_body_already_used_error().into());
         }
+        let body = if init.body_present {
+            init.body.clone()
+        } else {
+            inherited.body_bytes_for_fetch(scope, req_obj)?
+        };
         signal = init.signal.unwrap_or(inherited.signal);
         body_stream = if init.body_present {
             init.body_stream.clone()
@@ -740,11 +745,6 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             init.method.clone()
         } else {
             inherited.method.clone()
-        };
-        let body = if init.body_present {
-            init.body.clone()
-        } else {
-            inherited.body.clone()
         };
         let mut headers = if init.headers_present {
             init.headers.clone()
@@ -1202,12 +1202,14 @@ pub(super) fn start_worker_resource_fetch<'s>(
             &state,
             native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing },
 
+
             document_url,
             signal_id,
             request_metadata,
             policy_context,
         )
     }
+
 
 }
 

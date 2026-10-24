@@ -25,7 +25,9 @@ pub(super) fn start<'s>(
     let load = state.borrow().loader.register_load(
         kind.resource_type().into(),
         if metadata.keepalive {
-            ResourceLoadDisposition::Keepalive
+            ResourceLoadDisposition::Keepalive {
+                body_bytes: if matches!(request.url.scheme(), "http" | "https") { request.body.as_ref().map_or(0, bytes::Bytes::len) } else { 0 },
+            }
         } else {
             ResourceLoadDisposition::Ordinary
         },
@@ -34,7 +36,7 @@ pub(super) fn start<'s>(
     let Some(load) = load else {
         return Some(make_rejected_promise(
             scope,
-            "fetch: worker global is shutting down",
+            "Failed to fetch",
         ));
     };
     let handle = crate::network::interception_control::next_subresource_network_handle();
