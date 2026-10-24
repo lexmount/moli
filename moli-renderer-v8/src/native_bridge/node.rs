@@ -33,6 +33,7 @@ mod tree;
 
 pub(in crate::native_bridge) use accessors::node_text_content_getter_function;
 use accessors::*;
+use reference::NativeNodeReference;
 
 pub(super) use self::arguments::*;
 pub(super) use self::bridge_callbacks::*;
@@ -44,7 +45,6 @@ pub(super) use self::foreign::*;
 use self::metadata::*;
 pub(crate) use self::mutation::validate_pre_insert_handles;
 pub(super) use self::mutation::*;
-pub(crate) use self::reference::NativeNodeReference;
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]
