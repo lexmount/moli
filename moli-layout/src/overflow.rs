@@ -475,10 +475,18 @@ where
             }
         };
         for line in &context.fragments.lines {
-            local_overflow = local_overflow.union(inline_bounds(line.rect));
+            local_overflow = local_overflow.union(inline_bounds(line.scrollable_rect));
         }
         for fragment in &context.fragments.text {
-            local_overflow = local_overflow.union(inline_bounds(fragment.rect));
+            let line = &context.fragments.lines[fragment.line_index];
+            let mut rect = fragment.rect;
+            if line.scrollable_rect != line.rect {
+                let left = rect.x.max(line.scrollable_rect.x);
+                let right = rect.right().min(line.scrollable_rect.right());
+                rect.x = left.min(right);
+                rect.width = (right - left).max(0.0);
+            }
+            local_overflow = local_overflow.union(inline_bounds(rect));
         }
         for fragment in &context.fragments.boxes {
             local_overflow = local_overflow.union(inline_bounds(fragment.rect));

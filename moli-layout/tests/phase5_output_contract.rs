@@ -3755,3 +3755,37 @@ fn transformed_fixed_containing_block_still_clips_its_fixed_descendant() {
         "the fixed containing block's overflow clip must still apply"
     );
 }
+
+#[test]
+fn wrapped_trailing_spaces_do_not_expand_scrollable_overflow() {
+    for (text, overflows) in [("aa aa aa aa", false), ("aaaaaa", true)] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2]),
+            Node::element("fixed-font", vec![3]),
+            Node::text("text", text),
+        ]);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles
+            .0
+            .insert(1, fixed_size(LayoutDisplay::Block, 33.0, 120.0));
+        let (font_style, mut services) = fixed_inline_font();
+        styles.0.insert(2, font_style);
+        let pass = build_layout_pass(
+            &source,
+            &mut styles,
+            &mut services,
+            LayoutPassRequest::new(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+        )
+        .unwrap();
+        let metrics = pass.element_metrics_for_source(1).unwrap();
+        if overflows {
+            assert!(metrics.scroll_size.width > metrics.client_size.width);
+        } else {
+            assert_eq!(metrics.scroll_size.width, metrics.client_size.width);
+        }
+    }
+}
