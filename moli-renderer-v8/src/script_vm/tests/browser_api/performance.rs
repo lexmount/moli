@@ -356,3 +356,46 @@ fn resource_timing_added_during_full_event_stays_in_secondary_buffer() {
         r#"{"entries":["https://resource-buffer-reentrant.test/resource-0.js","https://resource-buffer-reentrant.test/resource-1.js","https://resource-buffer-reentrant.test/resource-2.js"],"events":1}"#
     );
 }
+
+#[test]
+fn resource_timing_dropped_count_survives_recovery_resize_and_clear() {
+    let mut vm = new_storage_test_vm("https://resource-drop-count.test/");
+    install_test_resource_recorder(&mut vm);
+    vm.eval(
+        r#"
+        globalThis.__dropReports = [];
+        globalThis.__dropObserver = new PerformanceObserver((list, observer, options) => {
+          __dropReports.push(Object.hasOwn(options, 'droppedEntriesCount')
+            ? options.droppedEntriesCount : 'absent');
+        });
+        __dropObserver.observe({entryTypes:['resource','resource','mark']});
+        performance.setResourceTimingBufferSize(1);
+        performance.onresourcetimingbufferfull = () => {
+          performance.setResourceTimingBufferSize(3);
+          __recordResourceTiming('https://resource-drop-count.test/reentrant');
+        };
+        __recordResourceTiming('https://resource-drop-count.test/first');
+        __recordResourceTiming('https://resource-drop-count.test/overflow');
+        "#,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("JSON.stringify(__dropReports)").unwrap(), "[1]");
+    vm.run_next_timeout_for_test().unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([__dropReports,performance.getEntriesByType('resource').length])")
+            .unwrap(),
+        r#"[[1,"absent"],3]"#
+    );
+    for script in [
+        "__dropObserver.observe({entryTypes:['resource','resource','mark']});performance.mark('after-recovery');",
+        "performance.clearResourceTimings();__dropObserver.observe({entryTypes:['resource','mark']});performance.mark('after-clear');",
+        "performance.setResourceTimingBufferSize(0);__dropObserver.observe({entryTypes:['resource','mark']});__recordResourceTiming('https://resource-drop-count.test/discard');",
+        "__dropObserver.observe({entryTypes:['mark']});performance.mark('marks-only');",
+    ] {
+        vm.eval(script).unwrap();
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(__dropReports)").unwrap(),
+        r#"[1,"absent",1,1,2,0]"#
+    );
+}
