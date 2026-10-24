@@ -166,14 +166,14 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) -> Option<FrameDocumentClassicScriptSchedulerWork> {
-        // Reinsertion from an abort/navigateerror handler creates a new Window.
-        // Finish only the retiring context before installing its successor.
+        // Reinsertion from a cancellation or unload handler creates a new
+        // Window. Dismiss a prepared sibling before installing its successor.
         if self
             .child_browsing_contexts
             .get(&handle)
             .is_some_and(|entry| entry.retiring)
         {
-            self.drop_child_browsing_context_handles(vec![handle]);
+            Self::drop_child_browsing_context_subtree_with_window_realm(scope, self, handle);
         }
         match self.child_browsing_context_bootstrap_for_handle(handle) {
             Some(attribute_bootstrap) => {
@@ -919,11 +919,9 @@ impl JsContextHost {
                 let Some(entry) = host.child_browsing_contexts.get_mut(&handle) else {
                     continue;
                 };
-                if entry.retiring {
-                    // Nested removal must not dispatch the same cancellation twice.
-                    host.drop_child_browsing_context_handles(vec![handle]);
-                    continue;
-                }
+                // A sibling may be prepared by the outer batch but not yet
+                // dismissed. Its Document's unload claim prevents repetition
+                // during self-removal; preparation must not skip its events.
                 entry.retiring = true;
                 let frame_id = entry.frame_id.clone();
                 let retirement = ChildWindowRetirement {
@@ -943,7 +941,7 @@ impl JsContextHost {
             (retirements, disablers)
         };
         for (retirement, window) in retirements {
-            // Child destruction informs Navigation API without unloading the Document.
+            // Chromium dismisses a removed child before destroying its realm.
             // Settle the captured old Window even if an earlier callback has
             // already replaced it. Looking up by handle here would cancel its
             // successor, or leave the old Window's promises pending forever.
@@ -955,6 +953,14 @@ impl JsContextHost {
                     scope,
                     window,
                     crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
+                );
+            }
+            if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
+                Self::dispatch_child_document_tree_unload_without_beforeunload(
+                    scope,
+                    host_ptr,
+                    retirement.handle,
+                    false,
                 );
             }
             if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
