@@ -70,12 +70,16 @@ const CURLINFO_HTTP_VERSION: curl_sys::CURLINFO = curl_sys::CURLINFO_LONG + 46;
 static NEXT_FETCH_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 static INSTALL_FETCH_RUNTIME_PANIC_HOOK: Once = Once::new();
 
-fn curl_runtime_deadline(request: &Request, config: &FetchConfig) -> Option<Instant> {
+fn curl_runtime_deadline(
+    request: &Request,
+    config: &FetchConfig,
+    started_at: Instant,
+) -> Option<Instant> {
     let timeout = request.effective_request_timeout(config);
     if timeout.is_zero() {
         None
     } else {
-        Instant::now().checked_add(timeout)
+        started_at.checked_add(timeout)
     }
 }
 
@@ -377,6 +381,7 @@ impl FetchRuntimeOwner {
                 crate::client_hints::ClientHintPreferences::default(),
             )),
             Arc::default(),
+            Arc::default(),
         )
     }
 
@@ -385,6 +390,7 @@ impl FetchRuntimeOwner {
         cookie_store: SharedBrowserCookieStore,
         client_hint_preferences: SharedClientHintPreferences,
         dictionaries: crate::compression_dictionary::SharedDictionaryStore,
+        http_authentication: crate::http_authentication::SharedHttpAuthenticationCache,
     ) -> Self {
         let runtime_id = NEXT_FETCH_RUNTIME_ID
             .fetch_add(1, Ordering::Relaxed)
@@ -404,6 +410,7 @@ impl FetchRuntimeOwner {
             cookie_store,
             client_hint_preferences,
             dictionaries,
+            http_authentication,
             request_rx,
             curl_runtime,
             curl_http,
@@ -715,6 +722,7 @@ struct RuntimeOwner {
     cookie_store: SharedBrowserCookieStore,
     client_hint_preferences: SharedClientHintPreferences,
     dictionaries: crate::compression_dictionary::SharedDictionaryStore,
+    http_authentication: crate::http_authentication::SharedHttpAuthenticationCache,
     request_rx: Receiver<RuntimeCommand>,
     curl_runtime: CurlMultiRuntime<FetchTransferHandler, ActiveTransferContext>,
     curl_http: CurlHttpSender<FetchTransferHandler, ActiveTransferContext>,
@@ -736,6 +744,12 @@ impl RuntimeOwner {
             restarts,
             &self.config,
             request,
+            url,
+        );
+        prepared.request = crate::http_authentication::HttpAuthenticationCache::prepare_owned(
+            &self.http_authentication,
+            &self.config,
+            prepared.request,
             url,
         );
         prepared.request = crate::compression_dictionary::DictionaryStore::prepare_owned(
@@ -1003,7 +1017,11 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
-            deadline: curl_runtime_deadline(&context.job.request, &self.config),
+            deadline: curl_runtime_deadline(
+                &context.job.request,
+                &self.config,
+                context.job.hop.started_at,
+            ),
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1220,7 +1238,11 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
-            deadline: curl_runtime_deadline(&context.job.request, &self.config),
+            deadline: curl_runtime_deadline(
+                &context.job.request,
+                &self.config,
+                context.job.hop.started_at,
+            ),
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1451,7 +1473,11 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
-            deadline: curl_runtime_deadline(&context.job.request, &self.config),
+            deadline: curl_runtime_deadline(
+                &context.job.request,
+                &self.config,
+                context.job.hop.started_at,
+            ),
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1493,7 +1519,54 @@ impl RuntimeOwner {
                     .as_ref()
                     .and_then(moli_curl::CurlConnectionTiming::from_easy),
             );
-        if let Some(easy) = completion.easy.as_mut() {
+        let authentication_retry = if !self.shutdown_requested.load(Ordering::SeqCst)
+            && !completion.context.is_cancelled()
+        {
+            completion
+                .easy
+                .as_mut()
+                .and_then(|easy| easy.get_mut().http_authentication.as_mut()?.take_retry())
+        } else {
+            None
+        };
+        if let Some(retry) = authentication_retry {
+            let (request, url, cookie_context) = completion.context.request_context();
+            let cookies = if request.allows_credentials_for_url(url) {
+                store_response_cookies(&self.cookie_store, url, &retry.headers, cookie_context)
+            } else {
+                Ok(Vec::new())
+            };
+            match cookies {
+                Ok(_) => {
+                    state.active_transfers = state.active_transfers.saturating_sub(1);
+                    // No collector received this private 401. Keep the same
+                    // logical request, body, cancellation and uncommitted stream
+                    // channels; this is an authentication retry, not a redirect.
+                    match completion.context {
+                        ActiveTransferContext::Buffered(mut context) => {
+                            context.job.request.http_authentication = Some(retry.prepared);
+                            self.start_job_or_reply(state, context.job);
+                        }
+                        ActiveTransferContext::Streaming(mut context) => {
+                            context.job.request.http_authentication = Some(retry.prepared);
+                            context.job.easy = completion.easy;
+                            self.start_streaming_job_or_reply(state, context.job);
+                        }
+                        ActiveTransferContext::StreamingRaw(mut context) => {
+                            context.job.request.http_authentication = Some(retry.prepared);
+                            context.job.easy = completion.easy;
+                            self.start_raw_streaming_job_or_reply(state, context.job);
+                        }
+                    }
+                    return;
+                }
+                Err(error) => completion.result = Err(error),
+            }
+        }
+        if completion.context.is_cancelled() {
+            completion.result = Err(anyhow::Error::new(crate::FetchCancelled)
+                .context("fetch runtime request cancelled"));
+        } else if let Some(easy) = completion.easy.as_mut() {
             if let Some(error) = easy.get_mut().content_decoding_error.take() {
                 completion.result = Err(anyhow!(error));
             } else if completion.result.is_ok()
@@ -2827,6 +2900,26 @@ enum ActiveTransferContext {
 }
 
 impl ActiveTransferContext {
+    fn request_context(&self) -> (&Request, &Url, &NetworkCookieRequestContext) {
+        match self {
+            Self::Buffered(context) => (
+                &context.job.request,
+                &context.job.current_url,
+                &context.job.current_cookie_context,
+            ),
+            Self::Streaming(context) => (
+                &context.job.request,
+                &context.job.current_url,
+                &context.job.current_cookie_context,
+            ),
+            Self::StreamingRaw(context) => (
+                &context.job.request,
+                &context.job.current_url,
+                &context.job.current_cookie_context,
+            ),
+        }
+    }
+
     fn response_progress(&self) -> &ResponseProgress {
         match self {
             Self::Buffered(context) => &context.job.response_progress,
@@ -2907,6 +3000,7 @@ pub(crate) struct FetchTransferHandler {
     upload_observer: Option<crate::UploadObserver>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
     dictionary_response: Option<crate::compression_dictionary::DictionaryResponse>,
+    http_authentication: Option<crate::http_authentication::HttpAuthenticationResponse>,
     content_decoding: Option<crate::content_decoding::ContentDecoding>,
     content_decoding_error: Option<String>,
 }
@@ -2961,6 +3055,7 @@ impl FetchTransferHandler {
             upload_observer: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
             dictionary_response: None,
+            http_authentication: None,
             content_decoding: None,
             content_decoding_error: None,
         }
@@ -3022,6 +3117,8 @@ impl FetchTransferHandler {
     }
 
     pub(crate) fn begin_dictionary_response(&mut self, request: &Request, url: &Url) {
+        self.http_authentication =
+            crate::http_authentication::HttpAuthenticationResponse::new(request);
         self.dictionary_response = request.compression_dictionary_store.as_ref().map(|store| {
             crate::compression_dictionary::DictionaryResponse::new(
                 Arc::clone(store),
@@ -3032,6 +3129,41 @@ impl FetchTransferHandler {
         self.content_decoding = crate::content_decoding::ContentDecoding::required(request)
             .then(|| crate::content_decoding::ContentDecoding::new(request));
         self.content_decoding_error = None;
+    }
+
+    fn forward_response_header(&mut self, data: &[u8]) -> bool {
+        if crate::response::parse_http_response_status_line(data)
+            .is_some_and(|line| line.status >= 200)
+        {
+            self.content_decoding_error = None;
+        }
+        if let Some(response) = self.dictionary_response.as_mut() {
+            response.header(data);
+        }
+        if let Some(decoding) = self.content_decoding.as_mut() {
+            if let Err(error) = decoding.header(data) {
+                self.content_decoding_error = Some(error.to_string());
+            } else if decoding.needs_readable_dictionary_response()
+                && self
+                    .dictionary_response
+                    .as_ref()
+                    .is_none_or(|response| !response.readable())
+            {
+                self.content_decoding_error =
+                    Some("dictionary response failed its CORS readability check".to_owned());
+            }
+        }
+        if crate::response::parse_http_response_status_line(data)
+            .is_some_and(|line| line.status >= 200)
+            && let Some(timing) = self.response_progress()
+        {
+            timing.reset_response_body_sizes();
+        }
+        match &mut self.response {
+            FetchResponseCollector::Buffered(collector) => collector.header(data),
+            FetchResponseCollector::Streaming(collector) => collector.header(data),
+            FetchResponseCollector::StreamingRaw(collector) => collector.header(data),
+        }
     }
 
     fn finish_dictionary_response(&mut self) -> Result<()> {
@@ -3161,40 +3293,21 @@ impl Handler for FetchTransferHandler {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
-        if crate::response::parse_http_response_status_line(data)
-            .is_some_and(|line| line.status >= 200)
-        {
-            self.content_decoding_error = None;
-        }
-        if let Some(response) = self.dictionary_response.as_mut() {
-            response.header(data);
-        }
-        if let Some(decoding) = self.content_decoding.as_mut() {
-            if let Err(error) = decoding.header(data) {
-                self.content_decoding_error = Some(error.to_string());
-            } else if decoding.needs_readable_dictionary_response()
-                && self
-                    .dictionary_response
-                    .as_ref()
-                    .is_none_or(|response| !response.readable())
-            {
-                self.content_decoding_error =
-                    Some("dictionary response failed its CORS readability check".to_owned());
-            }
-        }
-        if crate::response::parse_http_response_status_line(data)
-            .is_some_and(|line| line.status >= 200)
-            && let Some(timing) = self.response_progress()
-        {
-            timing.reset_response_body_sizes();
-        }
         if let Some(recorder) = self.network_observation_recorder.as_ref() {
             recorder.record_response_header_line(data);
         }
-        match &mut self.response {
-            FetchResponseCollector::Buffered(collector) => collector.header(data),
-            FetchResponseCollector::Streaming(collector) => collector.header(data),
-            FetchResponseCollector::StreamingRaw(collector) => collector.header(data),
+        use crate::http_authentication::AuthenticationHeaderAction;
+        match self
+            .http_authentication
+            .as_mut()
+            .map(|response| response.header(data))
+        {
+            Some(AuthenticationHeaderAction::Defer) => true,
+            Some(AuthenticationHeaderAction::Retry) => false,
+            Some(AuthenticationHeaderAction::Replay(lines)) => {
+                lines.iter().all(|line| self.forward_response_header(line))
+            }
+            Some(AuthenticationHeaderAction::Forward) | None => self.forward_response_header(data),
         }
     }
 

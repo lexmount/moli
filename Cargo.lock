@@ -2955,6 +2955,7 @@ dependencies = [
  "moli-web-bot-auth",
  "moli-web-mime",
  "parking_lot",
+ "percent-encoding",
  "rcgen",
  "regex",
  "serde",
