@@ -190,25 +190,41 @@ pub(super) fn update_descriptor<'s>(
     sync_owners(scope, face);
 }
 
-pub(super) fn initialize_resolver<'s>(
+pub(super) fn initialize<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
     resource: FontFaceLoad,
     request_context: Option<crate::native_bridge::WindowExecutionContextIdentity>,
 ) {
+    super::state::initialize(scope, face, resource, request_context);
+    publish_state(scope, face);
+}
+
+pub(super) fn loaded_promise<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    if let Some(promise) = get_private_value(scope, face, FONT_FACE_LOADED_SLOT)
+        .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())
+    {
+        return Some(promise);
+    }
+    let load = super::state::get(scope, face)?;
+    let context = face.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    // Native errors can exist before page code observes .loaded. Creating a
+    // rejected promise in the constructor would report an unhandled rejection
+    // even when the page never obtains that promise.
+    let resolver = v8::PromiseResolver::new(scope).expect("FontFace loaded resolver");
+    let promise = resolver.get_promise(scope);
+    set_private_value(scope, face, FONT_FACE_LOADED_SLOT, promise.into());
     set_private_value(scope, face, RESOLVER, resolver.into());
     // A retained pending .loaded promise also retains its settlement endpoint.
     // Loading faces have a Window-owned native root, released on completion
     // or retirement; unloaded JS-only cycles remain collectible.
-    set_private_value(
-        scope,
-        resolver.get_promise(scope).into(),
-        PROMISE_OWNER,
-        face.into(),
-    );
-    super::state::initialize(scope, face, resource, request_context);
-    publish_state(scope, face);
+    set_private_value(scope, promise.into(), PROMISE_OWNER, face.into());
+    settle_loaded_promise(scope, face, &load);
+    Some(promise)
 }
 
 /// Only the observer layer creates JS errors, settles promises and dispatches
@@ -220,9 +236,9 @@ fn publish_state<'s>(scope: &mut v8::PinScope<'s, '_>, face: v8::Local<'s, v8::O
     let Some((previous, load)) = super::state::take_change(scope, face) else {
         return;
     };
-    let (current, started, error) = {
+    let (current, started) = {
         let load = load.borrow();
-        (load.status(), load.was_started(), load.error())
+        (load.status(), load.was_started())
     };
     if previous == FontFaceStatus::Unloaded && started {
         super::events::font_face_loading_started(scope, face);
@@ -230,23 +246,40 @@ fn publish_state<'s>(scope: &mut v8::PinScope<'s, '_>, face: v8::Local<'s, v8::O
     match current {
         FontFaceStatus::Loaded => {
             sync_owners(scope, face);
-            if let Some(resolver) = resolver_from_slot(scope, face, RESOLVER) {
-                release_promise_owner(scope, face, resolver);
-                let _ = resolver.resolve(scope, face.into());
-            }
         }
-        FontFaceStatus::Error => {
-            if let Some(resolver) = resolver_from_slot(scope, face, RESOLVER) {
-                let error = error.expect("native failed font has an error");
-                let exception = new_dom_exception_value(scope, error.message, error.name);
-                release_promise_owner(scope, face, resolver);
-                let _ = resolver.reject(scope, exception);
-            }
-        }
+        FontFaceStatus::Error => {}
         FontFaceStatus::Unloaded | FontFaceStatus::Loading => return,
     }
+    settle_loaded_promise(scope, face, &load);
     if started {
         super::events::notify_font_face_set_owners_of_load(scope, face);
+    }
+}
+
+fn settle_loaded_promise<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+    load: &FontFaceLoad,
+) {
+    let Some(resolver) = resolver_from_slot(scope, face, RESOLVER) else {
+        return;
+    };
+    let (status, error) = {
+        let load = load.borrow();
+        (load.status(), load.error())
+    };
+    match status {
+        FontFaceStatus::Loaded => {
+            release_promise_owner(scope, face, resolver);
+            let _ = resolver.resolve(scope, face.into());
+        }
+        FontFaceStatus::Error => {
+            let error = error.expect("native failed font has an error");
+            let exception = new_dom_exception_value(scope, error.message, error.name);
+            release_promise_owner(scope, face, resolver);
+            let _ = resolver.reject(scope, exception);
+        }
+        FontFaceStatus::Unloaded | FontFaceStatus::Loading => {}
     }
 }
 
@@ -289,8 +322,7 @@ pub(super) fn load_font<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
-    let promise = get_private_value(scope, face, FONT_FACE_LOADED_SLOT)
-        .and_then(|v| v8::Local::<v8::Promise>::try_from(v).ok())?;
+    let promise = loaded_promise(scope, face)?;
     let load = super::state::get(scope, face)?;
     let context = face.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);

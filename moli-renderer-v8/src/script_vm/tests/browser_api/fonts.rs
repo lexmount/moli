@@ -5,6 +5,7 @@ use std::time::Duration;
 mod descriptor_ranges;
 mod matching;
 mod ownership;
+mod promises;
 mod readiness;
 mod selection_order;
 mod unicode_ranges;
