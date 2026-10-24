@@ -112,32 +112,32 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_object_store_key_from_va
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     key_path: &KeyPath,
-) -> ExtractedObjectStoreKey {
+) -> ObjectStoreKey {
     if let KeyPath::Sequence(paths) = key_path {
         let mut keys = Vec::with_capacity(paths.len());
         for path in paths {
             match extract_object_store_key_from_value(scope, value, &KeyPath::String(path.clone()))
             {
-                ExtractedObjectStoreKey::Key(key) => keys.push(key),
+                ObjectStoreKey::Key(key) => keys.push(key),
                 other => return other,
             }
         }
         let key = Key::Array(keys);
         return if key.validate_depth().is_ok() {
-            ExtractedObjectStoreKey::Key(key)
+            ObjectStoreKey::Key(key)
         } else {
-            ExtractedObjectStoreKey::Invalid
+            ObjectStoreKey::Invalid
         };
     }
     let KeyPath::String(path) = key_path else {
-        return ExtractedObjectStoreKey::Missing;
+        return ObjectStoreKey::Missing;
     };
     let Some(value) = value_at_string_key_path(scope, value, path) else {
-        return ExtractedObjectStoreKey::Missing;
+        return ObjectStoreKey::Missing;
     };
     match parse_idb_key(scope, value) {
-        Ok(Some(key)) => ExtractedObjectStoreKey::Key(key),
-        Ok(None) => ExtractedObjectStoreKey::Missing,
-        Err(_) => ExtractedObjectStoreKey::Invalid,
+        Ok(Some(key)) => ObjectStoreKey::Key(key),
+        Ok(None) => ObjectStoreKey::Missing,
+        Err(_) => ObjectStoreKey::Invalid,
     }
 }

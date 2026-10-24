@@ -1,5 +1,5 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::indexed_db_transaction_mode;
+use crate::context_bootstrap::indexed_db::{KeyConversionError, indexed_db_transaction_mode};
 use moli_indexeddb::TransactionMode;
 
 pub(super) fn object_store_write_callback<'s>(
@@ -19,15 +19,13 @@ pub(super) fn object_store_write_callback<'s>(
         scope.throw_exception(error);
         return;
     }
-    let explicit_key = {
-        v8::tc_scope!(let scope, scope);
-        match parse_idb_key(scope, key) {
-            Ok(key) => key,
-            Err(error) => {
-                error.throw(scope);
-                scope.rethrow();
-                return;
-            }
+    let explicit_key = match parse_idb_key(scope, key) {
+        Ok(Some(key)) => ObjectStoreKey::Key(key),
+        Ok(None) => ObjectStoreKey::Missing,
+        Err(KeyConversionError::Invalid(_)) => ObjectStoreKey::Invalid,
+        Err(error @ KeyConversionError::Exception(_)) => {
+            error.throw(scope);
+            return;
         }
     };
     // Key conversion can invoke getters too, including one that aborts the transaction.

@@ -33,7 +33,9 @@ pub(super) enum PreparedObjectStoreKey {
     GenerateInline { key_path: String },
 }
 
-pub(super) enum ExtractedObjectStoreKey {
+/// Key conversion and key-path extraction distinguish invalid data from a
+/// JavaScript exception. Invalid data is checked after value serialization.
+pub(super) enum ObjectStoreKey {
     Key(Key),
     Missing,
     Invalid,

@@ -77,6 +77,11 @@ async fn rejected_writes_allocate_no_native_request_state() {
 }
 
 #[tokio::test]
+async fn invalid_write_keys_preserve_chromium_clone_and_getter_error_order() {
+    assert_write_preparation("key-errors").await;
+}
+
+#[tokio::test]
 async fn cursor_updates_validate_before_admission_and_preserve_snapshots() {
     assert_write_preparation("cursor-rejections").await;
 }

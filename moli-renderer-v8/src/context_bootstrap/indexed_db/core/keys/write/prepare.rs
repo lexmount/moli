@@ -5,14 +5,14 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
     store: v8::Local<'s, v8::Object>,
     transaction: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
-    explicit_key: Option<Key>,
+    explicit_key: ObjectStoreKey,
 ) -> Option<PreparedObjectStoreWrite> {
     let metadata = indexed_db_object_store_metadata(scope, store)?;
     let info = metadata.info();
     let serialized = serialize_js_value_for_transaction(scope, transaction, value)?;
     let key = match &info.key_path {
         Some(key_path) => {
-            if explicit_key.is_some() {
+            if !matches!(explicit_key, ObjectStoreKey::Missing) {
                 return invalid_write(
                     scope,
                     "The store uses in-line keys and does not accept a key argument.",
@@ -20,14 +20,14 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
             }
             let clone = deserialize_js_value(scope, &serialized)?;
             match extract_object_store_key_from_value(scope, clone, key_path) {
-                ExtractedObjectStoreKey::Key(key) => PreparedObjectStoreKey::Explicit(key),
-                ExtractedObjectStoreKey::Invalid => {
+                ObjectStoreKey::Key(key) => PreparedObjectStoreKey::Explicit(key),
+                ObjectStoreKey::Invalid => {
                     return invalid_write(
                         scope,
                         "The value at the object store keyPath is not a valid key.",
                     );
                 }
-                ExtractedObjectStoreKey::Missing => {
+                ObjectStoreKey::Missing => {
                     if !info.auto_increment {
                         return invalid_write(
                             scope,
@@ -53,10 +53,13 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
             }
         }
         None => match explicit_key {
-            Some(key) => PreparedObjectStoreKey::Explicit(key),
-            None if info.auto_increment => PreparedObjectStoreKey::Generate,
-            None => {
+            ObjectStoreKey::Key(key) => PreparedObjectStoreKey::Explicit(key),
+            ObjectStoreKey::Missing if info.auto_increment => PreparedObjectStoreKey::Generate,
+            ObjectStoreKey::Missing => {
                 return invalid_write(scope, "A key is required for stores without autoIncrement.");
+            }
+            ObjectStoreKey::Invalid => {
+                return invalid_write(scope, "The key is not a valid IndexedDB key.");
             }
         },
     };

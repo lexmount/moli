@@ -120,6 +120,55 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
       const saved = await result(read.objectStore('inline').get(7));
       assert(saved.id === 7 && saved.payload === 'snapshot', 'stored value and primary key disagree');
       await readDone;
+    } else if (scenario === 'key-errors') {
+      for (const queued of [false, true]) {
+        const stores = ['plain', 'inline', 'generated'];
+        let firstDone;
+        if (queued) {
+          const first = db.transaction(stores, 'readwrite');
+          firstDone = complete(first);
+          first.objectStore('plain').put('blocker', 'hold');
+        }
+        const tx = db.transaction(stores, 'readwrite'), done = complete(tx);
+        const accepted = [];
+        for (const name of stores) {
+          const store = tx.objectStore(name);
+          const before = requestStateEntries?.(store);
+          for (const method of ['put', 'add']) {
+            for (const badKey of [{}, null, NaN, [undefined], [null], new realm.Date(NaN)]) {
+              throws(() => store[method](() => {}, badKey), 'DataCloneError');
+              let reads = 0;
+              throws(() => store[method]({get payload() {reads++; return 'snapshot';}}, badKey), 'DataError');
+              assert(reads === 1, `${name}/${method}: invalid key skipped value serialization`);
+              for (const marker of [new realm.Error('original value'), {}, null, undefined]) {
+                throws(() => store[method]({get payload() {throw marker;}}, badKey), marker);
+              }
+            }
+            const order = [];
+            const key = Object.defineProperty([1], '0', {get() {order.push('key'); return undefined;}});
+            throws(() => store[method]({get payload() {order.push('value'); return 'snapshot';}}, key), 'DataError');
+            assert(order.join() === 'key,value', `${name}/${method}: wrong conversion order: ${order}`);
+            for (const marker of [new realm.Error('original key'), {}, null, undefined]) {
+              let valueReads = 0;
+              const key = Object.defineProperty([1], '0', {get() {throw marker;}});
+              throws(() => store[method]({get payload() {valueReads++; return 'unused';}}, key), marker);
+              assert(valueReads === 0, 'key getter exception did not stop serialization');
+            }
+          }
+          if (requestStateEntries) assert(requestStateEntries(store) === before, 'invalid key allocated a request');
+          accepted.push(result(name === 'plain' ? store.put('accepted', 'valid') : store.put({payload: 'accepted'})));
+        }
+        // These failures also follow Chromium's serialization-first behavior.
+        for (const method of ['put', 'add']) {
+          throws(() => tx.objectStore('inline')[method](() => {}, 123), 'DataCloneError');
+          throws(() => tx.objectStore('plain')[method](() => {}), 'DataCloneError');
+        }
+        const keys = await Promise.all(accepted);
+        assert(JSON.stringify(keys) === JSON.stringify(['valid', queued ? 2 : 1, queued ? 2 : 1]),
+          `invalid writes consumed generated keys: ${keys}`);
+        await done;
+        if (firstDone) await firstDone;
+      }
     } else if (scenario === 'native-state') {
       const first = db.transaction('plain', 'readwrite'), firstDone = complete(first);
       const queued = db.transaction('plain', 'readwrite'), queuedDone = complete(queued);
