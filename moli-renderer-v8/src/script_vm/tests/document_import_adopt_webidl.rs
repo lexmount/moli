@@ -80,7 +80,8 @@ fn document_import_and_adopt_accept_registered_native_proxy_arguments_and_receiv
         const clone = Document.prototype.importNode.call(__importDocumentProxy, __importElementProxy,
             { customElementRegistry: __importRegistryProxy, selfOnly: true });
         if (clone === __importElement || clone.ownerDocument !== document || clone.childNodes.length !== 0) return 'clone';
-        if (Document.prototype.adoptNode.call(__importDocumentProxy, __importElementProxy) !== __importElement) return 'adopt';
+        const adopted = Document.prototype.adoptNode.call(__importDocumentProxy, __importElementProxy);
+        if (adopted !== __importElementProxy || !Node.prototype.isSameNode.call(adopted, __importElement)) return 'adopt';
         for (const [method, receiver, node] of [
             ['importNode', __importDocumentProxy, new Proxy(__importElementProxy, {})],
             ['adoptNode', __importDocumentProxy, new Proxy(__importElementProxy, {})],

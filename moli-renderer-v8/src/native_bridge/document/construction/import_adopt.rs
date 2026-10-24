@@ -194,7 +194,7 @@ pub(in crate::native_bridge) fn node_adopt_node_callback<'a>(
                 return;
             }
             detached_set_owner_document(scope, source, args.this());
-            rv.set(source.into());
+            rv.set(parsed.node.into());
             return;
         }
         if let Some(adopted) = call_global_bridge_method(
@@ -202,22 +202,23 @@ pub(in crate::native_bridge) fn node_adopt_node_callback<'a>(
             "__adoptNodeIntoDocument",
             &[args.this().into(), source.into()],
         ) {
-            rv.set(adopted);
+            if adopted.is_object() {
+                rv.set(parsed.node.into());
+            } else {
+                rv.set(adopted);
+            }
             return;
         }
         rv.set_null();
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let Some(adopted) = runtime.adopt_node(scope, runtime_ptr, handle, node) else {
+    if runtime
+        .adopt_node(scope, runtime_ptr, handle, node)
+        .is_none()
+    {
         rv.set_null();
         return;
-    };
-    set_wrapped_handle_or_null_for_receiver(
-        scope,
-        &mut rv,
-        runtime_ptr,
-        args.this(),
-        Some(adopted),
-    );
+    }
+    rv.set(parsed.node.into());
 }

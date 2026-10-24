@@ -129,7 +129,7 @@ impl WebSocketCloseInfo {
             .close_code
             .map(close_info_code_from_number)
             .transpose()?;
-        moli_websocket::normalize_websocket_close_info(code, self.reason)
+        normalize_websocket_close_info(code, self.reason)
     }
 }
 

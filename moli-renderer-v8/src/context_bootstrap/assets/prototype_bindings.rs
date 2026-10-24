@@ -422,11 +422,6 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
     install_geometry_template_bindings(scope, template, spec.interface.name(), profile);
-    if spec.interface.name() == "EncodedVideoChunk" {
-        super::super::encoded_video_chunk::install_encoded_video_chunk_template_bindings(
-            scope, template,
-        );
-    }
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
