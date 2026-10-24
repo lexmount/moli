@@ -160,6 +160,33 @@ pub(crate) struct RequestInputSnapshot {
     pub(crate) signal: Option<v8::Global<v8::Object>>,
 }
 
+impl RequestInputSnapshot {
+    /// Constructor snapshots leave native bodies in their stream for transfer.
+    /// Fetch must recover a byte-backed source after RequestInit conversion,
+    /// only when init did not override that body. Genuine streaming bodies
+    /// remain on the separately captured stream path.
+    pub(crate) fn body_bytes_for_fetch<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        source: v8::Local<'s, v8::Object>,
+    ) -> Result<Option<bytes::Bytes>, webidl::WebIdlError> {
+        if self.has_stream_body || !is_branded_request_object(scope, source) {
+            return Ok(self.body.clone());
+        }
+        if request_body_unusable(scope, source) {
+            return Err(request_body_already_used_error());
+        }
+        if request_slot_value(scope, source, REQUEST_BODY_SLOT)
+            .is_none_or(|body| body.is_null_or_undefined())
+        {
+            return Ok(None);
+        }
+        try_network_body_bytes_from_object(scope, source)
+            .map(|body| body.map(bytes::Bytes::from))
+            .map_err(|_| webidl::WebIdlError::custom_message("Failed to materialize request body"))
+    }
+}
+
 pub(crate) fn mark_request_input_body_used_for_fetch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,

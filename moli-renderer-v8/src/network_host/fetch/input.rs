@@ -56,7 +56,7 @@ pub(super) fn parse_window_fetch_input<'s>(
         let body = if init.body_present {
             init.body.clone()
         } else {
-            inherited.body.clone()
+            inherited.body_bytes_for_fetch(scope, req_obj)?
         };
         let mut headers = if init.headers_present {
             init.headers.clone()

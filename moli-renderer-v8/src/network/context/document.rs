@@ -518,26 +518,31 @@ impl DocumentResourceLoader {
     pub(crate) fn register_network_only_keepalive_load(
         &self,
         kind: ResourceLoadKind,
+        body_bytes: usize,
         request_client: ResourceRequestClient,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) -> Option<ResourceLoadLease> {
         if let Some(load) = self.authority.loads.register(
             kind,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes },
             request_client.clone(),
             cancel_handle.clone(),
         ) {
             return Some(load);
         }
-        matches!(
+        if matches!(
             self.state(),
             DocumentResourceLoaderState::Detaching | DocumentResourceLoaderState::Detached
-        )
-        .then(|| {
-            self.authority
-                .loads
-                .register_detached_keepalive(kind, request_client, cancel_handle)
-        })
+        ) {
+            self.authority.loads.register_detached_keepalive(
+                kind,
+                body_bytes,
+                request_client,
+                cancel_handle,
+            )
+        } else {
+            None
+        }
     }
 
     pub(crate) fn load_diagnostics(&self) -> ResourceLoadRegistryDiagnostics {

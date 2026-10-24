@@ -10,6 +10,8 @@ use std::{
 use moli_fetch::FetchCancelHandle;
 use parking_lot::Mutex;
 
+use super::keepalive::{KeepaliveBodyBudget, KeepaliveBodyReservation};
+
 use crate::{
     network::{BrowserResourceRuntime, RendererResourceTaskRunner, ResourceRequestClient},
     types::SubresourceResourceType,
@@ -39,7 +41,13 @@ impl ResourceLoadId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceLoadDisposition {
     Ordinary,
-    Keepalive,
+    Keepalive { body_bytes: usize },
+}
+
+impl ResourceLoadDisposition {
+    pub(crate) fn is_keepalive(self) -> bool {
+        matches!(self, Self::Keepalive { .. })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +109,7 @@ pub(crate) struct ResourceLoadRetirement {
 struct ResourceLoadRegistryState {
     detached: bool,
     loads: HashMap<ResourceLoadId, Weak<ResourceLoadRegistration>>,
+    keepalive_body_budget: KeepaliveBodyBudget,
 }
 
 struct ResourceLoadRegistryInner {
@@ -134,6 +143,7 @@ impl ResourceLoadRegistry {
                 state: Mutex::new(ResourceLoadRegistryState {
                     detached: false,
                     loads: HashMap::new(),
+                    keepalive_body_budget: KeepaliveBodyBudget::default(),
                 }),
             }),
         }
@@ -154,12 +164,24 @@ impl ResourceLoadRegistry {
         request_client: ResourceRequestClient,
         cancel_handle: Option<FetchCancelHandle>,
     ) -> Option<ResourceLoadLease> {
-        let registration =
-            self.new_registration(kind, disposition, request_client, cancel_handle, false);
         let mut state = self.inner.state.lock();
         if state.detached {
             return None;
         }
+        let body_reservation = match disposition {
+            ResourceLoadDisposition::Ordinary => None,
+            ResourceLoadDisposition::Keepalive { body_bytes } => {
+                Some(state.keepalive_body_budget.reserve(body_bytes)?)
+            }
+        };
+        let registration = self.new_registration(
+            kind,
+            disposition,
+            request_client,
+            cancel_handle,
+            false,
+            body_reservation,
+        );
         state
             .loads
             .insert(registration.id, Arc::downgrade(&registration));
@@ -175,21 +197,29 @@ impl ResourceLoadRegistry {
     pub(crate) fn register_detached_keepalive(
         &self,
         kind: ResourceLoadKind,
+        body_bytes: usize,
         request_client: ResourceRequestClient,
         cancel_handle: Option<FetchCancelHandle>,
-    ) -> ResourceLoadLease {
+    ) -> Option<ResourceLoadLease> {
+        let body_reservation = self
+            .inner
+            .state
+            .lock()
+            .keepalive_body_budget
+            .reserve(body_bytes)?;
         let registration = self.new_registration(
             kind,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes },
             request_client,
             cancel_handle,
             true,
+            Some(body_reservation),
         );
         let cancel_handle = registration.lifecycle.lock().cancel_handle.clone();
         registration
             .browser_runtime
             .register_detached_keepalive_load(registration.id, registration.kind, cancel_handle);
-        ResourceLoadLease { registration }
+        Some(ResourceLoadLease { registration })
     }
 
     fn new_registration(
@@ -199,6 +229,7 @@ impl ResourceLoadRegistry {
         request_client: ResourceRequestClient,
         cancel_handle: Option<FetchCancelHandle>,
         detached_keepalive: bool,
+        body_reservation: Option<KeepaliveBodyReservation>,
     ) -> Arc<ResourceLoadRegistration> {
         let id = ResourceLoadId::next();
         let browser_runtime = request_client.browser_resource_runtime();
@@ -215,6 +246,7 @@ impl ResourceLoadRegistry {
                 consumer_cancel: None,
                 detached_keepalive,
                 registry: Arc::downgrade(&self.inner),
+                body_reservation,
             }),
             cancelled: AtomicBool::new(false),
             finished: AtomicBool::new(false),
@@ -243,18 +275,19 @@ impl ResourceLoadRegistry {
             "replacement registry must share the source resource task runner"
         );
 
-        let registrations = {
+        let (registrations, keepalive_body_budget) = {
             let mut source = self.inner.state.lock();
             assert!(
                 !source.detached,
                 "only an active resource registry can be superseded"
             );
             source.detached = true;
-            source
+            let registrations = source
                 .loads
                 .drain()
                 .filter_map(|(_, registration)| registration.upgrade())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (registrations, source.keepalive_body_budget.clone())
         };
 
         let replacement_registry = Arc::downgrade(&replacement.inner);
@@ -286,6 +319,14 @@ impl ResourceLoadRegistry {
             !target.detached,
             "resource loads cannot transfer into a detached registry"
         );
+        // document.open() keeps the LocalWindow's Fetch group. Existing
+        // reservations retain this same counter through completion, even
+        // though their lifecycle registration moves to the new authority.
+        assert!(
+            target.keepalive_body_budget.is_empty(),
+            "replacement authority must not already own a different keepalive budget"
+        );
+        target.keepalive_body_budget = keepalive_body_budget;
         let mut published = 0;
         for registration in transferred {
             if registration.finished.load(Ordering::Acquire)
@@ -324,7 +365,7 @@ impl ResourceLoadRegistry {
                     retirement.ordinary_load_count += 1;
                     registration.cancel();
                 }
-                ResourceLoadDisposition::Keepalive => {
+                ResourceLoadDisposition::Keepalive { .. } => {
                     retirement.keepalive_load_count += 1;
                     registration.detach_keepalive();
                 }
@@ -348,7 +389,7 @@ impl ResourceLoadRegistry {
                 ResourceLoadDisposition::Ordinary => {
                     diagnostics.active_ordinary_load_count += 1;
                 }
-                ResourceLoadDisposition::Keepalive => {
+                ResourceLoadDisposition::Keepalive { .. } => {
                     diagnostics.active_keepalive_load_count += 1;
                 }
             }
@@ -358,6 +399,7 @@ impl ResourceLoadRegistry {
 }
 
 struct ResourceLoadLifecycle {
+    body_reservation: Option<KeepaliveBodyReservation>,
     auth_retry_budget: moli_fetch::AuthRetryBudget,
     cancel_handle: Option<FetchCancelHandle>,
     consumer_cancel: Option<Box<dyn FnOnce() + Send + 'static>>,
@@ -382,15 +424,17 @@ impl ResourceLoadRegistration {
         if self.finished.load(Ordering::Acquire) || self.cancelled.swap(true, Ordering::AcqRel) {
             return;
         }
-        let (cancel_handle, consumer_cancel, detached_keepalive, registry) = {
+        let (cancel_handle, consumer_cancel, detached_keepalive, registry, body_reservation) = {
             let mut lifecycle = self.lifecycle.lock();
             (
                 lifecycle.cancel_handle.take(),
                 lifecycle.consumer_cancel.take(),
                 lifecycle.detached_keepalive,
                 lifecycle.registry.clone(),
+                lifecycle.body_reservation.take(),
             )
         };
+        drop(body_reservation);
         if let Some(cancel_handle) = cancel_handle {
             cancel_handle.cancel();
         }
@@ -432,11 +476,16 @@ impl ResourceLoadRegistration {
         if self.finished.swap(true, Ordering::AcqRel) {
             return;
         }
-        let (detached_keepalive, registry) = {
+        let (detached_keepalive, registry, body_reservation) = {
             let mut lifecycle = self.lifecycle.lock();
             lifecycle.consumer_cancel.take();
-            (lifecycle.detached_keepalive, lifecycle.registry.clone())
+            (
+                lifecycle.detached_keepalive,
+                lifecycle.registry.clone(),
+                lifecycle.body_reservation.take(),
+            )
         };
+        drop(body_reservation);
         if let Some(registry) = registry.upgrade() {
             registry.state.lock().loads.remove(&self.id);
         }
@@ -670,6 +719,129 @@ mod tests {
             .expect("active registry should accept loads")
     }
 
+    fn keepalive_load(
+        registry: &ResourceLoadRegistry,
+        client: &crate::network::ResourceRequestClientOwner,
+        bytes: usize,
+    ) -> Option<ResourceLoadLease> {
+        registry.register(
+            ResourceLoadKind::Fetch,
+            ResourceLoadDisposition::Keepalive { body_bytes: bytes },
+            client.handle(),
+            None,
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keepalive_quota_tracks_logical_requests_across_clones_and_cancel() {
+        let registry = registry();
+        let first = keepalive_load(&registry, &registry.request_client_owner, 65535).unwrap();
+        let alias = first.clone();
+        let second = keepalive_load(&registry, &registry.request_client_owner, 1).unwrap();
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 1).is_none());
+        second.finish();
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 2).is_none());
+        let third = keepalive_load(&registry, &registry.request_client_owner, 1).unwrap();
+        first.finish();
+        alias.finish();
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 65536).is_none());
+        let fourth = keepalive_load(&registry, &registry.request_client_owner, 65535).unwrap();
+        third.cancel();
+        third.finish();
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 2).is_none());
+        let last = keepalive_load(&registry, &registry.request_client_owner, 1).unwrap();
+        fourth.finish();
+        drop(last);
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 65536).is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keepalive_quota_isolates_fetch_groups_sharing_a_browser_client() {
+        let registry = registry();
+        let other = ResourceLoadRegistry::new(registry.task_runner());
+        let _first = keepalive_load(&registry, &registry.request_client_owner, 65536).unwrap();
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 1).is_none());
+        let _other = keepalive_load(&other, &registry.request_client_owner, 65536).unwrap();
+        assert!(keepalive_load(&other, &registry.request_client_owner, 1).is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keepalive_quota_survives_document_authority_transfer() {
+        let registry = registry();
+        let replacement = ResourceLoadRegistry::new(registry.task_runner());
+        let first = keepalive_load(&registry, &registry.request_client_owner, 65536).unwrap();
+        assert_eq!(registry.transfer_existing_loads_to(&replacement), 1);
+        assert!(keepalive_load(&replacement, &registry.request_client_owner, 1).is_none());
+        first.finish();
+        assert!(keepalive_load(&replacement, &registry.request_client_owner, 65536).is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn detached_keepalive_reports_share_the_outgoing_fetch_group_quota() {
+        let registry = registry();
+        let first = keepalive_load(&registry, &registry.request_client_owner, 65536).unwrap();
+        registry.begin_detach();
+        assert!(
+            registry
+                .register_detached_keepalive(
+                    ResourceLoadKind::CspReport,
+                    1,
+                    registry.request_client_owner.handle(),
+                    None
+                )
+                .is_none()
+        );
+        first.finish();
+        let report = registry
+            .register_detached_keepalive(
+                ResourceLoadKind::CspReport,
+                65536,
+                registry.request_client_owner.handle(),
+                None,
+            )
+            .unwrap();
+        assert!(report.is_detached_keepalive());
+        report.finish();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keepalive_quota_admission_is_atomic_across_network_threads() {
+        let registry = registry();
+        let barrier = std::sync::Barrier::new(33);
+        let accepted = std::sync::atomic::AtomicUsize::new(0);
+        let mut admitted = 0;
+        let mut extra = None;
+        std::thread::scope(|scope| {
+            for _ in 0..32 {
+                let loads = &registry.registry;
+                let client = registry.request_client_owner.handle();
+                let barrier = &barrier;
+                let accepted = &accepted;
+                scope.spawn(move || {
+                    let load = loads.register(
+                        ResourceLoadKind::Fetch,
+                        ResourceLoadDisposition::Keepalive { body_bytes: 4096 },
+                        client,
+                        None,
+                    );
+                    if load.is_some() {
+                        accepted.fetch_add(1, Ordering::AcqRel);
+                    }
+                    barrier.wait();
+                    barrier.wait();
+                    drop(load);
+                });
+            }
+            barrier.wait();
+            admitted = accepted.load(Ordering::Acquire);
+            extra = keepalive_load(&registry, &registry.request_client_owner, 1);
+            barrier.wait();
+        });
+        assert_eq!(admitted, 16);
+        assert!(extra.is_none());
+        assert!(keepalive_load(&registry, &registry.request_client_owner, 65536).is_some());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn authentication_budget_follows_lease_clones_but_not_other_requests() {
         let registry = registry();
@@ -786,7 +958,7 @@ mod tests {
         );
         let keepalive = lease(
             &source,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes: 0 },
             keepalive_cancel.clone(),
         );
         let source_registry_id = source.id();
@@ -833,7 +1005,7 @@ mod tests {
         let cancel_handle = FetchCancelHandle::new();
         let lease = lease(
             &registry,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes: 65536 },
             cancel_handle.clone(),
         );
         let runtime = lease.request_client().browser_resource_runtime();
@@ -851,6 +1023,9 @@ mod tests {
             runtime.detached_keepalive_diagnostics().active_load_count,
             1
         );
+        let weak_registry = Arc::downgrade(&registry.inner);
+        drop(registry);
+        assert!(weak_registry.upgrade().is_none());
         lease.finish();
         assert_eq!(
             runtime.detached_keepalive_diagnostics().active_load_count,
@@ -864,7 +1039,7 @@ mod tests {
         let cancel_handle = FetchCancelHandle::new();
         let lease = lease(
             &registry,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes: 0 },
             cancel_handle.clone(),
         );
         registry.begin_detach();
@@ -888,7 +1063,7 @@ mod tests {
         let initial_cancel = FetchCancelHandle::new();
         let lease = lease(
             &registry,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes: 0 },
             initial_cancel,
         );
         let runtime = lease.request_client().browser_resource_runtime();

@@ -10,7 +10,7 @@ pub(super) fn record_intercepted_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) {
+) -> Option<()> {
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -47,7 +47,7 @@ pub(super) fn record_intercepted_fetch(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report,
         },
-    );
+    )
 }
 
 pub(super) fn reject_offline_fetch(
@@ -300,36 +300,38 @@ pub(super) fn spawn_network_fetch(
             false,
         )
         .is_some();
-    let internal_id = host.record_async_subresource_fetch(
-        prepared.fetch_context,
-        v8::Global::new(scope, resolver),
-        prepared.keepalive,
-        prepared.integrity.clone(),
-        prepared.connect_policy,
-        prepared.csp_report_context,
-        Some(cancel_handle.clone()),
-        prepared.credentials_mode,
-        prepared.request_mode,
-        prepared.request_origin.clone(),
-        prepared.redirect_mode,
-        prepared.network_partition_key.clone(),
-        prepared.policy_context,
-        PendingSubresourceFetchInfo {
-            internal_id: 0,
-            network_request_handle: None,
-            frame_id: prepared.frame_id.clone(),
-            document_url: prepared.document_url.clone(),
-            url: prepared.resolved_url.clone(),
-            websocket_socket_id: None,
-            method: prepared.method.clone(),
-            request_headers: prepared.request_headers.clone(),
-            request_body: request_body_text(&prepared.body),
-            request_body_bytes: prepared.body.clone(),
-            resource_type: SubresourceResourceType::Fetch,
-            request_cookie_report,
-        },
-        requires_preflight,
-    );
+    let internal_id = host
+        .record_async_subresource_fetch(
+            prepared.fetch_context,
+            v8::Global::new(scope, resolver),
+            prepared.keepalive,
+            prepared.integrity.clone(),
+            prepared.connect_policy,
+            prepared.csp_report_context,
+            Some(cancel_handle.clone()),
+            prepared.credentials_mode,
+            prepared.request_mode,
+            prepared.request_origin.clone(),
+            prepared.redirect_mode,
+            prepared.network_partition_key.clone(),
+            prepared.policy_context,
+            PendingSubresourceFetchInfo {
+                internal_id: 0,
+                network_request_handle: None,
+                frame_id: prepared.frame_id.clone(),
+                document_url: prepared.document_url.clone(),
+                url: prepared.resolved_url.clone(),
+                websocket_socket_id: None,
+                method: prepared.method.clone(),
+                request_headers: prepared.request_headers.clone(),
+                request_body: request_body_text(&prepared.body),
+                request_body_bytes: prepared.body.clone(),
+                resource_type: SubresourceResourceType::Fetch,
+                request_cookie_report,
+            },
+            requires_preflight,
+        )
+        .ok_or_else(|| anyhow::anyhow!("Failed to fetch"))?;
     if let Some(check) = host.window_fetch_redirect_check(internal_id) {
         request = request.with_redirect_check(check);
     }
