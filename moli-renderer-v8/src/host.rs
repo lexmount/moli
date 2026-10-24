@@ -39,6 +39,9 @@ pub(super) use self::events::{
     invoke_prepared_event_callback, report_event_callback_exception,
     report_event_listener_exception,
 };
+pub(crate) use self::events::{
+    EventHandlerCspAdmission, EventHandlerPropertyState, ListenerFilter, UncompiledEventHandler,
+};
 pub(super) use self::scripts::{
     CommittedInlineClassicScript, FailedDynamicScript, HostScriptScheduler, ModuleFailurePolicy,
     PreparedRuntimeScriptStartCommit, QueuedScriptFailureKind, RuntimeScriptAdmission,

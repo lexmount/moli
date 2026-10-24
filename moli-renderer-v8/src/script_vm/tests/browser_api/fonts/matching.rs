@@ -285,7 +285,11 @@ fn font_set_queries_match_unicode_scalars_and_preserve_family_list_order() {
 #[test]
 fn font_query_generic_families_do_not_match_named_font_faces() {
     for generic in ["serif", "sans-serif", "monospace", "system-ui"] {
-        let mut vm = new_storage_test_vm("https://font-matching.test/");
+        let mut completions = RendererResourceCompletionTestHarness::new();
+        let mut vm = new_storage_test_vm_with_completion_sender(
+            "https://font-matching.test/",
+            completions.sender(),
+        );
         vm.eval(&format!(r#"
             globalThis.face=new FontFace('{generic}','url(data:font/ttf;base64,AA==)');
             face.loaded.catch(()=>{{}});document.fonts.add(face);
@@ -305,6 +309,7 @@ fn font_query_generic_families_do_not_match_named_font_faces() {
         );
         assert_eq!(vm.eval("face.status").unwrap(), "unloaded", "{generic}");
         vm.eval(&format!(r#"document.fonts.load('16px "{generic}"','A').then(faces=>results.push(faces.length),error=>results.push(error.name))"#)).unwrap();
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("JSON.stringify(results)").unwrap(),
             r#"[0,"NetworkError"]"#
@@ -328,7 +333,11 @@ fn font_query_matches_chromium_unicode_case_folding() {
         ("İ", "i\u{0307}", false),
         ("𐐀", "𐐨", false),
     ] {
-        let mut vm = new_storage_test_vm("https://unicode-font-family.test/");
+        let mut completions = RendererResourceCompletionTestHarness::new();
+        let mut vm = new_storage_test_vm_with_completion_sender(
+            "https://unicode-font-family.test/",
+            completions.sender(),
+        );
         vm.eval(&format!(
             r#"
             globalThis.face=new FontFace('{family}','url(data:font/ttf;base64,AA==)');
@@ -345,6 +354,7 @@ fn font_query_matches_chromium_unicode_case_folding() {
             "{family} / {query}"
         );
         vm.eval(&format!("document.fonts.load('{font}','A').then(faces=>result.push(faces.length),error=>result.push(error.name))")).unwrap();
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("JSON.stringify(result)").unwrap(),
             if matches {

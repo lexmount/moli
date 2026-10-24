@@ -630,7 +630,7 @@ async fn handle_scheduler_input(
             input = input_kind,
         );
     }
-    let ok = match input {
+    let mut ok = match input {
         SchedulerInput::ProtocolWorkCompletion(completion) => {
             flush_owned_protocol_work(
                 frontend_router,
@@ -739,6 +739,16 @@ async fn handle_scheduler_input(
             .await
         }
     };
+    if ok {
+        let output = scheduler.complete_ready_renderer_output_continuations();
+        ok = flush_protocol_output_with_runtime_deferred_reply_routing(
+            frontend_router,
+            scheduler,
+            pending_runtime_deferred_replies,
+            output,
+        )
+        .await;
+    }
     if let Some(started) = trace_started {
         tracing::info!(
             target: "moli_cdp_runtime",
@@ -1031,8 +1041,10 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                     ) {
                         Ok(advance) => advance,
                         Err(response) => {
-                            let mut routed =
-                                route_unmatched_runtime_inspector_response(scheduler, response);
+                            let mut routed = prefix;
+                            routed.append(route_unmatched_runtime_inspector_response(
+                                scheduler, response,
+                            ));
                             routed.append(output);
                             if !routed.is_empty() {
                                 pending_flush
@@ -1056,15 +1068,18 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                             pending_runtime_deferred_replies.push_back(*pending);
                         }
                         RuntimeDeferredReplyAdvance::Complete(completion) => {
-                            let completion = (*completion)
+                            let mut completion = (*completion)
                                 .settle_exact_outputs_before_response(scheduler)
                                 .await;
-                            let mut remaining_output = prefix;
-                            remaining_output.append(output);
+                            // This prefix was already ordered before the
+                            // renderer response in the same concrete batch.
+                            // Keep it before the wire reply when completing
+                            // the deferred command, including timer output.
+                            completion.output.prepend_protocol_output(prefix);
                             enqueue_runtime_deferred_reply_completion_flush(
                                 &mut pending_flush,
                                 completion,
-                                remaining_output,
+                                output,
                             );
                             break;
                         }
@@ -2165,6 +2180,7 @@ fn take_internal_command_response(
     }
     *output = ProtocolOutputSequence::from_background_events(passthrough);
     Some((|| {
+        // This control API consumes the structured protocol result.
         let response = response.context("CDP internal command returned no response")?;
         let resource = match metadata.method.as_deref() {
             Some("Target.attachToBrowserTarget" | "Target.attachToTarget") => response

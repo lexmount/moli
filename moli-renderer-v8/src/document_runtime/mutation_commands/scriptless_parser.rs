@@ -129,4 +129,15 @@ impl DocumentRuntime {
             self.pending_connected_style_load_prime_result.extend(prime);
         }
     }
+
+    fn reset_non_dirty_textarea_selection_after_child_list_change(&mut self, handle: DomHandle) {
+        let should_reset = self
+            .dom_host
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.is_html_textarea() && !element.input_value_dirty());
+        if should_reset {
+            let _ = self.dom_host.set_selection_range(handle, 0, 0);
+        }
+    }
 }

@@ -480,14 +480,14 @@ pub(crate) use self::media_queries::SimpleObjectEventListenerInspectorSnapshot;
 #[cfg(feature = "devtools")]
 pub(crate) use self::media_queries::simple_event_target_inspector_listener_snapshots;
 pub(crate) use self::media_queries::{
-    ResolvedSimpleEventTarget, dispatch_media_query_list_change_events,
+    ResolvedSimpleEventTarget, clear_simple_event_target_listeners, dispatch_media_query_list_change_events,
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint,
     dispatch_simple_event_target_event_with_original_target, initialize_simple_event_target,
     invoke_simple_event_target_listeners, simple_event_target_handler_getter_callback,
     simple_event_target_handler_setter_callback,
-    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    simple_object_event_activate_uncompiled_handler, simple_object_event_listeners_snapshot, simple_object_event_set_handler,
     simple_object_event_target_register_webidl_listener, simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_scope_callback;
@@ -1306,3 +1306,6 @@ pub(crate) fn set_event_private_bool<'s>(
 pub(crate) use self::events::event_trusted;
 #[cfg(test)]
 pub(crate) use navigator_runtime::midi_map_for_test;
+
+#[cfg(test)]
+pub(crate) use self::media_queries::install_simple_event_target_handlers;

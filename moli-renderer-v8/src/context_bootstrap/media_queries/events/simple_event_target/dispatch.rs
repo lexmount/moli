@@ -201,6 +201,7 @@ fn dispatch_resolved_event<'s>(
             event,
             None,
             callback_errors,
+            None,
         )
     } else {
         SimpleEventDispatchResult::default()
@@ -209,6 +210,7 @@ fn dispatch_resolved_event<'s>(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn invoke_simple_event_listeners<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -217,6 +219,7 @@ fn invoke_simple_event_listeners<'s>(
     event: v8::Local<'s, v8::Object>,
     capture: Option<bool>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
+    handler_override: Option<(&[v8::Local<'s, v8::Value>], EventHandlerType)>,
 ) -> SimpleEventDispatchResult {
     let mut dispatched = false;
     let mut did_listeners_throw = false;
@@ -260,9 +263,13 @@ fn invoke_simple_event_listeners<'s>(
             &listener,
             callback_target.into(),
             if listener.handler_slot.is_some() {
-                error_arguments
-                    .as_ref()
-                    .map_or(callback_arguments.as_slice(), |values| values.as_slice())
+                handler_override
+                    .map(|(arguments, _)| arguments)
+                    .unwrap_or_else(|| {
+                        error_arguments
+                            .as_ref()
+                            .map_or(callback_arguments.as_slice(), |values| values.as_slice())
+                    })
             } else {
                 &callback_arguments
             },
@@ -274,11 +281,18 @@ fn invoke_simple_event_listeners<'s>(
         if listener.handler_slot.is_some()
             && let Some(returned) = outcome.value
         {
-            apply_handler_return_value(
+            let handler_type = handler_override.map(|(_, kind)| kind).unwrap_or_else(|| {
+                if error_arguments.is_some() {
+                    EventHandlerType::OnErrorEventHandler
+                } else {
+                    EventHandlerType::EventHandler
+                }
+            });
+            apply_event_handler_return_value(
                 scope,
                 event,
                 v8::Local::new(scope, &returned),
-                error_arguments.is_some(),
+                handler_type,
             );
         }
         set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
@@ -292,6 +306,41 @@ fn invoke_simple_event_listeners<'s>(
         dispatched,
         did_listeners_throw,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_simple_event_target_listeners<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &(impl EventTypeKey + ?Sized),
+    event: v8::Local<'s, v8::Object>,
+    filter: crate::host::ListenerFilter,
+    handler_arguments: &[v8::Local<'s, v8::Value>],
+    handler_type: EventHandlerType,
+    callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
+) -> SimpleEventDispatchResult {
+    let Some(identity) = resolve_event_target(scope, target) else {
+        return SimpleEventDispatchResult::default();
+    };
+    let Some(registry) = SimpleEventListenerRegistry::from_owner(scope, identity.listener_owner)
+    else {
+        return SimpleEventDispatchResult::default();
+    };
+    let capture = match filter {
+        crate::host::ListenerFilter::Capturing => Some(true),
+        crate::host::ListenerFilter::Bubbling => Some(false),
+        crate::host::ListenerFilter::All => None,
+    };
+    invoke_simple_event_listeners(
+        scope,
+        identity.dispatch_target,
+        registry,
+        event_type,
+        event,
+        capture,
+        callback_errors,
+        Some((handler_arguments, handler_type)),
+    )
 }
 
 fn finish_event_dispatch<'s>(
@@ -432,18 +481,4 @@ fn invoke_simple_event_callback_with_invocation<'s>(
             },
         },
     )
-}
-
-fn apply_handler_return_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    returned: v8::Local<'s, v8::Value>,
-    error_handler: bool,
-) {
-    let handler_type = if error_handler {
-        EventHandlerType::OnErrorEventHandler
-    } else {
-        EventHandlerType::EventHandler
-    };
-    apply_event_handler_return_value(scope, event, returned, handler_type);
 }

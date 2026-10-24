@@ -125,6 +125,12 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
         let key = native_key(&source.request_key)?;
         let native_source = match source.source {
             module_tree::ModuleSource::Text(text) => WorkerModuleSource::text(text.to_string()),
+            module_tree::ModuleSource::TextWithOrigin { source, origin } => {
+                WorkerModuleSource::TextWithOrigin {
+                    source: source.to_string(),
+                    origin,
+                }
+            }
             module_tree::ModuleSource::Binary(bytes) => WorkerModuleSource::binary(bytes.to_vec()),
         };
         let entry = create_worker_module_script(
@@ -209,6 +215,15 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
             entry_phases: HashMap::new(),
             dependency_edges: edges.to_vec(),
         })
+    }
+
+    fn cache_module_request_error(
+        &mut self,
+        key: module_tree::ModuleMapKey,
+        error: module_tree::ModuleLoadError,
+    ) -> module_tree::ModuleLoadError {
+        let entry = self.mark_module_failed(key.clone(), error.clone());
+        error.with_key(key).with_module_entry(entry)
     }
 
     fn mark_module_failed(

@@ -128,6 +128,7 @@ __jsonStream.send();
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
+            preload_state: Default::default(),
         },
         network_request_headers: None,
     })

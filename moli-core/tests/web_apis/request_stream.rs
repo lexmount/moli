@@ -12,7 +12,7 @@ async fn assert_request_stream_body(scenario: &str) -> Result<()> {
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(
@@ -53,7 +53,7 @@ async fn request_stream_consumers_retain_reader_locks_on_success_and_failure() -
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(observed, serde_json::json!({"errors": []}), "{target}");

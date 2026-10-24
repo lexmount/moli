@@ -1,6 +1,9 @@
 use super::*;
+#[cfg(test)]
 use crate::definitions::define_function_accessor_property;
-use crate::util::{get_private_value, throw_type_error, v8str};
+#[cfg(test)]
+use crate::util::v8str;
+use crate::util::{get_private_value, throw_type_error};
 
 // These callbacks are shared by declared EventHandler accessors. Their callback
 // data is the property name, which also identifies the private handler slot.
@@ -12,6 +15,15 @@ pub(crate) fn simple_event_target_handler_getter_callback<'s>(
     let Some((target, property)) = handler_callback_data(scope, &args) else {
         return;
     };
+    if let Some(popup_id) =
+        crate::native_bridge::lightweight_popup_id_from_window(scope, target.identity.handler_owner)
+        && let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope)
+    {
+        let value = unsafe { &mut *host_ptr }
+            .lightweight_popup_event_handler_property_value(scope, popup_id, &property);
+        rv.set(value.unwrap_or_else(|| v8::null(scope).into()));
+        return;
+    }
     rv.set(
         get_private_value(scope, target.identity.handler_owner, &property)
             .unwrap_or_else(|| v8::null(scope).into()),
@@ -26,6 +38,15 @@ pub(crate) fn simple_event_target_handler_setter_callback<'s>(
     let Some((target, property)) = handler_callback_data(scope, &args) else {
         return;
     };
+    if let Some(popup_id) =
+        crate::native_bridge::lightweight_popup_id_from_window(scope, target.identity.handler_owner)
+        && let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope)
+    {
+        let handler = v8::Local::<v8::Object>::try_from(args.get(0)).ok();
+        unsafe { &mut *host_ptr }
+            .set_lightweight_popup_event_handler_property(scope, popup_id, &property, handler);
+        return;
+    }
     simple_object_event_set_handler_in_registry(
         scope,
         target.identity.handler_owner,
@@ -51,6 +72,7 @@ fn handler_callback_data<'s>(
 
 /// Install explicit EventHandler accessors on object-backed Window surfaces.
 /// Ordinary properties with an `on` prefix never become listeners implicitly.
+#[cfg(test)]
 pub(crate) fn install_simple_event_target_handlers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

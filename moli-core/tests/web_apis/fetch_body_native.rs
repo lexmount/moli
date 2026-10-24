@@ -11,7 +11,7 @@ async fn assert_native_body_consumption(scenario: &str) -> Result<()> {
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(
@@ -59,7 +59,7 @@ async fn fetch_network_body_rewrapping_avoids_reentrant_source_borrows() -> Resu
         for target in ["window", "child", "worker"] {
             let observed = tokio::time::timeout(
                 Duration::from_secs(20),
-                super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+                super::event_dispatch::run_probe(&browser, &server, target, &source),
             )
             .await??;
             assert_eq!(

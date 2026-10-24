@@ -49,7 +49,7 @@ impl ScriptVm {
             .document_runtime
             .document_subresource_csp_check(&manifest_url, DocumentSubresourceCspKind::Manifest)
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violation.is_empty() {
             return complete_default_app_manifest(&document_url, Some(&manifest_url));
         }
 

@@ -1428,47 +1428,6 @@ impl PageScriptHost {
             .map(|record| v8::Local::new(scope, &record.window_proxy))
     }
 
-    pub(crate) fn lightweight_popup_event_handler_property_value<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        popup_id: u64,
-        property_name: &str,
-    ) -> Option<v8::Local<'s, v8::Value>> {
-        let window = self.lightweight_popup_window(scope, popup_id)?;
-        Some(
-            get_private_value(scope, window, property_name)
-                .filter(|value| value.is_object())
-                .unwrap_or_else(|| v8::null(scope).into()),
-        )
-    }
-
-    pub(crate) fn set_lightweight_popup_event_handler_property<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        popup_id: u64,
-        property_name: &str,
-        handler: Option<v8::Local<'s, v8::Object>>,
-    ) {
-        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
-            return;
-        };
-        if !is_window_event_handler_property(property_name) {
-            return;
-        };
-        let value = handler
-            .map(v8::Local::<v8::Value>::from)
-            .unwrap_or_else(|| v8::null(scope).into());
-        crate::context_bootstrap::simple_object_event_set_handler(
-            scope,
-            window,
-            property_name
-                .strip_prefix("on")
-                .expect("Window event handler"),
-            property_name,
-            value,
-        );
-    }
-
     pub(in crate::native_bridge::context_host) fn lightweight_popup_opener_endpoint(
         &self,
         popup_id: u64,
@@ -3732,26 +3691,23 @@ impl PageScriptHost {
         };
         // The DOM dispatcher owns target, phase, path and cleanup. Invoke only
         // this Window's listener phase without starting a second dispatch.
-        for capture in [true, false] {
-            if !at_target && capture != capture_only {
-                continue;
-            }
-            crate::context_bootstrap::invoke_simple_event_target_listeners(
-                scope,
-                window,
-                event_type,
-                event,
-                capture,
-                handler_arguments,
-                handler_type,
-                None,
-            );
-            if event_dispatch_status(scope, event) != DispatchStatus::Continue
-                || !self.popup_window_event_target_is_current(target)
-            {
-                break;
-            }
-        }
+        let filter = if at_target {
+            crate::host::ListenerFilter::All
+        } else if capture_only {
+            crate::host::ListenerFilter::Capturing
+        } else {
+            crate::host::ListenerFilter::Bubbling
+        };
+        crate::context_bootstrap::invoke_simple_event_target_listeners(
+            scope,
+            window,
+            event_type,
+            event,
+            filter,
+            handler_arguments,
+            handler_type,
+            None,
+        );
         self.restore_window_message_source_scope(previous_message_source);
         restore_lightweight_popup_event_dispatch(scope, previous);
         if self.popup_window_event_target_is_current(target) {

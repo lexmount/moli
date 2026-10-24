@@ -281,7 +281,7 @@ impl PageScriptHost {
 
     pub(crate) fn child_has_isolated_window_proxies(&self, child_handle: DomHandle) -> bool {
         let Some(store) = self
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .as_ref()
             .and_then(|config| config.pending_contexts.upgrade())
         else {
@@ -318,7 +318,7 @@ impl PageScriptHost {
             return Ok(None);
         };
         let Some(store) = self
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .as_ref()
             .and_then(|config| config.pending_contexts.upgrade())
         else {
@@ -363,7 +363,7 @@ impl PageScriptHost {
             .frame_owner_frame_id_for_child_handle(child_handle)
             .ok_or_else(|| anyhow::anyhow!("reused isolated proxy lost its frame"))?;
         let store = self
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .as_ref()
             .and_then(|config| config.pending_contexts.upgrade())
             .ok_or_else(|| anyhow::anyhow!("reused isolated proxy lost its bootstrap owner"))?;
@@ -401,7 +401,7 @@ impl PageScriptHost {
             return Ok(0);
         };
         let Some(store) = host
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .as_ref()
             .and_then(|config| config.pending_contexts.upgrade())
         else {
@@ -455,7 +455,7 @@ impl PageScriptHost {
         context: v8::Local<'_, v8::Context>,
     ) {
         let Some(store) = self
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .as_ref()
             .and_then(|config| config.pending_contexts.upgrade())
         else {
@@ -487,7 +487,7 @@ impl PageScriptHost {
         &self,
     ) -> Vec<(RuntimeObservableContextToken, Rc<v8::Weak<v8::Context>>)> {
         let Some(store) = self
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .as_ref()
             .and_then(|config| config.pending_contexts.upgrade())
         else {
@@ -520,7 +520,7 @@ pub(crate) fn remember_isolated_window_context(
         .window_execution_context_identity_for_access_check(context)
         .ok_or_else(|| anyhow::anyhow!("isolated Context has no registered Window Realm"))?;
     let store = unsafe { &*host_ptr }
-        .child_default_context_bootstrap
+        .window_default_context_bootstrap
         .as_ref()
         .and_then(|config| config.pending_contexts.upgrade())
         .ok_or_else(|| anyhow::anyhow!("Window bootstrap owner was retired"))?;
@@ -801,7 +801,7 @@ fn ensure_isolated_window_world_member<'s>(
     access_policy: WindowExecutionContextAccessPolicy,
 ) -> anyhow::Result<v8::Local<'s, v8::Context>> {
     let config = unsafe { &*host_ptr }
-        .child_default_context_bootstrap
+        .window_default_context_bootstrap
         .clone()
         .ok_or_else(|| anyhow::anyhow!("Window bootstrap is unavailable"))?;
     let store = config
