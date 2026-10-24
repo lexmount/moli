@@ -1,6 +1,9 @@
 use super::*;
+#[cfg(test)]
 use crate::definitions::define_function_accessor_property;
-use crate::util::{get_private_value, throw_type_error, v8str};
+#[cfg(test)]
+use crate::util::v8str;
+use crate::util::{get_private_value, throw_type_error};
 
 // These callbacks are shared by declared EventHandler accessors. Their callback
 // data is the property name, which also identifies the private handler slot.
@@ -69,6 +72,7 @@ fn handler_callback_data<'s>(
 
 /// Install explicit EventHandler accessors on object-backed Window surfaces.
 /// Ordinary properties with an `on` prefix never become listeners implicitly.
+#[cfg(test)]
 pub(crate) fn install_simple_event_target_handlers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

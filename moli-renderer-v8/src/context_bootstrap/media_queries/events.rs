@@ -9,12 +9,12 @@ pub(in crate::context_bootstrap) use media_query_list::{
     media_query_list_remove_listener_callback,
 };
 pub(crate) use simple_event_target::{
-    SimpleObjectEventListenerInspectorSnapshot, dispatch_simple_event_target_event,
-    dispatch_simple_event_target_event_collecting_errors,
+    SimpleObjectEventListenerInspectorSnapshot, clear_simple_event_target_listeners,
+    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    dispatch_simple_event_target_event_with_checkpoint,
+    dispatch_simple_event_target_event_with_original_target, initialize_simple_event_target,
+    invoke_simple_event_target_listeners, is_simple_event_target,
     dispatch_simple_event_target_event_with_ancestors,
-    dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
-    install_simple_event_target_handlers, is_simple_event_target,
-    dispatch_simple_event_target_event_with_original_target,
     simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
     simple_event_target_inspector_listener_snapshots,
@@ -23,3 +23,6 @@ pub(crate) use simple_event_target::{
     simple_object_event_remove_listener_value_for_type, simple_object_event_set_handler,
     simple_object_event_target_register_webidl_listener, simple_object_has_event_listeners,
 };
+
+#[cfg(test)]
+pub(crate) use simple_event_target::install_simple_event_target_handlers;

@@ -16,10 +16,10 @@ use crate::{
         deep_clone_shared_web_storage_store,
         dispatch_simple_event_target_event_with_original_target,
         finish_cross_document_navigation_for_window,
-        history_entry_seed_for_cross_document_location,
-        install_navigation_bootstrap_entry_for_holder, initialize_simple_event_target,
-        install_simple_window_event_handlers, install_storage_aliases_for_window,
-        navigation_unload_event_active, new_shared_web_storage_store, scoped_indexed_db_factory,
+        history_entry_seed_for_cross_document_location, initialize_simple_event_target,
+        install_navigation_bootstrap_entry_for_holder, install_simple_window_event_handlers,
+        install_storage_aliases_for_window, navigation_unload_event_active,
+        new_shared_web_storage_store, scoped_indexed_db_factory,
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
@@ -3679,26 +3679,23 @@ impl JsContextHost {
         };
         // The DOM dispatcher owns target, phase, path and cleanup. Invoke only
         // this Window's listener phase without starting a second dispatch.
-        for capture in [true, false] {
-            if !at_target && capture != capture_only {
-                continue;
-            }
-            crate::context_bootstrap::invoke_simple_event_target_listeners(
-                scope,
-                window,
-                event_type,
-                event,
-                capture,
-                handler_arguments,
-                handler_type,
-                None,
-            );
-            if event_dispatch_status(scope, event) != DispatchStatus::Continue
-                || !self.popup_window_event_target_is_current(target)
-            {
-                break;
-            }
-        }
+        let filter = if at_target {
+            crate::host::ListenerFilter::All
+        } else if capture_only {
+            crate::host::ListenerFilter::Capturing
+        } else {
+            crate::host::ListenerFilter::Bubbling
+        };
+        crate::context_bootstrap::invoke_simple_event_target_listeners(
+            scope,
+            window,
+            event_type,
+            event,
+            filter,
+            handler_arguments,
+            handler_type,
+            None,
+        );
         self.restore_window_message_source_scope(previous_message_source);
         restore_lightweight_popup_event_dispatch(scope, previous);
         if self.popup_window_event_target_is_current(target) {
