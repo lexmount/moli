@@ -1791,6 +1791,7 @@ fn image_submitter_coordinate_component(value: f64, max: f64) -> u32 {
 }
 
 fn send_anchor_ping_requests(
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     destination_url: &str,
@@ -1802,7 +1803,7 @@ fn send_anchor_ping_requests(
         .split_ascii_whitespace()
         .filter_map(|raw_url| base_url.join(raw_url).ok())
     {
-        crate::network_host::send_link_audit_ping(runtime_ptr, handle, ping_url, destination_url);
+        crate::network_host::send_link_audit_ping(scope, runtime_ptr, handle, ping_url, destination_url);
     }
 }
 
@@ -1917,7 +1918,7 @@ fn anchor_click_default_action(
     if resolved.is_empty() || url::Url::parse(&resolved).is_err() {
         return None;
     }
-    send_anchor_ping_requests(runtime_ptr, handle, &resolved);
+    send_anchor_ping_requests(scope, runtime_ptr, handle, &resolved);
     let runtime = unsafe { &*runtime_ptr };
     if has_reflected_attribute(runtime, handle, "download") {
         let suggested_filename =

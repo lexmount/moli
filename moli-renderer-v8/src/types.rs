@@ -87,7 +87,7 @@ pub(super) struct PendingFontFaceFetch {
 }
 
 pub(super) enum PendingSubresourceContinuation {
-    Beacon,
+    Beacon(Box<PendingBeacon>),
     Dictionary(Box<PendingDictionaryFetch>),
     ResponsePreload(Box<PendingResponsePreload>),
     CspReport {
@@ -148,6 +148,17 @@ pub(super) enum PendingSubresourceContinuation {
     },
 }
 
+/// Fire-and-forget HTTP requests retain native policy, not a script realm.
+/// Upload bytes in this snapshot share their immutable backing with the lease.
+pub(super) struct PendingBeacon {
+    pub(super) request: moli_fetch::Request,
+    pub(super) policy_context: SubresourcePolicyContext,
+    pub(super) policy: crate::document_runtime::DocumentConnectPolicySnapshot,
+    pub(super) redirect_state: crate::network_host::FetchCspRedirectState,
+    pub(super) report_context: crate::network_host::WindowCspReportRequestContext,
+    pub(super) timing: Option<crate::context_bootstrap::FetchResourceTiming>,
+}
+
 pub(super) struct PendingDictionaryFetch {
     pub(super) policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     pub(super) redirect_state: crate::network_host::FetchCspRedirectState,
@@ -205,6 +216,11 @@ impl PendingSubresourceContinuation {
         &crate::network_host::WindowCspReportRequestContext,
     )> {
         match self {
+            Self::Beacon(beacon) => Some((
+                &beacon.policy,
+                &beacon.redirect_state,
+                &beacon.report_context,
+            )),
             Self::Fetch(fetch) => Some((
                 fetch.connect_policy(),
                 fetch.redirect_csp_state(),
@@ -2047,6 +2063,5 @@ mod tests {
         assert!(media.delays_document_load_event());
         assert!(text_track.delays_document_load_event());
         assert!(stylesheet_subresource.delays_document_load_event());
-        assert!(!PendingSubresourceContinuation::Beacon.delays_document_load_event());
     }
 }

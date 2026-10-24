@@ -27,6 +27,15 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         return;
     }
 
+    let execution_context = {
+        let host = unsafe { &*host_ptr };
+        let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+            .expect("binding validated Navigator receiver");
+        receiver.get_creation_context(scope).and_then(|context| {
+            host.window_execution_context_identity_for_v8_context(scope, context)
+        })
+    };
+
     let raw_url = match webidl::convert::<webidl::UsvString>(
         scope,
         args.get(0),
@@ -43,20 +52,32 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
     };
 
     let host = unsafe { &mut *host_ptr };
-    let Some(request_context) = window_ping_request_context(scope, host) else {
-        rv.set(v8::Boolean::new(scope, false).into());
+    let Some(execution_context) = execution_context else {
+        rv.set_bool(false);
+        return;
+    };
+    let Some(document_target) = host
+        .current_window_document_task_target_for_dispatch_scope(execution_context.dispatch_scope())
+    else {
+        rv.set_bool(false);
+        return;
+    };
+    let Some(request_context) =
+        window_ping_request_context(scope, host, execution_context, document_target)
+    else {
+        rv.set_bool(false);
         return;
     };
     let WindowPingRequestContext {
-        execution_context,
         resource_loader,
         frame_id,
         document_url,
         base_url,
         request_origin,
         network_partition_key,
-    } = request_context;
-    let resolved_url = match resolve_context_url(&base_url, &raw_url, None) {
+        ..
+    } = &request_context;
+    let resolved_url = match resolve_context_url(base_url, &raw_url, None) {
         Ok(url) => url,
         Err(_) => {
             crate::util::throw_type_error(scope, "The URL argument is ill-formed or unsupported.");
@@ -70,14 +91,21 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
 
     let mut request_headers = Vec::new();
     append_default_body_content_type(&mut request_headers, body_content_type.as_deref());
-    request_headers = filter_headers_for_guard(&request_headers, HeadersGuard::RequestNoCors);
+    let request_mode = if body_content_type.as_ref().is_some_and(|content_type| {
+        !moli_fetch::is_cors_safelisted_request_header("Content-Type", content_type)
+    }) {
+        RequestMode::Cors
+    } else {
+        RequestMode::NoCors
+    };
+    let preflight_request_headers = request_headers.clone();
     let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let request_body_text = request_body_text(&body);
     let request_cookie_report = observe_subresource_request_cookie_report(
         resource_loader.request_client(),
-        &document_url,
-        &request_origin,
+        document_url,
+        request_origin,
         &resolved_url,
         "POST",
         RequestCredentialsMode::Include,
@@ -98,47 +126,14 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         request_cookie_report,
     };
 
-    if host.should_intercept_subresource(SubresourceResourceType::Ping) {
-        let admitted = host
-            .record_pending_subresource_beacon(
-                execution_context,
-                network_partition_key.clone(),
-                info,
-            )
-            .is_some();
-        rv.set_bool(admitted);
-        return;
-    }
-
-    if host.network_offline() {
-        record_beacon_failure(host, info, "Network emulation offline".to_owned());
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-    if host.is_url_blocked(&resolved_url) {
-        record_beacon_failure(host, info, BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned());
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-    if should_request_be_blocked_due_to_bad_port(&resolved_url) {
-        record_beacon_failure(
-            host,
-            info,
-            format!("sendBeacon: blocked bad port for `{resolved_url}`"),
-        );
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-
-    let loader = resource_loader.request_client().clone();
     let request =
         match Request::new_bytes("POST", resolved_url.as_str(), body, request_headers.clone()) {
             Ok(request) => request
-                .with_initiator_url(&document_url)
+                .with_initiator_url(document_url)
                 .with_request_origin(request_origin.clone())
                 .with_resource_type(RequestResourceType::Beacon)
                 .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Beacon)
-                .with_request_mode(RequestMode::NoCors)
+                .with_request_mode(request_mode)
                 .with_credentials_mode(RequestCredentialsMode::Include)
                 .with_network_partition_key(network_partition_key.clone())
                 .with_redirect_mode(RequestRedirectMode::Follow)
@@ -148,41 +143,32 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
                 return;
             }
         };
-    let cancel_handle = FetchCancelHandle::new();
-    let network_context = AsyncSubresourceNetworkContext {
-        frame_id: info.frame_id.clone(),
-        request_origin: request_origin.clone(),
-        document_url: info.document_url.clone(),
-        resource_type: info.resource_type,
-        policy_context: Default::default(),
+    let request = match request
+        .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+            document_referrer_policy: request_context.referrer_policy.clone(),
+            ..Default::default()
+        })
+        .with_fetch_referrer(&request_context.referrer_for(&resolved_url))
+    {
+        Ok(request) => request,
+        Err(error) => {
+            crate::util::throw_type_error(scope, &error.to_string());
+            return;
+        }
     };
-    let Some(internal_id) = host.record_async_subresource_beacon(
-        execution_context,
-        Some(cancel_handle.clone()),
-        network_partition_key,
-        info,
-    ) else {
-        rv.set_bool(false);
-        return;
-    };
-    spawn_async_subresource_fetch(
-        resource_loader.task_runner(),
-        host.resource_completion_sender(),
-        loader,
+    rv.set_bool(start_window_ping(
+        scope,
+        host,
+        &request_context,
         request,
-        Some(cancel_handle),
-        Vec::new(),
-        internal_id,
-        network_context,
-        resolved_url,
-        "POST".to_owned(),
-        request_headers,
-        request_body_text,
-    );
-    rv.set(v8::Boolean::new(scope, true).into());
+        info,
+        preflight_request_headers,
+        "beacon",
+    ));
 }
 
 pub(crate) fn send_link_audit_ping(
+    scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
     link: crate::document_runtime::DomHandle,
     ping_url: url::Url,
@@ -199,26 +185,30 @@ pub(crate) fn send_link_audit_ping(
     else {
         return;
     };
+    let Some(document_target) = host
+        .current_window_document_task_target_for_dispatch_scope(execution_context.dispatch_scope())
+    else {
+        return;
+    };
     let Some(request_context) =
-        window_ping_request_context_for_execution_context(host, execution_context)
+        window_ping_request_context(scope, host, execution_context, document_target)
     else {
         return;
     };
     let WindowPingRequestContext {
-        execution_context,
         resource_loader,
         frame_id,
         document_url,
-        base_url: _,
         request_origin,
         network_partition_key,
-    } = request_context;
+        ..
+    } = &request_context;
     let mut request_headers = vec![
         ("Content-Type".to_owned(), "text/ping".to_owned()),
         ("Cache-Control".to_owned(), "max-age=0".to_owned()),
         ("Ping-To".to_owned(), destination_url.to_owned()),
     ];
-    if document_url.scheme() == "http" || moli_url::same_origin(&document_url, &ping_url) {
+    if document_url.scheme() == "http" || moli_url::same_origin(document_url, &ping_url) {
         request_headers.push(("Ping-From".to_owned(), document_url.as_str().to_owned()));
     }
     let request_headers =
@@ -226,8 +216,8 @@ pub(crate) fn send_link_audit_ping(
     let request_body = Some("PING".to_owned());
     let request_cookie_report = observe_subresource_request_cookie_report(
         resource_loader.request_client(),
-        &document_url,
-        &request_origin,
+        document_url,
+        request_origin,
         &ping_url,
         "POST",
         RequestCredentialsMode::Include,
@@ -250,33 +240,6 @@ pub(crate) fn send_link_audit_ping(
         request_cookie_report,
     };
 
-    if host.should_intercept_subresource(SubresourceResourceType::Ping) {
-        let _ = host.record_pending_subresource_beacon(
-            execution_context,
-            network_partition_key.clone(),
-            info,
-        );
-        return;
-    }
-
-    if host.network_offline() {
-        record_beacon_failure(host, info, "Network emulation offline".to_owned());
-        return;
-    }
-    if host.is_url_blocked(&ping_url) {
-        record_beacon_failure(host, info, BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned());
-        return;
-    }
-    if should_request_be_blocked_due_to_bad_port(&ping_url) {
-        record_beacon_failure(
-            host,
-            info,
-            format!("ping: blocked bad port for `{ping_url}`"),
-        );
-        return;
-    }
-
-    let loader = resource_loader.request_client().clone();
     let request = match Request::new_bytes(
         "POST",
         ping_url.as_str(),
@@ -284,8 +247,8 @@ pub(crate) fn send_link_audit_ping(
         request_headers.clone(),
     ) {
         Ok(request) => request
+            .with_initiator_url(document_url)
             .without_inferred_referrer()
-            .with_initiator_url(&document_url)
             .with_request_origin(request_origin.clone())
             .with_resource_type(RequestResourceType::Ping)
             .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Ping)
@@ -299,40 +262,23 @@ pub(crate) fn send_link_audit_ping(
             return;
         }
     };
-    let cancel_handle = FetchCancelHandle::new();
-    let network_context = AsyncSubresourceNetworkContext {
-        frame_id: info.frame_id.clone(),
-        request_origin: request_origin.clone(),
-        document_url: info.document_url.clone(),
-        resource_type: info.resource_type,
-        policy_context: Default::default(),
-    };
-    let Some(internal_id) = host.record_async_subresource_beacon(
-        execution_context,
-        Some(cancel_handle.clone()),
-        network_partition_key,
-        info,
-    ) else {
-        return;
-    };
-    spawn_async_subresource_fetch(
-        resource_loader.task_runner(),
-        host.resource_completion_sender(),
-        loader,
+    let _ = start_window_ping(
+        scope,
+        host,
+        &request_context,
         request,
-        Some(cancel_handle),
+        info,
         Vec::new(),
-        internal_id,
-        network_context,
-        ping_url,
-        "POST".to_owned(),
-        request_headers,
-        request_body,
+        "ping",
     );
 }
 
 struct WindowPingRequestContext {
     execution_context: crate::native_bridge::WindowExecutionContextIdentity,
+    document_target: crate::native_bridge::WindowDocumentTaskTarget,
+    policy_context: crate::types::SubresourcePolicyContext,
+    referrer_policy: Option<String>,
+    referrer_source: Option<url::Url>,
     resource_loader: crate::network::context::DocumentResourceLoader,
     frame_id: Option<String>,
     document_url: url::Url,
@@ -344,19 +290,17 @@ struct WindowPingRequestContext {
 fn window_ping_request_context(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
-) -> Option<WindowPingRequestContext> {
-    let execution_context = host.current_runtime_window_execution_context_identity(scope)?;
-    window_ping_request_context_for_execution_context(host, execution_context)
-}
-
-fn window_ping_request_context_for_execution_context(
-    host: &JsContextHost,
     execution_context: crate::native_bridge::WindowExecutionContextIdentity,
+    document_target: crate::native_bridge::WindowDocumentTaskTarget,
 ) -> Option<WindowPingRequestContext> {
     let owner = execution_context.dispatch_scope();
-    let resource_loader = host
-        .document_resource_loader_for_dispatch_scope(owner)?
-        .clone();
+    if !host.window_execution_context_owner_is_current(execution_context.owner(), owner)
+        || !host.window_document_owner_is_current_for_dispatch_scope(document_target.owner(), owner)
+    {
+        return None;
+    }
+    let resource_loader =
+        host.document_resource_loader_for_window_owner(document_target.owner())?;
     let environment = host.subresource_request_environment(&resource_loader, owner)?;
     let crate::network::context::SubresourceRequestEnvironment {
         document_url,
@@ -366,6 +310,10 @@ fn window_ping_request_context_for_execution_context(
     } = environment;
     Some(WindowPingRequestContext {
         execution_context,
+        document_target,
+        policy_context: effective_subresource_policy_context(scope, host, owner),
+        referrer_policy: effective_subresource_referrer_policy(host, owner),
+        referrer_source: host.document_client_referrer_source(owner),
         resource_loader,
         frame_id,
         document_url,
@@ -373,6 +321,153 @@ fn window_ping_request_context_for_execution_context(
         request_origin,
         network_partition_key: active_subresource_network_partition_key(host, owner),
     })
+}
+
+impl WindowPingRequestContext {
+    fn referrer_for(&self, url: &url::Url) -> String {
+        self.referrer_source
+            .as_ref()
+            .and_then(|source| {
+                moli_fetch::referrer_value(source, url, self.referrer_policy.as_deref(), None)
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn start_window_ping(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut JsContextHost,
+    context: &WindowPingRequestContext,
+    mut request: Request,
+    info: PendingSubresourceFetchInfo,
+    preflight_request_headers: Vec<(String, String)>,
+    initiator_type: &'static str,
+) -> bool {
+    let owner = context.execution_context.dispatch_scope();
+    let Some(policy) = host.document_connect_policy_snapshot_for_owner(owner) else {
+        return false;
+    };
+    let Some(report_context) = capture_window_csp_report_request_context(scope, host, owner) else {
+        return false;
+    };
+    if report_context.identity() != context.document_target {
+        return false;
+    }
+    let (reports, enforced) = policy
+        .check_url(
+            &context.document_url,
+            &request.url,
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .into_violations();
+    let policy_error = enforced.first().map(|violation| {
+        crate::document_runtime::document_content_security_policy_error_message(
+            violation,
+            initiator_type,
+        )
+    });
+    let host_ptr = host as *mut JsContextHost;
+    for violation in reports.into_iter().chain(enforced) {
+        send_content_security_policy_violation_report_from_window_context(
+            host,
+            &report_context,
+            &violation,
+        );
+        host.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(
+            scope, host_ptr, context.document_target, &violation,
+        );
+    }
+    if let Some(error) = policy_error {
+        // Blink's Beacon path stops before constructing a ResourceRequest.
+        // Hyperlink auditing instead exposes a failed ping timing, even when
+        // the keepalive quota is already full. Neither reaches transport.
+        if request.resource_type == RequestResourceType::Ping {
+            let timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("ping");
+            host.record_window_resource_timing(
+                scope,
+                context.execution_context,
+                timing.failure(&info.url),
+            );
+            record_beacon_failure(host, info, error);
+        }
+        return true;
+    }
+    let beacon = crate::types::PendingBeacon {
+        request: request.clone(),
+        policy_context: context.policy_context,
+        redirect_state: FetchCspRedirectState::new(&policy),
+        policy,
+        report_context,
+        timing: Some(
+            crate::context_bootstrap::FetchResourceTiming::for_initiator_type(initiator_type),
+        ),
+    };
+    let cancel_handle = FetchCancelHandle::new();
+    let Some(internal_id) = host.record_async_subresource_beacon(
+        context.execution_context,
+        beacon,
+        Some(cancel_handle.clone()),
+        info.clone(),
+    ) else {
+        return false;
+    };
+    let error = if host.network_offline() {
+        Some("Network emulation offline".to_owned())
+    } else if host.is_url_blocked(&request.url) {
+        Some(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
+    } else if should_request_be_blocked_due_to_bad_port(&request.url) {
+        Some(format!(
+            "{initiator_type}: blocked bad port for `{}`",
+            request.url
+        ))
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        let _ = host.resource_completion_sender().send_async_subresource(
+            crate::types::AsyncSubresourceFetchCompletion {
+                internal_id,
+                request_url: request.url,
+                request_method: request.method,
+                request_headers: request.request_headers,
+                request_body: info.request_body,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
+                network_error_text: None,
+                result: Err(error).into(),
+            },
+        );
+        return true;
+    }
+    if host.should_intercept_subresource(SubresourceResourceType::Ping) {
+        host.pause_pending_subresource_fetch(internal_id);
+        return true;
+    }
+    if let Some(check) = host.window_fetch_redirect_check(internal_id) {
+        request = request.with_redirect_check(check);
+    }
+    spawn_async_subresource_fetch(
+        context.resource_loader.task_runner(),
+        host.resource_completion_sender(),
+        context.resource_loader.request_client().clone(),
+        request,
+        Some(cancel_handle),
+        preflight_request_headers,
+        internal_id,
+        AsyncSubresourceNetworkContext {
+            frame_id: info.frame_id,
+            request_origin: context.request_origin.clone(),
+            document_url: info.document_url,
+            resource_type: info.resource_type,
+            policy_context: context.policy_context,
+        },
+        info.url,
+        info.method,
+        info.request_headers,
+        info.request_body,
+    );
+    true
 }
 
 fn navigator_beacon_body<'s>(

@@ -6,8 +6,10 @@ use crate::frame_owner_model::{
     FrameDocumentLocalWindowTransition, FrameLocalWindowOwnerTransition,
 };
 use crate::{
-    document_runtime::DomHandle, dom::native::DocumentReadyState,
+    document_runtime::DomHandle,
+    dom::native::DocumentReadyState,
     frame_owner_model::FrameDocumentOwnerTransition,
+    native_bridge::{OwnerDispatchScope, WindowExecutionContextOwner},
 };
 use moli_web_mime::is_xml_document_mime;
 use url::Url;
@@ -313,6 +315,22 @@ impl JsContextHost {
                 .expect("synthetic child Document commit requires its parent authority")
                 .clone()
         });
+        // A replacement can reuse the WindowProxy before deferred realm
+        // teardown. Finish the old timeline while its exact binding resolves.
+        if local_window_transition == FrameDocumentLocalWindowTransition::ReplaceLocalWindow
+            && let Some(owner) = expected_current_owner
+            && let Some(binding) = self.clone_window_execution_context_binding(
+                scope,
+                WindowExecutionContextOwner::Frame(owner.local_window_id),
+                OwnerDispatchScope::Child(handle),
+            )
+        {
+            let host_ptr = self as *mut Self;
+            binding.with_current_scope(scope, host_ptr, |scope, _| {
+                unsafe { &mut *host_ptr }
+                    .retire_beacon_timings_for_context(scope, binding.realm_token());
+            });
+        }
         let web_mcp_navigation = self.current_child_navigation_load(handle);
         let owner_transition = self
             .frame_owner_store

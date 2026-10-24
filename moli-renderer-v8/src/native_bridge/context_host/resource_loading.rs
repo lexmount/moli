@@ -37,6 +37,60 @@ fn navigation_response_from_subresource_body(
 }
 
 impl JsContextHost {
+    pub(crate) fn record_window_resource_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        identity: super::WindowExecutionContextIdentity,
+        entry: crate::context_bootstrap::ResourcePerformanceEntry,
+    ) -> bool {
+        if !self.window_execution_context_identity_is_current(identity) {
+            return false;
+        }
+        let Some(binding) = self.clone_window_execution_context_binding(
+            scope,
+            identity.owner(),
+            identity.dispatch_scope(),
+        ) else {
+            return false;
+        };
+        let host_ptr = self as *mut Self;
+        binding
+            .with_current_scope(scope, host_ptr, |scope, _| {
+                crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+            })
+            .is_some()
+    }
+
+    /// Finish the old Window's public timing before its wrapper cache retires.
+    /// Transport leases remain alive and their terminal cannot report twice.
+    pub(crate) fn retire_beacon_timings_for_context(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        realm_token: super::RuntimeObservableContextToken,
+    ) {
+        let mut entries = Vec::new();
+        self.for_each_subresource_fetch_state_mut(|pending| {
+            if pending
+                .execution_context
+                .window_network_only_identity()
+                .is_none_or(|identity| identity.realm_token() != realm_token)
+            {
+                return;
+            }
+            if let PendingSubresourceContinuation::Beacon(beacon) = &mut pending.continuation
+                && let Some(mut timing) = beacon.timing.take()
+            {
+                if let Some(native) = pending.load.response_timing() {
+                    timing.observe_native_timing(native);
+                }
+                entries.push(timing.failure(&pending.info.url));
+            }
+        });
+        for entry in entries {
+            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+        }
+    }
+
     pub(crate) fn record_document_resource_timing(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -1476,14 +1530,25 @@ impl JsContextHost {
     pub(crate) fn record_async_subresource_beacon(
         &mut self,
         execution_context: super::WindowExecutionContextIdentity,
+        beacon: crate::types::PendingBeacon,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
-        network_partition_key: Option<String>,
         mut info: PendingSubresourceFetchInfo,
     ) -> Option<u64> {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        let internal_id = info.internal_id;
-        let (load, request_origin) = self.register_document_resource_load_for_dispatch_scope(
-            execution_context.dispatch_scope(),
+        let target = beacon.report_context.identity();
+        if target.dispatch_scope() != execution_context.dispatch_scope()
+            || !self.window_execution_context_owner_is_current(
+                execution_context.owner(),
+                execution_context.dispatch_scope(),
+            )
+            || !self.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            )
+        {
+            return None;
+        }
+        let (load, request_origin) = self.register_document_resource_load(
+            target.owner(),
             info.resource_type,
             ResourceLoadDisposition::Keepalive {
                 body_bytes: info
@@ -1491,8 +1556,10 @@ impl JsContextHost {
                     .as_ref()
                     .map_or(0, bytes::Bytes::len),
             },
-            cancel_handle.clone(),
+            cancel_handle,
         )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
         self.record_pending_subresource_request_started(&info, load.disposition());
         self.pending_subresource_fetches.insert(
             internal_id,
@@ -1504,11 +1571,11 @@ impl JsContextHost {
                 execution_context: PendingSubresourceExecutionContext::window_network_only(
                     execution_context,
                 ),
-                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
-                request_mode: moli_fetch::RequestMode::NoCors,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::Beacon,
+                credentials_mode: beacon.request.credentials_mode,
+                request_mode: beacon.request.request_mode,
+                network_partition_key: beacon.request.network_partition_key().map(str::to_owned),
+                policy_context: beacon.policy_context,
+                continuation: PendingSubresourceContinuation::Beacon(Box::new(beacon)),
                 deferred_request_started: false,
                 blob_url_entry: None,
             },
@@ -1557,49 +1624,6 @@ impl JsContextHost {
         );
         self.note_subresource_activity();
         internal_id
-    }
-
-    pub(crate) fn record_pending_subresource_beacon(
-        &mut self,
-        execution_context: super::WindowExecutionContextIdentity,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) -> Option<u64> {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        let internal_id = info.internal_id;
-        let (load, request_origin) = self.register_document_resource_load_for_dispatch_scope(
-            execution_context.dispatch_scope(),
-            info.resource_type,
-            ResourceLoadDisposition::Keepalive {
-                body_bytes: info
-                    .request_body_bytes
-                    .as_ref()
-                    .map_or(0, bytes::Bytes::len),
-            },
-            None,
-        )?;
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            internal_id,
-            PendingSubresourceFetchState {
-                redirect_headers: None,
-                request_origin,
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::window_network_only(
-                    execution_context,
-                ),
-                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
-                request_mode: moli_fetch::RequestMode::NoCors,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::Beacon,
-                deferred_request_started: false,
-                blob_url_entry: None,
-            },
-        );
-        self.note_subresource_activity();
-        Some(internal_id)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3038,7 +3062,10 @@ impl JsContextHost {
         let mut pending = self
             .subresource_fetch_states()
             .filter(|pending| {
-                matches!(pending.continuation, PendingSubresourceContinuation::Beacon)
+                matches!(
+                    pending.continuation,
+                    PendingSubresourceContinuation::Beacon(_)
+                )
             })
             .filter_map(|pending| {
                 Some((

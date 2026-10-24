@@ -29,6 +29,7 @@ impl ScriptVm {
                 pending.continuation,
                 PendingSubresourceContinuation::Dictionary(_)
                     | PendingSubresourceContinuation::ResponsePreload(_)
+                    | PendingSubresourceContinuation::Beacon(_)
             ) {
             result.and_then(|response| {
                 if !response.redirect_chain.is_empty()
@@ -62,12 +63,28 @@ impl ScriptVm {
             result
         };
 
-        let activity = self.complete_response_preload(
-            &mut pending,
-            response_filter.as_ref(),
-            skip_fetch_security_validation,
-            &result,
-        )?;
+        let activity = if matches!(
+            pending.continuation,
+            PendingSubresourceContinuation::Beacon(_)
+        ) {
+            let head = result.as_ref().ok().map(|response| response.head());
+            let body_size = result
+                .as_ref()
+                .map_or(0, |response| response.body_bytes().len());
+            self.complete_beacon_timing(
+                &mut pending,
+                head.as_ref(),
+                response_filter.as_ref(),
+                body_size,
+            )?
+        } else {
+            self.complete_response_preload(
+                &mut pending,
+                response_filter.as_ref(),
+                skip_fetch_security_validation,
+                &result,
+            )?
+        };
         match result {
             Ok(response) => {
                 let network_request_headers = response
@@ -891,7 +908,7 @@ impl ScriptVm {
                         }
                         PendingSubresourceContinuation::Dictionary(_)
                         | PendingSubresourceContinuation::ResponsePreload(_)
-                        | PendingSubresourceContinuation::Beacon
+                        | PendingSubresourceContinuation::Beacon(_)
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
@@ -1028,7 +1045,7 @@ impl ScriptVm {
                         }
                         PendingSubresourceContinuation::Dictionary(_)
                         | PendingSubresourceContinuation::ResponsePreload(_)
-                        | PendingSubresourceContinuation::Beacon
+                        | PendingSubresourceContinuation::Beacon(_)
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
