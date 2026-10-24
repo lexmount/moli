@@ -8,6 +8,7 @@ use url::Url;
 
 use super::{AsyncSubresourceCommandExecution, ScriptVm};
 
+mod beacon;
 mod document_completion;
 mod fetch_dispatch;
 mod intercepted_fetch;
@@ -856,7 +857,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Dictionary(_) => "dictionary",
         PendingSubresourceContinuation::ResponsePreload(_) => "response_preload",
-        PendingSubresourceContinuation::Beacon => "beacon",
+        PendingSubresourceContinuation::Beacon(_) => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",

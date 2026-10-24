@@ -409,6 +409,16 @@ impl ScriptVm {
         {
             request = request.with_subresource_request_metadata(request_metadata.clone());
         }
+        if let PendingSubresourceContinuation::Beacon(beacon) = &pending.continuation {
+            // CDP may resume this request after its Document navigated. Keep
+            // the original client referrer, policy and Beacon/Ping metadata.
+            request = request
+                .with_referrer_from(&beacon.request)
+                .with_resource_type(beacon.request.resource_type);
+            if let Some(metadata) = beacon.request.browser_request_metadata() {
+                request = request.with_browser_request_metadata(metadata);
+            }
+        }
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
         self.spawn_running_subresource_fetch(

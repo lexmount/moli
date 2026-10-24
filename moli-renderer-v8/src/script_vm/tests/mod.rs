@@ -2260,6 +2260,7 @@ mod audio_event_interfaces;
 mod audio_node_interfaces;
 mod audio_param_node_interfaces;
 mod audio_source_interfaces;
+mod beacon_request_policy;
 mod bitmap_renderer;
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_range;
