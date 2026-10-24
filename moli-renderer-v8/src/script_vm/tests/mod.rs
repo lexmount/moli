@@ -2389,6 +2389,7 @@ mod html_constructor_proxy_handler_isolation;
 
 mod data_transfer_native_receivers;
 
+mod child_removal;
 mod encrypted_media;
 mod exception_constructor_strings;
 mod hyperlink_null_url_protocol;
