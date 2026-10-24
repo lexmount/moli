@@ -8,6 +8,8 @@ enum Task<'a, Id> {
     Visit(Id, usize),
     Children(Option<Id>, usize),
     Boundary,
+    ChoiceBoundary,
+    Fallback(String, usize),
     PopStyle,
     EndLink(usize),
     EndQuote,
@@ -69,6 +71,14 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 Task::Children(None, _) | Task::RawChildren(None, _, _) => {}
                 Task::Boundary => self.writer().boundary(2),
+                Task::ChoiceBoundary => self.writer().boundary(1),
+                Task::Fallback(label, before) => {
+                    if self.writer().content_mark() == before {
+                        self.writer().text(" ");
+                        self.writer().text(&label);
+                        self.writer().text(" ");
+                    }
+                }
                 Task::PopStyle => self.writer().pop_style(),
                 Task::EndLink(serial) => self.writer().end_link(serial),
                 Task::EndQuote => {
@@ -207,6 +217,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         }
         match tag {
             "head" | "script" | "style" | "noscript" | "template" => return,
+            "title" => return,
             "br" => {
                 self.writer().hard_break();
                 return;
@@ -215,6 +226,22 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 self.writer().block("---".into(), 2, 2);
                 return;
             }
+            "select" | "optgroup" | "option" => {
+                self.writer().boundary(1);
+                if matches!(tag, "optgroup" | "option")
+                    && let Some(label) = self
+                        .dom
+                        .attribute(node, "label")
+                        .filter(|label| !label.is_empty())
+                {
+                    self.writer().text(label);
+                    self.writer().boundary(1);
+                    if tag == "option" {
+                        return;
+                    }
+                }
+                self.tasks.push(Task::ChoiceBoundary);
+            }
             "strong" | "b" => self.style(Style::Strong),
             "em" | "i" => self.style(Style::Emphasis),
             "del" | "s" | "strike" => self.style(Style::Strike),
@@ -222,7 +249,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 if let Some(href) = self
                     .dom
                     .attribute(node, "href")
-                    .filter(|href| !href.is_empty())
+                    .filter(|href| !href.is_empty() && crate::media::safe_link_url(href))
                 {
                     self.serial += 1;
                     let serial = self.serial;
@@ -237,17 +264,34 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
             }
             "img" => {
-                let alt = self.dom.attribute(node, "alt").unwrap_or_default();
+                let alt = crate::content::image_label(self.dom, node);
                 let title = self.dom.attribute(node, "title");
-                if let Some(src) = self
-                    .dom
-                    .attribute(node, "src")
-                    .filter(|src| !src.is_empty())
-                {
+                if let Some(src) = crate::media::source(self.dom, node) {
                     self.writer().image(alt, src, title);
+                } else {
+                    // A failed or absent resource must not erase its textual
+                    // alternative, especially when it is a link's only label.
+                    self.writer().text(alt);
                 }
                 return;
             }
+            "input" => {
+                if let Some(value) = crate::form::input_text(self.dom, node) {
+                    self.writer().text(" ");
+                    self.writer().text(value);
+                    self.writer().text(" ");
+                }
+                return;
+            }
+            "textarea" => {
+                if let Some(value) = self.dom.control_value(node) {
+                    self.writer().text(value);
+                } else {
+                    self.children(node, depth + 1);
+                }
+                return;
+            }
+            "iframe" | "video" | "audio" if self.media(node, tag, depth) => return,
             "code" | "pre" => {
                 self.raw.clear();
                 let end = if tag == "pre" {
@@ -298,7 +342,62 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             }
             _ => {}
         }
+        if let Some(label) =
+            crate::content::fallback_text(self.dom, node, self.options.max_depth - depth)
+        {
+            let before = self.writer().content_mark();
+            self.tasks.push(Task::Fallback(label, before));
+        }
         self.children(node, depth + 1);
+    }
+
+    fn media(&mut self, node: D::NodeId, tag: &str, depth: usize) -> bool {
+        let urls = crate::media::sources(self.dom, node, tag, depth, self.options.max_depth);
+        let poster = (tag == "video")
+            .then(|| crate::media::direct_attribute(self.dom, node, "poster", true))
+            .flatten();
+        if urls.is_empty() && poster.is_none() {
+            return false;
+        }
+        let block = is_block(tag);
+        if block {
+            self.writer().boundary(2);
+        } else {
+            self.writer().text(" ");
+        }
+        let label = crate::media::label(self.dom, node, tag);
+        if let Some(poster) = poster {
+            self.writer()
+                .image(&format!("{label} poster"), poster, None);
+            self.writer().text(" ");
+        }
+        let has_source = !urls.is_empty();
+        for href in urls {
+            self.serial += 1;
+            let serial = self.serial;
+            let opened = self.writer().push_style(Style::Link {
+                serial,
+                href,
+                title: None,
+            });
+            self.writer().text(label);
+            if opened {
+                self.writer().end_link(serial);
+            } else {
+                // Markdown cannot nest a media link inside a surrounding link.
+                // Retain its destination as text rather than silently losing it.
+                self.writer().text(" (");
+                self.writer().text(href);
+                self.writer().text(")");
+            }
+            self.writer().text(" ");
+        }
+        if block {
+            self.writer().boundary(2);
+        } else {
+            self.writer().text(" ");
+        }
+        has_source
     }
 
     fn table_cell(&mut self) {
