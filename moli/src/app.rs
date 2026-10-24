@@ -25,18 +25,25 @@ use moli_core::runtime::{
     RawDocumentFetchPolicy, storage_partition::StoragePartitionState,
 };
 use moli_fetch::{NetworkFetchFailureContext, Request};
-use moli_protocol_server::ProtocolServer;
+use moli_protocol_server::{BrowserInstanceControl, ProtocolServer};
 
 use self::readiness::ReadinessPlan;
 
 const READINESS_FAILURE_DIAGNOSTICS_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub async fn run_from_env() -> Result<()> {
-    let cli = Cli::parse_from(normalize_args_for_compat(std::env::args_os()));
+    run_parsed_cli(parse_cli_from_env(), None).await
+}
+
+pub fn parse_cli_from_env() -> Cli {
+    Cli::parse_from(normalize_args_for_compat(std::env::args_os()))
+}
+
+pub async fn run_parsed_cli(cli: Cli, control: Option<BrowserInstanceControl>) -> Result<()> {
     let config = AppConfig::from_cli(&cli).context("failed to build app configuration")?;
     crate::telemetry::init(&config.log_filter);
     let mut stdout = std::io::stdout();
-    run_cli_with_config(cli, config, &mut stdout).await
+    run_cli_with_config_and_control(cli, config, &mut stdout, control).await
 }
 
 pub async fn run_cli<W: Write>(stdout: &mut W, cli: Cli) -> Result<()> {
@@ -48,6 +55,15 @@ pub async fn run_cli_with_config<W: Write>(
     cli: Cli,
     config: AppConfig,
     stdout: &mut W,
+) -> Result<()> {
+    run_cli_with_config_and_control(cli, config, stdout, None).await
+}
+
+async fn run_cli_with_config_and_control<W: Write>(
+    cli: Cli,
+    config: AppConfig,
+    stdout: &mut W,
+    control: Option<BrowserInstanceControl>,
 ) -> Result<()> {
     match cli.command {
         Commands::Fetch(mut args) => {
@@ -256,7 +272,11 @@ pub async fn run_cli_with_config<W: Write>(
                 storage_partition,
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            server.serve().await.context("protocol server failed")?;
+            match control {
+                Some(control) => server.serve_with_control(control).await,
+                None => server.serve().await,
+            }
+            .context("protocol server failed")?;
         }
         Commands::Import(args) => {
             let summary =

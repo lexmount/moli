@@ -72,6 +72,12 @@ impl AppConfig {
                 config.server.host = args.host.clone();
                 config.server.port = args.port;
                 config.server.timeout_secs = args.timeout;
+                if args.screencast_video.is_some()
+                    && !config.browser.layout_policy().uses_real_layout()
+                {
+                    bail!("--screencast-video requires --layout or MOLI_LAYOUT=true");
+                }
+                config.server.screencast_video = args.screencast_video.clone();
                 if let Some(interval_ms) = args.screencast_interval {
                     config.server.screencast_interval_ms = interval_ms;
                 }

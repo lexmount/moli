@@ -19,6 +19,7 @@ moli-protocol = { path = "../moli-protocol" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
 moli-protocol-webdriver-bidi = { path = "../moli-protocol-webdriver-bidi" }
 moli-protocol-webdriver-classic = { path = "../moli-protocol-webdriver-classic" }
+moli-screencast-video = { path = "../moli-screencast-video" }
 moli-trace = { path = "../moli-trace" }
 parking_lot = "0.12"
 percent-encoding = "2.3"

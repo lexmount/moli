@@ -8,6 +8,8 @@ pub struct ServerConfig {
     pub timeout_secs: u32,
     /// Base screencast interval in milliseconds; must be positive.
     pub screencast_interval_ms: u32,
+    /// One MP4 recording of the startup main Page; requires real layout.
+    pub screencast_video: Option<std::path::PathBuf>,
 }
 
 impl ServerConfig {
@@ -23,6 +25,7 @@ impl Default for ServerConfig {
             port: 9222,
             timeout_secs: 10,
             screencast_interval_ms: DEFAULT_SCREENCAST_INTERVAL_MS,
+            screencast_video: None,
         }
     }
 }

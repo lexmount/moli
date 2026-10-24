@@ -6,6 +6,11 @@
 
 use std::io;
 
+#[cfg(unix)]
+mod bounded;
+#[cfg(unix)]
+pub use bounded::{BoundedTermination, TerminationNotice};
+
 /// Installs immediate-exit handlers for `SIGTERM`, `SIGINT`, and `SIGHUP`.
 ///
 /// On Unix, a handled signal terminates the process with status
@@ -62,6 +67,9 @@ mod unix {
     }
 
     extern "C" fn exit_immediately(signal: libc::c_int) {
+        if super::bounded::notify(signal) {
+            return;
+        }
         // `_exit` is async-signal-safe and terminates the whole process on the
         // supported Unix targets without invoking user-space cleanup.
         // SAFETY: the status is derived from one of the installed signals and

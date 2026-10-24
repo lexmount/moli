@@ -212,6 +212,19 @@ jobs:
           rustup toolchain install $toolchain --profile minimal --no-self-update
           rustc --version
 
+      - name: Install x264 build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          choco install make --yes --no-progress --limit-output
+          $gitRoot = Split-Path (Split-Path (Get-Command git).Source)
+          $unixTools = Join-Path $gitRoot "usr\bin"
+          if (-not (Test-Path (Join-Path $unixTools "bash.exe"))) {
+            throw "Git for Windows Bash is required to build the bundled x264 source"
+          }
+          $unixTools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Validate PowerShell installer
         shell: pwsh
         run: |

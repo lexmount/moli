@@ -456,8 +456,23 @@ pub struct ServeArgs {
     )]
     pub screencast_interval: Option<u32>,
 
+    /// Also write the main Page screencast to one CPU-encoded H.264 MP4 file. Requires --layout; existing files are rejected.
+    #[arg(long, env = "MOLI_SCREENCAST_VIDEO", value_name = "PATH", requires = "layout", value_parser = screencast_video_path_parser())]
+    pub screencast_video: Option<PathBuf>,
+
     #[command(flatten)]
     pub common: CommonArgs,
+}
+
+fn screencast_video_path_parser() -> impl clap::builder::TypedValueParser<Value = PathBuf> {
+    use clap::builder::TypedValueParser;
+    clap::builder::OsStringValueParser::new().try_map(|value| {
+        if value.is_empty() {
+            Err("video path cannot be empty")
+        } else {
+            Ok(PathBuf::from(value))
+        }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Args)]

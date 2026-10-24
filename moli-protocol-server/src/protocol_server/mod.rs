@@ -28,6 +28,7 @@ use moli_fetch::FetchConfig;
 #[cfg(test)]
 use moli_protocol::DEFAULT_CDP_TAB_TARGET_ID;
 use moli_protocol::{CdpInitialStoragePartition, DEFAULT_CDP_PAGE_TARGET_ID};
+use moli_screencast_video::VideoRecorder;
 #[cfg(test)]
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
@@ -151,6 +152,15 @@ impl ProtocolServer {
     /// Serve one instance with a protocol-independent lifecycle control handle.
     /// Use a fresh handle for each instance; shutdown requests are persistent.
     pub async fn serve_with_control(&self, control: BrowserInstanceControl) -> Result<()> {
+        anyhow::ensure!(
+            self.config.screencast_video.is_none()
+                || self
+                    .navigation_runtime_config
+                    .layout_configuration()
+                    .policy
+                    .uses_real_layout(),
+            "screencast video requires enabled layout"
+        );
         let listener = TcpListener::bind(self.config.bind_target())
             .await
             .with_context(|| {
@@ -164,22 +174,44 @@ impl ProtocolServer {
             .local_addr()
             .context("failed to read bound protocol socket address")?;
 
-        info!(%addr, "protocol server listening");
-
         let app_state = AppState::new_with_storage_partition_and_runtime_config(
             addr,
             self.storage_partition.clone(),
             self.navigation_runtime_config.clone(),
             self.config.screencast_interval_ms,
-            control,
+            control.clone(),
         )?;
-
-        serve_listener(listener, app_state).await
+        let recording = self
+            .config
+            .screencast_video
+            .as_deref()
+            .map(VideoRecorder::spawn)
+            .transpose()?;
+        if let Some(recording) = recording.as_ref() {
+            app_state
+                .cdp_owner_registry
+                .enable_screencast_video(recording.handle())?;
+        }
+        info!(%addr, "protocol server listening");
+        match recording {
+            Some(recording) => {
+                serve_listener_with_video(listener, app_state, Some(recording)).await
+            }
+            None => serve_listener(listener, app_state).await,
+        }
     }
 }
 
 /// Shared by the executable and instance-lifecycle integration tests.
 async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()> {
+    serve_listener_with_video(listener, app_state, None).await
+}
+
+async fn serve_listener_with_video(
+    listener: TcpListener,
+    app_state: AppState,
+    mut recording: Option<VideoRecorder>,
+) -> Result<()> {
     const SHUTDOWN_BUDGET: Duration = Duration::from_secs(5);
     let control = app_state.control.clone();
     let cdp_owner_registry = app_state.cdp_owner_registry.clone();
@@ -193,28 +225,61 @@ async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()
         .with_graceful_shutdown(async move { stop_accepting.shutdown_requested().await })
         .into_future();
     tokio::pin!(serving);
+    let mut recording_error = None;
     let completed = tokio::select! {
         result = &mut serving => Some(result),
         _ = control.shutdown_requested() => None,
+        error = async {
+            match recording.as_mut() {
+                Some(recording) => recording.failure().await,
+                None => std::future::pending().await,
+            }
+        } => {
+            recording_error = Some(error);
+            None
+        }
     };
     control.request(InstanceCommand::Shutdown);
+    if let Some(recording) = recording.as_ref() {
+        recording.stop(std::time::Instant::now());
+    }
     tokio::time::timeout(SHUTDOWN_BUDGET, async {
-        let (_, result) = tokio::join!(cdp_owner_registry.shutdown(), async {
-            // Drain in-flight HTTP requests before taking the final Classic
-            // session set. New requests and upgraded sockets are rejected.
-            match completed {
-                Some(result) => result,
-                None => (&mut serving).await,
+        let (_, result, video_result) = tokio::join!(
+            cdp_owner_registry.shutdown(),
+            async {
+                // Drain in-flight HTTP requests before taking the final Classic
+                // session set. New requests and upgraded sockets are rejected.
+                match completed {
+                    Some(result) => result,
+                    None => (&mut serving).await,
+                }
+                .context("protocol server failed")?;
+                classic_session_registry.shutdown(&cookie_profile).await?;
+                control.drained().await;
+                Ok::<(), anyhow::Error>(())
+            },
+            async {
+                if let Some(recording) = recording.as_mut() {
+                    let stats = recording.finish().await?;
+                    if stats.encoded_frames > 0 {
+                        info!(
+                            encoded_frames = stats.encoded_frames,
+                            duration_ticks = stats.duration_ticks,
+                            encoded_bytes = stats.encoded_bytes,
+                            replaced_frames = stats.replaced_frames,
+                            "screencast video saved"
+                        );
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
             }
-            .context("protocol server failed")?;
-            classic_session_registry.shutdown(&cookie_profile).await?;
-            control.drained().await;
-            Ok(())
-        });
-        result
+        );
+        result?;
+        video_result?;
+        recording_error.map_or(Ok(()), Err)
     })
     .await
-    .context("protocol server shutdown timed out; checkpoints may be incomplete")?
+    .context("protocol server shutdown timed out; recording or checkpoints may be incomplete")?
 }
 
 // Matchit accepts an empty final parameter when a literal slash follows it.

@@ -1,0 +1,10 @@
+Moli binaries with screencast video support statically link x264, distributed
+under GPL-2.0-or-later. This applies to the linked binary even when recording
+is not enabled at runtime. The MIT / Apache-2.0 notices describe Moli's own
+source and other dependencies, and do not replace x264's license.
+
+The exact x264 source, GPL text, NASM source/build-tool license, bridge and
+build instructions are included in sources/moli-screencast-video. Revisions
+and hashes are in native/README.md. The full Moli source, Cargo.lock and build
+configuration are at https://github.com/lexmount/moli under the release tag
+matching VERSION in this package. Cargo dependencies retain their licenses.
