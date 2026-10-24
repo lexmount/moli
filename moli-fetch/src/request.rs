@@ -84,7 +84,9 @@ pub struct Request {
     pub credentials_mode: RequestCredentialsMode,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
     network_partition_key: Option<String>,
-    auth: Option<ScopedRequestAuth>,
+    auth: Option<Arc<ConfiguredRequestAuth>>,
+    pub(crate) http_authentication:
+        Option<Arc<crate::http_authentication::PreparedHttpAuthentication>>,
     pub cookie_context: NetworkCookieRequestContext,
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
@@ -96,12 +98,6 @@ pub struct Request {
         Option<crate::compression_dictionary::SharedDictionaryStore>,
     pub(crate) compression_dictionary_snapshot:
         Option<crate::compression_dictionary::DictionaryRequestSnapshot>,
-}
-
-#[derive(Debug, Clone)]
-struct ScopedRequestAuth {
-    credentials: RequestAuth,
-    origin: WebOrigin,
 }
 
 /// The lifetime of request headers supplied by an interception command.
@@ -501,6 +497,14 @@ pub struct RequestAuth {
     pub password: String,
 }
 
+// Credentials and their original server are immutable request configuration.
+// Keep them together and out of the inline Request/async-future footprint.
+#[derive(Debug)]
+struct ConfiguredRequestAuth {
+    value: RequestAuth,
+    origin: url::Origin,
+}
+
 impl RequestAuth {
     fn can_use_header_transport(&self) -> bool {
         matches!(
@@ -563,6 +567,7 @@ impl Request {
             redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
+            http_authentication: None,
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
@@ -603,6 +608,7 @@ impl Request {
             redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
+            http_authentication: None,
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
@@ -676,6 +682,7 @@ impl Request {
             redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
+            http_authentication: None,
             cookie_context: NetworkCookieRequestContext::subresource(method),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
@@ -1228,35 +1235,52 @@ impl Request {
     }
 
     pub fn auth(&self) -> Option<&RequestAuth> {
-        self.auth.as_ref().map(|auth| &auth.credentials)
+        self.configured_auth()
+            .or_else(|| self.http_authentication.as_ref()?.credentials())
     }
 
-    pub(crate) fn auth_for_url(&self, request_url: &Url) -> Option<&RequestAuth> {
-        let auth = self.auth.as_ref()?;
-        (auth.credentials.target != RequestAuthTarget::Server
-            || auth.origin.same_origin(&WebOrigin::from_url(request_url)))
-        .then_some(&auth.credentials)
+    pub(crate) fn configured_auth(&self) -> Option<&RequestAuth> {
+        self.auth.as_ref().map(|auth| &auth.value)
+    }
+
+    pub(crate) fn transport_auth_for_url(&self, url: &Url) -> Option<&RequestAuth> {
+        let configured = self.auth.as_ref()?;
+        let auth = &configured.value;
+        (auth.target != RequestAuthTarget::Server
+            || (self.allows_credentials_for_url(url) && configured.origin == url.origin()))
+        .then_some(auth)
     }
 
     pub fn auth_requires_buffered_transport(&self) -> bool {
-        self.auth()
+        self.configured_auth()
             .is_some_and(|auth| !auth.can_use_header_transport())
     }
 
     pub fn preemptive_server_basic_auth_for_url(&self, request_url: &Url) -> Option<(&str, &str)> {
-        let auth = self.auth_for_url(request_url)?;
-        (auth.target == RequestAuthTarget::Server && auth.scheme == RequestAuthScheme::Basic)
-            .then_some((auth.username.as_str(), auth.password.as_str()))
+        let auth = self
+            .transport_auth_for_url(request_url)
+            .filter(|auth| {
+                auth.target == RequestAuthTarget::Server && auth.scheme == RequestAuthScheme::Basic
+            })
+            .or_else(|| {
+                self.http_authentication
+                    .as_ref()?
+                    .preemptive_credentials(request_url)
+            })?;
+        (auth.target == RequestAuthTarget::Server
+            && auth.scheme == RequestAuthScheme::Basic
+            && self.allows_credentials_for_url(request_url))
+        .then_some((auth.username.as_str(), auth.password.as_str()))
     }
 
     pub fn set_auth(&mut self, auth: Option<RequestAuth>) {
-        // Pin credentials to where they were supplied, rather than the mutable
-        // current URL. A later CDP auth response grants new credentials only to
-        // that challenged origin, without authorizing subsequent redirects.
-        self.auth = auth.map(|credentials| ScopedRequestAuth {
-            credentials,
-            origin: WebOrigin::from_url(&self.url),
+        self.auth = auth.map(|value| {
+            Arc::new(ConfiguredRequestAuth {
+                value,
+                origin: self.url.origin(),
+            })
         });
+        self.http_authentication = None;
     }
 
     pub fn with_auth(mut self, auth: RequestAuth) -> Self {

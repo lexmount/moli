@@ -19,6 +19,7 @@ mod dns;
 mod error;
 mod fetch_url_list;
 mod headers;
+mod http_authentication;
 mod network_fetch_result;
 mod proxy;
 mod proxy_connect;
