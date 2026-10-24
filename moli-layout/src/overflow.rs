@@ -3,6 +3,7 @@ use std::{collections::VecDeque, fmt::Debug, hash::Hash};
 use crate::{
     LayoutBoxId, LayoutDisplay, LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutSize,
     LayoutTransform2D, LayoutViewport, LayoutWorld,
+    inline::InlineLineFragment,
     style::{LayoutOverflowMode, ResolvedLayoutTransform},
 };
 
@@ -474,22 +475,24 @@ where
                 rect
             }
         };
+        let rtl = context
+            .laid_out
+            .as_ref()
+            .is_some_and(|layout| layout.is_rtl());
         for line in &context.fragments.lines {
-            local_overflow = local_overflow.union(inline_bounds(line.scrollable_rect));
+            local_overflow = local_overflow.union(inline_bounds(line.scrollable_rect(rtl)));
         }
         for fragment in &context.fragments.text {
             let line = &context.fragments.lines[fragment.line_index];
-            let mut rect = fragment.rect;
-            if line.scrollable_rect != line.rect {
-                let left = rect.x.max(line.scrollable_rect.x);
-                let right = rect.right().min(line.scrollable_rect.right());
-                rect.x = left.min(right);
-                rect.width = (right - left).max(0.0);
-            }
+            let rect = inline_scrollable_rect(fragment.rect, line, rtl);
             local_overflow = local_overflow.union(inline_bounds(rect));
         }
+        // These are structural inline boxes. Atomic boxes and their descendants
+        // contribute their own overflow through child_contribution instead.
         for fragment in &context.fragments.boxes {
-            local_overflow = local_overflow.union(inline_bounds(fragment.rect));
+            let line = &context.fragments.lines[fragment.line_index];
+            let rect = inline_scrollable_rect(fragment.rect, line, rtl);
+            local_overflow = local_overflow.union(inline_bounds(rect));
         }
     }
     OverflowBoxGeometry {
@@ -505,6 +508,21 @@ where
         horizontal_leading_gutter,
         local_overflow,
     }
+}
+
+fn inline_scrollable_rect(
+    mut rect: LayoutRect,
+    line: &InlineLineFragment,
+    rtl: bool,
+) -> LayoutRect {
+    let scrollable = line.scrollable_rect(rtl);
+    if scrollable != line.rect {
+        let left = rect.x.max(scrollable.x);
+        let right = rect.right().min(scrollable.right());
+        rect.x = left.min(right);
+        rect.width = (right - left).max(0.0);
+    }
+    rect
 }
 
 fn grid_track_overflow_axis(

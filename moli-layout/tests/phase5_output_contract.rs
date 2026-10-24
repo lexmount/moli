@@ -3762,7 +3762,7 @@ fn wrapped_trailing_spaces_do_not_expand_scrollable_overflow() {
         let source = Source(vec![
             Node::element("root", vec![1]),
             Node::element("scroller", vec![2]),
-            Node::element("fixed-font", vec![3]),
+            Node::html_element("fixed-font", "span", vec![3]),
             Node::text("text", text),
         ]);
         let mut styles = Styles::default();
@@ -3771,8 +3771,9 @@ fn wrapped_trailing_spaces_do_not_expand_scrollable_overflow() {
             .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
         styles
             .0
-            .insert(1, fixed_size(LayoutDisplay::Block, 33.0, 120.0));
-        let (font_style, mut services) = fixed_inline_font();
+            .insert(1, fixed_size(LayoutDisplay::Block, 25.0, 120.0));
+        let (mut font_style, mut services) = fixed_inline_font();
+        font_style.force_layout_display(LayoutDisplay::Inline);
         styles.0.insert(2, font_style);
         let pass = build_layout_pass(
             &source,
@@ -3786,6 +3787,12 @@ fn wrapped_trailing_spaces_do_not_expand_scrollable_overflow() {
             assert!(metrics.scroll_size.width > metrics.client_size.width);
         } else {
             assert_eq!(metrics.scroll_size.width, metrics.client_size.width);
+            assert!(
+                pass.client_rects_for_source(2)
+                    .iter()
+                    .any(|quad| quad.bounding_rect().width > metrics.client_size.width),
+                "hanging spaces must remain part of inline CSSOM geometry"
+            );
         }
     }
 }

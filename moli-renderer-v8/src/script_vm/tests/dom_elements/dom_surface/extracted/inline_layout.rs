@@ -1570,10 +1570,10 @@ fn html_direction_hints_and_bidi_contexts_stay_in_the_style_cascade() {
     }
 }
 
-// Expected scrollWidth values verified in Chromium 156.0.8078.47 with the same
-// markup and the bundled Ahem face (0.6em advance). Chromium reports identical
-// values for `dir=rtl`, but RTL inline overflow toward the inline start is not
-// yet part of scrollable overflow here, so only LTR is asserted.
+// Expected scrollWidth values rechecked in Chromium 145.0.7632.116 with the same
+// markup and the bundled Ahem face (0.6em advance). RTL inline overflow toward
+// the inline start is not yet part of scrollable overflow here, so only LTR
+// is asserted.
 #[test]
 fn hanging_trailing_spaces_do_not_contribute_to_scrollable_overflow() {
     let cases = [
@@ -1607,26 +1607,66 @@ fn hanging_trailing_spaces_do_not_contribute_to_scrollable_overflow() {
         ("pre-line", "aa   ", 15),
         ("pre-line", "aaaaaa", 36),
         ("pre-line", "aaaaaa aa", 36),
+        ("normal", "<span>aa   </span>aa", 15),
+        ("pre-wrap", "<span>aa   </span>aa", 15),
+        ("pre-line", "<span>aa   </span>aa", 15),
+        (
+            "normal",
+            "<span style='display:inline-block;width:40px;height:10px'></span>   aa",
+            40,
+        ),
+        (
+            "pre-wrap",
+            "<span style='display:inline-block;width:40px;height:10px'></span>   aa",
+            40,
+        ),
+        (
+            "pre-line",
+            "<span style='display:inline-block;width:40px;height:10px'></span>   aa",
+            40,
+        ),
+        (
+            "normal",
+            "<span style='display:inline-block;width:6px;height:10px'><i style='display:block;width:40px;height:10px'></i></span>   aa",
+            40,
+        ),
+        (
+            "pre-wrap",
+            "<span style='display:inline-block;width:6px;height:10px'><i style='display:block;width:40px;height:10px'></i></span>   aa",
+            40,
+        ),
+        (
+            "pre-line",
+            "<span style='display:inline-block;width:6px;height:10px'><i style='display:block;width:40px;height:10px'></i></span>   aa",
+            40,
+        ),
     ];
     let mut mismatches = Vec::new();
-    for (white_space, text, scroll_width) in cases {
-        let markup = format!(
-            r#"<!doctype html><style>body{{margin:0}}#s{{width:15px;height:50px;overflow:hidden;font:10px/10px MoliAhem}}</style><div id=s style="white-space:{white_space}">{text}</div>"#
-        );
-        let mut vm = new_parsed_test_vm("https://hanging-space-overflow.test/", &markup);
-        vm._context_host.borrow().register_layout_test_font(
-            "MoliAhem",
-            include_bytes!("../../../../../../../moli-layout/tests/fixtures/moli-ahem.ttf")
-                .to_vec(),
-        );
-        let query = "JSON.stringify([s.scrollWidth,s.clientWidth])";
-        let first = serde_json::from_str::<[i32; 2]>(&vm.eval(query).unwrap()).unwrap();
-        publish_layout_for_test(&mut vm);
-        let painted = serde_json::from_str::<[i32; 2]>(&vm.eval(query).unwrap()).unwrap();
-        if first != [scroll_width, 15] || painted != first {
-            mismatches.push(format!(
-                "{white_space} / {text:?}: expected [{scroll_width}, 15], got {first:?} then {painted:?}"
-            ));
+    for (white_space, content, scroll_width) in cases {
+        for (wrapper, start, end) in [
+            ("text", "", ""),
+            ("span", "<span>", "</span>"),
+            ("nested", "<span><span>", "</span></span>"),
+            ("background", "<span style='background:orange'>", "</span>"),
+        ] {
+            let markup = format!(
+                r#"<!doctype html><style>body{{margin:0}}#s{{width:15px;height:50px;overflow:hidden;font:10px/10px MoliAhem}}</style><div id=s style="white-space:{white_space}">{start}{content}{end}</div>"#
+            );
+            let mut vm = new_parsed_test_vm("https://hanging-space-overflow.test/", &markup);
+            vm._context_host.borrow().register_layout_test_font(
+                "MoliAhem",
+                include_bytes!("../../../../../../../moli-layout/tests/fixtures/moli-ahem.ttf")
+                    .to_vec(),
+            );
+            let query = "JSON.stringify([s.scrollWidth,s.clientWidth])";
+            let first = serde_json::from_str::<[i32; 2]>(&vm.eval(query).unwrap()).unwrap();
+            publish_layout_for_test(&mut vm);
+            let painted = serde_json::from_str::<[i32; 2]>(&vm.eval(query).unwrap()).unwrap();
+            if first != [scroll_width, 15] || painted != first {
+                mismatches.push(format!(
+                    "{white_space} / {content:?} / {wrapper}: expected [{scroll_width}, 15], got {first:?} then {painted:?}"
+                ));
+            }
         }
     }
     assert!(mismatches.is_empty(), "{mismatches:#?}");
