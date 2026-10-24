@@ -64,6 +64,16 @@ impl StaticHttpServer {
         response_headers: &'static str,
         response_body: impl Fn(usize, &CapturedHttpRequest) -> String + Send + 'static,
     ) -> Self {
+        Self::spawn_with_raw_responder(expected_requests, move |index, request| {
+            let body = response_body(index, request);
+            format!("HTTP/1.1 200 OK\r\n{response_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+        }).await
+    }
+
+    pub(super) async fn spawn_with_raw_responder(
+        expected_requests: usize,
+        response: impl Fn(usize, &CapturedHttpRequest) -> String + Send + 'static,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind static HTTP test server");
@@ -147,17 +157,11 @@ impl StaticHttpServer {
                     headers,
                     body: request[header_end..header_end + content_length].to_vec(),
                 };
-                let body = response_body(index, &captured);
+                let response = response(index, &captured);
                 requests.push(captured);
 
                 socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\n{response_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                        .as_bytes(),
-                    )
+                    .write_all(response.as_bytes())
                     .await
                     .expect("write static HTTP test response");
             }
