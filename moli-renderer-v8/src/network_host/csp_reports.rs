@@ -140,14 +140,14 @@ impl WindowCspReportRequestContext {
     fn register_report_load(
         &self,
         cancel_handle: Option<FetchCancelHandle>,
-    ) -> crate::network::loads::ResourceLoadLease {
-        self.resource_loader
-            .register_network_only_keepalive_load(
-                crate::network::loads::ResourceLoadKind::CspReport,
-                self.request_client.clone(),
-                cancel_handle,
-            )
-            .expect("captured CSP report context must retain a resource authority")
+        body_bytes: usize,
+    ) -> Option<crate::network::loads::ResourceLoadLease> {
+        self.resource_loader.register_network_only_keepalive_load(
+            crate::network::loads::ResourceLoadKind::CspReport,
+            body_bytes,
+            self.request_client.clone(),
+            cancel_handle,
+        )
     }
 }
 
@@ -258,7 +258,16 @@ fn send_content_security_policy_report_request(
     }
 
     if host.should_intercept_subresource(SubresourceResourceType::CspReport) {
-        let load = request_context.register_report_load(None);
+        let Some(load) = request_context
+            .register_report_load(None, request.body.as_ref().map_or(0, bytes::Bytes::len))
+        else {
+            record_content_security_policy_report_failure(
+                host,
+                info,
+                "csp report: request could not be admitted".to_owned(),
+            );
+            return;
+        };
         host.record_pending_subresource_csp_report(
             request_context.identity,
             request_context.request_origin.clone(),
@@ -316,7 +325,17 @@ fn dispatch_service_worker_content_security_policy_report(
     }
 
     let cancel_handle = FetchCancelHandle::new();
-    let load = request_context.register_report_load(Some(cancel_handle.clone()));
+    let Some(load) = request_context.register_report_load(
+        Some(cancel_handle.clone()),
+        request.body.as_ref().map_or(0, bytes::Bytes::len),
+    ) else {
+        record_content_security_policy_report_failure(
+            host,
+            info,
+            "csp report: request could not be admitted".to_owned(),
+        );
+        return true;
+    };
     let internal_id = host.record_async_subresource_csp_report(
         request_context.identity,
         request_context.request_origin.clone(),
@@ -387,7 +406,17 @@ fn spawn_content_security_policy_report_fetch(
     request: Request,
 ) {
     let cancel_handle = FetchCancelHandle::new();
-    let load = request_context.register_report_load(Some(cancel_handle.clone()));
+    let Some(load) = request_context.register_report_load(
+        Some(cancel_handle.clone()),
+        request.body.as_ref().map_or(0, bytes::Bytes::len),
+    ) else {
+        record_content_security_policy_report_failure(
+            host,
+            info,
+            "csp report: request could not be admitted".to_owned(),
+        );
+        return;
+    };
     let task_runner = load.task_runner();
     let internal_id = host.record_async_subresource_csp_report(
         request_context.identity,

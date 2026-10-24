@@ -336,7 +336,10 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     }
 
     if host.should_intercept_subresource(SubresourceResourceType::Fetch) {
-        record_intercepted_fetch(scope, host, resolver, prepared);
+        if record_intercepted_fetch(scope, host, resolver, prepared).is_none() {
+            rv.set(make_rejected_promise(scope, "Failed to fetch").into());
+            return;
+        }
         rv.set(promise.into());
         return;
     }
@@ -347,12 +350,19 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    if let Some(internal_id) = dispatch_service_worker_fetch(scope, host, resolver, &prepared) {
-        if let Some(signal) = signal {
-            install_window_fetch_abort_listener(scope, signal, internal_id);
+    match dispatch_service_worker_fetch(scope, host, resolver, &prepared) {
+        Ok(Some(internal_id)) => {
+            if let Some(signal) = signal {
+                install_window_fetch_abort_listener(scope, signal, internal_id);
+            }
+            rv.set(promise.into());
+            return;
         }
-        rv.set(promise.into());
-        return;
+        Ok(None) => {}
+        Err(error) => {
+            rv.set(make_rejected_promise(scope, &error.to_string()).into());
+            return;
+        }
     }
 
     let internal_id = match spawn_network_fetch(scope, host, resolver, prepared) {

@@ -99,12 +99,14 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
     };
 
     if host.should_intercept_subresource(SubresourceResourceType::Ping) {
-        host.record_pending_subresource_beacon(
-            execution_context,
-            network_partition_key.clone(),
-            info,
-        );
-        rv.set(v8::Boolean::new(scope, true).into());
+        let admitted = host
+            .record_pending_subresource_beacon(
+                execution_context,
+                network_partition_key.clone(),
+                info,
+            )
+            .is_some();
+        rv.set_bool(admitted);
         return;
     }
 
@@ -154,12 +156,15 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         resource_type: info.resource_type,
         policy_context: Default::default(),
     };
-    let internal_id = host.record_async_subresource_beacon(
+    let Some(internal_id) = host.record_async_subresource_beacon(
         execution_context,
         Some(cancel_handle.clone()),
         network_partition_key,
         info,
-    );
+    ) else {
+        rv.set_bool(false);
+        return;
+    };
     spawn_async_subresource_fetch(
         resource_loader.task_runner(),
         host.resource_completion_sender(),
@@ -246,7 +251,7 @@ pub(crate) fn send_link_audit_ping(
     };
 
     if host.should_intercept_subresource(SubresourceResourceType::Ping) {
-        host.record_pending_subresource_beacon(
+        let _ = host.record_pending_subresource_beacon(
             execution_context,
             network_partition_key.clone(),
             info,
@@ -302,12 +307,14 @@ pub(crate) fn send_link_audit_ping(
         resource_type: info.resource_type,
         policy_context: Default::default(),
     };
-    let internal_id = host.record_async_subresource_beacon(
+    let Some(internal_id) = host.record_async_subresource_beacon(
         execution_context,
         Some(cancel_handle.clone()),
         network_partition_key,
         info,
-    );
+    ) else {
+        return;
+    };
     spawn_async_subresource_fetch(
         resource_loader.task_runner(),
         host.resource_completion_sender(),
