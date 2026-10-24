@@ -42,6 +42,7 @@ pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
 mod javascript_url;
+mod video_color_space;
 pub(crate) use self::idle_detection::{
     apply_idle_override_to_current_context, retire_idle_detectors_in_current_context,
 };

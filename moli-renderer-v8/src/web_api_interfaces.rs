@@ -155,6 +155,7 @@ interfaces! {
     Element: Node;
     ElementInternals;
     EncodedVideoChunk;
+    VideoColorSpace;
     ErrorEvent: Event;
     Event;
     EventCounts;

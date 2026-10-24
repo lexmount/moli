@@ -75,6 +75,7 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "SourceBuffer",
     "SourceBufferList",
     "EncodedVideoChunk",
+    "VideoColorSpace",
     "ImageBitmap",
     "ImageBitmapRenderingContext",
     "CanvasGradient",
@@ -467,7 +468,7 @@ fn exposure_for_name(name: &str) -> ExposureSet {
         "ServiceWorkerContainer" => ExposureSet::WINDOW_ONLY,
         "ServiceWorker" => ExposureSet::WINDOW_AND_SERVICE_WORKER,
         "FileSystemSyncAccessHandle" => ExposureSet::DEDICATED_WORKER_ONLY,
-        "EncodedVideoChunk" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
+        "EncodedVideoChunk" | "VideoColorSpace" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
         _ if WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::WINDOW_DEDICATED_AND_SHARED_WORKER
         }
