@@ -29,8 +29,8 @@ pub(crate) fn install_simple_window_event_handlers<'s>(
     }
 }
 
-// The listener registry is discarded when the lightweight Window navigates.
-// Clear its handler values too, without invoking author-defined property setters.
+// Reset handler values alongside listener registrations, without invoking
+// author-defined property setters.
 pub(crate) fn clear_simple_window_event_handler_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,

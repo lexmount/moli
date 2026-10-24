@@ -83,6 +83,7 @@ pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
                     event,
                     Some(capture),
                     None,
+                    None,
                 );
                 result.dispatched |= invoked.dispatched;
                 result.did_listeners_throw |= invoked.did_listeners_throw;
