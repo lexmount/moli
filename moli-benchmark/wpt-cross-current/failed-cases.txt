@@ -43,7 +43,6 @@ css/css-animations/stability/animation-event-destroy-renderer.html?animationiter
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
-css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html
 css/css-cascade/layer-media-query.html
@@ -366,7 +365,6 @@ css/css-flexbox/table-with-infinite-max-intrinsic-width.html
 css/css-font-loading/fontface-descriptor-updates-2.html
 css/css-font-loading/fontfaceset-load-css-wide-keywords.html
 css/css-font-loading/fontfaceset-load-var.html
-css/css-font-loading/fontfacesetloadevent-constructor.html
 css/css-forms/parsing/checkmark-pseudo-element.html
 css/css-forms/parsing/picker-icon-pseudo-element.html
 css/css-forms/parsing/picker-select-pseudo-element.html
@@ -2685,7 +2683,6 @@ html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-on
 html/browsers/origin/cross-origin-objects/cross-origin-objects-on-new-window.html
 html/browsers/origin/cross-origin-objects/window-location-and-location-href-cross-realm-set.html
 html/browsers/origin/relaxing-the-same-origin-restriction/document_domain.html
-html/browsers/sandboxing/sandbox-popup-inherits-script-blocking.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-01.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_3.html
@@ -2888,7 +2885,6 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
@@ -3116,7 +3112,6 @@ navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
-navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
 navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
 navigation-api/navigation-history-entry/entries-after-bfcache.html
@@ -3171,7 +3166,6 @@ requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
 resource-timing/cached-image-gets-single-entry.html
 resource-timing/document-domain-no-impact-opener.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/initiator-type/input.html
 resource-timing/initiator-type/link.html
 resource-timing/initiator-type/picture.html
@@ -3285,7 +3279,6 @@ service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
-service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/synced-state.https.html
 service-workers/service-worker/unregister-then-register-new-script.https.html
 service-workers/service-worker/unregister-then-register.https.html
