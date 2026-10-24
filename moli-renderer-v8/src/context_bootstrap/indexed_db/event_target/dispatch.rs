@@ -3,6 +3,7 @@ use crate::context_bootstrap::{
     EventHandlerType, event_target_dispatch, events, invoke_simple_event_target_listeners,
 };
 use crate::event_type::EventTypeKey;
+use crate::host::ListenerFilter;
 use crate::util::get_private_object;
 
 #[derive(Clone, Copy)]
@@ -80,49 +81,41 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
     events::set_event_composed_path(scope, event, composed_path);
     let bubbles = events::event_bool_attribute(scope, event, "bubbles");
     let arguments = [event.into()];
-    for capture in [true, false] {
-        let indices: Vec<usize> = if capture {
-            (0..path.len()).rev().collect()
-        } else {
-            (0..path.len()).collect()
-        };
-        for index in indices {
-            if events::event_internal_bool_flag(scope, event, events::EVENT_STOP_PROPAGATION_SLOT) {
-                break;
-            }
-            if !capture && index != 0 && !bubbles {
-                continue;
-            }
-            let current_target = path[index];
-            let phase = if index == 0 {
-                2
-            } else if capture {
-                1
-            } else {
-                3
-            };
-            let _ = events::event_backing(scope, event).set(
-                scope,
-                v8str(scope, "currentTarget").into(),
-                current_target.into(),
-            );
-            let _ = events::event_backing(scope, event).set(
-                scope,
-                v8str(scope, "eventPhase").into(),
-                v8::Integer::new(scope, phase).into(),
-            );
-            let invoked = invoke_simple_event_target_listeners(
-                scope,
-                current_target,
-                event_type,
-                event,
-                capture,
-                &arguments,
-                EventHandlerType::EventHandler,
-                None,
-            );
-            result.did_throw |= invoked.did_throw;
+    // Ancestors have capture/bubble phases. The target itself fires one
+    // registration-ordered snapshot, as Blink's IndexedDB dispatcher does.
+    let capture = (1..path.len())
+        .rev()
+        .map(|index| (index, 1, ListenerFilter::Capturing));
+    let target = std::iter::once((0, 2, ListenerFilter::All));
+    let bubble = (1..path.len())
+        .filter(|_| bubbles)
+        .map(|index| (index, 3, ListenerFilter::Bubbling));
+    for (index, phase, filter) in capture.chain(target).chain(bubble) {
+        if events::event_internal_bool_flag(scope, event, events::EVENT_STOP_PROPAGATION_SLOT) {
+            break;
         }
+        let current_target = path[index];
+        let _ = events::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "currentTarget").into(),
+            current_target.into(),
+        );
+        let _ = events::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, phase).into(),
+        );
+        let invoked = invoke_simple_event_target_listeners(
+            scope,
+            current_target,
+            event_type,
+            event,
+            filter,
+            &arguments,
+            EventHandlerType::EventHandler,
+            None,
+        );
+        result.did_throw |= invoked.did_throw;
     }
     result.uncanceled = !events::event_bool_attribute(scope, event, "defaultPrevented");
     event_target_dispatch::finish_dispatch(scope, event);

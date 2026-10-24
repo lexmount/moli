@@ -786,6 +786,47 @@ fn set_simple_object_event_ordered_handler_callback<'s>(
     ensure_simple_object_event_type_order(scope, registry, event_type);
 }
 
+pub(crate) fn clear_simple_event_target_listeners<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+) {
+    let Some(registry) = simple_object_event_listener_registry(scope, target) else {
+        return;
+    };
+    let Some(types) = registry
+        .0
+        .get_own_property_names(scope, v8::GetPropertyNamesArgs::default())
+    else {
+        return;
+    };
+    // Keep the registry identity shared with active dispatches and calls that
+    // have already resolved their receiver before argument conversion.
+    for index in 0..types.length() {
+        let Some(key) = types.get_index(scope, index) else {
+            continue;
+        };
+        if let Some(listeners) = registry
+            .0
+            .get(scope, key)
+            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        {
+            for index in 0..listeners.length() {
+                if let Some(entry) = listeners.get_index(scope, index) {
+                    unregister_simple_object_event_listener_abort_algorithm(scope, entry);
+                }
+            }
+        }
+        let _ = registry.0.delete(scope, key);
+    }
+    let order = v8::Array::new(scope, 0);
+    set_private_value(
+        scope,
+        registry.0,
+        SIMPLE_EVENT_TARGET_LISTENER_TYPE_ORDER_SLOT,
+        order.into(),
+    );
+}
+
 pub(crate) fn simple_object_event_remove_listener_value_for_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

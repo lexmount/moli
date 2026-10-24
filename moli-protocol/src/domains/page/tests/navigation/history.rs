@@ -1803,12 +1803,11 @@ async fn browser_document_navigation_keeps_page_residence_and_replaces_document_
             take_response_by_id(&mut ctx, id)["error"].is_null(),
             "navigation {index}"
         );
-        wait_until_message(
-            &mut ctx,
-            Some(session),
-            "stable Page replacement load",
-            |message| message["method"] == "Page.loadEventFired",
-        )
+        // Streamed replacement advances on real scheduler inputs, independent
+        // of how many idle polling turns fit under concurrent test load.
+        wait_until_scheduler_message(&mut ctx, "stable Page replacement load", |message| {
+            message["method"] == "Page.loadEventFired"
+        })
         .await;
         assert_eq!(
             ctx.conn.renderer_page_residence_identity_for_owner(&owner),

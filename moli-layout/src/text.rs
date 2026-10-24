@@ -1528,11 +1528,6 @@ fn validate_registered_font(
     .ok_or(WebFontRegistrationError::UnsupportedPayload)
 }
 
-/// Validates font bytes without registering them in a document's layout.
-pub fn validate_web_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
-    validate_registered_font(&WebFontFace::new("FontFace"), decode_web_font_bytes(bytes)?)
-}
-
 fn decode_web_font_bytes<'a>(
     bytes: impl Into<Cow<'a, [u8]>>,
 ) -> Result<Blob<u8>, WebFontRegistrationError> {
