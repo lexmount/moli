@@ -1,5 +1,6 @@
 mod abort_signal_events;
 mod callback_execution;
+mod console;
 mod error_reporting_guard;
 mod event_target_prototype;
 mod notification_init;

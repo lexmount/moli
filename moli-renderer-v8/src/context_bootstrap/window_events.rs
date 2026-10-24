@@ -157,9 +157,9 @@ pub(super) use accessors::{
     window_onunhandledrejection_getter_function, window_onunhandledrejection_setter_function,
 };
 pub(super) use console::{
-    console_assert_callback, console_debug_callback, console_error_callback,
-    console_group_callback, console_group_collapsed_callback, console_info_callback,
-    console_log_callback, console_noop_callback, console_profile_callback,
+    console_assert_callback, console_debug_callback, console_dir_callback, console_dirxml_callback,
+    console_error_callback, console_group_callback, console_group_collapsed_callback,
+    console_info_callback, console_log_callback, console_noop_callback, console_profile_callback,
     console_profile_end_callback, console_table_callback, console_trace_callback,
     console_warn_callback,
 };
