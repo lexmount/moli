@@ -120,6 +120,7 @@ impl PageScriptHost {
             .document_connect_policy_snapshot_for_owner(owner)
             .ok_or("XHR interception Document policy is unavailable")?;
         Ok(XhrInterceptionRoute::Native(ControlledXhrContext {
+            csp_source_location: Default::default(),
             interception,
             connect_policy,
         }))

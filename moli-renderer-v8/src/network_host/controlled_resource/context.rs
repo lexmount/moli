@@ -26,6 +26,7 @@ impl XhrInterceptionRoute {
 }
 
 pub(crate) struct ControlledXhrContext {
+    pub(crate) csp_source_location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
     pub(crate) interception: ResourceInterceptionContext,
     pub(crate) connect_policy: DocumentConnectPolicySnapshot,
 }
@@ -52,6 +53,7 @@ impl ControlledXhrContext {
             crate::types::SubresourceRequestInitiatorType::Script,
         );
         controlled.connect_policy = Some(self.connect_policy);
+        controlled.csp_source_location = self.csp_source_location;
         controlled.preflight_headers = preflight_headers;
         controlled
     }

@@ -21,9 +21,11 @@ pub(super) fn record_compatibility_intercepted_xhr(
         &prepared.method,
         prepared.credentials_mode,
     );
+    let xhr = v8::Global::new(scope, xhr);
     host.record_pending_subresource_xhr(
+        scope,
         prepared.execution_context,
-        v8::Global::new(scope, xhr),
+        xhr,
         prepared.use_cors_preflight,
         String::new(),
         prepared.credentials_mode,
@@ -80,9 +82,12 @@ pub(super) fn dispatch_service_worker_xhr(
         policy_context: prepared.policy_context,
     };
     let request_body_text = request_body_text(&prepared.send_body);
+    let execution_context = prepared.execution_context.duplicate(scope);
+    let xhr = v8::Global::new(scope, xhr);
     let internal_id = host.record_async_subresource_xhr(
-        prepared.execution_context.duplicate(scope),
-        v8::Global::new(scope, xhr),
+        scope,
+        execution_context,
+        xhr,
         prepared.use_cors_preflight,
         String::new(),
         Some(cancel_handle.clone()),
@@ -119,7 +124,7 @@ pub(super) fn dispatch_service_worker_xhr(
         crate::service_worker_runtime::service_worker_fetch_request_metadata(&prepared.request()),
     );
     let dispatch = ServiceWorkerFetchDispatch {
-        redirect_check: None,
+        redirect_check: host.window_fetch_redirect_check(internal_id),
         internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
@@ -203,7 +208,7 @@ pub(super) fn spawn_network_xhr_fetch(
     request_client: ResourceRequestClient,
     control: Option<ControlledXhrContext>,
 ) -> u64 {
-    let request = prepared
+    let mut request = prepared
         .request()
         .with_request_mode(moli_fetch::RequestMode::Cors)
         .with_subframe_context(prepared.frame_id.is_some());
@@ -224,9 +229,11 @@ pub(super) fn spawn_network_xhr_fetch(
         policy_context: prepared.policy_context,
     };
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
+    let xhr = v8::Global::new(scope, xhr);
     let internal_id = host.record_async_subresource_xhr(
+        scope,
         prepared.execution_context,
-        v8::Global::new(scope, xhr),
+        xhr,
         prepared.use_cors_preflight,
         prepared.initiator_url.clone(),
         Some(cancel_handle.clone()),
@@ -249,6 +256,9 @@ pub(super) fn spawn_network_xhr_fetch(
         },
         control.is_none(),
     );
+    if let Some(check) = host.window_fetch_redirect_check(internal_id) {
+        request = request.with_redirect_check(check);
+    }
     if let Some(control) = control {
         let (load, info) = host
             .pending_subresource_native_inputs(internal_id)

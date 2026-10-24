@@ -5,6 +5,7 @@ mod computed_style;
 mod cors_preflight;
 mod cors_redirect;
 mod cors_response;
+mod csp_redirect;
 mod cssom;
 mod data_response;
 mod dom;

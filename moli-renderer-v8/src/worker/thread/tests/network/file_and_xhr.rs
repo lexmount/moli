@@ -1947,13 +1947,15 @@ async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_
 #[tokio::test]
 async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src() {
     ensure_v8();
-    let (source_base_url, _, source_server, target_server) =
-        spawn_cross_origin_redirect_with_cors_http_servers(
-            "/worker-xhr-csp-redirect-deny",
-            "/worker-xhr-csp-target",
-            "worker-xhr-csp-target",
-        )
-        .await;
+    let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (source_base_url, source_server) = spawn_single_redirect_http_server(
+        "/worker-xhr-csp-redirect-deny",
+        format!(
+            "http://{}/worker-xhr-csp-target",
+            target_listener.local_addr().unwrap()
+        ),
+    )
+    .await;
     let url = format!("{source_base_url}/worker-xhr-csp-redirect-deny");
     let url_literal = serde_json::to_string(&url).expect("serialize worker xhr url");
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader");
@@ -2034,10 +2036,10 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
         .await
         .expect("worker XHR CSP redirect source server should finish");
     assert!(
-        !target_server.is_finished(),
+        futures_util::FutureExt::now_or_never(target_listener.accept()).is_none(),
         "CSP refuses the redirect before the target receives a request"
     );
-    target_server.abort();
+
     let record = network.expect("worker XHR CSP redirect should record network failure");
     assert_eq!(record.url().path(), "/worker-xhr-csp-target");
     assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);

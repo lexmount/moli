@@ -1197,69 +1197,16 @@ async fn spawn_cross_origin_redirect_with_cors_http_servers(
     target_path: &'static str,
     target_body: &'static str,
 ) -> (String, String, JoinHandle<()>, JoinHandle<()>) {
-    let target_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind worker redirect target with CORS server");
-    let target_addr = target_listener
-        .local_addr()
-        .expect("worker redirect target with CORS addr");
-    let target_base_url = format!("http://{target_addr}");
-    let target_server = tokio::spawn(async move {
-        let (mut stream, _) = target_listener
-            .accept()
-            .await
-            .expect("accept worker redirect target with CORS request");
-        read_http_request_head(&mut stream)
-            .await
-            .expect("read worker redirect target with CORS request");
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            target_body.len(),
-            target_body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write worker redirect target with CORS response");
-    });
-
-    let source_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind worker redirect source with CORS server");
-    let source_addr = source_listener
-        .local_addr()
-        .expect("worker redirect source with CORS addr");
-    let source_base_url = format!("http://{source_addr}");
-    let target_location = format!("{target_base_url}{target_path}");
-    let source_server = tokio::spawn(async move {
-        let (mut stream, _) = source_listener
-            .accept()
-            .await
-            .expect("accept worker redirect source with CORS request");
-        let request = read_http_request_head(&mut stream)
-            .await
-            .expect("read worker redirect source with CORS request");
-        let path = request
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .expect("worker redirect source with CORS request path");
-        assert_eq!(path, source_path);
-        let response = format!(
-            "HTTP/1.1 302 Found\r\nLocation: {target_location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write worker redirect source with CORS response");
-    });
-
-    (
-        source_base_url,
-        target_base_url,
-        source_server,
-        target_server,
-    )
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        target_body.len(),
+        target_body,
+    );
+    let (target_url, target_server) =
+        spawn_raw_path_response_http_server(vec![(target_path, response, Duration::ZERO)]).await;
+    let (source_url, source_server) =
+        spawn_single_redirect_http_server(source_path, format!("{target_url}{target_path}")).await;
+    (source_url, target_url, source_server, target_server)
 }
 
 async fn spawn_raw_path_response_http_server(

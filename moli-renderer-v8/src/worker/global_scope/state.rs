@@ -18,6 +18,7 @@ impl WorkerGlobalState {
 
     pub(super) fn resource_load_control(&self) -> ControlledXhrContext {
         ControlledXhrContext {
+            csp_source_location: Default::default(),
             interception: self
                 .interception_context
                 .clone()

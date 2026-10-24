@@ -96,6 +96,7 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
         output.record_subresource_network(record);
     }
 
+
 }
 
 fn worker_fetch_script_metadata(
@@ -1167,6 +1168,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             "Font requests are disabled by the resource policy",
         ));
     }
+
 
     {
         let metadata =
