@@ -563,6 +563,7 @@ impl JsContextHost {
                 unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
             {
                 unsafe { &mut *host_ptr }.abort_window_requests_for_document(
+                    scope,
                     crate::native_bridge::WindowDocumentOwner::Frame(owner),
                 );
             }
