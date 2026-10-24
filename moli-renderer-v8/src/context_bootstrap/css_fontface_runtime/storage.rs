@@ -147,6 +147,13 @@ fn reconcile_document_font_face_set_ready<'s>(
     crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
         scope, host_ptr, handle,
     );
+    if unsafe { &*host_ptr }.document_has_font_load_candidates(handle)
+        && let Err(error) = unsafe { &*host_ptr }.ensure_initial_layout()
+    {
+        tracing::debug!(%error, "font readiness could not observe layout demand");
+    }
+    super::loading::start_demanded_font_face_loads(scope);
+    super::loading::start_queued_font_face_set_loads(scope, fonts);
     if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(handle) {
         super::events::font_face_set_loading_started(scope, fonts);
     } else {

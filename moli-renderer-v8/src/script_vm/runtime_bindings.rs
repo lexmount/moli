@@ -195,7 +195,15 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
         }
     }
     let checkpoint_started = trace_enabled.then(Instant::now);
-    scope.perform_microtask_checkpoint();
+    crate::context_bootstrap::start_demanded_font_face_loads(scope);
+    loop {
+        scope.perform_microtask_checkpoint();
+        // A promise reaction can itself force geometry and select another
+        // unloaded face. Settle those demands within this same checkpoint.
+        if !crate::context_bootstrap::start_demanded_font_face_loads(scope) {
+            break;
+        }
+    }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         crate::native_bridge::restore_deferred_active_child_window_scope_if_present(scope, host);

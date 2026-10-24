@@ -234,6 +234,10 @@ fn font_face_readonly_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if slot == FONT_FACE_STATUS_SLOT || slot == FONT_FACE_LOADED_SLOT {
+        super::loading::start_demanded_font_face_loads(scope);
+        super::loading::start_queued_font_face_load(scope, args.this());
+    }
     if slot == FONT_FACE_STATUS_SLOT {
         let status = super::loading::status(scope, args.this());
         if let Some(value) = v8_string(scope, status.as_str()) {

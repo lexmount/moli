@@ -6,6 +6,7 @@ use crate::util::{get_private_value, set_private_value};
 
 const RESOLVER: &str = "__moliFontFaceResolver";
 const PROMISE_OWNER: &str = "__moliFontFacePromiseOwner";
+const DEMAND_QUEUED: &str = "__moliFontFaceDemandQueued";
 const OWNER_DOCUMENT: &str = "__moliFontFaceSetOwnerDocument";
 static NEXT_REGISTRATION: AtomicU64 = AtomicU64::new(1);
 const QUERY_RESOLVER: &str = "__moliFontQueryResolver";
@@ -247,7 +248,7 @@ fn publish_state<'s>(scope: &mut v8::PinScope<'s, '_>, face: v8::Local<'s, v8::O
         FontFaceStatus::Loaded => {
             sync_owners(scope, face);
         }
-        FontFaceStatus::Error => {}
+        FontFaceStatus::Error => sync_owners(scope, face),
         FontFaceStatus::Unloaded | FontFaceStatus::Loading => return,
     }
     settle_loaded_promise(scope, face, &load);
@@ -323,15 +324,117 @@ pub(super) fn load_font<'s>(
     face: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let promise = loaded_promise(scope, face)?;
-    let load = super::state::get(scope, face)?;
-    let context = face.get_creation_context(scope)?;
+    start_font_load(scope, face);
+    Some(promise)
+}
+
+pub(crate) fn start_demanded_font_face_loads(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    if !super::state::has_observers(scope) {
+        return false;
+    }
+    let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    // Layout reports only stable slot identities. Release every native borrow
+    // before entering a face's creation realm or publishing loading events.
+    let demands = unsafe { &*host_ptr }.take_font_load_demands();
+    if demands.is_empty() {
+        return false;
+    }
+    let mut started = false;
+    for face in super::state::demanded_wrappers(scope, &demands) {
+        started |= start_font_load(scope, face);
+    }
+    started
+}
+
+pub(crate) fn queue_demanded_font_face_loads(scope: &mut v8::PinScope<'_, '_>) {
+    if !super::state::has_observers(scope) {
+        return;
+    }
+    let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let demands = unsafe { &*host_ptr }.take_font_load_demands();
+    if demands.is_empty() {
+        return;
+    }
+    for face in super::state::demanded_wrappers(scope, &demands) {
+        if status(scope, face) != FontFaceStatus::Unloaded
+            || get_private_value(scope, face, DEMAND_QUEUED).is_some_and(|value| value.is_true())
+        {
+            continue;
+        }
+        let Some(context) = face.get_creation_context(scope) else {
+            continue;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let Some(owner_host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
+            continue;
+        };
+        let queued = v8::Boolean::new(scope, true);
+        set_private_value(scope, face, DEMAND_QUEUED, queued.into());
+        let callback = v8::Function::builder(run_font_load_demand)
+            .data(face.into())
+            .build(scope)
+            .expect("font demand task");
+        // A native frame cannot settle promises or run author getters. Its
+        // selected demands become ordinary tasks owned by the creating Window.
+        unsafe { &mut *owner_host_ptr }.queue_internal_task(scope, callback);
+    }
+}
+
+fn run_font_load_demand<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let face = v8::Local::<v8::Object>::try_from(args.data()).expect("font demand face");
+    set_private_value(scope, face, DEMAND_QUEUED, v8::undefined(scope).into());
+    start_font_load(scope, face);
+}
+
+pub(super) fn start_queued_font_face_load<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+) {
+    if get_private_value(scope, face, DEMAND_QUEUED).is_some_and(|value| value.is_true()) {
+        set_private_value(scope, face, DEMAND_QUEUED, v8::undefined(scope).into());
+        start_font_load(scope, face);
+    }
+}
+
+pub(super) fn start_queued_font_face_set_loads<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    fonts: v8::Local<'s, v8::Object>,
+) {
+    let Some(faces) = super::storage::font_face_set_faces_array(scope, fonts) else {
+        return;
+    };
+    for index in 0..faces.length() {
+        if let Some(face) = faces
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            start_queued_font_face_load(scope, face);
+        }
+    }
+}
+
+fn start_font_load<'s>(scope: &mut v8::PinScope<'s, '_>, face: v8::Local<'s, v8::Object>) -> bool {
+    let Some(load) = super::state::get(scope, face) else {
+        return false;
+    };
+    let Some(context) = face.get_creation_context(scope) else {
+        return false;
+    };
     let scope = &mut v8::ContextScope::new(scope, context);
     let start = load.borrow_mut().begin();
     publish_state(scope, face);
     if start {
         advance_sources(scope, face, &load);
     }
-    Some(promise)
+    start
 }
 
 fn advance_sources<'s>(
@@ -414,7 +517,15 @@ pub(super) fn sync_registration<'s>(
     let host = unsafe { &*host_ptr };
     let changed = host.with_font_services(document, |services| {
         let load = load.borrow();
-        match load.register(services, registration_scope) {
+        let pending = registration_scope
+            == moli_layout::WebFontRegistrationScope::FontFaceSetManual
+            && matches!(
+                load.status(),
+                FontFaceStatus::Unloaded | FontFaceStatus::Loading
+            );
+        let demands_changed = services
+            .set_font_load_candidate(load.slot(), pending.then(|| load.descriptor().clone()));
+        let registration_changed = match load.register(services, registration_scope) {
             Ok(Some(
                 moli_layout::WebFontRegistrationOutcome::Added
                 | moli_layout::WebFontRegistrationOutcome::Replaced,
@@ -424,7 +535,8 @@ pub(super) fn sync_registration<'s>(
                 tracing::warn!(%error, "failed to register FontFace");
                 false
             }
-        }
+        };
+        demands_changed | registration_changed
     });
     if changed {
         host.invalidate_document_font_layout(document);

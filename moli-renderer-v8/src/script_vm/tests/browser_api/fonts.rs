@@ -2,6 +2,7 @@ use super::*;
 use base64::Engine;
 use std::time::Duration;
 
+mod demand;
 mod descriptor_ranges;
 mod layers;
 mod matching;
