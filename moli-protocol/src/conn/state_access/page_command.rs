@@ -5,6 +5,23 @@ use crate::conn::{CommandDispatchContext, CommandOwnerScope};
 use moli_core::page::CompletedPageCommand;
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_before_unload_navigation(
+        self,
+        completed: crate::domains::page::CompletedBeforeUnloadNavigationCommand,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> crate::domains::page::PreparedBeforeUnloadNavigation {
+        completed.prepare(self.connection, context)
+    }
+
+    pub(crate) fn resume_before_unload_navigation(
+        self,
+        prepared: crate::domains::page::PreparedBeforeUnloadNavigation,
+        output_mode: crate::domains::page::NavigationCommandOutput,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> crate::domains::page::BeforeUnloadNavigationStep {
+        prepared.resume(self.connection, context, output_mode)
+    }
+
     pub(crate) fn page_query_host_is_current(
         self,
         host: &crate::conn::ProtocolPageHostScope,

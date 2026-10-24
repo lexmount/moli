@@ -124,9 +124,12 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
     ) -> Result<module_tree::CompiledModuleSnapshot, module_tree::ModuleLoadError> {
         let key = native_key(&source.request_key)?;
         let native_source = match source.source {
-            module_tree::ModuleSource::Text(text)
-            | module_tree::ModuleSource::TextWithOrigin { source: text, .. } => {
-                WorkerModuleSource::text(text.to_string())
+            module_tree::ModuleSource::Text(text) => WorkerModuleSource::text(text.to_string()),
+            module_tree::ModuleSource::TextWithOrigin { source, origin } => {
+                WorkerModuleSource::TextWithOrigin {
+                    source: source.to_string(),
+                    origin,
+                }
             }
             module_tree::ModuleSource::Binary(bytes) => WorkerModuleSource::binary(bytes.to_vec()),
         };

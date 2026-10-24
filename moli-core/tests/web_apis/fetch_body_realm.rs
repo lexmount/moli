@@ -14,7 +14,7 @@ async fn assert_binary_body_realms(scenario: &str, expected_cases: usize) -> Res
     for target in ["window", "child"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(

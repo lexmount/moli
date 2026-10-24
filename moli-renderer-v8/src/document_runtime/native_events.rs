@@ -1,9 +1,10 @@
 use super::*;
+use crate::event_type::{EventType, EventTypeKey};
 
 /// Native dispatch inputs, captured before selecting a JavaScript realm. The
 /// event's wrappers are created only when its path has an actual observer.
-pub(crate) struct NativeEventDispatch<'event> {
-    event_type: &'event str,
+pub(crate) struct NativeEventDispatch {
+    event_type: EventType,
     target: EventTargetHandle,
     original_target: EventTargetHandle,
     path: Vec<EventTargetHandle>,
@@ -20,7 +21,9 @@ impl DocumentRuntime {
         handle: DomHandle,
         attribute: &str,
     ) -> EventTargetHandle {
-        if native_bridge::element::is_body_window_event_handler_attribute(attribute)
+        if attribute
+            .strip_prefix("on")
+            .is_some_and(native_bridge::element::body_or_frameset_reflects_window_event_type)
             && self.dom_host.owner_document_handle(handle) == Some(self.document_handle())
             && self.dom_host.node(handle).is_some_and(|node| {
                 node.is_html_element_named("body") || node.is_html_element_named("frameset")
@@ -32,15 +35,15 @@ impl DocumentRuntime {
         }
     }
 
-    pub(crate) fn prepare_native_event_dispatch<'event>(
+    pub(crate) fn prepare_native_event_dispatch(
         &self,
         target: EventTargetHandle,
         original_target: EventTargetHandle,
-        event_type: &'event str,
-    ) -> NativeEventDispatch<'event> {
+        event_type: &(impl EventTypeKey + ?Sized),
+    ) -> NativeEventDispatch {
         let (bubbles, cancelable) = host_event_defaults(event_type);
         NativeEventDispatch {
-            event_type,
+            event_type: event_type.to_event_type(),
             target,
             original_target,
             path: self.build_propagation_path(target, false),
@@ -49,20 +52,20 @@ impl DocumentRuntime {
         }
     }
 
-    pub(crate) fn native_event_has_observers(&self, event: &NativeEventDispatch<'_>) -> bool {
+    pub(crate) fn native_event_has_observers(&self, event: &NativeEventDispatch) -> bool {
         event.path.iter().enumerate().any(|(index, target)| {
             self.events.has_listener_in_dispatch_path(
                 *target,
-                event.event_type,
+                &event.event_type,
                 index == 0 || event.bubbles,
             ) || (index == 0 || event.bubbles)
                 && match self
                     .events
-                    .event_handler_property_callback_id(*target, event.event_type)
+                    .event_handler_property_callback_id(*target, &event.event_type)
                 {
                     Some(callback) => callback.is_some(),
                     None => self
-                        .event_handler_content_attribute_node(*target, event.event_type)
+                        .event_handler_content_attribute_node(*target, &event.event_type)
                         .is_some(),
                 }
         })
@@ -72,13 +75,16 @@ impl DocumentRuntime {
     pub(crate) fn event_handler_content_attribute_node(
         &self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Option<DomHandle> {
-        let attribute = native_bridge::element::event_handler_content_attribute_name(event_type)?;
+        let attribute =
+            native_bridge::element::event_handler_content_attribute_name(event_type.as_str()?)?;
         let handle = match target {
             EventTargetHandle::Node(handle) => handle,
             EventTargetHandle::Window => {
-                if !native_bridge::element::is_body_window_event_handler_attribute(&attribute) {
+                if !attribute.strip_prefix("on").is_some_and(
+                    native_bridge::element::body_or_frameset_reflects_window_event_type,
+                ) {
                     return None;
                 }
                 self.dom_host
@@ -87,7 +93,7 @@ impl DocumentRuntime {
                     .as_document()?
                     .body_or_frameset_handle(self.dom_host.dom(), self.document_handle())?
             }
-            EventTargetHandle::ChildWindow(_) => return None,
+            EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => return None,
         };
         if self.event_handler_attribute_target(handle, &attribute) != target {
             return None;
@@ -95,7 +101,9 @@ impl DocumentRuntime {
         let element = self.dom_host.node(handle)?.as_element()?;
         if matches!(target, EventTargetHandle::Node(_))
             && (element.is_html_element("body") || element.is_html_element("frameset"))
-            && native_bridge::element::is_body_window_event_handler_attribute(&attribute)
+            && attribute
+                .strip_prefix("on")
+                .is_some_and(native_bridge::element::body_or_frameset_reflects_window_event_type)
         {
             return None;
         }
@@ -106,25 +114,22 @@ impl DocumentRuntime {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
-        event: NativeEventDispatch<'_>,
+        event: NativeEventDispatch,
     ) -> std::result::Result<(), String> {
-        let wrapper = if event.target == EventTargetHandle::Window {
-            match event.event_type {
-                "pageshow" | "pagehide" => {
-                    context_bootstrap::construct_original_page_transition_event(
-                        scope,
-                        event.event_type,
-                        false,
-                    )
-                }
-                _ => context_bootstrap::construct_original_event(scope, event.event_type),
-            }
+        let wrapper = if event.target == EventTargetHandle::Window
+            && matches!(event.event_type.as_str(), Some("pageshow" | "pagehide"))
+        {
+            context_bootstrap::construct_original_page_transition_event(
+                scope,
+                event.event_type.as_str().expect("page transition name"),
+                false,
+            )
             .ok_or_else(|| format!("failed to construct native {} event", event.event_type))?
         } else {
             let target = event_target_value(scope, host_ptr, event.target)?;
             create_host_event(
                 scope,
-                event.event_type,
+                &event.event_type,
                 target,
                 target,
                 event.bubbles,

@@ -97,6 +97,16 @@ pub struct RendererFencedProtocolOutput {
     pub events: Vec<BackgroundProtocolEvent>,
     pub predecessors: Vec<RendererOutputFence>,
     target_id: Option<String>,
+    projected: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl RendererFencedProtocolOutput {
+    pub(crate) fn finish(self) -> Vec<BackgroundProtocolEvent> {
+        if let Some(projected) = self.projected {
+            let _ = projected.send(());
+        }
+        self.events
+    }
 }
 
 enum ProtocolSchedulerWorkPayload {
@@ -219,6 +229,32 @@ impl ProtocolSchedulerWork {
                     events,
                     predecessors,
                     target_id,
+                    projected: None,
+                },
+            ),
+        }
+    }
+
+    /// A local continuation waits on the same exact projection fence as wire
+    /// output. It produces no wire event and does not acquire a target load
+    /// lane that the continuation itself must release.
+    pub(crate) fn renderer_projection_receipt(
+        publish_sequence: ProtocolWorkPublishSequence,
+        predecessor: RendererOutputFence,
+        target_id: Option<String>,
+        projected: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            publish_sequence,
+            renderer_output_source: None,
+            delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
+            payload: ProtocolSchedulerWorkPayload::RendererFencedOutput(
+                RendererFencedProtocolOutput {
+                    events: Vec::new(),
+                    predecessors: vec![predecessor],
+                    target_id,
+                    projected: Some(projected),
                 },
             ),
         }
@@ -230,6 +266,20 @@ impl ProtocolSchedulerWork {
         match self.payload {
             ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => Ok(output),
             _ => Err(Box::new(self)),
+        }
+    }
+
+    /// Local continuations also follow owner actions emitted by this concrete
+    /// source. The adapter uses its existing source metadata to admit those
+    /// actions before releasing the continuation; no renderer rescan is needed.
+    pub fn renderer_output_continuation_predecessor(&self) -> Option<RendererOutputCursor> {
+        match &self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output)
+                if output.projected.is_some() =>
+            {
+                output.predecessors.first().map(RendererOutputFence::cursor)
+            }
+            _ => None,
         }
     }
 
@@ -428,14 +478,16 @@ impl ProtocolSchedulerWork {
     /// crosses the ordinary client-turn predecessor just like activation.
     pub fn is_command_followup(&self) -> bool {
         match &self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
+                output.projected.is_some()
+            }
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
             | ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
             ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
                 action.is_command_followup()
             }
-            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
-            | ProtocolSchedulerWorkPayload::ProtocolObservation(_)
+            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
             | ProtocolSchedulerWorkPayload::NavigationRequestContinuation(..)
             | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_)
             | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_) => false,
@@ -479,6 +531,13 @@ impl ProtocolSchedulerWork {
     /// work retains its explicit Page, output and command prerequisites.
     pub fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match &self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output)
+                if output.projected.is_some() =>
+            {
+                // A before-load continuation decides whether that pending load
+                // may begin. Waiting for the load here would create a cycle.
+                ProtocolNavigationDependency::ReplacesPendingLoad
+            }
             ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_)
             | ProtocolSchedulerWorkPayload::NavigationRequestContinuation(..)
             | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_)

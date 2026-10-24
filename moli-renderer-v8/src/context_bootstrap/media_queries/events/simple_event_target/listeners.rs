@@ -78,7 +78,7 @@ struct SimpleObjectEventHandlerEntryDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_HANDLER_SLOT_FIELD)]
     handler_slot: v8::Local<'scope, v8::String>,
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENER_CALLBACK_SLOT)]
-    callback: v8::Local<'scope, v8::Object>,
+    callback: v8::Local<'scope, v8::Value>,
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_CONTEXT_ANCHOR_SLOT)]
     relevant_context_anchor: v8::Local<'scope, v8::Object>,
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT)]
@@ -626,70 +626,15 @@ pub(super) fn simple_object_event_set_handler_in_registry<'s>(
     registry: SimpleEventListenerRegistry<'s>,
 ) {
     let callback = store_event_handler_value(scope, target, handler_slot_name, value);
-    let active = callback.is_some();
-    let Some(listeners) = simple_object_event_listener_array(scope, registry, event_type, active)
-    else {
-        return;
-    };
-    if let Some(callback) = callback {
-        let (relevant_context_anchor, incumbent_context_anchor, relevant_identity) =
-            simple_callback_context_anchors(scope, callback);
-        for index in 0..listeners.length() {
-            let Some(candidate) = listeners.get_index(scope, index) else {
-                continue;
-            };
-            if simple_object_event_listener_handler_slot(scope, candidate).as_deref()
-                == Some(handler_slot_name)
-                && handler_belongs_to_target(scope, candidate, target)
-            {
-                if let Ok(entry) = v8::Local::<v8::Object>::try_from(candidate) {
-                    set_private_value(
-                        scope,
-                        entry,
-                        SIMPLE_EVENT_TARGET_LISTENER_CALLBACK_SLOT,
-                        callback.into(),
-                    );
-                    let callable = v8::Boolean::new(scope, callback.is_callable());
-                    set_private_value(
-                        scope,
-                        entry,
-                        SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT,
-                        callable.into(),
-                    );
-                    set_private_value(
-                        scope,
-                        entry,
-                        SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_CONTEXT_ANCHOR_SLOT,
-                        relevant_context_anchor.into(),
-                    );
-                    set_private_value(
-                        scope,
-                        entry,
-                        SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT,
-                        incumbent_context_anchor.into(),
-                    );
-                    capture_simple_listener_initiator(scope, entry);
-                    set_simple_object_event_listener_relevant_identity(
-                        scope,
-                        entry,
-                        relevant_identity,
-                    );
-                }
-                ensure_simple_object_event_type_order(scope, registry, event_type);
-                return;
-            }
-        }
-        let entry = simple_object_event_handler_entry_object(
+    if callback.is_some() {
+        set_simple_object_event_ordered_handler_callback(
             scope,
+            target,
+            event_type,
             handler_slot_name,
             callback,
-            relevant_context_anchor,
-            incumbent_context_anchor,
-            relevant_identity,
+            registry,
         );
-        set_private_value(scope, entry, HANDLER_TARGET_SLOT, target.into());
-        let _ = listeners.set_index(scope, listeners.length(), entry.into());
-        ensure_simple_object_event_type_order(scope, registry, event_type);
         return;
     }
     let Some(listeners) = simple_object_event_listener_array(scope, registry, event_type, false)
@@ -732,6 +677,145 @@ fn handler_belongs_to_target<'s>(
                 .unwrap_or(owner)
                 .strict_equals(target.into())
         })
+}
+
+/// An uncompiled or failed content handler retains its active listener's
+/// registration position without inventing a callable value for it.
+pub(crate) fn simple_object_event_activate_uncompiled_handler<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &(impl EventTypeKey + ?Sized),
+    handler_slot_name: &str,
+) {
+    let Some(registry) = simple_object_event_listener_registry(scope, target) else {
+        return;
+    };
+    set_simple_object_event_ordered_handler_callback(
+        scope,
+        target,
+        event_type,
+        handler_slot_name,
+        None,
+        registry,
+    );
+}
+
+fn set_simple_object_event_ordered_handler_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &(impl EventTypeKey + ?Sized),
+    handler_slot_name: &str,
+    callback: Option<v8::Local<'s, v8::Object>>,
+    registry: SimpleEventListenerRegistry<'s>,
+) {
+    let Some(listeners) = simple_object_event_listener_array(scope, registry, event_type, true)
+    else {
+        return;
+    };
+    let (relevant_context_anchor, incumbent_context_anchor, relevant_identity) =
+        if let Some(callback) = callback {
+            simple_callback_context_anchors(scope, callback)
+        } else {
+            let context = scope.get_current_context();
+            simple_callback_context_anchors_for_contexts(scope, context, context)
+        };
+    let value = callback
+        .map(v8::Local::<v8::Value>::from)
+        .unwrap_or_else(|| v8::null(scope).into());
+    for index in 0..listeners.length() {
+        let Some(candidate) = listeners.get_index(scope, index) else {
+            continue;
+        };
+        if simple_object_event_listener_handler_slot(scope, candidate).as_deref()
+            == Some(handler_slot_name)
+            && handler_belongs_to_target(scope, candidate, target)
+        {
+            if let Ok(entry) = v8::Local::<v8::Object>::try_from(candidate) {
+                set_private_value(
+                    scope,
+                    entry,
+                    SIMPLE_EVENT_TARGET_LISTENER_CALLBACK_SLOT,
+                    value,
+                );
+                let callable =
+                    v8::Boolean::new(scope, callback.is_some_and(|value| value.is_callable()));
+                set_private_value(
+                    scope,
+                    entry,
+                    SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT,
+                    callable.into(),
+                );
+                set_private_value(
+                    scope,
+                    entry,
+                    SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_CONTEXT_ANCHOR_SLOT,
+                    relevant_context_anchor.into(),
+                );
+                set_private_value(
+                    scope,
+                    entry,
+                    SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT,
+                    incumbent_context_anchor.into(),
+                );
+                set_simple_object_event_listener_relevant_identity(scope, entry, relevant_identity);
+                capture_simple_listener_initiator(scope, entry);
+            }
+            ensure_simple_object_event_type_order(scope, registry, event_type);
+            return;
+        }
+    }
+    let entry = simple_object_event_handler_entry_object(
+        scope,
+        handler_slot_name,
+        callback,
+        relevant_context_anchor,
+        incumbent_context_anchor,
+        relevant_identity,
+    );
+    set_private_value(scope, entry, HANDLER_TARGET_SLOT, target.into());
+    let _ = listeners.set_index(scope, listeners.length(), entry.into());
+    ensure_simple_object_event_type_order(scope, registry, event_type);
+}
+
+pub(crate) fn clear_simple_event_target_listeners<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+) {
+    let Some(registry) = simple_object_event_listener_registry(scope, target) else {
+        return;
+    };
+    let Some(types) = registry
+        .0
+        .get_own_property_names(scope, v8::GetPropertyNamesArgs::default())
+    else {
+        return;
+    };
+    // Keep the registry identity shared with active dispatches and calls that
+    // have already resolved their receiver before argument conversion.
+    for index in 0..types.length() {
+        let Some(key) = types.get_index(scope, index) else {
+            continue;
+        };
+        if let Some(listeners) = registry
+            .0
+            .get(scope, key)
+            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        {
+            for index in 0..listeners.length() {
+                if let Some(entry) = listeners.get_index(scope, index) {
+                    unregister_simple_object_event_listener_abort_algorithm(scope, entry);
+                }
+            }
+        }
+        let _ = registry.0.delete(scope, key);
+    }
+    let order = v8::Array::new(scope, 0);
+    set_private_value(
+        scope,
+        registry.0,
+        SIMPLE_EVENT_TARGET_LISTENER_TYPE_ORDER_SLOT,
+        order.into(),
+    );
 }
 
 pub(crate) fn simple_object_event_remove_listener_value_for_type<'s>(
@@ -1004,7 +1088,7 @@ fn simple_object_event_listener_entry_object<'s>(
 fn simple_object_event_handler_entry_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     handler_slot_name: &str,
-    callback: v8::Local<'s, v8::Object>,
+    callback: Option<v8::Local<'s, v8::Object>>,
     relevant_context_anchor: v8::Local<'s, v8::Object>,
     incumbent_context_anchor: v8::Local<'s, v8::Object>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
@@ -1013,10 +1097,10 @@ fn simple_object_event_handler_entry_object<'s>(
     let entry = SimpleObjectEventHandlerEntryDeclaration::new(
         v8_string(scope, &marker),
         v8_string(scope, handler_slot_name).expect("event handler slot"),
-        callback,
+        value,
         relevant_context_anchor,
         incumbent_context_anchor,
-        callback.is_callable(),
+        callback.is_some_and(|value| value.is_callable()),
     )
     .bind(scope)
     .expect("SimpleObject event handler entry declaration should bind");

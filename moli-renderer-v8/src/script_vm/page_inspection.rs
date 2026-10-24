@@ -140,7 +140,7 @@ impl ScriptVm {
                         .iter()
                         .filter(|event| {
                             self.document_runtime
-                                .has_event_listener(EventTargetHandle::Node(handle), event)
+                                .has_event_listener(EventTargetHandle::Node(handle), **event)
                         })
                         .map(|event| (*event).to_owned())
                         .collect(),

@@ -31,6 +31,7 @@ fn native_commit_visibility_requires_the_admitted_fact_and_current_attachment() 
         timestamp: 1.0,
         session_history_position: None,
         browsing_context_group: None,
+        navigation_policy: None,
     });
     assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone(), None));
     assert_eq!(slot.frame_tree_document_loader_id(), None);

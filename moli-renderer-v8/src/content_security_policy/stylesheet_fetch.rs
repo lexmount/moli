@@ -10,8 +10,8 @@ type Check = dyn Fn(
         Option<&str>,
         ContentSecurityPolicyRedirectStatus,
     ) -> (
-        Option<ContentSecurityPolicyUrlViolation>,
-        Option<ContentSecurityPolicyUrlViolation>,
+        Vec<ContentSecurityPolicyUrlViolation>,
+        Vec<ContentSecurityPolicyUrlViolation>,
     ) + Send
     + Sync;
 
@@ -28,21 +28,23 @@ pub(crate) struct StylesheetFetchCspContext {
 }
 
 impl StylesheetFetchCspContext {
-    pub(crate) fn new<C>(capture_check: impl Fn() -> C + Send + Sync + 'static) -> Self
+    pub(crate) fn new<C, R, E>(capture_check: impl Fn() -> C + Send + Sync + 'static) -> Self
     where
-        C: Fn(
-                &Url,
-                Option<&str>,
-                ContentSecurityPolicyRedirectStatus,
-            ) -> (
-                Option<ContentSecurityPolicyUrlViolation>,
-                Option<ContentSecurityPolicyUrlViolation>,
-            ) + Send
+        C: Fn(&Url, Option<&str>, ContentSecurityPolicyRedirectStatus) -> (R, E)
+            + Send
             + Sync
             + 'static,
+        R: IntoIterator<Item = ContentSecurityPolicyUrlViolation>,
+        E: IntoIterator<Item = ContentSecurityPolicyUrlViolation>,
     {
         Self {
-            capture_check: Arc::new(move || Box::new(capture_check())),
+            capture_check: Arc::new(move || {
+                let check = capture_check();
+                Box::new(move |url, nonce, status| {
+                    let (report, enforce) = check(url, nonce, status);
+                    (report.into_iter().collect(), enforce.into_iter().collect())
+                })
+            }),
             violations: Arc::default(),
         }
     }
@@ -62,7 +64,7 @@ impl StylesheetFetchCspContext {
                     ContentSecurityPolicyRedirectStatus::FollowedRedirect
                 },
             );
-            let error = enforce.as_ref().map(|violation| {
+            let error = enforce.first().map(|violation| {
                 anyhow::anyhow!(
                     "Stylesheet request blocked by Content Security Policy directive `{}`",
                     violation.effective_directive

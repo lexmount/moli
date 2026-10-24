@@ -285,7 +285,7 @@ fn clone_selected_node(
             units.len()
         }
         .min(units.len());
-        scratch.create_text_node(&String::from_utf16_lossy(&units[start..end.max(start)]))
+        scratch.create_text_node(String::from_utf16_lossy(&units[start..end.max(start)]))
     } else {
         // DomHost's native import reuses the DOM clone machinery without
         // invoking custom-element constructors or Range/Node JS overrides.

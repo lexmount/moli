@@ -122,6 +122,7 @@ impl ScriptVm {
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
+            preload_state: Default::default(),
         };
         let info = pending.info.clone();
         let activity = self.resolve_pending_subresource_fetch_body(

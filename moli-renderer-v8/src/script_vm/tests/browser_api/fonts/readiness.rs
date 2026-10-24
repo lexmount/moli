@@ -374,6 +374,7 @@ async fn assert_loaded_promise_lifetime(mode: &str) {
     let execution_context = pending_contexts[0];
     let retired = mode.contains("retire-");
     if retired {
+        let resource_owner_id = vm.resource_owner_id;
         let mut host = vm._context_host.borrow_mut();
         if mode.ends_with("retire-realm") {
             host.retire_window_realm_resources(execution_context.realm_token());
@@ -382,7 +383,8 @@ async fn assert_loaded_promise_lifetime(mode: &str) {
         } else if mode.ends_with("retire-context") {
             assert_eq!(
                 host.retire_window_execution_contexts_for_context_token(
-                    execution_context.realm_token()
+                    execution_context.realm_token(),
+                    Some(resource_owner_id),
                 ),
                 1
             );
