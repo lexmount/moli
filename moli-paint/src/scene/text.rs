@@ -85,6 +85,44 @@ pub(super) fn paint_glyph_run(
     };
     let glyph_transform = backend_glyph_transform(run.glyph_skew_radians);
     let glyph_embolden = backend_glyph_embolden(run.glyph_embolden);
+    let transform = device_transform(run.transform, scale);
+    let glyphs = || {
+        run.glyphs.iter().map(|glyph| anyrender::Glyph {
+            id: glyph.id,
+            x: glyph.x,
+            y: glyph.y,
+        })
+    };
+    let stroke = run.stroke.and_then(|stroke| {
+        let width = finite_nonnegative(stroke.width);
+        (width > 0.0 && stroke.color.alpha > 0.0).then_some((stroke, width))
+    });
+    // `-webkit-text-stroke` is centered on the glyph outline. The backend's
+    // stroked glyph path does not take an embolden amount, so synthetic bold
+    // widens the stroke by the fill's outline expansion instead.
+    let paint_stroke = |scene: &mut _| {
+        if let Some((stroke, width)) = stroke {
+            let embolden = rendered_fill_embolden(&font.font, run.font_size, glyph_embolden);
+            PaintScene::draw_glyphs(
+                scene,
+                &font.font,
+                run.font_size,
+                false,
+                &run.normalized_coords,
+                Vec2::ZERO,
+                &Stroke::new(f64::from(width) + 2.0 * embolden),
+                to_backend_color(stroke.color),
+                1.0,
+                transform,
+                glyph_transform,
+                glyphs(),
+            );
+        }
+    };
+    let stroke_first = stroke.is_some_and(|(stroke, _)| stroke.paint_first);
+    if stroke_first {
+        paint_stroke(scene);
+    }
     scene.draw_glyphs(
         &font.font,
         run.font_size,
@@ -94,14 +132,13 @@ pub(super) fn paint_glyph_run(
         Fill::NonZero,
         to_backend_color(color),
         1.0,
-        device_transform(run.transform, scale),
+        transform,
         glyph_transform,
-        run.glyphs.iter().map(|glyph| anyrender::Glyph {
-            id: glyph.id,
-            x: glyph.x,
-            y: glyph.y,
-        }),
+        glyphs(),
     );
+    if !stroke_first {
+        paint_stroke(scene);
+    }
 }
 
 pub(super) fn paint_text_decoration(
@@ -173,6 +210,31 @@ pub(super) fn paint_text_decoration(
                 &path,
             );
         }
+    }
+}
+
+/// Outline expansion, in glyph-space pixels, that the backend actually applies
+/// to an emboldened (and therefore unhinted) fill.
+///
+/// glifo caches unhinted fill outlines at units-per-em size and applies the
+/// embolden amount there before scaling to `font_size`, so the rendered
+/// expansion is `embolden * font_size / units_per_em`. Stroked outlines are
+/// cached at `font_size`, so the stroke widening has to use the same scaled
+/// amount to stay centered on the visible fill edge.
+fn rendered_fill_embolden(font: &peniko::FontData, font_size: f32, embolden: Vec2) -> f64 {
+    use skrifa::raw::TableProvider;
+    let amount = embolden.x.max(embolden.y).max(0.0);
+    if amount == 0.0 {
+        return 0.0;
+    }
+    let units_per_em = skrifa::FontRef::from_index(font.data.as_ref(), font.index)
+        .ok()
+        .and_then(|face| face.head().ok())
+        .map(|head| head.units_per_em())
+        .filter(|&upem| upem > 0);
+    match units_per_em {
+        Some(upem) => amount * f64::from(finite_nonnegative(font_size)) / f64::from(upem),
+        None => 0.0,
     }
 }
 

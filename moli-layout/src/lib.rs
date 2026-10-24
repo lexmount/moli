@@ -87,7 +87,7 @@ pub use snapshot::{
     PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect,
     PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
     PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
-    PaintTextShadow, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
+    PaintTextShadow, PaintTextStroke, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
     pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
 };
 pub use source::{
