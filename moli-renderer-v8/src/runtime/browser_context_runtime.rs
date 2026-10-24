@@ -980,6 +980,16 @@ impl RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntimeOwnerAccess {
+    /// Clear CORS grants from this context's active and retired network leases.
+    /// An origin filter matches the initiator, as in Chromium's preflight cache.
+    pub fn clear_cors_preflight_cache(
+        &self,
+        origin: Option<&url::Url>,
+    ) -> Result<(), &'static str> {
+        self.resource_runtime_registrar
+            .clear_cors_preflight_cache(origin)
+    }
+
     pub fn runtime(&self) -> RendererBrowserContextRuntime {
         self.runtime.clone()
     }

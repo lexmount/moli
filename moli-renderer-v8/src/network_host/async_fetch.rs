@@ -1,4 +1,5 @@
 use super::*;
+use crate::network::CorsPreflightCacheKey;
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, NetworkObservationJournal,
     RedirectInfo, RequestCredentialsMode, RequestMode, RequestRedirectMode, ResponseHead,
@@ -10,6 +11,10 @@ const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
 #[cfg(test)]
 #[path = "async_fetch/redirect_tests.rs"]
 mod redirect_tests;
+
+#[cfg(test)]
+#[path = "async_fetch/preflight_cache_tests.rs"]
+mod preflight_cache_tests;
 
 /// Script fetches need CORS authorization before following every redirect,
 /// even though their browser-generated GET requests do not require preflight.
@@ -123,8 +128,19 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
         preflight_observer,
     )
     .await?;
+    let cache_key = CorsPreflightCacheKey::for_request(&request);
     let observed =
-        fetch_once_with_network_metadata(&loader, request, Some(response_cancel.clone())).await?;
+        fetch_once_with_network_metadata(&loader, request, Some(response_cancel.clone())).await;
+    if observed.is_err()
+        && let Some(key) = cache_key
+    {
+        loader
+            .browser_resource_runtime()
+            .cors_preflight_cache()
+            .lock()
+            .remove_key(&key);
+    }
+    let observed = observed?;
     cancel_handle.adopt_response_progress(&response_cancel);
     Ok(observed)
 }
@@ -373,15 +389,23 @@ async fn fetch_browser_subresource_with_cors_redirect_checks(
             redirects.single_hop_transport_request(),
             Some(hop_cancel.clone()),
         )
-        .await?;
+        .await;
+        if observed.is_err() {
+            invalidate_cors_preflight(&loader, redirects.request());
+        }
+        let observed = observed?;
         let network_extra_info_available = observed.request_observation().is_some();
         let (mut response, hop_journal) = observed.into_parts_with_observation_journal();
         journal.append(hop_journal);
-        match redirects.advance(
+        let transition = redirects.advance(
             response.head(),
             network_extra_info_available,
             response.network_request_extra_info(),
-        )? {
+        );
+        if transition.is_err() {
+            invalidate_cors_preflight(&loader, redirects.request());
+        }
+        match transition? {
             ManualCorsRedirectTransition::FinalResponse
             | ManualCorsRedirectTransition::ManualResponse { .. } => {
                 let redirect_chain = redirects.into_redirect_chain();
@@ -418,16 +442,23 @@ async fn fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
                 redirects.single_hop_transport_request(),
                 hop_cancel.clone(),
             )
-            .await
-            .map_err(format_network_error)?;
+            .await;
+        if observed.is_err() {
+            invalidate_cors_preflight(loader, redirects.request());
+        }
+        let observed = observed.map_err(format_network_error)?;
         let network_extra_info_available = observed.request_observation().is_some();
         let (mut response, hop_journal) = observed.into_parts_with_observation_journal();
         journal.append(hop_journal);
-        match redirects.advance(
+        let transition = redirects.advance(
             response.head(),
             network_extra_info_available,
             response.network_request_extra_info(),
-        )? {
+        );
+        if transition.is_err() {
+            invalidate_cors_preflight(loader, redirects.request());
+        }
+        match transition? {
             ManualCorsRedirectTransition::FinalResponse
             | ManualCorsRedirectTransition::ManualResponse { .. } => {
                 let redirect_chain = redirects.into_redirect_chain();
@@ -540,10 +571,20 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     )
     .await?;
     let redirect_mode = request.redirect_mode();
+    let cache_key = CorsPreflightCacheKey::for_request(&request);
     let result = loader
         .fetch_raw_stream_with_cancel_and_network_metadata(request, hop_cancel)
-        .await
-        .map_err(format_network_error)?;
+        .await;
+    if result.is_err()
+        && let Some(key) = cache_key
+    {
+        loader
+            .browser_resource_runtime()
+            .cors_preflight_cache()
+            .lock()
+            .remove_key(&key);
+    }
+    let result = result.map_err(format_network_error)?;
     validate_redirect_mode_response_head(&result.response().head(), redirect_mode)?;
     cancel_handle.adopt_response_progress(&result.response().cancellation_handle());
     Ok(result)
@@ -551,6 +592,14 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
 
 fn format_network_error(error: anyhow::Error) -> String {
     format!("{error:#}")
+}
+
+fn invalidate_cors_preflight(loader: &ResourceRequestClient, request: &Request) {
+    loader
+        .browser_resource_runtime()
+        .cors_preflight_cache()
+        .lock()
+        .remove(request);
 }
 
 async fn run_cors_preflight_if_needed(
@@ -572,6 +621,17 @@ async fn run_cors_preflight_if_needed(
             request.use_cors_preflight(),
         )
     {
+        let runtime = loader.browser_resource_runtime();
+        let cache_disabled = loader.page_network_policy().cache_disabled();
+        if !cache_disabled
+            && runtime.cors_preflight_cache().lock().can_skip(
+                request,
+                preflight_request_headers,
+                std::time::Instant::now(),
+            )
+        {
+            return Ok(());
+        }
         let observable_preflight_headers = preflight_headers.clone();
         let mut preflight_request = Request::new_browser_bytes(
             "OPTIONS",
@@ -585,6 +645,7 @@ async fn run_cors_preflight_if_needed(
         // non-ok response, never another OPTIONS request.
         .with_redirect_mode(RequestRedirectMode::Manual)
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_cache_mode(request.cache_mode())
         .with_redirect_chain(request.redirect_chain().to_vec())
         .with_network_partition_key(request.network_partition_key().map(str::to_owned))
         .with_referrer_from(request);
@@ -630,7 +691,7 @@ async fn run_cors_preflight_if_needed(
                 &preflight_response,
             );
         }
-        validate_cors_preflight_response(
+        let result = validate_cors_preflight_response(
             &request.serialized_origin(),
             request.credentials_mode,
             &request.method,
@@ -639,6 +700,10 @@ async fn run_cors_preflight_if_needed(
             &preflight_response.headers,
             request.use_cors_preflight(),
         )?;
+        runtime
+            .cors_preflight_cache()
+            .lock()
+            .insert(request, result, std::time::Instant::now());
     }
     Ok(())
 }
