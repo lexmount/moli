@@ -4,10 +4,12 @@
 //! and execution-context lifetimes. Page policy and Document/Worker lifecycle
 //! state must remain outside this boundary.
 
+mod cors_preflight;
 mod diagnostics;
 mod memory_cache;
 mod runtime;
 
+pub(crate) use cors_preflight::{CorsPreflightCache, CorsPreflightCacheKey, CorsPreflightResult};
 pub use diagnostics::{
     BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics,
     BrowserResourceRuntimeDiagnostics,

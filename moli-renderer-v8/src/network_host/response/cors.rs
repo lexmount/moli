@@ -9,6 +9,7 @@ use moli_web_mime::{
 };
 
 use crate::cross_origin_isolation::{CrossOriginEmbedderPolicy, DocumentIsolationPolicy};
+use crate::network::CorsPreflightResult;
 
 const CORS_SAFELISTED_RESPONSE_HEADER_NAMES: &[&str] = &[
     "cache-control",
@@ -447,7 +448,7 @@ pub(crate) fn validate_cors_preflight_response(
     response_status: u16,
     response_headers: &[(String, Vec<u8>)],
     use_cors_preflight: bool,
-) -> Result<(), String> {
+) -> Result<CorsPreflightResult, String> {
     if !(200..300).contains(&response_status) {
         return Err(format!(
             "CORS preflight failed: response status {response_status}"
@@ -464,53 +465,14 @@ pub(crate) fn validate_cors_preflight_response(
     if allow_methods.is_none() && use_cors_preflight {
         allow_methods = Some(vec![requested_method.to_owned()]);
     }
-    let wildcard_allowed = credentials_mode != RequestCredentialsMode::Include;
-
-    if !moli_fetch::is_cors_safelisted_method(requested_method) {
-        let Some(allow_methods) = allow_methods else {
-            return Err(format!(
-                "CORS preflight failed: no Access-Control-Allow-Methods for {requested_method}"
-            ));
-        };
-        if !allow_methods
-            .iter()
-            .any(|method| method == requested_method || (wildcard_allowed && method == "*"))
-        {
-            return Err(format!(
-                "CORS preflight failed: Access-Control-Allow-Methods `{}` does not allow {requested_method}",
-                allow_methods.join(",")
-            ));
-        }
-    }
-
-    let unsafe_header_names = moli_fetch::cors_unsafe_request_header_names(request_headers);
-    if unsafe_header_names.is_empty() {
-        return Ok(());
-    }
-
-    let Some(allow_headers) = allow_headers else {
-        return Err(format!(
-            "CORS preflight failed: no Access-Control-Allow-Headers for {}",
-            unsafe_header_names.join(",")
-        ));
-    };
-    let wildcard_headers = wildcard_allowed && allow_headers.iter().any(|name| name == "*");
-    for header_name in unsafe_header_names {
-        // Authorization is a CORS non-wildcard request-header name, so it
-        // always needs an explicit, case-insensitive match.
-        if !allow_headers
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&header_name))
-            && (!wildcard_headers || header_name == "authorization")
-        {
-            return Err(format!(
-                "CORS preflight failed: Access-Control-Allow-Headers `{}` does not allow {header_name}",
-                allow_headers.join(",")
-            ));
-        }
-    }
-
-    Ok(())
+    let result = CorsPreflightResult::new(
+        credentials_mode,
+        allow_methods,
+        allow_headers,
+        response_headers,
+    );
+    result.validate_request(requested_method, request_headers)?;
+    Ok(result)
 }
 
 pub(crate) fn filter_cors_exposed_response_headers(
@@ -866,7 +828,8 @@ mod tests {
                 204,
                 &response_headers,
                 false,
-            ),
+            )
+            .map(|_| ()),
             Ok(())
         );
     }
@@ -960,6 +923,7 @@ mod tests {
             &response_headers,
             false,
         )
+        .map(|_| ())
     }
 
     #[test]
