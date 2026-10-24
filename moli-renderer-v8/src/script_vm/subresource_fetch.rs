@@ -12,6 +12,7 @@ use {
     crate::types::{PendingSubresourceAuthResponse, PendingSubresourceResponseDetails},
 };
 
+mod beacon;
 mod document_completion;
 mod fetch_dispatch;
 mod intercepted_fetch;
@@ -209,10 +210,17 @@ fn detached_window_fetch_csp_redirect_failure_message(
     if redirect_state.was_checked(final_url) {
         return None;
     }
-    let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-    if let Some(mut violation) =
-        policy.report_only_violation(&pending.info.document_url, final_url, redirect_status)
-    {
+    let (reports, enforced) = policy
+        .check_url(
+            &pending.info.document_url,
+            final_url,
+            ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+        )
+        .into_violations();
+    let error = enforced.first().map(|violation| {
+        crate::document_runtime::document_content_security_policy_error_message(violation, "fetch")
+    });
+    for mut violation in reports.into_iter().chain(enforced) {
         violation.blocked_uri =
             crate::content_security_policy::csp_url_for_report(&pending.info.url);
         crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
@@ -223,21 +231,7 @@ fn detached_window_fetch_csp_redirect_failure_message(
             &violation,
         );
     }
-    let mut violation =
-        policy.enforce_violation(&pending.info.document_url, final_url, redirect_status)?;
-    violation.blocked_uri = crate::content_security_policy::csp_url_for_report(&pending.info.url);
-    crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
-        .apply_to(&mut violation);
-    crate::network_host::send_content_security_policy_violation_report_from_window_context(
-        &mut context_host.borrow_mut(),
-        report_context,
-        &violation,
-    );
-    Some(
-        crate::document_runtime::document_content_security_policy_error_message(
-            &violation, "fetch",
-        ),
-    )
+    error
 }
 
 enum MediaSubresourceTerminal<'a> {
@@ -697,7 +691,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Dictionary(_) => "dictionary",
         PendingSubresourceContinuation::ResponsePreload(_) => "response_preload",
-        PendingSubresourceContinuation::Beacon => "beacon",
+        PendingSubresourceContinuation::Beacon(_) => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(..) => "websocket",
