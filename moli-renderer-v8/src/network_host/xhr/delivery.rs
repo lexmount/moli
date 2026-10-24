@@ -28,7 +28,7 @@ pub(super) use self::timeout::{
 
 /// Clear the complete response surface before a new request or terminal event.
 /// Streaming delivery may already have exposed partial response data.
-pub(in crate::network_host::xhr) fn reset_xhr_response(
+pub(crate) fn reset_xhr_response(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
 ) {
