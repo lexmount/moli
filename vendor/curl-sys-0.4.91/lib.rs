@@ -1216,6 +1216,12 @@ extern "C" {
         timeout_ms: c_int,
         ret: *mut c_int,
     ) -> CURLMcode;
+    pub fn curl_multi_waitfds(
+        multi_handle: *mut CURLM,
+        fds: *mut curl_waitfd,
+        size: c_uint,
+        fd_count: *mut c_uint,
+    ) -> CURLMcode;
 
     #[cfg(feature = "poll_7_68_0")]
     pub fn curl_multi_poll(
