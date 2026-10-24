@@ -2571,11 +2571,33 @@ impl JsContextHost {
             )
     }
 
+    /// window.stop() cancels Fetch and XHR, including keepalive requests, but
+    /// leaves independent connections such as EventSource and WebSocket alone.
+    pub(crate) fn abort_window_fetches_and_xhrs_for_document(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: crate::native_bridge::WindowDocumentOwner,
+    ) {
+        self.abort_window_requests_matching(scope, owner, |continuation| {
+            continuation.is_window_fetch() || continuation.is_window_xhr()
+        });
+    }
+
     /// Stop the captured Document's requests while retaining their Window-bound
     /// terminal delivery. document.open() keeps that Window and its XHR objects.
     pub(crate) fn abort_window_requests_for_document(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         owner: crate::native_bridge::WindowDocumentOwner,
+    ) {
+        self.abort_window_requests_matching(scope, owner, |_| true);
+    }
+
+    fn abort_window_requests_matching(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: crate::native_bridge::WindowDocumentOwner,
+        matches_continuation: impl Fn(&PendingSubresourceContinuation) -> bool,
     ) {
         use crate::types::{PendingWindowRequestAbort, WindowRequestAbortContinuation};
 
@@ -2585,7 +2607,10 @@ impl JsContextHost {
         let registry_id = loader.load_diagnostics().registry_id;
         let requests = self
             .subresource_fetch_states()
-            .filter(|pending| pending.load.registry_id() == registry_id)
+            .filter(|pending| {
+                pending.load.registry_id() == registry_id
+                    && matches_continuation(&pending.continuation)
+            })
             .map(|pending| {
                 let internal_id = pending.info.internal_id;
                 let delivery =
@@ -2625,6 +2650,12 @@ impl JsContextHost {
             if self.abort_subresource_fetch(internal_id)
                 && let Some(delivery) = delivery
             {
+                if let WindowRequestAbortContinuation::Xhr(xhr) = &delivery.continuation {
+                    // Clear partial response data at cancellation, while the
+                    // queued networking task still owns the terminal events.
+                    let xhr = v8::Local::new(scope, xhr);
+                    crate::network_host::reset_xhr_response(scope, xhr);
+                }
                 self.pending_window_request_aborts
                     .insert(internal_id, delivery);
                 let _ = self.resource_completion_tx.send_async_subresource_event(

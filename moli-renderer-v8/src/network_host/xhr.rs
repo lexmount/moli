@@ -61,7 +61,7 @@ pub(crate) use self::delivery::{
     apply_xhr_response_body_source, apply_xhr_response_body_source_with_status_text,
     apply_xhr_streaming_failure, apply_xhr_streaming_response_body_source,
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
-    finish_xhr_abort, throw_synchronous_xhr_failure,
+    finish_xhr_abort, reset_xhr_response, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::encoding::xhr_response_text_decoder;
 pub(crate) use self::instance_state::{
