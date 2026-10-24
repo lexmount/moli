@@ -409,6 +409,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
             scope, template,
         );
     }
+
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
