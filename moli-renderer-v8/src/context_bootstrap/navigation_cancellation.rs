@@ -113,6 +113,8 @@ impl WindowNavigationStop {
             // replacing this Window. A genuinely retired LocalWindow must not
             // cancel a new Window installed behind the same frame handle.
             if binding.is_current(unsafe { &*host_ptr }) {
+                unsafe { &mut *host_ptr }
+                    .abort_window_fetches_and_xhrs_for_document(scope, self.target.owner());
                 if let OwnerDispatchScope::Child(handle) = self.target.dispatch_scope() {
                     unsafe { &mut *host_ptr }.abort_child_document_parser_for_navigation(handle);
                 }
