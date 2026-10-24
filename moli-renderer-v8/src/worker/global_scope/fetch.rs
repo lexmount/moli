@@ -2087,6 +2087,11 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         if inherited.body_unusable && !init.body_present {
             return Err(crate::network_host::request_body_already_used_error().into());
         }
+        let body = if init.body_present {
+            init.body.clone()
+        } else {
+            inherited.body_bytes_for_fetch(scope, req_obj)?
+        };
         signal = init.signal.unwrap_or(inherited.signal);
         body_stream = if init.body_present {
             init.body_stream.clone()
@@ -2102,11 +2107,6 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             init.method.clone()
         } else {
             inherited.method.clone()
-        };
-        let body = if init.body_present {
-            init.body.clone()
-        } else {
-            inherited.body.clone()
         };
         let mut headers = if init.headers_present {
             init.headers.clone()
@@ -2550,7 +2550,9 @@ pub(super) fn start_worker_resource_fetch<'s>(
         let signal_id = signal.and_then(|signal| worker_abort_signal_id(scope, signal));
         let cancel_handle = FetchCancelHandle::new();
         let disposition = if request_metadata.keepalive {
-            ResourceLoadDisposition::Keepalive
+            ResourceLoadDisposition::Keepalive {
+                body_bytes: body.as_ref().map_or(0, bytes::Bytes::len),
+            }
         } else {
             ResourceLoadDisposition::Ordinary
         };
@@ -2559,10 +2561,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             disposition,
             Some(cancel_handle.clone()),
         ) else {
-            return Some(make_rejected_promise(
-                scope,
-                "fetch: worker global is shutting down",
-            ));
+            return Some(make_rejected_promise(scope, "Failed to fetch"));
         };
         let request_body = request_body_text(&body);
         let fetch_id = {
@@ -2653,7 +2652,13 @@ pub(super) fn start_worker_resource_fetch<'s>(
         let signal_id = signal.and_then(|signal| worker_abort_signal_id(scope, signal));
         let cancel_handle = FetchCancelHandle::new();
         let disposition = if request_metadata.keepalive {
-            ResourceLoadDisposition::Keepalive
+            ResourceLoadDisposition::Keepalive {
+                body_bytes: if matches!(resolved_url.scheme(), "http" | "https") {
+                    body.as_ref().map_or(0, bytes::Bytes::len)
+                } else {
+                    0
+                },
+            }
         } else {
             ResourceLoadDisposition::Ordinary
         };
@@ -2662,10 +2667,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             disposition,
             Some(cancel_handle.clone()),
         ) else {
-            return Some(make_rejected_promise(
-                scope,
-                "fetch: worker global is shutting down",
-            ));
+            return Some(make_rejected_promise(scope, "Failed to fetch"));
         };
         let request_body = request_body_text(&body);
         let fetch_id = {
