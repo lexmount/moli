@@ -82,6 +82,11 @@ async fn invalid_write_keys_preserve_chromium_clone_and_getter_error_order() {
 }
 
 #[tokio::test]
+async fn prepared_writes_preserve_snapshots_generated_keys_and_index_constraints() {
+    assert_write_preparation("execution-indexes").await;
+}
+
+#[tokio::test]
 async fn cursor_updates_validate_before_admission_and_preserve_snapshots() {
     assert_write_preparation("cursor-rejections").await;
 }

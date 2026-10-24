@@ -25,6 +25,13 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
     open.result.createObjectStore('inline', {keyPath: 'id', autoIncrement: true});
     open.result.createObjectStore('nested', {keyPath: 'meta.id', autoIncrement: true});
     open.result.createObjectStore('generated', {autoIncrement: true});
+    if (scenario === 'execution-indexes') {
+      open.result.createObjectStore('nonunique').createIndex('by-label', 'label');
+      open.result.createObjectStore('unique').createIndex('by-label', 'label', {unique: true});
+      const inline = open.transaction.objectStore('inline');
+      inline.createIndex('by-label', 'label', {unique: true});
+      inline.createIndex('by-id', 'id', {unique: true});
+    }
   };
   const db = await result(open);
   try {
@@ -168,6 +175,63 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
           `invalid writes consumed generated keys: ${keys}`);
         await done;
         if (firstDone) await firstDone;
+      }
+    } else if (scenario === 'execution-indexes') {
+      for (const queued of [false, true]) {
+        const names = ['plain', 'nonunique', 'unique', 'inline', 'generated'];
+        const label = `snapshot-${queued}`;
+        let firstDone;
+        if (queued) {
+          const first = db.transaction(names, 'readwrite');
+          firstDone = complete(first);
+          first.objectStore('plain').put('blocker', 'hold');
+        }
+        const tx = db.transaction(names, 'readwrite'), done = complete(tx);
+        const writes = names.map(name => {
+          let reads = 0;
+          const value = {label, date: new realm.Date(1234), get payload() {
+            reads++;
+            return new realm.Map([['text', 'snapshot']]);
+          }};
+          const request = name === 'inline' || name === 'generated'
+            ? tx.objectStore(name).put(value)
+            : tx.objectStore(name).put(value, 'one');
+          assert(reads === 1, `${name}: value was not snapshotted at the call`);
+          assert(!Object.hasOwn(value, 'id'), `${name}: generated key mutated the original value`);
+          value.label = 'changed';
+          return result(request);
+        });
+        const second = result(tx.objectStore('nonunique').add({label}, `two-${queued}`));
+        const failures = ['unique', 'inline'].map(name => {
+          const store = tx.objectStore(name);
+          const request = name === 'inline' ? store.add({label}) : store.add({label}, 'two');
+          return new Promise((resolve, reject) => {
+            request.onsuccess = () => reject(new Error(`${name}: duplicate unique key was accepted`));
+            request.onerror = event => {
+              event.preventDefault();
+              resolve(request.error.name);
+            };
+          });
+        });
+        const keys = await Promise.all(writes);
+        await second;
+        assert((await Promise.all(failures)).every(name => name === 'ConstraintError'),
+          'unique index did not reject duplicate values');
+        await done;
+        if (firstDone) await firstDone;
+        const read = db.transaction(names), readDone = complete(read);
+        const values = names.map((name, index) => result(read.objectStore(name).get(keys[index])));
+        const nonunique = result(read.objectStore('nonunique').index('by-label').getAll(label));
+        const unique = result(read.objectStore('unique').index('by-label').get(label));
+        const inline = result(read.objectStore('inline').index('by-id').get(keys[3]));
+        for (const value of await Promise.all(values)) {
+          assert(value.label === label && value.payload.get('text') === 'snapshot'
+            && value.date.getTime() === 1234, 'execution changed the prepared value');
+        }
+        assert((await nonunique).length === 2, 'nonunique index lost a value');
+        assert((await unique).label === label, 'unique index lost the accepted value');
+        assert((await inline).id === keys[3], 'generated inline key was not available to the unique index');
+        await readDone;
       }
     } else if (scenario === 'native-state') {
       const first = db.transaction('plain', 'readwrite'), firstDone = complete(first);
