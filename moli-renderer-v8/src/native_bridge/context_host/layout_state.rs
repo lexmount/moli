@@ -26,6 +26,15 @@ struct CachedInferredFrameStyleViewport {
     viewport: StyleViewport,
 }
 
+#[derive(PartialEq)]
+pub(super) struct FontLoadScanInputs {
+    pub(super) dom_version: u64,
+    pub(super) style_generations: Vec<(DomHandle, u64, u64)>,
+    pub(super) visual_generation: u64,
+    pub(super) viewport: LayoutViewport,
+    pub(super) environment: StyloStyleEnvironment,
+}
+
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
@@ -40,6 +49,7 @@ struct CachedInferredFrameStyleViewport {
 #[derive(Default)]
 pub(super) struct DocumentLayoutState {
     services: DocumentLayoutServices,
+    font_load_scan_inputs: Option<FontLoadScanInputs>,
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
     web_fonts: DocumentWebFontState,
     // Allocated only when a child has enabled font resource work. The existing
@@ -67,6 +77,44 @@ pub(super) struct DocumentLayoutState {
 }
 
 impl DocumentLayoutState {
+    pub(super) fn has_any_font_load_candidates(&self) -> bool {
+        self.services.has_font_load_candidates()
+            || self
+                .embedded_document_services
+                .values()
+                .any(DocumentLayoutServices::has_font_load_candidates)
+    }
+
+    pub(super) fn font_load_scan_is_current(&self, inputs: &FontLoadScanInputs) -> bool {
+        self.font_load_scan_inputs.as_ref() == Some(inputs)
+    }
+
+    pub(super) fn publish_font_load_scan_inputs(&mut self, inputs: FontLoadScanInputs) {
+        self.font_load_scan_inputs = Some(inputs);
+    }
+
+    pub(super) fn has_font_load_candidates(
+        &self,
+        document: DomHandle,
+        main_document: DomHandle,
+    ) -> bool {
+        if document == main_document {
+            self.services.has_font_load_candidates()
+        } else {
+            self.embedded_document_services
+                .get(&document)
+                .is_some_and(DocumentLayoutServices::has_font_load_candidates)
+        }
+    }
+
+    pub(super) fn take_font_load_demands(&mut self) -> std::collections::BTreeSet<String> {
+        let mut demands = self.services.take_font_load_demands();
+        for services in self.embedded_document_services.values_mut() {
+            demands.extend(services.take_font_load_demands());
+        }
+        demands
+    }
+
     /// Both conditions are required: a request can own a slot before its
     /// stylesheet generation is published, while an empty published manifest
     /// still records reconciliation state that later mutations must advance.

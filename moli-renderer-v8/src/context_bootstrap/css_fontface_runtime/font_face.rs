@@ -234,10 +234,20 @@ fn font_face_readonly_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if slot == FONT_FACE_STATUS_SLOT || slot == FONT_FACE_LOADED_SLOT {
+        super::loading::start_demanded_font_face_loads(scope);
+        super::loading::start_queued_font_face_load(scope, args.this());
+    }
     if slot == FONT_FACE_STATUS_SLOT {
         let status = super::loading::status(scope, args.this());
         if let Some(value) = v8_string(scope, status.as_str()) {
             rv.set(value.into());
+        }
+        return;
+    }
+    if slot == FONT_FACE_LOADED_SLOT {
+        if let Some(promise) = super::loading::loaded_promise(scope, args.this()) {
+            rv.set(promise.into());
         }
         return;
     }
@@ -340,8 +350,6 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
             (String::new(), Some(Vec::new()), bytes)
         }
     };
-    let resolver = v8::PromiseResolver::new(scope).expect("FontFace loaded resolver");
-    let loaded = Some(resolver.get_promise(scope));
     FontFaceObjectDeclaration::new(
         parsed.family,
         source,
@@ -357,7 +365,7 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         descent_override,
         line_gap_override,
         size_adjust,
-        loaded,
+        None,
     )
     .initialize(scope, this)
     .expect("FontFace declaration should initialize object");
@@ -374,7 +382,7 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
     } else if let Some(bytes) = binary {
         resource.borrow_mut().initialize_binary(&bytes);
     }
-    super::loading::initialize_resolver(scope, this, resolver, resource, request_context);
+    super::loading::initialize(scope, this, resource, request_context);
     rv.set(this.into());
 }
 

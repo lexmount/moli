@@ -147,6 +147,13 @@ fn reconcile_document_font_face_set_ready<'s>(
     crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
         scope, host_ptr, handle,
     );
+    if unsafe { &*host_ptr }.document_has_font_load_candidates(handle)
+        && let Err(error) = unsafe { &*host_ptr }.ensure_initial_layout()
+    {
+        tracing::debug!(%error, "font readiness could not observe layout demand");
+    }
+    super::loading::start_demanded_font_face_loads(scope);
+    super::loading::start_queued_font_face_set_loads(scope, fonts);
     if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(handle) {
         super::events::font_face_set_loading_started(scope, fonts);
     } else {
@@ -295,10 +302,34 @@ fn sync_font_face_set_matching_order<'s>(
         }
         slots
     };
-    let connected = slots(connected);
+    let mut connected = slots(connected);
     let manual = slots(manual);
     // SAFETY: the native font service cannot call V8 while borrowed.
     let host = unsafe { &*host_ptr };
+    if !connected.is_empty()
+        && let Some(root) = host
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+        && let Some(resources) =
+            crate::layout_renderer::current_native_stylesheet_resources(host, root)
+    {
+        let cascade_order = resources
+            .web_fonts()
+            .iter()
+            .filter_map(|resource| resource.web_font())
+            .enumerate()
+            .map(|(index, font)| (font.registration_slot(), index))
+            .collect::<std::collections::HashMap<_, _>>();
+        // Only native matching uses cascade order. FontFaceSet's public array
+        // above retains document order, followed by manual insertion order.
+        connected.sort_by_key(|slot| {
+            cascade_order
+                .get(slot.as_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+    }
     if host.with_font_services(document, |services| {
         services.set_web_font_order(&connected, &manual)
     }) {

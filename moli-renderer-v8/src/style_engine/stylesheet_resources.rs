@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -99,6 +99,16 @@ impl StylesheetResourceManifest {
         STYLESHEET_RESOURCE_MANIFEST_BUILD_COUNT.with(|count| count.set(count.get() + 1));
         let mut web_fonts = Vec::new();
         let mut imports = BTreeMap::new();
+        // Stylo has already resolved effective rules and sorted them by the
+        // document-wide layer order. Source order alone loses cross-sheet and
+        // empty @layer statements, even though those can change font priority.
+        let document_font_order = stylist
+            .iter_extra_data_origins()
+            .filter(|(_, origin)| *origin == Origin::Author)
+            .flat_map(|(data, _)| data.font_faces.iter())
+            .enumerate()
+            .map(|(index, (rule, _))| (rule.raw_ptr().as_ptr() as usize, index))
+            .collect::<HashMap<_, _>>();
         collect_resources(
             document_stylesheets,
             stylist.device(),
@@ -106,6 +116,7 @@ impl StylesheetResourceManifest {
                 .cascade_data()
                 .borrow_for_origin(Origin::Author)
                 .custom_media_map(),
+            Some(&document_font_order),
             &mut web_fonts,
             &mut imports,
         );
@@ -114,6 +125,7 @@ impl StylesheetResourceManifest {
                 scope.active_stylesheets(),
                 stylist.device(),
                 scope.author_styles().data.custom_media_map(),
+                None,
                 &mut web_fonts,
                 &mut imports,
             );
@@ -154,9 +166,11 @@ fn collect_resources(
     stylesheets: &ActiveStylesheetCollection,
     device: &style::device::Device,
     custom_media: &style::stylesheets::CustomMediaMap,
+    cascade_order: Option<&HashMap<usize, usize>>,
     web_fonts: &mut Vec<StylesheetLoadBlockingResource>,
     imports: &mut BTreeMap<String, url::Url>,
 ) {
+    let mut fonts = Vec::new();
     for stylesheet in stylesheets.entries() {
         let effective_font_faces = native_effective_font_face_rule_addresses(
             stylesheet.stylesheet(),
@@ -167,9 +181,13 @@ fn collect_resources(
             if !effective_font_faces.contains(&resource.rule_address()) {
                 continue;
             }
+            let order = cascade_order
+                .and_then(|order| order.get(&resource.rule_address()))
+                .copied()
+                .unwrap_or(usize::MAX);
             let resource = resource.resource();
             if resource.web_font().is_some() {
-                web_fonts.push(resource.clone());
+                fonts.push((order, resource.clone()));
             }
         }
         for import in stylesheet.import_urls() {
@@ -180,4 +198,8 @@ fn collect_resources(
                 .or_insert_with(|| import.clone());
         }
     }
+    if cascade_order.is_some() {
+        fonts.sort_by_key(|(order, _)| *order);
+    }
+    web_fonts.extend(fonts.into_iter().map(|(_, resource)| resource));
 }

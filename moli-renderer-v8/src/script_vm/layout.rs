@@ -257,6 +257,7 @@ impl ScriptVm {
         if publishes_layout
             && matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
+                crate::context_bootstrap::queue_demanded_font_face_loads(scope);
                 crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
@@ -341,6 +342,30 @@ impl ScriptVm {
             Ok(())
         }) {
             tracing::warn!(%error, "failed to reconcile current document web fonts");
+        }
+    }
+
+    pub(super) fn discover_manual_font_load_demands(&mut self) {
+        if !self._context_host.borrow().font_load_demand_scan_needed() {
+            return;
+        }
+        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+            let host = unsafe { &*host_ptr };
+            let document = host.document_handle();
+            let request = moli_layout::LayoutPassRequest::new(
+                host.layout_viewport_for_document(document),
+                moli_layout::LayoutFlushReason::FontLoading,
+            );
+            // Resource discovery must also run on headless pages which never
+            // request geometry or paint. Discard the pass rather than replacing
+            // the frozen geometry snapshot used by synchronous DOM readers.
+            let result = host.build_layout_pass_for_document(document, request);
+            host.publish_font_load_scan_inputs();
+            drop(result?);
+            crate::context_bootstrap::queue_demanded_font_face_loads(scope);
+            Ok(())
+        }) {
+            tracing::debug!(%error, "manual font demand discovery failed");
         }
     }
 

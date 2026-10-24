@@ -7,7 +7,7 @@
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -26,6 +26,7 @@ use thiserror::Error;
 
 use crate::stylo_to_parley::TextBrush;
 
+mod font_demand;
 mod font_source;
 pub use font_source::FontFaceData;
 
@@ -39,6 +40,8 @@ pub(crate) struct ParleyDocumentServices {
         TextStyle<'static, 'static, TextBrush>,
         Option<InlineFontMetrics>,
     )>,
+    font_load_candidates: BTreeMap<String, (Arc<WebFontFace>, (bool, usize))>,
+    font_load_demands: BTreeSet<String>,
     #[cfg(test)]
     font_family_resolution_miss_count: usize,
 }
@@ -906,6 +909,8 @@ pub struct DocumentLayoutServices {
     // Selection priority belongs to this Document's current FontFaceSet.
     web_font_order: WebFontOrder,
     has_font_face_set_order: bool,
+    pending_web_fonts: BTreeMap<String, Arc<WebFontFace>>,
+    queued_font_loads: BTreeSet<String>,
     pub(crate) text_layout_passes: u64,
     #[cfg(test)]
     font_collection_rebuilds: usize,
@@ -944,6 +949,8 @@ impl DocumentLayoutServices {
             web_fonts: BTreeMap::new(),
             web_font_order: BTreeMap::new(),
             has_font_face_set_order: false,
+            pending_web_fonts: BTreeMap::new(),
+            queued_font_loads: BTreeSet::new(),
             text_layout_passes: 0,
             #[cfg(test)]
             font_collection_rebuilds: 0,
@@ -959,6 +966,8 @@ impl DocumentLayoutServices {
             web_fonts: BTreeMap::new(),
             web_font_order: BTreeMap::new(),
             has_font_face_set_order: false,
+            pending_web_fonts: BTreeMap::new(),
+            queued_font_loads: BTreeSet::new(),
             text_layout_passes: 0,
             #[cfg(test)]
             font_collection_rebuilds: 0,
@@ -1026,6 +1035,7 @@ impl DocumentLayoutServices {
             .map(|(slot, _)| slot.clone())
             .collect::<Vec<_>>();
         self.web_font_order = order;
+        let demands_changed = self.sync_font_load_candidates();
         let current = ordered_web_fonts(&self.web_fonts, &self.web_font_order)
             .into_iter()
             .map(|(slot, _)| slot.clone())
@@ -1033,7 +1043,7 @@ impl DocumentLayoutServices {
         // Physical families are private per slot. Changing CSS selection order
         // only updates candidate priorities, never Fontique registrations.
         self.refresh_web_font_priorities();
-        let changed = current != previous;
+        let changed = current != previous || demands_changed;
         if changed && let Some(parley) = self.parley.as_mut() {
             parley.invalidate_font_selection();
         }
@@ -1041,6 +1051,7 @@ impl DocumentLayoutServices {
     }
 
     fn refresh_web_font_priorities(&mut self) {
+        self.sync_font_load_candidates();
         let Some(parley) = self.parley.as_mut() else {
             return;
         };
@@ -1058,12 +1069,14 @@ impl DocumentLayoutServices {
     }
 
     fn rebuild_font_collection(&mut self) {
-        if self.parley.is_some() {
+        if let Some(parley) = self.parley.as_mut() {
+            self.queued_font_loads.append(&mut parley.font_load_demands);
             self.parley = Some(Box::new(build_parley_services(
                 self.system_font_policy,
                 &self.web_fonts,
                 &self.web_font_order,
             )));
+            self.sync_font_load_candidates();
             #[cfg(test)]
             {
                 self.font_collection_rebuilds += 1;
@@ -1185,6 +1198,13 @@ impl DocumentLayoutServices {
         let mut changed = false;
         let mut removed = false;
         for slot in slots {
+            if matches!(
+                scope,
+                WebFontRegistrationScope::FontFaceSetConnected
+                    | WebFontRegistrationScope::FontFaceSetManual
+            ) {
+                changed |= self.set_font_load_candidate(slot, None);
+            }
             let Some(font) = self.web_fonts.get_mut(slot) else {
                 continue;
             };
@@ -1325,11 +1345,15 @@ impl DocumentLayoutServices {
             web_fonts,
             web_font_order: order,
             has_font_face_set_order: self.has_font_face_set_order,
+            pending_web_fonts: self.pending_web_fonts.clone(),
+            queued_font_loads: BTreeSet::new(),
             text_layout_passes: 0,
             #[cfg(test)]
             font_collection_rebuilds: 0,
         };
         let result = consume(&mut temporary);
+        self.queued_font_loads
+            .extend(temporary.take_font_load_demands());
         self.text_layout_passes = self
             .text_layout_passes
             .saturating_add(temporary.text_layout_passes);
@@ -1355,6 +1379,7 @@ impl DocumentLayoutServices {
                 &self.web_fonts,
                 &self.web_font_order,
             )));
+            self.sync_font_load_candidates();
         }
         self.parley.as_deref_mut().expect("Parley was initialized")
     }
@@ -1392,6 +1417,8 @@ fn build_parley_services(
         web_font_families: BTreeMap::new(),
         font_family_resolution_plans: Vec::new(),
         inline_font_metrics_cache: Vec::new(),
+        font_load_candidates: BTreeMap::new(),
+        font_load_demands: BTreeSet::new(),
         #[cfg(test)]
         font_family_resolution_miss_count: 0,
     };

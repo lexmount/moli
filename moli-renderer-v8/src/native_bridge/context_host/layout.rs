@@ -5,7 +5,7 @@ use moli_layout::{
 };
 
 use super::JsContextHost;
-use super::layout_state::InferredFrameStyleViewportCacheKey;
+use super::layout_state::{FontLoadScanInputs, InferredFrameStyleViewportCacheKey};
 use crate::{
     css_resource_urls::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
@@ -333,6 +333,57 @@ impl JsContextHost {
         self.document_layout_state
             .borrow_mut()
             .clear_latest_layout();
+    }
+
+    pub(crate) fn document_has_font_load_candidates(&self, document: DomHandle) -> bool {
+        self.document_layout_state
+            .borrow()
+            .has_font_load_candidates(document, self.document_handle())
+    }
+
+    fn font_load_scan_inputs(&self) -> FontLoadScanInputs {
+        FontLoadScanInputs {
+            dom_version: self.dom_host().dom_version(),
+            style_generations: self
+                .style_engine
+                .visual_style_input_generations(self.active_layout_document_handles()),
+            visual_generation: self.visual_state_generation(),
+            viewport: self.layout_viewport_for_document(self.document_handle()),
+            environment: StyloStyleEnvironment::from_emulated_media(self.emulated_media()),
+        }
+    }
+
+    pub(crate) fn font_load_demand_scan_needed(&self) -> bool {
+        if !self.layout_policy().uses_real_layout()
+            || !self
+                .document_layout_state
+                .borrow()
+                .has_any_font_load_candidates()
+        {
+            return false;
+        }
+        let inputs = self.font_load_scan_inputs();
+        !self
+            .document_layout_state
+            .borrow()
+            .font_load_scan_is_current(&inputs)
+    }
+
+    pub(crate) fn publish_font_load_scan_inputs(&self) {
+        let inputs = self.font_load_scan_inputs();
+        self.document_layout_state
+            .borrow_mut()
+            .publish_font_load_scan_inputs(inputs);
+    }
+
+    pub(crate) fn take_font_load_demands(&self) -> std::collections::BTreeSet<String> {
+        debug_assert!(
+            !self.layout_pass_active.get(),
+            "font requests must not reenter an active layout pass"
+        );
+        self.document_layout_state
+            .borrow_mut()
+            .take_font_load_demands()
     }
 
     pub(crate) fn build_layout_pass_for_document(

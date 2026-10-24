@@ -23,7 +23,6 @@ cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/css-cascade/all-prop-initial-xml.html
 css/css-easing/linear-timing-functions-duplicate-points-crash.html
 css/css-flexbox/inline-flex-column-image-load.html
-css/css-font-loading/font-face-reject.html
 css/css-values/dynamic-viewport-units-rule-cache.html
 css/css-variables/variable-animation-from-to.html
 css/css-variables/variable-animation-over-transition.html
@@ -104,7 +103,6 @@ html/editing/the-hidden-attribute/hidden-until-found-and-details.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-empty.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-nonexistent.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-top.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html

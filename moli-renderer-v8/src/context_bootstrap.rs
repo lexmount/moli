@@ -17,6 +17,7 @@ mod crypto;
 mod css_fontface_runtime;
 pub(crate) use css_fontface_runtime::{
     bind_stylesheet_font_face, finish_font_face_url_load, publish_font_face_load_changes,
+    queue_demanded_font_face_loads, start_demanded_font_face_loads,
 };
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;

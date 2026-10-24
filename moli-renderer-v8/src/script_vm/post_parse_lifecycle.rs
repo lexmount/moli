@@ -2404,6 +2404,7 @@ impl ScriptVm {
         self.apply_connected_style_load_prime_result(prime_result);
         self.record_ready_stylesheet_network_results();
         self.reconcile_document_web_fonts_for_layout();
+        self.discover_manual_font_load_demands();
     }
 
     pub(crate) fn apply_connected_style_load_prime_result(

@@ -2139,6 +2139,9 @@ impl InlineBuildInput {
             // direct box state; closing that state moves the complete subtree.
             base_style.brush.paint = !unit.control;
             let structural_parent = unit.ancestors.last().copied().unwrap_or(self.root_style);
+            if !unit.control {
+                parley.request_font_loads_for_text(&base_style, &self.text[output_range.clone()]);
+            }
             if !parley.requires_character_font_resolution(&base_style) {
                 let sample = (!unit.control)
                     .then(|| self.text[output_range.clone()].chars().next())
