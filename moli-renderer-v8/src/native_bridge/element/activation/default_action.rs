@@ -1765,7 +1765,13 @@ fn send_anchor_ping_requests(
         .split_ascii_whitespace()
         .filter_map(|raw_url| base_url.join(raw_url).ok())
     {
-        crate::network_host::send_link_audit_ping(scope, runtime_ptr, handle, ping_url, destination_url);
+        crate::network_host::send_link_audit_ping(
+            scope,
+            runtime_ptr,
+            handle,
+            ping_url,
+            destination_url,
+        );
     }
 }
 

@@ -239,6 +239,68 @@ async fn link_audit_ping_omits_referer_without_losing_ping_headers() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn link_audit_ping_uses_its_adopted_document_base_policy_and_timeline() {
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/html; charset=utf-8\r\n",
+        |_, _| {
+            "<!doctype html><head><base href='/child-assets/'></head><body>child-ready</body>"
+                .to_owned()
+        },
+    )
+    .await;
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &beacon_url(&server, "/top/page"),
+        &loader,
+    );
+    vm.eval("globalThis.frame=document.body.appendChild(document.createElement('iframe'));frame.src='/child/page';true").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(frame.contentDocument.body?.textContent==='child-ready')",
+        "true",
+        "real child Document commits before parent script activates an adopted link",
+    )
+    .await;
+    vm.eval("globalThis.childPerformance=frame.contentWindow.performance;document.head.appendChild(Object.assign(document.createElement('meta'),{httpEquiv:'Content-Security-Policy',content:\"connect-src 'none'\"}));globalThis.link=document.createElement('a');link.href=frame.contentWindow.location.href+'#destination';link.ping='audit';frame.contentDocument.body.appendChild(link);HTMLElement.prototype.click.call(link);true").unwrap();
+    let url = beacon_url(&server, "/child-assets/audit");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        &format!("String(childPerformance.getEntriesByName({url:?}).length)"),
+        "1",
+        "Ping uses the link Document despite its caller's stricter CSP",
+    )
+    .await;
+    assert_eq!(vm.eval(&format!("JSON.stringify(childPerformance.getEntriesByName({url:?}).map(entry=>[entry.initiatorType,entry.responseStatus]))")).unwrap(), r#"[["ping",200]]"#);
+    assert_eq!(
+        vm.eval(&format!(
+            "String(performance.getEntriesByName({url:?}).length)"
+        ))
+        .unwrap(),
+        "0"
+    );
+    let child_url = beacon_url(&server, "/child/page");
+    let destination_url = beacon_url(&server, "/child/page#destination");
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].target, "/child/page");
+    let request = &requests[1];
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.target, "/child-assets/audit");
+    assert_eq!(request.body, b"PING");
+    assert_eq!(request.header_value("content-type"), Some("text/ping"));
+    assert_eq!(request.header_value("referer"), None);
+    assert_eq!(request.header_value("ping-from"), Some(child_url.as_str()));
+    assert_eq!(
+        request.header_value("ping-to"),
+        Some(destination_url.as_str())
+    );
+}
+
 fn complete_intercepted_beacon(vm: &mut StandaloneScriptVmHarness, internal_id: u64, url: &str) {
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
         internal_id,
