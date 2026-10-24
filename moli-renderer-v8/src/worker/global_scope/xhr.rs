@@ -844,10 +844,10 @@ pub(crate) fn try_worker_xhr_abort_callback(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
-    if !try_worker_xhr_terminate_fetch(scope, args.this()) {
+    if !try_worker_xhr_terminate_fetch(scope, xhr) {
         return false;
     }
-    crate::network_host::finish_xhr_abort(scope, args.this());
+    crate::network_host::finish_xhr_abort(scope, xhr);
     true
 }
 

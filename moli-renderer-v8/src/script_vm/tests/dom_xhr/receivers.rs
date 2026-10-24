@@ -145,13 +145,13 @@ globalThis.xhrProxyResult = 'pending';
     for (const [opener, sender] of [[xhrProxy, realXhr], [realXhr, xhrProxy]]) {
       const url = URL.createObjectURL(new Blob(['native reply'], {type: 'text/plain'}));
       prototype.open.call(opener, 'GET', url);
+      URL.revokeObjectURL(url);
       const onloadend = Object.getOwnPropertyDescriptor(realm.XMLHttpRequestEventTarget.prototype, 'onloadend');
       const done = new Promise(resolve => onloadend.set.call(xhrProxy, resolve));
       prototype.send.call(sender);
       await done;
-      URL.revokeObjectURL(url);
       assert(property('readyState').get.call(xhrProxy) === 4, 'native DONE state');
-      assert(property('status').get.call(xhrProxy) === 200, 'registered Proxy loads the same Blob response');
+      assert(property('status').get.call(xhrProxy) === 200, 'captured Blob load survives revocation');
       assert(property('responseText').get.call(xhrProxy) === 'native reply', 'shared response text');
       assert(property('response').get.call(realXhr) === 'native reply', 'shared response value');
       assert(prototype.getResponseHeader.call(xhrProxy, 'content-type') === 'text/plain', 'shared response headers');
