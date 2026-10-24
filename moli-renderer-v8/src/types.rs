@@ -93,7 +93,7 @@ pub(super) enum PendingSubresourceContinuation {
     CspReport {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
-    EventSource(v8::Global<v8::Object>),
+    EventSource(Box<PendingEventSourceRequest>),
     Fetch(PendingWindowFetchContinuation),
     FontFace(Box<PendingFontFaceFetch>),
     Image {
@@ -117,6 +117,7 @@ pub(super) enum PendingSubresourceContinuation {
     Xhr {
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
+        csp: Box<crate::network_host::WindowCspRequestContext>,
         // A null body completes at headers, before the transport's final task.
         // Taking its clock prevents that later task from reporting twice.
         timing: Option<crate::context_bootstrap::FetchResourceTiming>,
@@ -146,6 +147,11 @@ pub(super) enum PendingSubresourceContinuation {
         instance_id: moli_shared_worker::SharedWorkerInstanceId,
         report_id: u32,
     },
+}
+
+pub(super) struct PendingEventSourceRequest {
+    pub(super) event_source: v8::Global<v8::Object>,
+    pub(super) csp: crate::network_host::WindowCspRequestContext,
 }
 
 /// Fire-and-forget HTTP requests retain native policy, not a script realm.
@@ -208,6 +214,11 @@ impl ImageRequestCorsMode {
 }
 
 impl PendingSubresourceContinuation {
+    pub(super) fn csp_redirect_was_blocked(&self) -> bool {
+        self.csp_request_policy()
+            .is_some_and(|(_, state, _)| state.was_blocked())
+    }
+
     pub(super) fn csp_request_policy(
         &self,
     ) -> Option<(
@@ -216,6 +227,12 @@ impl PendingSubresourceContinuation {
         &crate::network_host::WindowCspReportRequestContext,
     )> {
         match self {
+            Self::EventSource(request) => Some((
+                &request.csp.policy,
+                &request.csp.redirect_state,
+                &request.csp.report_context,
+            )),
+            Self::Xhr { csp, .. } => Some((&csp.policy, &csp.redirect_state, &csp.report_context)),
             Self::Beacon(beacon) => Some((
                 &beacon.policy,
                 &beacon.redirect_state,
@@ -243,10 +260,15 @@ impl PendingSubresourceContinuation {
         }
     }
 
-    pub(super) fn new_window_xhr(xhr: v8::Global<v8::Object>, use_cors_preflight: bool) -> Self {
+    pub(super) fn new_window_xhr(
+        xhr: v8::Global<v8::Object>,
+        use_cors_preflight: bool,
+        csp: crate::network_host::WindowCspRequestContext,
+    ) -> Self {
         Self::Xhr {
             xhr,
             use_cors_preflight,
+            csp: Box::new(csp),
             timing: Some(
                 crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest"),
             ),

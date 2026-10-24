@@ -181,15 +181,49 @@ fn worker_fetch_redirect_check(
     fetch_id: u32,
 ) -> Option<moli_fetch::RequestRedirectCheck> {
     let pending = state.pending_fetches.get(&fetch_id)?;
-    if !pending.connect_policy.has_policies() {
+    worker_request_redirect_check(
+        state,
+        &pending.connect_policy,
+        &pending.redirect_csp_state,
+        &pending.document_url,
+        &pending.request_url,
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default(),
+    )
+}
+
+pub(super) fn worker_xhr_redirect_check(
+    state: &WorkerGlobalState,
+    xhr_id: u32,
+) -> Option<moli_fetch::RequestRedirectCheck> {
+    let pending = state.pending_xhrs.get(&xhr_id)?;
+    worker_request_redirect_check(
+        state,
+        &pending.connect_policy,
+        &pending.redirect_csp_state,
+        &pending.document_url,
+        &pending.request_url,
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default(),
+    )
+}
+
+pub(super) fn worker_request_redirect_check(
+    state: &WorkerGlobalState,
+    policy: &crate::document_runtime::DocumentConnectPolicySnapshot,
+    redirect_state: &crate::network_host::FetchCspRedirectState,
+    document_url: &Url,
+    request_url: &Url,
+    source_location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
+) -> Option<moli_fetch::RequestRedirectCheck> {
+    if !policy.has_policies() {
         return None;
     }
     let completion_tx = state.fetch_completion_tx.clone();
-    pending.redirect_csp_state.redirect_check(
-        pending.connect_policy.clone(),
-        pending.document_url.clone(),
-        pending.request_url.clone(),
-        move |violation| {
+    redirect_state.redirect_check(
+        policy.clone(),
+        document_url.clone(),
+        request_url.clone(),
+        move |mut violation| {
+            source_location.apply_to(&mut violation);
             let _ = completion_tx.send(WorkerFetchEvent::ContentSecurityPolicyViolation(Box::new(
                 violation,
             )));
@@ -639,6 +673,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
+    redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) {
     timing.begin_transport(cancel_handle.clone());
     tokio::task::spawn_local(async move {
@@ -675,6 +710,9 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             }
             if let Some(auth) = auth {
                 request = request.with_auth(auth.into());
+            }
+            if let Some(check) = redirect_check {
+                request = request.with_redirect_check(check);
             }
             request
         });
@@ -1233,6 +1271,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         auth,
         redirect_headers,
         redirect_chain,
+        worker_xhr_redirect_check(&state.borrow(), xhr_id),
     );
 }
 
@@ -2531,13 +2570,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         ));
     }
 
-    let connect_policy = {
-        let state = state.borrow();
-        crate::document_runtime::DocumentConnectPolicySnapshot::from_inherited_policy(
-            &super::content_security_policy::worker_policy_snapshot(&state),
-        )
-        .for_resource_kind(kind.csp_resource_kind())
-    };
+    let connect_policy = worker_request_policy_snapshot(&state.borrow(), kind.csp_resource_kind());
     // Local URLs are resolved by the worker fetch task without interception.
     if !matches!(resolved_url.scheme(), "blob" | "data")
         && fetch_subresource_interception_enabled

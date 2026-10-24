@@ -195,8 +195,8 @@ impl ScriptVm {
                     pending.execution_context.dispatch_scope(),
                 );
                 let event_source = match &pending.continuation {
-                    PendingSubresourceContinuation::EventSource(event_source) => {
-                        v8::Local::new(scope, event_source)
+                    PendingSubresourceContinuation::EventSource(request) => {
+                        v8::Local::new(scope, &request.event_source)
                     }
                     _ => unreachable!("EventSource completion requires EventSource continuation"),
                 };
@@ -224,7 +224,11 @@ impl ScriptVm {
                         crate::network_host::fail_event_source_connection(
                             scope,
                             event_source,
-                            crate::network_host::EventSourceTerminalMode::Reconnect,
+                            if pending.continuation.csp_redirect_was_blocked() {
+                                crate::network_host::EventSourceTerminalMode::Close
+                            } else {
+                                crate::network_host::EventSourceTerminalMode::Reconnect
+                            },
                         );
                     }
                     Ok(response) => {
@@ -552,7 +556,7 @@ impl ScriptVm {
                     let (reports, enforced) = font.policy.check_url(&pending.info.document_url, &response.final_url, redirect_status).into_violations();
                     let error = enforced.first().map(|violation| crate::document_runtime::document_content_security_policy_error_message(violation, "FontFace"));
                     for mut violation in reports.into_iter().chain(enforced) {
-                        report_window_fetch_csp_redirect_violation(scope, &context_host, &font.report_context, &pending.info.url, &mut violation);
+                        report_window_csp_redirect_violation(scope, &context_host, &font.report_context, &pending.info.url, &mut violation);
                     }
                     if let Some(error) = error {
                         return Err(error);

@@ -302,7 +302,9 @@ fn send_synchronous_network_xhr(
 ) {
     let mut timing =
         crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest");
-    let request = Request::new_bytes(
+    let csp = crate::network_host::WindowCspRequestContext::capture(scope, host, prepared.owner)
+        .expect("synchronous XHR prepared a live Document request authority");
+    let mut request = Request::new_bytes(
         &prepared.method,
         prepared.resolved_url.as_str(),
         prepared.send_body.clone(),
@@ -319,6 +321,14 @@ fn send_synchronous_network_xhr(
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
     .with_use_cors_preflight(prepared.use_cors_preflight);
+    if let Some(check) = csp.redirect_check(
+        scope,
+        &prepared.document_url,
+        &prepared.resolved_url,
+        host.resource_completion_sender(),
+    ) {
+        request = request.with_redirect_check(check);
+    }
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),

@@ -3265,6 +3265,12 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                     body_source_id,
                 );
                 let xhr = streaming_xhr_probe(scope);
+                let csp = crate::network_host::WindowCspRequestContext::capture(
+                    scope,
+                    &context_host.borrow(),
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                )
+                .expect("streaming XHR fixture has a Document request context");
 
                 context_host
                     .borrow_mut()
@@ -3300,6 +3306,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             continuation: super::PendingSubresourceContinuation::new_window_xhr(
                                 v8::Global::new(scope, xhr),
                                 false,
+                                csp,
                             ),
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
@@ -4499,6 +4506,12 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
             let _stream =
                 crate::network_host::pending_network_body_stream(scope, body_owner, body_source_id);
             let xhr = streaming_xhr_probe(scope);
+            let csp = crate::network_host::WindowCspRequestContext::capture(
+                scope,
+                &context_host.borrow(),
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("streaming XHR fixture has a Document request context");
 
             context_host
                 .borrow_mut()
@@ -4540,6 +4553,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         continuation: super::PendingSubresourceContinuation::new_window_xhr(
                             v8::Global::new(scope, xhr),
                             false,
+                            csp,
                         ),
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,

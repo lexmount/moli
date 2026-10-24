@@ -893,8 +893,8 @@ impl ScriptVm {
                         let xhr = v8::Local::new(scope, xhr);
                         crate::network_host::apply_xhr_failure(scope, xhr);
                     }
-                    PendingSubresourceContinuation::EventSource(event_source) => {
-                        let event_source = v8::Local::new(scope, event_source);
+                    PendingSubresourceContinuation::EventSource(request) => {
+                        let event_source = v8::Local::new(scope, &request.event_source);
                         crate::network_host::fail_event_source_connection(
                             scope,
                             event_source,
@@ -1008,10 +1008,10 @@ impl ScriptVm {
                             crate::types::SubresourceBodyFinished::failed(handle, error_text),
                         );
                 }
-                if let PendingSubresourceContinuation::EventSource(event_source) =
+                if let PendingSubresourceContinuation::EventSource(request) =
                     &pending.continuation
                 {
-                    let event_source = v8::Local::new(scope, event_source);
+                    let event_source = v8::Local::new(scope, &request.event_source);
                     crate::network_host::fail_event_source_connection(
                         scope,
                         event_source,
@@ -1208,7 +1208,7 @@ impl ScriptVm {
                 PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                     apply_stylesheet_subresource_terminal(&self._context_host, *binding);
                 }
-                PendingSubresourceContinuation::EventSource(event_source) => {
+                PendingSubresourceContinuation::EventSource(request) => {
                     if let Some(handle) = pending.info.network_request_handle {
                         self._context_host
                             .borrow_mut()
@@ -1236,7 +1236,7 @@ impl ScriptVm {
                                 ),
                             );
                     }
-                    let event_source = v8::Local::new(scope, event_source);
+                    let event_source = v8::Local::new(scope, &request.event_source);
                     let last_event_id =
                         crate::network_host::event_source_last_event_id(scope, event_source);
                     let reconnect_delay_ms =
@@ -1807,8 +1807,8 @@ impl ScriptVm {
                     enter_subresource_owner_async_scope(&context_host, scope, pending_owner);
                 if streaming.pending.continuation.is_window_event_source() {
                     let event_source = match &streaming.pending.continuation {
-                        PendingSubresourceContinuation::EventSource(event_source) => {
-                            v8::Local::new(scope, event_source)
+                        PendingSubresourceContinuation::EventSource(request) => {
+                            v8::Local::new(scope, &request.event_source)
                         }
                         _ => unreachable!("EventSource continuation was checked above"),
                     };
@@ -1845,7 +1845,11 @@ impl ScriptVm {
                         crate::network_host::fail_event_source_connection(
                             scope,
                             event_source,
-                            crate::network_host::EventSourceTerminalMode::Reconnect,
+                            if streaming.pending.continuation.csp_redirect_was_blocked() {
+                                crate::network_host::EventSourceTerminalMode::Close
+                            } else {
+                                crate::network_host::EventSourceTerminalMode::Reconnect
+                            },
                         );
                     }
                     defer_subresource_owner_async_scope(

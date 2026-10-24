@@ -168,67 +168,45 @@ fn document_connect_csp_redirect_failure_message<'s>(
         return None;
     }
 
-    if let Some(fetch) = pending.continuation.window_fetch() {
-        if fetch.redirect_csp_state().was_checked(final_url) {
-            return None;
-        }
-        let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-        if let Some(mut violation) = fetch.connect_policy().report_only_violation(
-            &pending.info.document_url,
-            final_url,
-            redirect_status,
-        ) {
-            report_window_fetch_csp_redirect_violation(
-                scope,
-                context_host,
-                fetch.csp_report_context(),
-                &pending.info.url,
-                &mut violation,
-            );
-        }
-        let mut violation = fetch.connect_policy().enforce_violation(
-            &pending.info.document_url,
-            final_url,
-            redirect_status,
-        )?;
-        report_window_fetch_csp_redirect_violation(
-            scope,
-            context_host,
-            fetch.csp_report_context(),
-            &pending.info.url,
-            &mut violation,
-        );
-        return Some(
-            crate::document_runtime::document_content_security_policy_error_message(
-                &violation, "fetch",
-            ),
-        );
+    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+    if redirect_state.was_checked(final_url) {
+        return None;
     }
-
-    let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-    let violation = context_host
-        .borrow_mut()
-        .check_document_connect_csp_for_owner_with_redirect_status(
-            scope,
-            pending.execution_context.dispatch_scope(),
-            &pending.info.document_url,
-            final_url,
-            redirect_status,
-        )
-        .into_blocking_violation()?;
     let operation = match pending.info.resource_type {
         SubresourceResourceType::EventSource => "EventSource",
         SubresourceResourceType::Xhr => "XMLHttpRequest",
         _ => "fetch",
     };
-    Some(
-        crate::document_runtime::document_content_security_policy_error_message(
-            &violation, operation,
-        ),
-    )
+    // Synthetic responses still need validation against the accepting Document,
+    // while the producer already checked every real redirect before sending it.
+    let (report_only, enforced) = policy
+        .check_redirect(&pending.info.document_url, final_url)
+        .into_violations();
+    let mut failure = None;
+    for (is_enforced, mut violation) in report_only
+        .into_iter()
+        .map(|violation| (false, violation))
+        .chain(enforced.into_iter().map(|violation| (true, violation)))
+    {
+        report_window_csp_redirect_violation(
+            scope,
+            context_host,
+            report_context,
+            &pending.info.url,
+            &mut violation,
+        );
+        if is_enforced && failure.is_none() {
+            failure = Some(
+                crate::document_runtime::document_content_security_policy_error_message(
+                    &violation, operation,
+                ),
+            );
+        }
+    }
+    failure
 }
 
-fn report_window_fetch_csp_redirect_violation<'s>(
+fn report_window_csp_redirect_violation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context_host: &Rc<RefCell<JsContextHost>>,
     report_context: &crate::network_host::WindowCspReportRequestContext,
