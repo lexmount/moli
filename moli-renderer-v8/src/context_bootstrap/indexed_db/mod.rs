@@ -1,6 +1,5 @@
 use super::{
     array_contains_strict, array_push_value, context_host_ptr_from_global_bridge,
-    define_non_enumerable_value_property as define_public_non_enumerable_value_property,
     global_constructor_prototype, object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,
@@ -54,6 +53,8 @@ pub(crate) use self::tasks::{
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
+#[cfg(test)]
+pub(crate) use self::typed_state::indexed_db_request_state_entries_for_test;
 pub(crate) use self::typed_state::retain_indexed_db_state_in_retired_realm;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 

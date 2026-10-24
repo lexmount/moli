@@ -756,6 +756,21 @@ pub(super) fn release_indexed_db_request_dispatch_refs<'s>(
     request.pending_cursor_position = None;
 }
 
+#[cfg(test)]
+pub(crate) fn indexed_db_request_state_entries_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    source: v8::Local<'_, v8::Object>,
+) -> usize {
+    let table = indexed_db_runtime_state_table_for_object(scope, source);
+    let table = table.borrow();
+    table.requests.len()
+        + table
+            .wrappers
+            .values()
+            .filter(|state| matches!(state.kind, IndexedDbWrapperKind::Request))
+            .count()
+}
+
 pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,

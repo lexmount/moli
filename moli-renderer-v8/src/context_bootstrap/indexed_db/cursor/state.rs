@@ -72,21 +72,89 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_current_position(
     (position >= 0).then_some(position as usize)
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn create_cursor_request<'s>(
+pub(in crate::context_bootstrap::indexed_db) struct CursorMutation<'s> {
+    pub(super) transaction: v8::Local<'s, v8::Object>,
+    pub(super) store: v8::Local<'s, v8::Object>,
+    pub(super) handle: TransactionHandle,
+    pub(super) store_name: String,
+    pub(super) primary_key: Key,
+}
+
+impl<'s> CursorMutation<'s> {
+    pub(super) fn create_request(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        cursor: v8::Local<'s, v8::Object>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        // A serialization getter may have aborted the transaction.
+        if !object_bool_property(scope, self.transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+            .unwrap_or(false)
+        {
+            throw_cursor_mutation_error(
+                scope,
+                "The transaction is not active.",
+                "TransactionInactiveError",
+            );
+            return None;
+        }
+        let request = create_request_object(scope, cursor.into(), self.transaction)?;
+        queue_transaction_request(scope, self.transaction, request);
+        Some(request)
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn prepare_cursor_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Object>, TransactionHandle, String)> {
+) -> Option<CursorMutation<'s>> {
     let (_, transaction) = cursor_request_and_transaction(scope, cursor)?;
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
         .unwrap_or(false)
     {
+        throw_cursor_mutation_error(
+            scope,
+            "The transaction is not active.",
+            "TransactionInactiveError",
+        );
         return None;
     }
-    let request = create_request_object(scope, cursor.into(), transaction)?;
-    queue_transaction_request(scope, transaction, request);
-    let handle = transaction_handle_from_value(scope, transaction.into())?;
+    if indexed_db_transaction_mode(scope, transaction) == Some(TransactionMode::ReadOnly) {
+        throw_cursor_mutation_error(scope, "The transaction is readonly.", "ReadOnlyError");
+        return None;
+    }
+    if object_bool_property(scope, cursor, INDEXED_DB_CURSOR_KEY_ONLY_SLOT).unwrap_or(false) {
+        throw_cursor_mutation_error(
+            scope,
+            "The cursor does not expose values.",
+            "InvalidStateError",
+        );
+        return None;
+    }
+    let Some(primary_key) = cursor_current_position(scope, cursor)
+        .and_then(|position| cursor_primary_key_at(scope, cursor, position))
+    else {
+        throw_cursor_mutation_error(scope, "The cursor is exhausted.", "InvalidStateError");
+        return None;
+    };
+    let store = cursor_store_object(scope, cursor)?;
     let store_name = cursor_store_name(scope, cursor)?;
-    Some((request, handle, store_name))
+    let handle = transaction_handle_from_value(scope, transaction.into())?;
+    Some(CursorMutation {
+        transaction,
+        store,
+        handle,
+        store_name,
+        primary_key,
+    })
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn throw_cursor_mutation_error(
+    scope: &mut v8::PinScope<'_, '_>,
+    message: &str,
+    name: &str,
+) {
+    let error = dom_exception_value(scope, message, name);
+    scope.throw_exception(error);
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn cursor_source_is_index<'s>(

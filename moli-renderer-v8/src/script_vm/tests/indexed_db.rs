@@ -3481,7 +3481,9 @@ fn indexed_db_rejects_out_of_range_integer_keys() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbOutOfRangeKeyError)")
         .expect("indexeddb out-of-range key result should be readable");
 
-    assert_eq!(result, "TypeError");
+    // The native key model still limits numeric range. Rejecting an unsupported
+    // key is data validation, rather than a WebIDL type conversion failure.
+    assert_eq!(result, "DataError");
 }
 
 #[test]
@@ -4996,15 +4998,11 @@ fn indexed_db_cursor_update_and_delete_fail_in_readonly_transactions() {
       const req = db.transaction("kv").objectStore("kv").openCursor();
       req.onsuccess = () => {
         const cursor = req.result;
-        const updateReq = cursor.update({ value: 2 });
-        updateReq.onerror = () => {
-          const deleteReq = cursor.delete();
-          deleteReq.onerror = () => {
-            globalThis.__indexedDbCursorReadonlyError = [
-              updateReq.error && updateReq.error.name,
-              deleteReq.error && deleteReq.error.name
-            ].join("|");
-          };
+        let updateError, deleteError;
+        try { cursor.update({ value: 2 }); } catch (error) { updateError = error.name; }
+        try { cursor.delete(); } catch (error) { deleteError = error.name; }
+        req.transaction.oncomplete = () => {
+          globalThis.__indexedDbCursorReadonlyError = [updateError, deleteError].join("|");
         };
       };
     };

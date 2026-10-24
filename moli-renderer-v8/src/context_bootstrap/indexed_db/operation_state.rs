@@ -1,4 +1,4 @@
-use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo};
+use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo, PreparedObjectStoreWrite};
 use crate::native_bridge::OwnerDispatchScope;
 
 pub(super) enum IndexedDbCursorSource {
@@ -64,8 +64,7 @@ pub(super) enum IndexedDbTransactionOperation {
     },
     OpenCursor(IndexedDbCursorOpenOperation),
     ObjectStoreWrite {
-        value: v8::Global<v8::Value>,
-        key: v8::Global<v8::Value>,
+        prepared: PreparedObjectStoreWrite,
         add_only: bool,
     },
     ObjectStoreDelete {
@@ -94,7 +93,7 @@ pub(super) enum IndexedDbTransactionOperation {
 }
 
 // Query arguments are converted at the API boundary and retained as native snapshots.
-// Write requests retain their existing deferred value/key conversion behavior.
+// Write values and keys are also prepared synchronously, before request admission.
 pub(super) struct IndexedDbPendingTransactionOperation {
     owner: OwnerDispatchScope,
     source: v8::Global<v8::Object>,
