@@ -299,6 +299,7 @@ fn dom_handle_for_range_object<'s>(
     host_ptr: *mut JsContextHost,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     native_bridge::callback_value_dom_handle(scope, object.into()).or_else(|| {
         native_bridge::document::detached_native_handle_for_runtime(scope, host_ptr, object)
     })

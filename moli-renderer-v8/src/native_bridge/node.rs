@@ -27,6 +27,7 @@ mod errors;
 mod foreign;
 mod metadata;
 mod mutation;
+mod reference;
 mod tree;
 
 pub(super) use self::arguments::*;
@@ -39,6 +40,7 @@ pub(super) use self::foreign::*;
 use self::metadata::*;
 pub(crate) use self::mutation::validate_pre_insert_handles;
 pub(super) use self::mutation::*;
+pub(crate) use self::reference::NativeNodeReference;
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]

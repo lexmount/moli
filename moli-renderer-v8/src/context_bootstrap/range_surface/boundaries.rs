@@ -26,14 +26,14 @@ struct RangeSetEndArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.selectNodeContents")]
 struct RangeSelectNodeContentsArgs<'s> {
-    #[webidl(with = range_select_node_contents_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.selectNode")]
 struct RangeSelectNodeArgs<'s> {
-    #[webidl(with = range_select_node_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
 }
 
@@ -42,27 +42,6 @@ struct RangeSelectNodeArgs<'s> {
 struct RangeCollapseArgs {
     #[webidl(default = false)]
     to_start: bool,
-}
-
-fn range_select_node_contents_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(
-        scope,
-        args,
-        index,
-        "Range.selectNodeContents requires a Node",
-    )
-}
-
-fn range_select_node_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, "Range.selectNode requires a Node")
 }
 
 pub(super) fn range_set_start_callback<'s>(
@@ -215,7 +194,7 @@ pub(super) fn range_select_node_callback<'s>(
         return;
     };
     let node = parsed.node;
-    let Some(parent) = object_property_as_object(scope, node, "parentNode") else {
+    let Some(parent) = range_node_parent(scope, node) else {
         throw_named_dom_exception(
             scope,
             "InvalidNodeTypeError",
@@ -301,24 +280,14 @@ pub(super) fn range_clone_range_callback<'s>(
 /// True iff `node`'s nodeType is 10 (DocumentType). Used by Range boundary
 /// setters and other DOM algorithms that reject doctype targets per spec.
 fn node_is_doctype<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) -> bool {
-    object_number_property(scope, node, "nodeType")
-        .map(|t| t as u32 == 10)
-        .unwrap_or(false)
+    range_node_type(scope, node) == Some(10)
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range boundary method")]
 struct RangeRelativeBoundaryArgs<'s> {
-    #[webidl(with = range_relative_boundary_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
-}
-
-fn range_relative_boundary_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, "Range boundary method requires a Node")
 }
 
 fn range_set_boundary_relative<'s>(
@@ -336,7 +305,7 @@ fn range_set_boundary_relative<'s>(
     // If node has no parent, throw InvalidNodeTypeError (the node is not a
     // child of any container, so before/after has no boundary point). WPT
     // tests this explicitly with detached / document-root nodes.
-    let Some(parent) = object_property_as_object(scope, node, "parentNode") else {
+    let Some(parent) = range_node_parent(scope, node) else {
         throw_named_dom_exception(
             scope,
             "InvalidNodeTypeError",

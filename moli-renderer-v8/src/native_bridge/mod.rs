@@ -76,6 +76,7 @@ pub(crate) use element::{
     compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
 };
 pub(super) use helpers::*;
+pub(crate) use node::NativeNodeReference;
 pub(crate) use node::branded_node_handle;
 pub(crate) use node::{
     current_or_live_delegate_node_arg_handle, node_or_foreign_arg_handle_allow_detached,
