@@ -504,6 +504,7 @@ pub(crate) struct InlineFragments {
 pub(crate) struct InlineLineFragment {
     pub(crate) line_index: usize,
     pub(crate) rect: PaintRect,
+    pub(crate) scrollable_rect: PaintRect,
     /// Conservative glyph/decoration/shadow ink used only by capture culling.
     /// CSSOM line geometry continues to use `rect`.
     pub(crate) paint_bounds: InlinePaintBounds,
@@ -582,9 +583,15 @@ pub(crate) fn build_inline_fragments(
             },
             |placement| placement.rect,
         );
+        let mut scrollable_rect = line_rect;
+        scrollable_rect.width = (scrollable_rect.width - metrics.hanging_advance).max(0.0);
+        if layout.is_rtl() {
+            scrollable_rect.x += metrics.hanging_advance;
+        }
         fragments.lines.push(InlineLineFragment {
             line_index,
             rect: line_rect,
+            scrollable_rect,
             paint_bounds: context
                 .selection
                 .as_ref()

@@ -1569,3 +1569,65 @@ fn html_direction_hints_and_bidi_contexts_stay_in_the_style_cascade() {
         assert_eq!(vm.eval(query).unwrap(), first, "paint: {doctype}");
     }
 }
+
+// Expected scrollWidth values verified in Chromium 156.0.8078.47 with the same
+// markup and the bundled Ahem face (0.6em advance). Chromium reports identical
+// values for `dir=rtl`, but RTL inline overflow toward the inline start is not
+// yet part of scrollable overflow here, so only LTR is asserted.
+#[test]
+fn hanging_trailing_spaces_do_not_contribute_to_scrollable_overflow() {
+    let cases = [
+        ("normal", "aa aa aa", 15),
+        ("normal", "aa   aa", 15),
+        ("normal", "aa   ", 15),
+        ("normal", "aaaaaa", 36),
+        ("normal", "aaaaaa aa", 36),
+        ("pre-wrap", "aa aa aa", 15),
+        ("pre-wrap", "aa   aa", 15),
+        ("pre-wrap", "aa   ", 15),
+        ("pre-wrap", "aaaaaa", 36),
+        ("pre-wrap", "aaaaaa aa", 36),
+        ("break-spaces", "aa aa aa", 18),
+        ("break-spaces", "aa   aa", 18),
+        ("break-spaces", "aa   ", 18),
+        ("break-spaces", "aaaaaa", 36),
+        ("break-spaces", "aaaaaa aa", 42),
+        ("pre", "aa aa aa", 48),
+        ("pre", "aa   aa", 42),
+        ("pre", "aa   ", 30),
+        ("pre", "aaaaaa", 36),
+        ("pre", "aaaaaa aa", 54),
+        ("nowrap", "aa aa aa", 48),
+        ("nowrap", "aa   aa", 30),
+        ("nowrap", "aa   ", 15),
+        ("nowrap", "aaaaaa", 36),
+        ("nowrap", "aaaaaa aa", 54),
+        ("pre-line", "aa aa aa", 15),
+        ("pre-line", "aa   aa", 15),
+        ("pre-line", "aa   ", 15),
+        ("pre-line", "aaaaaa", 36),
+        ("pre-line", "aaaaaa aa", 36),
+    ];
+    let mut mismatches = Vec::new();
+    for (white_space, text, scroll_width) in cases {
+        let markup = format!(
+            r#"<!doctype html><style>body{{margin:0}}#s{{width:15px;height:50px;overflow:hidden;font:10px/10px MoliAhem}}</style><div id=s style="white-space:{white_space}">{text}</div>"#
+        );
+        let mut vm = new_parsed_test_vm("https://hanging-space-overflow.test/", &markup);
+        vm._context_host.borrow().register_layout_test_font(
+            "MoliAhem",
+            include_bytes!("../../../../../../../moli-layout/tests/fixtures/moli-ahem.ttf")
+                .to_vec(),
+        );
+        let query = "JSON.stringify([s.scrollWidth,s.clientWidth])";
+        let first = serde_json::from_str::<[i32; 2]>(&vm.eval(query).unwrap()).unwrap();
+        publish_layout_for_test(&mut vm);
+        let painted = serde_json::from_str::<[i32; 2]>(&vm.eval(query).unwrap()).unwrap();
+        if first != [scroll_width, 15] || painted != first {
+            mismatches.push(format!(
+                "{white_space} / {text:?}: expected [{scroll_width}, 15], got {first:?} then {painted:?}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
