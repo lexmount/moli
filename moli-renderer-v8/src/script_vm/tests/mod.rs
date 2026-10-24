@@ -325,36 +325,38 @@ fn register_pending_window_fetch_for_test(
     let resolver = v8::PromiseResolver::new(scope).expect("test Fetch resolver");
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
     let url = Url::parse("https://fetch-execution-context.test/pending").unwrap();
-    let internal_id = host.record_async_subresource_fetch(
-        fetch_context,
-        v8::Global::new(scope, resolver),
-        keepalive,
-        String::new(),
-        connect_policy,
-        csp_report_context,
-        Some(cancel_handle.clone()),
-        moli_fetch::RequestCredentialsMode::SameOrigin,
-        moli_fetch::RequestMode::Cors,
-        (&url).into(),
-        moli_fetch::RequestRedirectMode::Follow,
-        None,
-        Default::default(),
-        crate::types::PendingSubresourceFetchInfo {
-            internal_id: 0,
-            network_request_handle: None,
-            frame_id: None,
-            document_url: url.clone(),
-            url: url.clone(),
-            websocket_socket_id: None,
-            method: "GET".to_owned(),
-            request_headers: Vec::new().into(),
-            request_body: None,
-            request_body_bytes: None,
-            resource_type: crate::types::SubresourceResourceType::Fetch,
-            request_cookie_report: None,
-        },
-        false,
-    );
+    let internal_id = host
+        .record_async_subresource_fetch(
+            fetch_context,
+            v8::Global::new(scope, resolver),
+            keepalive,
+            String::new(),
+            connect_policy,
+            csp_report_context,
+            Some(cancel_handle.clone()),
+            moli_fetch::RequestCredentialsMode::SameOrigin,
+            moli_fetch::RequestMode::Cors,
+            (&url).into(),
+            moli_fetch::RequestRedirectMode::Follow,
+            None,
+            Default::default(),
+            crate::types::PendingSubresourceFetchInfo {
+                internal_id: 0,
+                network_request_handle: None,
+                frame_id: None,
+                document_url: url.clone(),
+                url: url.clone(),
+                websocket_socket_id: None,
+                method: "GET".to_owned(),
+                request_headers: Vec::new().into(),
+                request_body: None,
+                request_body_bytes: None,
+                resource_type: crate::types::SubresourceResourceType::Fetch,
+                request_cookie_report: None,
+            },
+            false,
+        )
+        .expect("test Fetch should be admitted");
 
     if !matches!(stage, PendingWindowFetchTestStage::Pending) {
         let pending = host
@@ -493,36 +495,38 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
             panic!("this focused Fetch policy helper only supports frame Documents")
         }
     };
-    let internal_id = host.record_async_subresource_fetch(
-        fetch_context,
-        v8::Global::new(scope, resolver),
-        keepalive,
-        String::new(),
-        crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
-        csp_report_context,
-        Some(cancel_handle.clone()),
-        moli_fetch::RequestCredentialsMode::SameOrigin,
-        moli_fetch::RequestMode::Cors,
-        (&document_url).into(),
-        moli_fetch::RequestRedirectMode::Follow,
-        None,
-        Default::default(),
-        crate::types::PendingSubresourceFetchInfo {
-            internal_id: 0,
-            network_request_handle: None,
-            frame_id: None,
-            document_url,
-            url: request_url.clone(),
-            websocket_socket_id: None,
-            method: "GET".to_owned(),
-            request_headers: Vec::new().into(),
-            request_body: None,
-            request_body_bytes: None,
-            resource_type: crate::types::SubresourceResourceType::Fetch,
-            request_cookie_report: None,
-        },
-        false,
-    );
+    let internal_id = host
+        .record_async_subresource_fetch(
+            fetch_context,
+            v8::Global::new(scope, resolver),
+            keepalive,
+            String::new(),
+            crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
+            csp_report_context,
+            Some(cancel_handle.clone()),
+            moli_fetch::RequestCredentialsMode::SameOrigin,
+            moli_fetch::RequestMode::Cors,
+            (&document_url).into(),
+            moli_fetch::RequestRedirectMode::Follow,
+            None,
+            Default::default(),
+            crate::types::PendingSubresourceFetchInfo {
+                internal_id: 0,
+                network_request_handle: None,
+                frame_id: None,
+                document_url,
+                url: request_url.clone(),
+                websocket_socket_id: None,
+                method: "GET".to_owned(),
+                request_headers: Vec::new().into(),
+                request_body: None,
+                request_body_bytes: None,
+                resource_type: crate::types::SubresourceResourceType::Fetch,
+                request_cookie_report: None,
+            },
+            false,
+        )
+        .expect("test Fetch should be admitted");
     (
         internal_id,
         owner,
@@ -2343,6 +2347,7 @@ mod encoded_video_chunk;
 mod event_receivers;
 mod extracted;
 mod fetch_integrity;
+mod fetch_keepalive_quota;
 mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;

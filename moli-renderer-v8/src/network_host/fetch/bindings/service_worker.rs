@@ -10,16 +10,21 @@ pub(super) fn dispatch_service_worker_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: &PreparedWindowFetchRequest,
-) -> Option<u64> {
+) -> anyhow::Result<Option<u64>> {
     if !matches!(prepared.resolved_url.scheme(), "http" | "https") {
-        return None;
+        return Ok(None);
     }
     let client_id = host.service_worker_client_id_for_subresource_owner(prepared.request_scope());
-    host.service_worker_controller_for_fetch(
-        client_id,
-        &prepared.document_url,
-        &prepared.resolved_url,
-    )?;
+    if host
+        .service_worker_controller_for_fetch(
+            client_id,
+            &prepared.document_url,
+            &prepared.resolved_url,
+        )
+        .is_none()
+    {
+        return Ok(None);
+    }
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -49,36 +54,38 @@ pub(super) fn dispatch_service_worker_fetch(
         )
         .is_some();
     let request_body_text = request_body_text(&prepared.body);
-    let internal_id = host.record_async_subresource_fetch(
-        prepared.fetch_context.duplicate(scope),
-        v8::Global::new(scope, resolver),
-        prepared.keepalive,
-        prepared.integrity.clone(),
-        prepared.connect_policy.clone(),
-        prepared.csp_report_context.clone(),
-        Some(cancel_handle.clone()),
-        prepared.credentials_mode,
-        prepared.request_mode,
-        prepared.request_origin.clone(),
-        prepared.redirect_mode,
-        prepared.network_partition_key.clone(),
-        prepared.policy_context,
-        PendingSubresourceFetchInfo {
-            internal_id: 0,
-            network_request_handle: None,
-            frame_id: prepared.frame_id.clone(),
-            document_url: prepared.document_url.clone(),
-            url: prepared.resolved_url.clone(),
-            websocket_socket_id: None,
-            method: prepared.method.clone(),
-            request_headers: prepared.request_headers.clone(),
-            request_body: request_body_text.clone(),
-            request_body_bytes: prepared.body.clone(),
-            resource_type: SubresourceResourceType::Fetch,
-            request_cookie_report: request_cookie_report.clone(),
-        },
-        requires_preflight,
-    );
+    let internal_id = host
+        .record_async_subresource_fetch(
+            prepared.fetch_context.duplicate(scope),
+            v8::Global::new(scope, resolver),
+            prepared.keepalive,
+            prepared.integrity.clone(),
+            prepared.connect_policy.clone(),
+            prepared.csp_report_context.clone(),
+            Some(cancel_handle.clone()),
+            prepared.credentials_mode,
+            prepared.request_mode,
+            prepared.request_origin.clone(),
+            prepared.redirect_mode,
+            prepared.network_partition_key.clone(),
+            prepared.policy_context,
+            PendingSubresourceFetchInfo {
+                internal_id: 0,
+                network_request_handle: None,
+                frame_id: prepared.frame_id.clone(),
+                document_url: prepared.document_url.clone(),
+                url: prepared.resolved_url.clone(),
+                websocket_socket_id: None,
+                method: prepared.method.clone(),
+                request_headers: prepared.request_headers.clone(),
+                request_body: request_body_text.clone(),
+                request_body_bytes: prepared.body.clone(),
+                resource_type: SubresourceResourceType::Fetch,
+                request_cookie_report: request_cookie_report.clone(),
+            },
+            requires_preflight,
+        )
+        .ok_or_else(|| anyhow::anyhow!("Failed to fetch"))?;
     let request = host.service_worker_fetch_request(
         client_id,
         prepared.resolved_url.clone(),
@@ -114,7 +121,7 @@ pub(super) fn dispatch_service_worker_fetch(
         direct_completion_tx: None,
     };
     if host.dispatch_service_worker_fetch(dispatch) {
-        return Some(internal_id);
+        return Ok(Some(internal_id));
     }
 
     let _ =
@@ -131,7 +138,7 @@ pub(super) fn dispatch_service_worker_fetch(
                 network_error_text: None,
                 result: Err("service worker fetch dispatch failed".to_owned()).into(),
             });
-    Some(internal_id)
+    Ok(Some(internal_id))
 }
 
 fn request_body_text(body: &Option<bytes::Bytes>) -> Option<String> {

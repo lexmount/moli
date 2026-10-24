@@ -297,7 +297,9 @@ fn send_worker_content_security_policy_report_for_state(
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
     let Some(load) = loader.register_load(
         ResourceLoadKind::CspReport,
-        ResourceLoadDisposition::Keepalive,
+        ResourceLoadDisposition::Keepalive {
+            body_bytes: request.body.as_ref().map_or(0, bytes::Bytes::len),
+        },
         None,
     ) else {
         record_worker_content_security_policy_report_failure(
@@ -307,7 +309,7 @@ fn send_worker_content_security_policy_report_for_state(
             document_url,
             request,
             request_body,
-            "csp report: worker global is shutting down".to_owned(),
+            "csp report: request could not be admitted".to_owned(),
         );
         return;
     };
