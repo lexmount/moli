@@ -1,11 +1,11 @@
-//! Persistent WebSocket residences on the common HTTP/WebSocket Multi.
+//! Persistent WebSocket residences on their own socket-pool Multi.
 //! The runtime owns perform, completion dispatch and the single wait loop.
 
 use std::{collections::HashMap, time::Instant};
 
 use curl::{
     easy::Easy2,
-    multi::{Multi, WaitFd},
+    multi::{Multi, MultiWaker, WaitFd},
 };
 
 use super::{
@@ -34,10 +34,14 @@ pub(crate) struct WebSocketRegistry {
     readiness: SocketReadiness,
     receive: Vec<u8>,
     closed: bool,
+    owner_waker: MultiWaker,
 }
 
 impl WebSocketRegistry {
-    pub(crate) fn new(submissions: crossbeam_channel::Receiver<Submission>) -> Self {
+    pub(crate) fn new(
+        submissions: crossbeam_channel::Receiver<Submission>,
+        owner_waker: MultiWaker,
+    ) -> Self {
         Self {
             submissions,
             sessions: HashMap::new(),
@@ -45,6 +49,7 @@ impl WebSocketRegistry {
             readiness: SocketReadiness::default(),
             receive: Vec::new(),
             closed: false,
+            owner_waker,
         }
     }
 
@@ -56,12 +61,16 @@ impl WebSocketRegistry {
         self.sessions.is_empty() && self.dns.is_empty()
     }
 
-    pub(crate) fn shutdown(&mut self, multi: &mut Multi) {
+    pub(crate) fn shutdown(&mut self, multi: Option<&mut Multi>) {
         if self.closed {
             return;
         }
         self.closed = true;
-        self.fail_sessions(multi, "curl WebSocket runtime shut down");
+        if let Some(multi) = multi {
+            self.fail_sessions(multi, "curl WebSocket runtime shut down");
+        } else {
+            debug_assert!(self.sessions.is_empty());
+        }
         for pending in self.dns.drain() {
             pending
                 .io
@@ -112,7 +121,9 @@ impl WebSocketRegistry {
             io: submission.io,
         };
         match pending.dns.target().cloned() {
-            Some(target) => self.dns.start(pending.id, pending, target, multi.waker()),
+            Some(target) => self
+                .dns
+                .start(pending.id, pending, target, self.owner_waker.clone()),
             None => self.start(pending, multi),
         }
     }
@@ -227,8 +238,8 @@ impl WebSocketRegistry {
         self.sessions.len()
     }
 
-    pub(crate) fn poll_fds(&mut self) -> &mut [WaitFd] {
-        self.readiness.prepare(&self.sessions)
+    pub(crate) fn poll_fds(&mut self, handshakes: impl Iterator<Item = WaitFd>) -> &mut [WaitFd] {
+        self.readiness.prepare(&self.sessions, handshakes)
     }
 
     pub(crate) fn apply_readiness(&mut self) {
