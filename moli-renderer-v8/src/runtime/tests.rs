@@ -360,6 +360,7 @@ async fn dispatch_wheel_for_action_window_test(
             delta_y,
             pointer: RendererPointerEventProperties::default(),
             modifiers: 0,
+            intercept_drags: false,
         })
         .await
         .expect("wheel action should enter the renderer action window");

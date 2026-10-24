@@ -808,6 +808,7 @@ fn click_handle_internal(
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
+            intercepted_drag: None,
         };
     }
     if focus_behavior == ClickFocusBehavior::Apply
@@ -1031,6 +1032,7 @@ fn click_handle_internal(
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 
@@ -1047,6 +1049,7 @@ fn input_dispatch_outcome_after_click(
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download,
         pending_file_chooser,
+        intercepted_drag: None,
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::{RendererDragData, RendererInterceptedDrag};
 
 #[test]
 fn mouse_drop_requires_prevented_dragover() {
@@ -1082,5 +1083,179 @@ fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_fresh_paint() {
         vm.eval("window.__afterLeave")
             .expect("post-hover state should evaluate"),
         "false|false|false|true|none"
+    );
+}
+
+const DRAG_INTERCEPT_PAGE: &str = r#"<html><body>
+<div id="source" draggable="true" style="position:absolute;left:0;top:0;width:100px;height:40px"></div>
+<div id="target" style="position:absolute;left:0;top:100px;width:200px;height:100px"></div>
+</body></html>"#;
+
+const DRAG_INTERCEPT_LISTENERS: &str = r#"
+(() => {
+  window.__dragLog = [];
+  const source = document.getElementById('source');
+  const target = document.getElementById('target');
+  source.addEventListener('dragstart', event => {
+    event.dataTransfer.setData('text/plain', 'payload');
+    event.dataTransfer.setData('application/x-moli', 'custom');
+    event.dataTransfer.effectAllowed = 'move';
+    window.__dragLog.push('dragstart');
+  });
+  source.addEventListener('dragend', () => window.__dragLog.push('dragend'));
+  target.addEventListener('dragenter', event => {
+    window.__dragLog.push('dragenter:' + event.dataTransfer.getData('text/plain'));
+  });
+  target.addEventListener('dragover', event => {
+    event.preventDefault();
+    window.__dragLog.push('dragover');
+  });
+  target.addEventListener('dragleave', () => window.__dragLog.push('dragleave'));
+  target.addEventListener('drop', event => {
+    event.preventDefault();
+    window.__dragLog.push([
+      'drop',
+      event.dataTransfer.getData('application/x-moli'),
+      event.dataTransfer.types.join(','),
+      event.dataTransfer.effectAllowed,
+    ].join(':'));
+  });
+})()
+"#;
+
+fn start_intercepted_drag(vm: &mut ScriptVm) -> RendererInterceptedDrag {
+    vm.set_intercept_drags(true);
+    vm.publish_layout_for_test()
+        .expect("publish geometry before coordinate input");
+    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
+        .expect("mousedown should dispatch");
+    vm.dispatch_mouse_event_at_point(20.0, 120.0, "mousemove", 0, Some(1), 0.0, 0.0)
+        .expect("mousemove should start the drag")
+        .intercepted_drag
+        .expect("an uncanceled dragstart should be reported while intercepting")
+}
+
+fn drag_data_from(drag: &RendererInterceptedDrag) -> RendererDragData {
+    RendererDragData {
+        items: drag.items.clone(),
+        files: Vec::new(),
+        directories: Vec::new(),
+        drag_operations_mask: drag.drag_operations_mask,
+    }
+}
+
+#[test]
+fn intercepted_drag_reports_string_data_and_waits_for_drag_events() {
+    let mut vm = new_rendered_test_vm("https://drag-intercept-report.test/", DRAG_INTERCEPT_PAGE);
+    vm.eval(DRAG_INTERCEPT_LISTENERS)
+        .expect("drag listener setup should evaluate");
+
+    let drag = start_intercepted_drag(&mut vm);
+
+    let items: Vec<(&str, &str)> = drag
+        .items
+        .iter()
+        .map(|item| (item.mime_type.as_str(), item.data.as_str()))
+        .collect();
+    assert_eq!(
+        items,
+        vec![("text/plain", "payload"), ("application/x-moli", "custom")]
+    );
+    assert_eq!(drag.drag_operations_mask, 16);
+    // The mouse move that started the drag must not also drive dragover.
+    assert_eq!(
+        vm.eval("window.__dragLog.join('|')").expect("log"),
+        "dragstart"
+    );
+
+    // Mouse events no longer drive the intercepted drag.
+    vm.dispatch_mouse_event_at_point(20.0, 120.0, "mousemove", 0, Some(1), 0.0, 0.0)
+        .expect("mousemove during an intercepted drag");
+    assert_eq!(
+        vm.eval("window.__dragLog.join('|')").expect("log"),
+        "dragstart"
+    );
+}
+
+#[test]
+fn intercepted_drag_replays_enter_over_drop_and_ends_on_source() {
+    let mut vm = new_rendered_test_vm("https://drag-intercept-replay.test/", DRAG_INTERCEPT_PAGE);
+    vm.eval(DRAG_INTERCEPT_LISTENERS)
+        .expect("drag listener setup should evaluate");
+    let data = drag_data_from(&start_intercepted_drag(&mut vm));
+
+    for event in ["dragenter", "dragover", "drop"] {
+        let outcome = vm
+            .dispatch_drag_event_at_point(20.0, 120.0, event, data.clone(), 0)
+            .expect("drag event should dispatch");
+        assert!(outcome.handled, "{event} should hit the target");
+    }
+
+    assert_eq!(
+        vm.eval("window.__dragLog.join('|')").expect("log"),
+        "dragstart|dragenter:payload|dragover|dragover|drop:custom:text/plain,application/x-moli:move|dragend"
+    );
+}
+
+#[test]
+fn intercepted_drag_cancel_dispatches_dragleave_and_dragend() {
+    let mut vm = new_rendered_test_vm("https://drag-intercept-cancel.test/", DRAG_INTERCEPT_PAGE);
+    vm.eval(DRAG_INTERCEPT_LISTENERS)
+        .expect("drag listener setup should evaluate");
+    let data = drag_data_from(&start_intercepted_drag(&mut vm));
+
+    for event in ["dragenter", "dragleave"] {
+        vm.dispatch_drag_event_at_point(20.0, 120.0, event, data.clone(), 0)
+            .expect("drag event should dispatch");
+    }
+    // The session is over: a late drop must not reach the page as part of it.
+    vm.dispatch_mouse_event_at_point(20.0, 120.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("mouseup after cancel");
+
+    assert_eq!(
+        vm.eval("window.__dragLog.join('|')").expect("log"),
+        "dragstart|dragenter:payload|dragover|dragleave|dragend"
+    );
+}
+
+#[test]
+fn canceled_dragstart_is_not_intercepted() {
+    let mut vm = new_rendered_test_vm("https://drag-intercept-canceled.test/", DRAG_INTERCEPT_PAGE);
+    vm.eval(
+        "document.getElementById('source').addEventListener('dragstart', e => e.preventDefault())",
+    )
+    .expect("listener setup should evaluate");
+    vm.set_intercept_drags(true);
+    vm.publish_layout_for_test()
+        .expect("publish geometry before coordinate input");
+
+    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
+        .expect("mousedown should dispatch");
+    let outcome = vm
+        .dispatch_mouse_event_at_point(20.0, 120.0, "mousemove", 0, Some(1), 0.0, 0.0)
+        .expect("mousemove should attempt the drag");
+    assert_eq!(outcome.intercepted_drag, None);
+}
+
+#[test]
+fn drag_without_interception_is_not_reported_and_ends_on_source() {
+    let mut vm = new_rendered_test_vm("https://drag-no-intercept.test/", DRAG_INTERCEPT_PAGE);
+    vm.eval(DRAG_INTERCEPT_LISTENERS)
+        .expect("drag listener setup should evaluate");
+    vm.publish_layout_for_test()
+        .expect("publish geometry before coordinate input");
+
+    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
+        .expect("mousedown should dispatch");
+    let outcome = vm
+        .dispatch_mouse_event_at_point(20.0, 120.0, "mousemove", 0, Some(1), 0.0, 0.0)
+        .expect("mousemove should start the drag");
+    assert_eq!(outcome.intercepted_drag, None);
+    vm.dispatch_mouse_event_at_point(20.0, 120.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("mouseup should finish the drag");
+
+    assert_eq!(
+        vm.eval("window.__dragLog.join('|')").expect("log"),
+        "dragstart|dragover|drop:custom:text/plain,application/x-moli:move|dragend"
     );
 }

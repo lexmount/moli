@@ -95,6 +95,7 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
+                intercept_drags: _,
             } if event_name == "wheel" => self
                 .queue_wheel_event(
                     x,
@@ -119,8 +120,10 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
-            } => self
-                .dispatch_mouse_event_at_point_with_pointer(
+                intercept_drags,
+            } => {
+                self.vm_mut().set_intercept_drags(intercept_drags);
+                self.dispatch_mouse_event_at_point_with_pointer(
                     x,
                     y,
                     &event_name,
@@ -132,7 +135,8 @@ impl PageVm {
                     pointer,
                     modifiers,
                 )
-                .map(RendererPageReply::InputDispatchOutcome),
+                .map(RendererPageReply::InputDispatchOutcome)
+            }
             RendererPageCommand::DispatchTouchEvent {
                 points,
                 event_name,

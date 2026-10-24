@@ -95,6 +95,7 @@ pub trait PageInputExt {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        intercept_drags: bool,
     ) -> Result<PendingPageCommand>;
     fn finish_dispatch_mouse_event_at_point_with_outcome(
         &mut self,
@@ -261,6 +262,7 @@ impl PageInputExt for Page {
             delta_y,
             RendererPointerEventProperties::default(),
             0,
+            false,
         )
     }
 
@@ -276,6 +278,7 @@ impl PageInputExt for Page {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        intercept_drags: bool,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::DispatchMouseEventAtPoint {
             x,
@@ -288,6 +291,7 @@ impl PageInputExt for Page {
             delta_y,
             pointer,
             modifiers,
+            intercept_drags,
         })
     }
 

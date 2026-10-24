@@ -775,7 +775,7 @@ async fn mock_layout_policy_rejects_coordinate_input_without_dispatching() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_intercept_drags_fails_explicitly_without_drag_interception_events() {
+async fn set_intercept_drags_toggles_target_state() {
     let mut ctx = TestContext::new();
     with_loaded_document(
         &mut ctx,
@@ -783,14 +783,171 @@ async fn set_intercept_drags_fails_explicitly_without_drag_interception_events()
     )
     .await;
 
+    for (id, enabled) in [(12, true), (13, false)] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Input.setInterceptDrags",
+            "params": { "enabled": enabled }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+        let host_enabled = ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .active_page_target()
+            .input_intercept_drags_enabled;
+        assert_eq!(host_enabled, enabled);
+    }
+
     ctx.process_async(json!({
-        "id": 12,
+        "id": 14,
+        "method": "Input.setInterceptDrags",
+        "params": { "enabled": "yes" }
+    }))
+    .await;
+    ctx.expect_error(14, -32602, "InvalidParams");
+}
+
+const DRAG_PAGE: &str = r#"<html><body>
+    <div id='source' draggable='true' style='position:absolute;left:0;top:0;width:100px;height:40px'></div>
+    <div id='target' style='position:absolute;left:0;top:100px;width:200px;height:100px'></div>
+    <script>
+      window.__drag = [];
+      const source = document.getElementById('source');
+      const target = document.getElementById('target');
+      source.addEventListener('dragstart', event => {
+        event.dataTransfer.setData('text/plain', 'payload');
+        event.dataTransfer.setData('application/x-moli', 'custom');
+        event.dataTransfer.effectAllowed = 'move';
+        window.__drag.push('dragstart');
+      });
+      source.addEventListener('dragend', () => window.__drag.push('dragend'));
+      target.addEventListener('dragenter', event => {
+        window.__drag.push('dragenter:' + event.dataTransfer.getData('text/plain'));
+      });
+      target.addEventListener('dragover', event => {
+        event.preventDefault();
+        window.__drag.push('dragover');
+      });
+      target.addEventListener('drop', event => {
+        event.preventDefault();
+        window.__drag.push('drop:' + event.dataTransfer.getData('application/x-moli'));
+      });
+    </script>
+</body></html>"#;
+
+async fn dispatch_drag_mouse(
+    ctx: &mut TestContext,
+    id: u64,
+    event_type: &str,
+    y: u32,
+    buttons: u32,
+) {
+    ctx.process_async(json!({
+        "id": id,
+        "method": "Input.dispatchMouseEvent",
+        "params": {
+            "type": event_type,
+            "x": INPUT_HIT_X,
+            "y": y,
+            "button": "left",
+            "buttons": buttons
+        }
+    }))
+    .await;
+    ctx.expect_result(id, json!({}), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mouse_drag_with_interception_reports_drag_intercepted_and_replays_through_drag_events() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    ctx.capture_fixture_layout(None).await;
+
+    ctx.process_async(json!({
+        "id": 1,
         "method": "Input.setInterceptDrags",
         "params": { "enabled": true }
     }))
     .await;
+    ctx.expect_result(1, json!({}), None);
 
-    ctx.expect_error(12, -32000, SET_INTERCEPT_DRAGS_UNSUPPORTED_MESSAGE);
+    dispatch_drag_mouse(&mut ctx, 2, "mousePressed", 20, 1).await;
+    dispatch_drag_mouse(&mut ctx, 3, "mouseMoved", 120, 1).await;
+
+    let intercepted = json!({
+        "data": {
+            "items": [
+                { "mimeType": "text/plain", "data": "payload" },
+                { "mimeType": "application/x-moli", "data": "custom" }
+            ],
+            "dragOperationsMask": 16
+        }
+    });
+    ctx.expect_event("Input.dragIntercepted", Some(&intercepted));
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .active_page_target()
+            .input_drag_intercepted
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart"
+    );
+
+    for (id, drag_type) in [(4, "dragEnter"), (5, "dragOver"), (6, "drop")] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Input.dispatchDragEvent",
+            "params": {
+                "type": drag_type,
+                "x": INPUT_HIT_X,
+                "y": 120,
+                "data": intercepted["data"]
+            }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+    }
+
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart|dragenter:payload|dragover|dragover|drop:custom|dragend"
+    );
+    assert!(
+        !ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .active_page_target()
+            .input_drag_intercepted
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mouse_drag_without_interception_emits_no_drag_intercepted_event() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    ctx.capture_fixture_layout(None).await;
+
+    dispatch_drag_mouse(&mut ctx, 2, "mousePressed", 20, 1).await;
+    dispatch_drag_mouse(&mut ctx, 3, "mouseMoved", 120, 1).await;
+    dispatch_drag_mouse(&mut ctx, 4, "mouseReleased", 120, 0).await;
+
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Input.dragIntercepted")
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart|dragover|drop:custom|dragend"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

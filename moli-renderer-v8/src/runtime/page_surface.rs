@@ -479,12 +479,26 @@ pub struct RendererDragData {
     pub drag_operations_mask: i32,
 }
 
+/// String data of a drag that started while the client intercepts drags.
+///
+/// Files and directories are not carried: only string items set through
+/// `DataTransfer.setData` during `dragstart` leave the renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererInterceptedDrag {
+    pub items: Vec<RendererDragDataItem>,
+    pub drag_operations_mask: i32,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {
     pub handled: bool,
     pub triggered_top_level_navigation: bool,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub pending_file_chooser: Option<RendererPendingFileChooserActivation>,
+    /// Set when `dragstart` ran uncanceled and the command asked to intercept
+    /// drags. The renderer then leaves `dragenter`, `dragover` and `drop` to
+    /// `RendererPageCommand::DispatchDragEventAtPoint`.
+    pub intercepted_drag: Option<RendererInterceptedDrag>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4807,6 +4821,8 @@ pub enum RendererPageCommand {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        /// `Input.setInterceptDrags` state of the issuing DevTools session.
+        intercept_drags: bool,
     },
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,

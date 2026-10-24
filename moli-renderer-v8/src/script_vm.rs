@@ -876,6 +876,7 @@ fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 
@@ -1042,6 +1043,7 @@ pub(super) struct ScriptVm {
     suppress_compat_mouse_events: bool,
     active_scrollbar_drag: Option<ActiveScrollbarDrag>,
     active_drag_session: Option<ActiveDragSession>,
+    intercept_drags: bool,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
     next_internal_frontend_inspector_call_id: i32,
@@ -1113,6 +1115,12 @@ pub(super) struct ActiveTouchPoint {
 pub(super) struct ActiveDragSession {
     pub data_transfer: v8::Global<v8::Object>,
     pub drop_allowed: bool,
+    /// Element that received `dragstart`; `dragend` is dispatched here.
+    /// `None` for sessions created from externally supplied drag data.
+    pub source: Option<DomHandle>,
+    /// The DevTools client asked to take over the drag, so mouse events no
+    /// longer drive `dragover` and `drop`. `Input.dispatchDragEvent` does.
+    pub intercepted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2543,6 +2551,7 @@ impl ScriptVmDefaultWorldBootstrap {
             suppress_compat_mouse_events: false,
             active_scrollbar_drag: None,
             active_drag_session: None,
+            intercept_drags: false,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,
             next_internal_frontend_inspector_call_id: -1,

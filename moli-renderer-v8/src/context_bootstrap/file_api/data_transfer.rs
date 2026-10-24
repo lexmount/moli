@@ -1,15 +1,18 @@
 use super::*;
 use crate::blob;
 use crate::native_bridge::throw_dom_exception;
-use crate::runtime::{RendererDragData, RendererDraggedDirectory, RendererDraggedFile};
+use crate::runtime::{
+    RendererDragData, RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile,
+};
 use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::data_transfer::{
     DataTransferItemSummary, child_entry_full_path, clear_data_removes_item,
     contains_string_item_type, data_transfer_types_from_items, drag_effect_allowed_from_mask,
-    drop_effect_allowed_by_effect_allowed, modifier_drop_effect, normalize_drag_data_type,
-    preferred_drop_effect_from_mask, valid_drop_effect, valid_effect_allowed,
+    drag_operations_mask_from_effect_allowed, drop_effect_allowed_by_effect_allowed,
+    modifier_drop_effect, normalize_drag_data_type, preferred_drop_effect_from_mask,
+    valid_drop_effect, valid_effect_allowed,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -363,6 +366,43 @@ pub(crate) fn apply_drag_modifier_drop_effect<'s>(
         DATA_TRANSFER_DROP_EFFECT_SLOT,
         drop_effect,
     );
+}
+
+/// Reads the string items and `effectAllowed` that `dragstart` listeners left
+/// on a DataTransfer, in the shape CDP reports as `Input.DragData`.
+pub(crate) fn read_string_drag_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> (Vec<RendererDragDataItem>, i32) {
+    let mask = drag_operations_mask_from_effect_allowed(
+        data_transfer_effect_allowed(scope, data_transfer)
+            .as_deref()
+            .unwrap_or("none"),
+    );
+    let mut items = Vec::new();
+    let Some(item_array) = get_private_object(scope, data_transfer, DATA_TRANSFER_ITEMS_SLOT)
+        .and_then(|item_list| item_list_array(scope, item_list))
+    else {
+        return (items, mask);
+    };
+    for index in 0..item_array.length() {
+        let Some(item) = item_array
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            continue;
+        };
+        if item_kind(scope, item).as_deref() != Some("string") {
+            continue;
+        }
+        items.push(RendererDragDataItem {
+            mime_type: item_type(scope, item).unwrap_or_default(),
+            data: item_string_value(scope, item).unwrap_or_default(),
+            title: None,
+            base_url: None,
+        });
+    }
+    (items, mask)
 }
 
 fn private_string_property<'s>(

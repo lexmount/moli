@@ -111,6 +111,7 @@ impl PageVm {
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
+            intercepted_drag: None,
         })
     }
 

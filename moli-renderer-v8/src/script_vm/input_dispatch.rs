@@ -34,8 +34,8 @@ use crate::native_bridge::{
     CurrentInputEvent, CurrentInputEventScope, MouseReleaseFollowUp, PointerCaptureDispatchEvent,
 };
 use crate::runtime::{
-    RendererDragData, RendererInputDispatchOutcome, RendererPointerEventProperties,
-    RendererTouchPoint,
+    RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
+    RendererPointerEventProperties, RendererTouchPoint,
 };
 use crate::util::{
     node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
@@ -47,6 +47,27 @@ fn related_target_value<'s>(
     handle: Option<DomHandle>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     node_wrapper_from_handle(scope, handle?).map(Into::into)
+}
+
+/// Ends a drag session by dispatching `dragend` on the element that received
+/// `dragstart`. Sessions built from external drag data have no source.
+fn dispatch_drag_end<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    session: &ActiveDragSession,
+    x: f64,
+    y: f64,
+    modifiers: u8,
+) {
+    let Some(source) = session.source else {
+        return;
+    };
+    let data_transfer = v8::Local::new(scope, &session.data_transfer);
+    if let Some(event) =
+        construct_drag_event(scope, "dragend", x, y, data_transfer.into(), modifiers)
+    {
+        let _ = dispatch_public_event(scope, runtime_ptr, source, event);
+    }
 }
 
 fn tracks_mouse_hover_for_event(event_name: &str) -> bool {
@@ -674,6 +695,8 @@ impl ScriptVm {
         }
 
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
+        let intercept_drags = self.intercept_drags;
+        let intercepted_drag = Cell::new(None);
 
         let mut suppress_compat_mouse_events = self.suppress_compat_mouse_events;
         if event_name == "mousemove" && buttons == 0 {
@@ -953,7 +976,20 @@ impl ScriptVm {
                         *active_drag_session = Some(ActiveDragSession {
                             data_transfer: v8::Global::new(scope, data_transfer),
                             drop_allowed: false,
+                            source: Some(drag_start_handle),
+                            intercepted: intercept_drags,
                         });
+                        if intercept_drags {
+                            let (items, drag_operations_mask) =
+                                crate::context_bootstrap::read_string_drag_data(
+                                    scope,
+                                    data_transfer,
+                                );
+                            intercepted_drag.set(Some(RendererInterceptedDrag {
+                                items,
+                                drag_operations_mask,
+                            }));
+                        }
                     } else {
                         active_drag_session.take();
                     }
@@ -961,7 +997,9 @@ impl ScriptVm {
             }
             if event_name == "mousemove" && buttons & 1 != 0 {
                 let active_drag_session = unsafe { &mut *active_drag_session };
-                if let Some(session) = active_drag_session.as_mut() {
+                if let Some(session) = active_drag_session.as_mut()
+                    && !session.intercepted
+                {
                     let data_transfer = v8::Local::new(scope, &session.data_transfer);
                     if let Some(event) = construct_drag_event(
                         scope,
@@ -982,7 +1020,7 @@ impl ScriptVm {
             if event_name == "mouseup" && button == 0 {
                 let active_drag_session = unsafe { &mut *active_drag_session };
                 if let Some(session) = active_drag_session.as_mut() {
-                    if session.drop_allowed {
+                    if session.drop_allowed && !session.intercepted {
                         let data_transfer = v8::Local::new(scope, &session.data_transfer);
                         let allows_default = if let Some(event) = construct_drag_event(
                             scope,
@@ -1006,7 +1044,16 @@ impl ScriptVm {
                             );
                         }
                     }
-                    active_drag_session.take();
+                    if let Some(session) = active_drag_session.take() {
+                        dispatch_drag_end(
+                            scope,
+                            runtime_ptr,
+                            &session,
+                            client_x,
+                            client_y,
+                            modifiers,
+                        );
+                    }
                 }
             }
             // Keep the host-owned press alive through the release listeners;
@@ -1095,6 +1142,7 @@ impl ScriptVm {
                                     && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
                             pending_download,
                             pending_file_chooser: None,
+                            intercepted_drag: None,
                         });
                     }
                 }
@@ -1106,7 +1154,14 @@ impl ScriptVm {
             Ok(input_dispatch_outcome(true))
         });
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
-        result
+        result.map(|mut outcome| {
+            outcome.intercepted_drag = intercepted_drag.take();
+            outcome
+        })
+    }
+
+    pub(crate) fn set_intercept_drags(&mut self, enabled: bool) {
+        self.intercept_drags = enabled;
     }
 
     fn dispatch_active_scrollbar_mouse_event(
@@ -1697,6 +1752,16 @@ impl ScriptVm {
         let replace_active_drag_data_transfer = event_name == "dragenter"
             && (!incoming_drag_data_empty || self.active_drag_session.is_none());
         let clear_active_drag_data_transfer = event_name == "drop";
+        // `dragleave` is how `dragCancel` reaches the page: the drag is over.
+        let cancels_drag = event_name == "dragleave";
+        // Chromium answers `Input.dispatchDragEvent(dragEnter)` with `dragenter`
+        // and an immediate `dragover` on the same target. A drag intercepted
+        // earlier is replayed by a client that relies on that pair.
+        let dragover_follows_dragenter = event_name == "dragenter"
+            && self
+                .active_drag_session
+                .as_ref()
+                .is_some_and(|session| session.intercepted);
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
 
         let result = self.with_default_context_scope(move |scope, runtime_ptr| {
@@ -1711,9 +1776,16 @@ impl ScriptVm {
                     else {
                         return Ok(input_dispatch_outcome(false));
                     };
+                    // A replaced session keeps its source so `dragend` still
+                    // reaches the element that started the drag.
+                    let source = active_drag_session
+                        .as_ref()
+                        .and_then(|session| session.source);
                     *active_drag_session = Some(ActiveDragSession {
                         data_transfer: v8::Global::new(scope, data_transfer),
                         drop_allowed: false,
+                        source,
+                        intercepted: dragover_follows_dragenter,
                     });
                     data_transfer
                 } else {
@@ -1743,11 +1815,23 @@ impl ScriptVm {
             {
                 session.drop_allowed = !allows_default;
             }
+            if dragover_follows_dragenter
+                && let Some(event) =
+                    construct_drag_event(scope, "dragover", x, y, data_transfer_value, modifiers)
+            {
+                let allows_default =
+                    dispatch_public_event(scope, runtime_ptr, handle, event).allows_default();
+                if let Some(session) = active_drag_session.as_mut() {
+                    session.drop_allowed = !allows_default;
+                }
+            }
             if clear_active_drag_data_transfer && allows_default {
                 let _ = perform_drop_default_action(scope, runtime_ptr, handle, data_transfer);
             }
-            if clear_active_drag_data_transfer {
-                active_drag_session.take();
+            if (clear_active_drag_data_transfer || cancels_drag)
+                && let Some(session) = active_drag_session.take()
+            {
+                dispatch_drag_end(scope, runtime_ptr, &session, x, y, modifiers);
             }
             Ok(input_dispatch_outcome(true))
         });
