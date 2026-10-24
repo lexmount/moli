@@ -35,8 +35,8 @@ pub use standalone::CurlWebSocketRuntime;
 pub const MAX_SEND_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PENDING_EVENTS: usize = 8;
 // Bounds pending/open native work and its memory, without granting sockets
-// beyond the runtime's shared host/total connection limits.
-const SESSION_CAPACITY: usize = 255;
+// beyond the runtime's separate WebSocket socket pool.
+pub(crate) const SESSION_CAPACITY: usize = 255;
 
 #[derive(Debug)]
 pub struct CurlWebSocketRequest {

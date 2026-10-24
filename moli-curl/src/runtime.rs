@@ -4,6 +4,7 @@ mod config;
 pub(crate) mod diagnostics;
 pub(crate) mod identity;
 mod owner;
+mod poll_fds;
 #[cfg(test)]
 mod tests;
 
@@ -109,7 +110,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
         }
     }
 
-    /// Creates WebSockets on this runtime's owner and Multi. The capability
+    /// Creates WebSockets on this runtime's owner and separate socket pool. The capability
     /// cannot keep the runtime alive or shut down unrelated HTTP transfers.
     pub fn websocket_connector(&self) -> CurlWebSocketConnector {
         self.websocket_connector.clone()

@@ -15,12 +15,15 @@ pub struct CurlMultiRuntimeConfig {
     /// Keep this separate from `max_host_connections`: the latter is a curl
     /// transport connection-pool cap and should not throttle HTTP/2 streams.
     pub max_host_active: Option<NonZeroUsize>,
-    /// Shared libcurl per-host socket cap for HTTP/1, HTTP/2 and WebSockets.
+    /// Libcurl per-host socket cap for HTTP/1 and HTTP/2.
     /// Requests needing a new connection wait when the cap is reached; an
     /// existing HTTP/2 connection can still carry additional streams.
     pub max_host_connections: Option<NonZeroUsize>,
-    /// Shared socket cap across all hosts and protocols on this runtime.
+    /// HTTP socket cap across all hosts on this runtime.
     pub max_total_connections: Option<NonZeroUsize>,
+    /// Socket cap for the separate WebSocket pool. Native session admission
+    /// remains independently bounded, including pending handshakes.
+    pub max_websocket_connections: NonZeroUsize,
     pub max_concurrent_streams: Option<NonZeroUsize>,
     pub poll_interval: Duration,
     pub multiplex: bool,
@@ -34,6 +37,8 @@ impl Default for CurlMultiRuntimeConfig {
             max_host_active: None,
             max_host_connections: None,
             max_total_connections: None,
+            max_websocket_connections: NonZeroUsize::new(crate::websocket::SESSION_CAPACITY)
+                .expect("WebSocket session capacity is non-zero"),
             max_concurrent_streams: None,
             poll_interval: DEFAULT_RUNTIME_POLL_INTERVAL,
             multiplex: true,
@@ -80,6 +85,19 @@ pub(super) fn make_runtime_multi(config: &CurlMultiRuntimeConfig) -> Multi {
         && let Err(error) = multi.pipelining(false, true)
     {
         debug!("failed to enable curl multi multiplexing: {error}");
+    }
+    multi
+}
+
+pub(super) fn make_websocket_multi(limit: NonZeroUsize) -> Multi {
+    let mut multi = Multi::new();
+    // Upgraded connections stay attached for curl_ws_send/recv. Giving them
+    // their own pool prevents HTTP's six-socket default from blocking upgrades.
+    if let Err(error) = multi.set_max_total_connections(limit.get()) {
+        debug!("failed to configure curl WebSocket max_total_connections: {error}");
+    }
+    if let Err(error) = multi.set_max_connects(limit.get()) {
+        debug!("failed to configure curl WebSocket max_connects: {error}");
     }
     multi
 }

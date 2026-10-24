@@ -183,7 +183,7 @@ async fn echo(connection: &mut CurlWebSocketConnection) {
 }
 
 #[tokio::test]
-async fn shared_connection_limits_resume_http_after_websocket_release() {
+async fn separate_pools_allow_http_while_websocket_remains_open() {
     for total in [false, true] {
         let (base, _, peer) = peer();
         let (runtime, completed) = CurlMultiRuntime::new(config(total)).unwrap();
@@ -191,63 +191,53 @@ async fn shared_connection_limits_resume_http_after_websocket_release() {
         let mut connection = connector.connect(websocket_request(&base)).unwrap();
         opened(&mut connection).await;
         let owner = *connection.sender().control.owner_thread.lock();
-        let (queued, waiting) = oneshot::channel();
         let id = runtime
             .http_sender()
             .submit(request(
-                &(base.clone() + "/queued"),
-                HttpCapture {
-                    queued: Some(queued),
-                    ..HttpCapture::default()
-                },
+                &(base.clone() + "/independent"),
+                HttpCapture::default(),
                 DEADLINE,
             ))
             .unwrap();
-        timeout(DEADLINE, waiting).await.unwrap().unwrap();
-        assert!(completed.is_empty());
-        // It was silent during admission. Pool pressure must not evict it.
-        echo(&mut connection).await;
-        drop(connection);
         let completion = completed.recv_timeout(DEADLINE).unwrap();
         assert_eq!(completion.transfer_id, id);
         completion.result.unwrap();
         let easy = completion.easy.unwrap();
         assert_eq!(easy.get_ref().body, b"ok");
         assert_eq!(easy.get_ref().owner, owner);
-        // HTTP remains usable on this same native owner after WS teardown.
-        runtime
-            .http_sender()
-            .submit(request(
-                &(base.clone() + "/after"),
-                HttpCapture::default(),
-                DEADLINE,
-            ))
-            .unwrap();
-        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
+        echo(&mut connection).await;
+        assert_eq!(runtime.owner_count_for_testing(), 1);
+        drop(connection);
         drop(runtime);
         assert!(connector.connect(websocket_request(&base)).is_err());
-        assert_eq!(stop_peer(&base, peer), ["/native", "/queued", "/after"]);
+        assert_eq!(stop_peer(&base, peer), ["/native", "/independent"]);
     }
 }
 
 #[tokio::test]
-async fn shared_connection_limits_keep_quiet_websocket_through_http_timeout() {
+async fn separate_pools_preserve_http_limits_while_websocket_progresses() {
     for total in [false, true] {
-        let (base, _, peer) = peer();
+        let (base, release, peer) = peer();
         let (runtime, completed) = CurlMultiRuntime::new(config(total)).unwrap();
         let mut connection = runtime
             .websocket_connector()
             .connect(websocket_request(&base))
             .unwrap();
         opened(&mut connection).await;
+        hold_http(&runtime, &base).await;
+        let (queued, waiting) = oneshot::channel();
         let id = runtime
             .http_sender()
             .submit(request(
                 &(base.clone() + "/timed-out"),
-                HttpCapture::default(),
+                HttpCapture {
+                    queued: Some(queued),
+                    ..HttpCapture::default()
+                },
                 Duration::from_millis(200),
             ))
             .unwrap();
+        timeout(DEADLINE, waiting).await.unwrap().unwrap();
         let completion = completed.recv_timeout(DEADLINE).unwrap();
         assert_eq!(completion.transfer_id, id);
         assert!(completion.result.unwrap_err().chain().any(|error| {
@@ -256,14 +246,16 @@ async fn shared_connection_limits_keep_quiet_websocket_through_http_timeout() {
                 .is_some_and(curl::Error::is_operation_timedout)
         }));
         echo(&mut connection).await;
+        release.send(()).unwrap();
+        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
         drop(connection);
         drop(runtime);
-        assert_eq!(stop_peer(&base, peer), ["/native"]);
+        assert_eq!(stop_peer(&base, peer), ["/native", "/held"]);
     }
 }
 
 #[tokio::test]
-async fn shared_connection_limits_resume_websocket_after_http_release() {
+async fn separate_pools_allow_websocket_while_http_remains_occupied() {
     for total in [false, true] {
         let (base, release, peer) = peer();
         let (runtime, completed) = CurlMultiRuntime::new(config(total)).unwrap();
@@ -272,12 +264,11 @@ async fn shared_connection_limits_resume_websocket_after_http_release() {
             .websocket_connector()
             .connect(websocket_request(&base))
             .unwrap();
-        pool_waiting(&connection).await;
-        assert!(connection.events.is_empty());
-        release.send(()).unwrap();
-        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
         opened(&mut connection).await;
         echo(&mut connection).await;
+        assert!(completed.is_empty());
+        release.send(()).unwrap();
+        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
         drop(connection);
         drop(runtime);
         assert_eq!(stop_peer(&base, peer), ["/held", "/native"]);
@@ -285,53 +276,79 @@ async fn shared_connection_limits_resume_websocket_after_http_release() {
 }
 
 #[tokio::test]
-async fn shared_connection_limits_cancel_waiting_websocket_and_release_admission() {
+async fn separate_pools_allow_multiple_websockets_beyond_http_socket_cap() {
     for total in [false, true] {
-        let (base, release, peer) = peer();
-        let (runtime, completed) = CurlMultiRuntime::new(config(total)).unwrap();
-        hold_http(&runtime, &base).await;
+        let (base, _, peer) = peer();
+        let (runtime, _) = CurlMultiRuntime::<HttpCapture, ()>::new(config(total)).unwrap();
         let connector = runtime.websocket_connector();
-        let mut connection = connector.connect(websocket_request(&base)).unwrap();
-        pool_waiting(&connection).await;
-        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY - 1);
-        connection.sender().cancel();
-        assert!(matches!(
-            event(&mut connection).await,
-            CurlWebSocketEvent::Closed { result: Ok(()) }
-        ));
-        // Terminal delivery guarantees the native admission has been released,
-        // even while the application's receiver and connector remain alive.
-        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY);
-        release.send(()).unwrap();
-        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
-        runtime
-            .http_sender()
-            .submit(request(
-                &(base.clone() + "/after"),
-                HttpCapture::default(),
-                DEADLINE,
-            ))
-            .unwrap();
-        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
+        let mut connections = Vec::new();
+        for _ in 0..7 {
+            let mut connection = connector.connect(websocket_request(&base)).unwrap();
+            opened(&mut connection).await;
+            connections.push(connection);
+        }
+        for connection in &mut connections {
+            echo(connection).await;
+        }
+        assert_eq!(runtime.owner_count_for_testing(), 1);
+        assert!(connections.windows(2).all(|pair| {
+            *pair[0].sender().control.owner_thread.lock()
+                == *pair[1].sender().control.owner_thread.lock()
+        }));
+        drop(connections);
         drop(runtime);
-        // The cancelled waiter must never issue its upgrade after capacity returns.
-        assert_eq!(stop_peer(&base, peer), ["/held", "/after"]);
+        assert_eq!(stop_peer(&base, peer), vec!["/native"; 7]);
+    }
+}
+
+fn limited_websocket_config(total: bool) -> CurlMultiRuntimeConfig {
+    CurlMultiRuntimeConfig {
+        max_websocket_connections: NonZeroUsize::new(1).unwrap(),
+        ..config(total)
     }
 }
 
 #[tokio::test]
-async fn shared_connection_limits_include_pool_wait_in_websocket_deadline() {
+async fn websocket_pool_cancellation_releases_waiting_admission() {
     for total in [false, true] {
-        let (base, release, peer) = peer();
-        let (runtime, completed) = CurlMultiRuntime::new(config(total)).unwrap();
-        hold_http(&runtime, &base).await;
+        let (base, _, peer) = peer();
+        let (runtime, _) =
+            CurlMultiRuntime::<HttpCapture, ()>::new(limited_websocket_config(total)).unwrap();
         let connector = runtime.websocket_connector();
+        let mut first = connector.connect(websocket_request(&base)).unwrap();
+        opened(&mut first).await;
+        let mut waiting = connector.connect(websocket_request(&base)).unwrap();
+        pool_waiting(&waiting).await;
+        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY - 2);
+        waiting.sender().cancel();
+        assert!(matches!(
+            event(&mut waiting).await,
+            CurlWebSocketEvent::Closed { result: Ok(()) }
+        ));
+        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY - 1);
+        echo(&mut first).await;
+        drop(first);
+        drop(runtime);
+        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY);
+        assert_eq!(stop_peer(&base, peer), ["/native"]);
+    }
+}
+
+#[tokio::test]
+async fn websocket_pool_wait_consumes_handshake_deadline() {
+    for total in [false, true] {
+        let (base, _, peer) = peer();
+        let (runtime, _) =
+            CurlMultiRuntime::<HttpCapture, ()>::new(limited_websocket_config(total)).unwrap();
+        let connector = runtime.websocket_connector();
+        let mut first = connector.connect(websocket_request(&base)).unwrap();
+        opened(&mut first).await;
         let mut request = websocket_request(&base);
         request.handshake_timeout = Duration::from_millis(200);
-        let mut connection = connector.connect(request).unwrap();
-        pool_waiting(&connection).await;
+        let mut waiting = connector.connect(request).unwrap();
+        pool_waiting(&waiting).await;
         let mut timed_out = false;
-        while let Some(event) = timeout(DEADLINE, connection.recv()).await.unwrap() {
+        while let Some(event) = timeout(DEADLINE, waiting.recv()).await.unwrap() {
             match event {
                 CurlWebSocketEvent::Handshake {
                     result: Err(error), ..
@@ -340,15 +357,15 @@ async fn shared_connection_limits_include_pool_wait_in_websocket_deadline() {
                     let error = error.to_ascii_lowercase();
                     timed_out |= error.contains("timed out") || error.contains("timeout");
                 }
-                other => panic!("unexpected event while waiting for pool capacity: {other:?}"),
+                other => panic!("unexpected pool waiter event: {other:?}"),
             }
         }
         assert!(timed_out);
-        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY);
-        release.send(()).unwrap();
-        completed.recv_timeout(DEADLINE).unwrap().result.unwrap();
+        assert_eq!(connector.available_session_slots(), SESSION_CAPACITY - 1);
+        echo(&mut first).await;
+        drop(first);
         drop(runtime);
-        assert_eq!(stop_peer(&base, peer), ["/held"]);
+        assert_eq!(stop_peer(&base, peer), ["/native"]);
     }
 }
 
@@ -356,13 +373,13 @@ async fn shared_connection_limits_include_pool_wait_in_websocket_deadline() {
 async fn shared_owner_shutdown_releases_open_and_waiting_websockets_with_live_connector() {
     for total in [false, true] {
         let (base, _, peer) = peer();
-        let (runtime, _) = CurlMultiRuntime::<HttpCapture, ()>::new(config(total)).unwrap();
+        let (runtime, _) =
+            CurlMultiRuntime::<HttpCapture, ()>::new(limited_websocket_config(total)).unwrap();
         let connector = runtime.websocket_connector();
         let mut connection = connector.connect(websocket_request(&base)).unwrap();
         opened(&mut connection).await;
         let mut waiting = connector.connect(websocket_request(&base)).unwrap();
         pool_waiting(&waiting).await;
-        // Keep the capabilities alive. Neither owns the native thread's lifetime.
         drop(runtime);
         for connection in [&mut connection, &mut waiting] {
             assert!(matches!(
