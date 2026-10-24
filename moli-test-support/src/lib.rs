@@ -30,6 +30,8 @@ struct FixtureRuntimeState {
     alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     runtime_inline_module_executed: Arc<FixtureEvent>,
     runtime_owned_async_script_executed: Arc<FixtureEvent>,
+    parse_time_async_task_first_executed: Arc<FixtureEvent>,
+    parse_time_async_task_visibility_first_executed: Arc<FixtureEvent>,
     dynamic_preparation_context_replaced: Arc<FixtureEvent>,
     preload_request_count: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -1336,9 +1338,19 @@ const RUNTIME_OWNED_DEFAULT_ASYNC_MODULE_SIDE_EFFECT_MJS: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/runtime_owned_default_async_module_side_effect.mjs"
 );
 const PARSE_TIME_ASYNC_SLOW_JS: &str = "window.parseTimeAsyncSlowSawTail = !!document.getElementById('late'); window.parseTimeAsyncSlowSawDcl = window.parseTimeDclFired === true;";
-const PARSE_TIME_ASYNC_TASK_FIRST_JS: &str = "window.asyncTaskOrder.push('first-script'); Promise.resolve().then(() => window.asyncTaskOrder.push('first-microtask'));";
+const PARSE_TIME_ASYNC_TASK_FIRST_JS: &str = concat!(
+    "window.asyncTaskOrder.push('first-script');",
+    "Promise.resolve().then(() => window.asyncTaskOrder.push('first-microtask'));",
+    "fetch('/assets/parse_time_async_task_first_executed');",
+);
 const PARSE_TIME_ASYNC_TASK_SECOND_JS: &str = "window.asyncTaskOrder.push('second-script'); window.asyncTaskOrderResult = window.asyncTaskOrder.join(',');";
-const PARSE_TIME_ASYNC_TASK_VISIBILITY_FIRST_JS: &str = "window.asyncTaskVisibilityOrder.push('first-script'); window.asyncTaskVisibilityFirstSawTail = !!document.getElementById('late'); window.asyncTaskVisibilityFirstSawDcl = window.parseTimeVisibilityDclFired === true; Promise.resolve().then(() => window.asyncTaskVisibilityOrder.push('first-microtask'));";
+const PARSE_TIME_ASYNC_TASK_VISIBILITY_FIRST_JS: &str = concat!(
+    "window.asyncTaskVisibilityOrder.push('first-script');",
+    "window.asyncTaskVisibilityFirstSawTail = !!document.getElementById('late');",
+    "window.asyncTaskVisibilityFirstSawDcl = window.parseTimeVisibilityDclFired === true;",
+    "Promise.resolve().then(() => window.asyncTaskVisibilityOrder.push('first-microtask'));",
+    "fetch('/assets/parse_time_async_task_visibility_first_executed');",
+);
 const PARSE_TIME_ASYNC_TASK_VISIBILITY_SECOND_JS: &str = "window.asyncTaskVisibilityOrder.push('second-script'); window.asyncTaskVisibilityOrderResult = window.asyncTaskVisibilityOrder.join(',');";
 const PARSE_TIME_ASYNC_POST_PARSE_FIRST_JS: &str = "window.postParseAsyncTaskOrder.push('first-script'); Promise.resolve().then(() => window.postParseAsyncTaskOrder.push('first-microtask'));";
 const PARSE_TIME_ASYNC_POST_PARSE_SECOND_JS: &str = "window.postParseAsyncTaskOrder.push('second-script'); window.postParseAsyncTaskOrder.push(window.postParseDclSeen ? 'second-after-dcl' : 'second-before-dcl');";
