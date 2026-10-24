@@ -83,6 +83,7 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         self.start_eligible_jobs(multi);
     }
 
+    #[cfg(test)]
     pub(crate) fn contains(&self, id: CurlTransferId) -> bool {
         self.active.contains_key(&id)
     }

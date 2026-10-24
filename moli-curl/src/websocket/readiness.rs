@@ -55,7 +55,11 @@ pub(super) struct SocketReadiness {
 }
 
 impl SocketReadiness {
-    pub(super) fn prepare(&mut self, sessions: &HashMap<CurlTransferId, Session>) -> &mut [WaitFd] {
+    pub(super) fn prepare(
+        &mut self,
+        sessions: &HashMap<CurlTransferId, Session>,
+        handshakes: impl Iterator<Item = WaitFd>,
+    ) -> &mut [WaitFd] {
         self.ids.clear();
         self.fds.clear();
         for (id, session) in sessions.iter() {
@@ -64,6 +68,9 @@ impl SocketReadiness {
                 self.fds.push(fd);
             }
         }
+        // Keep session interests first: dispatch zips only those entries with
+        // ids. Handshake interests wake the owner to perform their own Multi.
+        self.fds.extend(handshakes);
         &mut self.fds
     }
 
