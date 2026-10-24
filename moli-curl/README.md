@@ -132,7 +132,7 @@ Chunk contents, WSS recovery, peer EOF and send progress under backpressure.
 ## Shared HTTP and WebSocket runtime
 
 `CurlMultiRuntime::websocket_connector()` admits WebSockets to the same native
-owner, Multi and poll loop as HTTP. HTTP completions remove an easy handle;
+owner and poll loop as HTTP, with an independent WebSocket socket pool. HTTP completions remove an easy handle;
 WebSocket handshake completion leaves it attached until the connection ends.
 `CurlWebSocketRuntime` is a standalone wrapper around this same driver.
 
@@ -141,19 +141,24 @@ owner, and an explicitly supplied closed connector fails without a standalone
 fallback. Fetch, Page and Worker use the connector from their network runtime.
 The Fetch semantic thread and WebSocket Tokio session thread remain separate.
 
-HTTP/1, HTTP/2 and WebSocket sockets share the Multi's default connection pool
-and its host/total connection limits. A live WebSocket consumes one connection;
-additional HTTP/2 streams can reuse an existing socket. Work requiring a new
-connection waits when the pool is full, and that wait counts towards its HTTP
-request or WebSocket handshake deadline. No protocol has reserved connections.
-Long-lived WebSockets can therefore keep new HTTP connections waiting until
-their deadline. Established WebSockets must never be evicted as idle HTTP
-connections; the pinned curl fork protects them in both eviction paths.
+HTTP/1 and HTTP/2 use the configured `max_host_connections` and
+`max_total_connections`. WebSockets use a separate Multi, allocated on first
+admission, with their own `max_websocket_connections` bound (255 by default).
+This matches Chromium's separate normal/WebSocket socket pools: long-lived
+upgrades must not exhaust HTTP's default six connections, and HTTP pressure must
+not block independent WebSocket handshakes. Neither pool evicts open WebSockets.
 
-The native WebSocket admission bound (255 pending/open sessions), event queue
-and frame/message memory limits remain separate work and memory bounds. They
-do not grant additional sockets beyond the shared pool limits. WebSocket
-transport still uses HTTP/1.1 Upgrade; it does not implement RFC 8441.
+Both Multis are driven on the same native owner. Their deadlines are merged;
+`curl_multi_waitfds` contributes WebSocket handshake readiness to the existing
+single poll, alongside HTTP, open WebSockets and the common owner waker. DNS and
+application wakeups use that same waker. HTTP-only runtimes retain one Multi.
+
+Native session admission (255 pending/open sessions), event queues and frame
+memory bounds remain independent of socket-pool admission. A WebSocket waiting
+for its own pool still consumes its handshake deadline and remains cancellable.
+Transport uses HTTP/1.1 Upgrade; RFC 8441 is not implemented.
+
+Chromium reference: [client_socket_pool_manager.cc](https://raw.githubusercontent.com/chromium/chromium/main/net/socket/client_socket_pool_manager.cc).
 
 In shared mode, poll/turn counters include HTTP work and HTTP wakeups. A fast
 poll with no WebSocket byte progress can therefore reflect useful HTTP work.

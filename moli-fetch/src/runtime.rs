@@ -3965,6 +3965,7 @@ fn curl_runtime_config(config: &FetchConfig) -> CurlMultiRuntimeConfig {
         poll_interval: RUNTIME_POLL_INTERVAL,
         multiplex: true,
         thread_name: "lm-net-multi".to_owned(),
+        ..CurlMultiRuntimeConfig::default()
     }
 }
 
