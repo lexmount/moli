@@ -137,14 +137,58 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_source_is_index<'s>(
         .unwrap_or(false)
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn create_cursor_request<'s>(
+pub(in crate::context_bootstrap::indexed_db) struct CursorMutation<'s> {
+    pub(super) transaction: v8::Local<'s, v8::Object>,
+    pub(super) store: v8::Local<'s, v8::Object>,
+    pub(super) handle: TransactionHandle,
+    pub(super) store_name: String,
+    pub(super) primary_key: Key,
+}
+
+impl<'s> CursorMutation<'s> {
+    pub(super) fn create_request(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        cursor: v8::Local<'s, v8::Object>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        // A serialization getter may have aborted the transaction.
+        if !object_bool_property(scope, self.transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+            .unwrap_or(false)
+        {
+            throw_cursor_mutation_error(
+                scope,
+                "The transaction is not active.",
+                "TransactionInactiveError",
+            );
+            return None;
+        }
+        let request = create_request_object(scope, cursor.into(), self.transaction)?;
+        queue_transaction_request(scope, self.transaction, request);
+        Some(request)
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn prepare_cursor_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Object>, TransactionHandle, String)> {
-    let (store, transaction, _) = cursor_mutation_state(scope, cursor)?;
+) -> Option<CursorMutation<'s>> {
+    let (store, transaction, primary_key) = cursor_mutation_state(scope, cursor)?;
     let handle = transaction_handle_from_value(scope, transaction.into())?;
     let store_name = indexed_db_object_store_name(scope, store)?;
-    let request = create_request_object(scope, cursor.into(), transaction)?;
-    queue_transaction_request(scope, transaction, request);
-    Some((request, handle, store_name))
+    Some(CursorMutation {
+        transaction,
+        store,
+        handle,
+        store_name,
+        primary_key,
+    })
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn throw_cursor_mutation_error(
+    scope: &mut v8::PinScope<'_, '_>,
+    message: &str,
+    name: &str,
+) {
+    let error = dom_exception_value(scope, message, name);
+    scope.throw_exception(error);
 }

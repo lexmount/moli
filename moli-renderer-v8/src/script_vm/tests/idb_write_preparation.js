@@ -135,6 +135,62 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
       }
       await firstDone;
       await queuedDone;
+    } else if (scenario === 'cursor-rejections' || scenario === 'cursor-readonly') {
+      const seed = db.transaction(['plain', 'inline'], 'readwrite'), seedDone = complete(seed);
+      seed.objectStore('plain').put({payload: 'before'}, 'one');
+      seed.objectStore('inline').put({id: 1, payload: 'before'});
+      await seedDone;
+      const tx = db.transaction(['plain', 'inline'], scenario === 'cursor-readonly' ? 'readonly' : 'readwrite');
+      const done = complete(tx);
+      const updates = ['plain', 'inline'].map(name => new Promise((resolve, reject) => {
+        const store = tx.objectStore(name), openCursor = store.openCursor();
+        openCursor.onerror = () => reject(openCursor.error);
+        openCursor.onsuccess = () => {
+          try {
+            const cursor = openCursor.result;
+            if (!cursor) {resolve(); return;}
+            const before = requestStateEntries?.(store);
+            if (scenario === 'cursor-readonly') {
+              let reads = 0;
+              throws(() => cursor.update({get payload() {reads++; return 'after';}}), 'ReadOnlyError');
+              throws(() => cursor.delete(), 'ReadOnlyError');
+              assert(reads === 0, 'readonly cursor update invoked a getter');
+              if (requestStateEntries) assert(requestStateEntries(store) === before, 'readonly update allocated native state');
+              cursor.continue();
+              return;
+            }
+            const marker = new realm.Error('cursor getter');
+            for (const value of [() => {}, new realm.Event('no-clone'), {get payload() {throw marker;}}]) {
+              throws(() => cursor.update(value), typeof value === 'object' && !(value instanceof realm.Event) ? marker : 'DataCloneError');
+            }
+            if (name === 'inline') throws(() => cursor.update({id: 2}), 'DataError');
+            if (requestStateEntries) assert(requestStateEntries(store) === before, 'rejected cursor update retained native state');
+            let keyReads = 0, valueReads = 0;
+            const original = cursor.value;
+            const value = {get payload() {
+              valueReads++;
+              throws(() => store.get('nested'), 'TransactionInactiveError');
+              return 'after';
+            }};
+            if (name === 'inline') Object.defineProperty(value, 'id', {enumerable: true, get() {keyReads++; return 1;}});
+            const update = cursor.update(value);
+            assert(update.source === cursor && update.transaction === tx, 'cursor request lost source or transaction');
+            assert(valueReads === 1 && keyReads === (name === 'inline' ? 1 : 0), `cursor getters ran ${keyReads}/${valueReads} times`);
+            assert(cursor.value === original && cursor.value.payload === 'before', 'update replaced the cursor value snapshot');
+            result(update).then(resolve, reject);
+          } catch (error) {reject(error);}
+        };
+      }));
+      await Promise.all(updates);
+      await done;
+      const read = db.transaction(['plain', 'inline']), readDone = complete(read);
+      const saved = await Promise.all([
+        result(read.objectStore('plain').get('one')),
+        result(read.objectStore('inline').get(1))
+      ]);
+      const expected = scenario === 'cursor-readonly' ? 'before' : 'after';
+      assert(saved.every(value => value.payload === expected), 'cursor update did not persist the expected snapshot');
+      await readDone;
     } else {
       throw new Error(`unknown scenario: ${scenario}`);
     }

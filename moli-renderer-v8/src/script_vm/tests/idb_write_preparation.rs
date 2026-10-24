@@ -75,3 +75,13 @@ async fn write_getters_run_once_and_propagate_exceptions_without_reentrancy() {
 async fn rejected_writes_allocate_no_native_request_state() {
     assert_write_preparation("native-state").await;
 }
+
+#[tokio::test]
+async fn cursor_updates_validate_before_admission_and_preserve_snapshots() {
+    assert_write_preparation("cursor-rejections").await;
+}
+
+#[tokio::test]
+async fn cursor_updates_reject_readonly_before_cloning() {
+    assert_write_preparation("cursor-readonly").await;
+}
