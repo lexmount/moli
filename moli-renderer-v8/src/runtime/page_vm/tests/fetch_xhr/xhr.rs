@@ -2148,17 +2148,16 @@ async fn xhr_cross_origin_redirect_without_cors_reports_network_error_surface() 
 }
 
 #[tokio::test]
-async fn xhr_document_csp_blocks_cross_origin_redirect_final_url() {
+async fn xhr_document_csp_blocks_cross_origin_redirect_before_wire_and_reports_initial_url() {
     run_page_vm_async_test(async move {
-            let (source_base_url, target_base_url, source_server, target_server) =
-                spawn_cross_origin_redirect_with_cors_http_servers(
+            let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (source_base_url, source_server) =
+                spawn_single_redirect_http_server(
                     "/xhr-csp-redirect-source",
-                    "/xhr-csp-redirect-target",
-                    "cors-allowed-xhr-target",
+                    format!("http://{}/xhr-csp-redirect-target", target_listener.local_addr().unwrap()),
                 )
                 .await;
             let xhr_url = format!("{source_base_url}/xhr-csp-redirect-source");
-            let target_url = format!("{target_base_url}/xhr-csp-redirect-target");
             let document_url =
                 Url::parse(&format!("{source_base_url}/page.html")).expect("document url");
             let mut page_vm = test_page_vm_with_document_url(document_url);
@@ -2235,9 +2234,8 @@ async fn xhr_document_csp_blocks_cross_origin_redirect_final_url() {
             source_server
                 .await
                 .expect("XHR CSP redirect source server should finish");
-            target_server
-                .await
-                .expect("XHR CSP redirect target server should finish");
+            assert!(tokio::time::timeout(Duration::from_millis(50), target_listener.accept()).await.is_err(),
+                "CSP must block before connecting to the XHR redirect target");
             let observed: serde_json::Value =
                 serde_json::from_str(&observed).expect("parse XHR CSP redirect observation");
             assert_eq!(
@@ -2251,7 +2249,7 @@ async fn xhr_document_csp_blocks_cross_origin_redirect_final_url() {
                         "loadend",
                     ],
                     "cspEvents": [{
-                        "blockedURI": target_url,
+                        "blockedURI": xhr_url,
                         "effectiveDirective": "connect-src",
                         "disposition": "enforce",
                         "instance": true,

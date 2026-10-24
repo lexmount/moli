@@ -55,6 +55,16 @@ pub(super) fn worker_policy_snapshot(
         )
 }
 
+pub(super) fn worker_request_policy_snapshot(
+    state: &WorkerGlobalState,
+    kind: ContentSecurityPolicyResourceKind,
+) -> crate::document_runtime::DocumentConnectPolicySnapshot {
+    crate::document_runtime::DocumentConnectPolicySnapshot::from_inherited_policy(
+        &worker_policy_snapshot(state),
+    )
+    .for_resource_kind(kind)
+}
+
 fn worker_policy_url<'a>(state: &'a WorkerGlobalState, protected_url: &'a Url) -> &'a Url {
     state
         .content_security_policy_snapshot

@@ -458,10 +458,17 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         let mut state = state.borrow_mut();
         let xhr_id = next_xhr_id(&mut state);
         let request_body = request_body_text(&prepared.send_body);
+        let connect_policy = worker_request_policy_snapshot(
+            &state,
+            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        );
+        let redirect_csp_state = crate::network_host::FetchCspRedirectState::new(&connect_policy);
         state.pending_xhrs.insert(
             xhr_id,
             PendingWorkerXhr {
                 timing: prepared.timing.clone(),
+                connect_policy,
+                redirect_csp_state,
                 xhr: v8::Global::new(scope, xhr),
                 document_url: prepared.document_url.clone(),
                 credentials_mode: prepared.credentials_mode,
@@ -548,6 +555,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         None,
         None,
         Vec::new(),
+        super::fetch::worker_xhr_redirect_check(&state.borrow(), xhr_id),
     );
 
     true
@@ -562,6 +570,16 @@ fn send_synchronous_worker_xhr(
 ) {
     let timing = prepared.timing.clone();
     let request_url_text = prepared.resolved_url.to_string();
+    let connect_policy = worker_request_policy_snapshot(
+        &state.borrow(),
+        crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+    );
+    let redirect_csp_state = crate::network_host::FetchCspRedirectState::new(&connect_policy);
+    let source_location = if connect_policy.has_policies() {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope)
+    } else {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+    };
     let request = match Request::new_bytes(
         &prepared.method,
         prepared.resolved_url.as_str(),
@@ -583,6 +601,16 @@ fn send_synchronous_worker_xhr(
                         document_referrer_policy: Some(referrer_policy),
                         ..moli_fetch::ScriptFetchRequestMetadata::default()
                     });
+            }
+            if let Some(check) = super::fetch::worker_request_redirect_check(
+                &state.borrow(),
+                &connect_policy,
+                &redirect_csp_state,
+                &prepared.document_url,
+                &prepared.resolved_url,
+                source_location,
+            ) {
+                request = request.with_redirect_check(check);
             }
             request
         }
@@ -700,12 +728,13 @@ fn send_synchronous_worker_xhr(
     match result {
         Ok(response) => {
             let response_head = response.head();
+            let redirect_csp_checked = redirect_csp_state.was_checked(&response_head.final_url);
             let redirect_status = if response_head.redirect_chain.is_empty() {
                 crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
             } else {
                 crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
             };
-            if redirect_status
+            if !redirect_csp_checked && redirect_status
                 == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
             {
                 dispatch_worker_content_security_policy_report_only_violation_for_checked_url_with_redirect_status_for_state(
@@ -718,7 +747,9 @@ fn send_synchronous_worker_xhr(
                     redirect_status,
                 );
             }
-            let csp_violation = {
+            let csp_violation = if redirect_csp_checked {
+                None
+            } else {
                 let state_ref = state.borrow();
                 worker_content_security_policy_violation_for_checked_url_with_redirect_status(
                     &state_ref,
@@ -1021,12 +1052,21 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     }
     if let Ok(response) = &completion.result {
         let response_head = response.head();
+        let redirect_csp_checked = state
+            .borrow()
+            .pending_xhrs
+            .get(&completion.xhr_id)
+            .is_some_and(|pending| {
+                pending
+                    .redirect_csp_state
+                    .was_checked(&response_head.final_url)
+            });
         let redirect_status = if response_head.redirect_chain.is_empty() {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
         } else {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
         };
-        if redirect_status
+        if !redirect_csp_checked && redirect_status
             == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
         {
             let (document_url, request_url) = {
@@ -1046,7 +1086,9 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                 redirect_status,
             );
         }
-        let csp_failure = {
+        let csp_failure = if redirect_csp_checked {
+            None
+        } else {
             let state_ref = state.borrow();
             let Some(pending) = state_ref.pending_xhrs.get(&completion.xhr_id) else {
                 return;
