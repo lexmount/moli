@@ -1407,6 +1407,9 @@ impl BrowserContext {
     }
 
     pub(crate) fn clear_http_cache(&self) -> Result<(), String> {
+        self.renderer_runtime_owner_access()
+            .clear_cors_preflight_cache(None)
+            .map_err(|error| format!("FailedToClearCorsPreflightCache: {error}"))?;
         let Some(cache_root) = self.http_cache_root.as_ref() else {
             return Ok(());
         };
@@ -1415,6 +1418,9 @@ impl BrowserContext {
     }
 
     pub(crate) fn clear_http_cache_for_origin(&self, origin: &url::Url) -> Result<usize, String> {
+        self.renderer_runtime_owner_access()
+            .clear_cors_preflight_cache(Some(origin))
+            .map_err(|error| format!("FailedToClearCorsPreflightCache: {error}"))?;
         let Some(cache_root) = self.http_cache_root.as_ref() else {
             return Ok(0);
         };

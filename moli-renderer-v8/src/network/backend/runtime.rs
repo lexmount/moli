@@ -17,7 +17,7 @@ use parking_lot::{Mutex, RwLock};
 
 use super::{
     BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics,
-    BrowserResourceRuntimeDiagnostics, SharedMemoryResourceCacheDiagnostics,
+    BrowserResourceRuntimeDiagnostics, CorsPreflightCache, SharedMemoryResourceCacheDiagnostics,
     memory_cache::SharedMemoryResourceCache,
 };
 use crate::network::loads::{
@@ -130,6 +130,7 @@ struct BrowserResourceRuntimeInner {
     owner_root_id: AtomicU64,
     client: FetchClientHandle,
     memory_cache: Mutex<SharedMemoryResourceCache>,
+    cors_preflight_cache: Mutex<CorsPreflightCache>,
     disk_pool: Option<DiskPool>,
     parkable_images: ParkableImageManager,
     parkable_image_schedule_notify: Arc<tokio::sync::Notify>,
@@ -163,6 +164,7 @@ impl BrowserResourceRuntimeOwner {
                 owner_root_id: AtomicU64::new(0),
                 client: fetch_owner.handle(),
                 memory_cache: Mutex::new(SharedMemoryResourceCache::default()),
+                cors_preflight_cache: Mutex::new(CorsPreflightCache::default()),
                 parkable_images,
                 disk_pool,
                 parkable_image_schedule_notify,
@@ -224,6 +226,19 @@ impl BrowserResourceRuntime {
 
     pub fn memory_cache_diagnostics(&self) -> SharedMemoryResourceCacheDiagnostics {
         self.inner.memory_cache.lock().diagnostics()
+    }
+
+    pub(crate) fn clear_cors_preflight_cache(&self, origin: Option<&url::Url>) {
+        let mut cache = self.inner.cors_preflight_cache.lock();
+        if let Some(origin) = origin {
+            cache.clear_for_origin(origin);
+        } else {
+            cache.clear();
+        }
+    }
+
+    pub(crate) fn cors_preflight_cache(&self) -> &Mutex<CorsPreflightCache> {
+        &self.inner.cors_preflight_cache
     }
 
     pub fn disk_pool(&self) -> Option<DiskPool> {
@@ -575,6 +590,26 @@ impl Drop for BrowserResourceRuntimeOwnerRoot {
 }
 
 impl BrowserResourceRuntimeOwnerRegistrar {
+    pub(crate) fn clear_cors_preflight_cache(
+        &self,
+        origin: Option<&url::Url>,
+    ) -> Result<(), &'static str> {
+        self.with_owner_set(|owners| {
+            if owners.terminal {
+                return Err("browser resource runtime owner root is shut down");
+            }
+            // Workers and in-flight loads can retain retired network leases
+            // after a proxy/config change. Clearing only the current binding
+            // would leave their permissions observable after cache clearing.
+            for owner in &owners.owners {
+                if let Some(inner) = owner.runtime.upgrade() {
+                    BrowserResourceRuntime { inner }.clear_cors_preflight_cache(origin);
+                }
+            }
+            Ok(())
+        })
+    }
+
     fn with_owner_set<T>(
         &self,
         operation: impl FnOnce(&BrowserResourceRuntimeOwnerSet) -> Result<T, &'static str>,
@@ -698,6 +733,100 @@ mod tests {
 
     fn registration() -> BrowserResourceRuntimeOwnerRegistration {
         BrowserResourceRuntimeOwner::new(&FetchConfig::default(), new_shared_browser_cookie_store())
+    }
+
+    #[test]
+    fn preflight_cache_clear_reaches_retired_leases_without_crossing_browser_contexts() {
+        use crate::network::CorsPreflightResult;
+        use moli_fetch::{Request, RequestCredentialsMode};
+        use moli_url::WebOrigin;
+        use std::time::Instant;
+
+        let (root, binding) = BrowserResourceRuntimeOwnerRoot::new(registration());
+        let registrar = root.registrar();
+        let old = binding.current();
+        let active = registrar.replace_owned(registration()).unwrap();
+        assert_eq!(root.owner_count_for_testing(), 2);
+        let (other_root, other_binding) = BrowserResourceRuntimeOwnerRoot::new(registration());
+        let unrelated = other_binding.current();
+        let origin = url::Url::parse("http://origin.test/path").unwrap();
+        let first = Request::new_browser_bytes(
+            "PUT",
+            "http://target.test/resource",
+            None,
+            Vec::new(),
+            WebOrigin::from_url(&origin),
+        )
+        .unwrap()
+        .with_credentials_mode(RequestCredentialsMode::Omit)
+        .with_network_partition_key(Some("partition-a".to_owned()));
+        let second = first
+            .clone()
+            .with_request_origin(WebOrigin::from_url(
+                &url::Url::parse("http://other.test").unwrap(),
+            ))
+            .with_network_partition_key(Some("partition-b".to_owned()));
+        let now = Instant::now();
+        for runtime in [&old, &active, &unrelated] {
+            for request in [&first, &second] {
+                runtime.cors_preflight_cache().lock().insert(
+                    request,
+                    CorsPreflightResult::new(
+                        RequestCredentialsMode::Omit,
+                        Some(vec!["PUT".to_owned()]),
+                        None,
+                        &[],
+                    ),
+                    now,
+                );
+                assert!(
+                    runtime
+                        .cors_preflight_cache()
+                        .lock()
+                        .can_skip(request, &[], now)
+                );
+            }
+        }
+
+        registrar.clear_cors_preflight_cache(Some(&origin)).unwrap();
+        for runtime in [&old, &active] {
+            assert!(
+                !runtime
+                    .cors_preflight_cache()
+                    .lock()
+                    .can_skip(&first, &[], now)
+            );
+            assert!(
+                runtime
+                    .cors_preflight_cache()
+                    .lock()
+                    .can_skip(&second, &[], now)
+            );
+        }
+        assert!(
+            unrelated
+                .cors_preflight_cache()
+                .lock()
+                .can_skip(&first, &[], now)
+        );
+
+        registrar.clear_cors_preflight_cache(None).unwrap();
+        for runtime in [&old, &active] {
+            assert!(
+                !runtime
+                    .cors_preflight_cache()
+                    .lock()
+                    .can_skip(&second, &[], now)
+            );
+        }
+        assert!(
+            unrelated
+                .cors_preflight_cache()
+                .lock()
+                .can_skip(&second, &[], now)
+        );
+        root.shutdown_and_join();
+        other_root.shutdown_and_join();
     }
 
     #[tokio::test(flavor = "multi_thread")]
