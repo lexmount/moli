@@ -80,6 +80,8 @@ interfaces! {
     RTCDTMFSender: EventTarget;
     RTCDTMFToneChangeEvent: Event;
     RTCDtlsTransport: EventTarget;
+    RTCEncodedAudioFrame;
+    RTCEncodedVideoFrame;
     RTCError: DOMException;
     RTCErrorEvent: Event;
     RTCIceTransport: EventTarget;
@@ -503,8 +505,6 @@ interfaces! {
     QuotaExceededError: DOMException;
     RTCDataChannel: EventTarget;
     RTCIceCandidate;
-    RTCEncodedAudioFrame;
-    RTCEncodedVideoFrame;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;
