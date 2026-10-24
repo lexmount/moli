@@ -9,6 +9,20 @@ pub(in crate::context_bootstrap) const RANGE_RECORD_LIFETIME_INTERNAL_FIELD_INDE
 pub(in crate::context_bootstrap) const RANGE_RECORD_ID_INTERNAL_FIELD_INDEX: usize = 1;
 pub(in crate::context_bootstrap) const RANGE_WRAPPER_INTERNAL_FIELD_COUNT: usize = 2;
 
+// Constructors read ordinary wrappers before branding is complete. Only a
+// registered native Proxy may use another object's range storage.
+pub(super) fn range_backing_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if range.is_proxy() {
+        let target = moli_webapi_declare::web_api_object_target(scope, range)?;
+        crate::web_api_interfaces::AbstractRange::is_instance(scope, target).then_some(target)
+    } else {
+        Some(range)
+    }
+}
+
 pub(in crate::context_bootstrap) fn current_document_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -212,6 +226,7 @@ pub(in crate::context_bootstrap) fn range_native_record_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
 ) -> Option<RangeRecordHandle> {
+    let range = range_backing_object(scope, range)?;
     let lifetime_value =
         range.get_internal_field(scope, RANGE_RECORD_LIFETIME_INTERNAL_FIELD_INDEX)?;
     let lifetime_big = v8::Local::<v8::BigInt>::try_from(lifetime_value).ok()?;
