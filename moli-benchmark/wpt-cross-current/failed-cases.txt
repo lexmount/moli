@@ -43,6 +43,7 @@ css/css-animations/stability/animation-event-destroy-renderer.html?animationiter
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
+css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html
 css/css-cascade/layer-media-query.html
@@ -362,11 +363,10 @@ css/css-flexbox/table-as-item-fixed-min-width-3.html
 css/css-flexbox/table-as-item-large-intrinsic-size.html
 css/css-flexbox/table-as-item-stretch-cross-size-5.html
 css/css-flexbox/table-with-infinite-max-intrinsic-width.html
-css/css-font-loading/font-face-reject.html
 css/css-font-loading/fontface-descriptor-updates-2.html
-css/css-font-loading/fontface-load-in-modal-dialog.html
 css/css-font-loading/fontfaceset-load-css-wide-keywords.html
 css/css-font-loading/fontfaceset-load-var.html
+css/css-font-loading/fontfacesetloadevent-constructor.html
 css/css-forms/parsing/checkmark-pseudo-element.html
 css/css-forms/parsing/picker-icon-pseudo-element.html
 css/css-forms/parsing/picker-select-pseudo-element.html
@@ -2599,7 +2599,6 @@ html/browsers/browsing-the-web/back-forward-cache/service-worker-clients-claim.h
 html/browsers/browsing-the-web/back-forward-cache/service-worker-clients-matchall.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-controlled-after-restore.https.html
 html/browsers/browsing-the-web/back-forward-cache/timers.html
-html/browsers/browsing-the-web/history-traversal/PopStateEvent.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_2.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_3.html
@@ -2656,6 +2655,7 @@ html/browsers/browsing-the-web/unloading-documents/002.html
 html/browsers/browsing-the-web/unloading-documents/003.html
 html/browsers/browsing-the-web/unloading-documents/004.html
 html/browsers/browsing-the-web/unloading-documents/005.html
+html/browsers/browsing-the-web/unloading-documents/beforeunload-canceling.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-navigation-of-parent.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-synchronous.html
 html/browsers/browsing-the-web/unloading-documents/navigation-during-beforeunload.html
@@ -2668,11 +2668,13 @@ html/browsers/history/the-history-interface/history_go_undefined.html
 html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html
 html/browsers/history/the-history-interface/traverse_the_history_2.html
 html/browsers/history/the-history-interface/traverse_the_history_3.html
+html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
 html/browsers/history/the-location-interface/assign_before_load.html
 html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
 html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
+html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
 html/browsers/history/the-location-interface/same-hash.html
@@ -2790,6 +2792,7 @@ html/dom/reflection-sections.html
 html/dom/reflection-tabular.html
 html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
+html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
 html/editing/the-hidden-attribute/beforematch-infinite-loop.html
 html/infrastructure/safe-passing-of-structured-data/shared-array-buffers/window-serviceworker-failure.https.html
 html/infrastructure/safe-passing-of-structured-data/transfer-audiodata.html
@@ -2859,6 +2862,7 @@ html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitiv
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
@@ -2882,6 +2886,7 @@ html/semantics/embedded-content/the-img-element/natural-size-orientation.html
 html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width-height.html
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
@@ -3009,7 +3014,6 @@ html/semantics/the-button-element/command-and-commandfor/button-event-dispatch.h
 html/semantics/the-button-element/command-and-commandfor/button-type-behavior.html
 html/semantics/the-button-element/command-and-commandfor/button-type-reflection.html
 html/semantics/the-button-element/command-and-commandfor/event-dispatch-shadow.html
-html/semantics/the-button-element/command-and-commandfor/event-interface.html
 html/semantics/the-button-element/command-and-commandfor/interface.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-behavior.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-invalid-behavior.html
@@ -3017,6 +3021,7 @@ html/semantics/the-button-element/command-and-commandfor/on-popover-behavior.htm
 html/semantics/the-button-element/command-and-commandfor/source-attribute-retargeting.html
 html/semantics/the-button-element/command-and-commandfor/toggleevent-source-attribute-retargeting.html
 html/syntax/charset/inheritance-bogus-meta.html
+html/syntax/charset/xhr.html
 html/syntax/parsing/DOMContentLoaded-defer.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
 html/syntax/parsing/html5lib_webkit02.html?run_type=uri
@@ -3106,12 +3111,15 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
+navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
+navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
 navigation-api/navigation-methods/return-value/back-204-205-download.html
 navigation-api/navigation-methods/sandboxing-back-parent.html
@@ -3259,7 +3267,6 @@ service-workers/service-worker/opaque-script.https.html
 service-workers/service-worker/postmessage.https.html
 service-workers/service-worker/redirected-response.https.html
 service-workers/service-worker/referrer-policy-header.https.html
-service-workers/service-worker/registration-end-to-end.https.html
 service-workers/service-worker/registration-schedule-job.https.html
 service-workers/service-worker/registration-scope-module-static-import.https.html
 service-workers/service-worker/registration-scope.https.html
@@ -3456,6 +3463,7 @@ workers/semantics/structured-clone/dedicated.html
 workers/semantics/structured-clone/shared.html
 worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
+worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
 xhr/abort-event-order.htm
 xhr/data-uri.htm
@@ -3464,10 +3472,8 @@ xhr/open-during-abort-event.htm
 xhr/open-during-abort.htm
 xhr/open-method-bogus.htm
 xhr/open-method-insecure.htm
-xhr/open-url-encoding.htm
-xhr/open-url-multi-window-2.htm
 xhr/open-url-multi-window-3.htm
-xhr/open-url-multi-window-5.htm
+xhr/open-url-multi-window-6.htm
 xhr/overridemimetype-headers-received-state-force-shiftjis.htm
 xhr/overridemimetype-invalid-mime-type.htm
 xhr/responsedocument-decoding.htm

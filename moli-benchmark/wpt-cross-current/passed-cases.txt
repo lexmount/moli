@@ -406,7 +406,6 @@ css/css-cascade/inherit-initial.html
 css/css-cascade/inline-style-background.html
 css/css-cascade/layer-basic.html
 css/css-cascade/layer-cssom-order-reverse-at-property.html
-css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-import.html
 css/css-cascade/layer-important.html
 css/css-cascade/layer-namespace-sandwich-crash.html
@@ -1634,6 +1633,7 @@ css/css-font-loading/empty-family-load.html
 css/css-font-loading/fontface-font-variation-settings-persisted-js-api.html
 css/css-font-loading/fontface-fonts-loading.html
 css/css-font-loading/fontface-invalid-arraybuffer.html
+css/css-font-loading/fontface-load-in-modal-dialog.html
 css/css-font-loading/fontface-loadingevent.html
 css/css-font-loading/fontfaceset-clear-css-connected.html
 css/css-font-loading/fontfaceset-delete-css-connected.html
@@ -1642,7 +1642,6 @@ css/css-font-loading/fontfaceset-load-css-connected.html
 css/css-font-loading/fontfaceset-loading-worker-crash.html
 css/css-font-loading/fontfaceset-update-after-stylesheet-change.html
 css/css-font-loading/fontfaceset-worker-fontface-crash.html
-css/css-font-loading/fontfacesetloadevent-constructor.html
 css/css-font-loading/historical.html
 css/css-font-loading/nonexistent-file-url.html
 css/css-forced-color-adjust/parsing/forced-color-adjust-computed.html
@@ -5758,6 +5757,7 @@ hr-time/timing-attack.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-client-postmessage.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-unregister.https.html
 html/browsers/browsing-the-web/history-traversal/001.html
+html/browsers/browsing-the-web/history-traversal/PopStateEvent.html
 html/browsers/browsing-the-web/history-traversal/api-availability.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash-twice.html
@@ -5899,6 +5899,7 @@ html/browsers/history/the-history-interface/history_go_minus.html
 html/browsers/history/the-history-interface/history_go_no_argument.html
 html/browsers/history/the-history-interface/history_go_plus.html
 html/browsers/history/the-history-interface/history_go_to_uri.html
+html/browsers/history/the-history-interface/history_go_zero.html
 html/browsers/history/the-history-interface/history_properties_only_fully_active.html
 html/browsers/history/the-history-interface/history_pushstate.html
 html/browsers/history/the-history-interface/history_pushstate_err.html
@@ -6265,8 +6266,6 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme-single-value-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
@@ -6389,7 +6388,6 @@ html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -6614,6 +6612,7 @@ html/semantics/forms/the-input-element/input-stepup.html
 html/semantics/forms/the-input-element/input-submit-remove-jssubmit.html
 html/semantics/forms/the-input-element/input-type-button.html
 html/semantics/forms/the-input-element/input-type-change-empty-crash.html
+html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/forms/the-input-element/input-type-checkbox.html
 html/semantics/forms/the-input-element/input-type-number-rtl-invalid-crash.html
 html/semantics/forms/the-input-element/input-untrusted-key-event.html
@@ -7062,6 +7061,7 @@ html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compi
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-module.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-of-promise-result.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-other-document.html
+html/semantics/scripting-1/the-script-element/module/dynamic-import/v8-code-cache.html
 html/semantics/scripting-1/the-script-element/module/error-and-slow-dependency.html
 html/semantics/scripting-1/the-script-element/module/error-type-1.html
 html/semantics/scripting-1/the-script-element/module/error-type-2.html
@@ -7213,6 +7213,7 @@ html/semantics/text-level-semantics/the-ruby-element/rt-without-ruby-crash.html
 html/semantics/text-level-semantics/the-time-element/001.html
 html/semantics/the-button-element/command-and-commandfor/button-event-dispatch-content-attribute.html
 html/semantics/the-button-element/command-and-commandfor/command-close-target-non-dialog-crash.html
+html/semantics/the-button-element/command-and-commandfor/event-interface.html
 html/semantics/the-button-element/command-and-commandfor/generic-eventtarget-crash.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-disconnect.html
 html/semantics/the-button-element/command-and-commandfor/on-popover-disconnect.html
@@ -8454,6 +8455,7 @@ service-workers/service-worker/register-default-scope.https.html
 service-workers/service-worker/register-same-scope-different-script-url.https.html
 service-workers/service-worker/register-wait-forever-in-install-worker.https.html
 service-workers/service-worker/registration-basic.https.html
+service-workers/service-worker/registration-end-to-end.https.html
 service-workers/service-worker/registration-events.https.html
 service-workers/service-worker/registration-iframe.https.html
 service-workers/service-worker/rejections.https.html
@@ -9020,10 +9022,8 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
-trusted-types/trusted-types-navigation.html?01-05
-trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?21-25
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -9734,9 +9734,11 @@ xhr/open-url-about-blank-window.htm
 xhr/open-url-base-inserted-after-open.htm
 xhr/open-url-base-inserted.htm
 xhr/open-url-base.htm
+xhr/open-url-encoding.htm
 xhr/open-url-javascript-window-2.htm
 xhr/open-url-javascript-window.htm
-xhr/open-url-multi-window-6.htm
+xhr/open-url-multi-window-2.htm
+xhr/open-url-multi-window-5.htm
 xhr/open-url-multi-window.htm
 xhr/open-url-redirected-sharedworker-origin.htm
 xhr/open-url-redirected-worker-origin.htm
@@ -9768,6 +9770,7 @@ xhr/send-accept-language.htm
 xhr/send-after-setting-document-domain.htm
 xhr/send-blob-with-no-mime-type.html
 xhr/send-data-blob.htm
+xhr/send-entity-body-basic.htm
 xhr/send-entity-body-empty.htm
 xhr/send-entity-body-get-head-async.htm
 xhr/send-entity-body-get-head.htm
