@@ -1129,6 +1129,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),

@@ -644,6 +644,8 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
         local_executor,
         &loader,
         &PageVmEnvConfig {
+            document_response_status: None,
+
             history_policy_container: None,
 
             window_identity: Default::default(),
@@ -941,6 +943,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -1125,6 +1129,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -1733,6 +1739,8 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
             local_executor,
             &loader,
             &PageVmEnvConfig {
+                document_response_status: None,
+
                 history_policy_container: None,
 
                 window_identity: Default::default(),
