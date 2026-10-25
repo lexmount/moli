@@ -793,3 +793,154 @@ fn filtered_hollow_text_keeps_one_searchable_semantic_copy() {
         }));
     }
 }
+
+fn filtered_fixture_glyph(bytes: &[u8], ch: char, stroke: Option<f32>) -> PaintSnapshot {
+    use moli_layout::{PaintBlendMode, PaintCompositeMode, PaintFilter, PaintTextStroke};
+    let mut snapshot =
+        PaintSnapshot::new(PaintViewport::new(300, 300, 2.0), PaintColor::TRANSPARENT);
+    let mut run = text(&mut snapshot, "A", 150.0, false);
+    let font = peniko::FontData::new(peniko::Blob::new(Arc::new(bytes.to_vec())), 0);
+    let face = skrifa::FontRef::from_index(bytes, 0).unwrap();
+    run.font = snapshot.intern_font(&font);
+    run.font_size = 100.0;
+    run.glyphs[0].id = face.charmap().map(ch).unwrap().to_u32();
+    run.glyphs[0].x = 100.0;
+    run.color = if stroke.is_some() {
+        PaintColor::TRANSPARENT
+    } else {
+        PaintColor::BLACK
+    };
+    run.stroke = stroke.map(|width| PaintTextStroke {
+        width,
+        color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+        paint_first: false,
+    });
+    let semantics = run.text.as_mut().unwrap();
+    semantics.text = Arc::from(ch.to_string());
+    semantics.clusters[0] = 0..ch.len_utf8();
+    snapshot.push_fragment(PaintFragment::PushLayer {
+        opacity: 1.0,
+        blend_mode: PaintBlendMode::Normal,
+        composite: PaintCompositeMode::SrcOver,
+        clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 300.0, 300.0)),
+        transform: PaintTransform2D::IDENTITY,
+        filter: Some(PaintFilter::Opacity(0.5)),
+    });
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+    snapshot
+}
+
+// Count actual painted pixels and each fixture color, including alpha. This
+// catches losing a color layer even when the base glyph remains visible.
+fn glyph_ink_counts(pixels: &[u8]) -> [usize; 3] {
+    let mut counts = [0; 3];
+    for pixel in pixels.chunks_exact(4).filter(|pixel| pixel[3] > 0) {
+        counts[0] += 1;
+        counts[1] += usize::from(pixel[2] > 200 && pixel[0] < 60 && pixel[1] < 120);
+        counts[2] += usize::from(pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60);
+    }
+    counts
+}
+
+fn assert_filtered_fixture_ink(snapshot: &PaintSnapshot, label: &str) -> [usize; 3] {
+    let reference = crate::raster_snapshot(snapshot).unwrap();
+    let expected = glyph_ink_counts(&reference.rgba);
+    let doc = document(snapshot, &options());
+    let images: Vec<_> = doc
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .filter(|stream| stream.dict.has(b"SMask"))
+        .collect();
+    if expected[0] == 0 {
+        assert!(
+            images.is_empty(),
+            "empty glyphs must not allocate a PDF image"
+        );
+        return expected;
+    }
+    // lopdf's general extractor prefers Type3 Differences names to ToUnicode.
+    // Decode the emitted text through its CMap, as PDF readers do. These
+    // one-glyph fixtures have exactly one font in their page resources.
+    let page = doc.get_pages()[&1];
+    let fonts = doc.get_page_fonts(page).unwrap();
+    assert_eq!(fonts.len(), 1);
+    let mut font = (*fonts.values().next().unwrap()).clone();
+    if font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type3" {
+        font.remove(b"Encoding");
+    }
+    let encoding = font.get_font_encoding(&doc).unwrap();
+    let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+    let mut text = String::new();
+    for operation in content
+        .operations
+        .iter()
+        .filter(|op| matches!(op.operator.as_str(), "Tj" | "TJ"))
+    {
+        for operand in &operation.operands {
+            let items = match operand {
+                lopdf::Object::Array(items) => items.as_slice(),
+                value => std::slice::from_ref(value),
+            };
+            for item in items {
+                if let lopdf::Object::String(bytes, _) = item {
+                    text.push_str(&encoding.bytes_to_string(bytes).unwrap());
+                }
+            }
+        }
+    }
+    assert_eq!(text, label);
+    assert_eq!(images.len(), 1);
+    let rgb = images[0].decompressed_content().unwrap();
+    let mask = images[0]
+        .dict
+        .get(b"SMask")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let alpha = doc
+        .get_object(mask)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .decompressed_content()
+        .unwrap();
+    assert_eq!(rgb.len(), alpha.len() * 3);
+    let pixels: Vec<_> = rgb
+        .chunks_exact(3)
+        .zip(alpha)
+        .flat_map(|(rgb, alpha)| [rgb[0], rgb[1], rgb[2], alpha])
+        .collect();
+    assert_eq!(
+        glyph_ink_counts(&pixels),
+        expected,
+        "all glyph layers and stroke ink must survive"
+    );
+    expected
+}
+
+#[test]
+fn filtered_colr_layers_outside_the_base_outline_survive() {
+    let snapshot = filtered_fixture_glyph(
+        include_bytes!("../../tests/fixtures/moli-pdf.ttf"),
+        '★',
+        None,
+    );
+    let counts = assert_filtered_fixture_ink(&snapshot, "★");
+    assert!(counts[1] > 0, "the blue layer lies above the base outline");
+}
+
+#[test]
+fn filtered_colr_glyph_with_an_empty_base_keeps_ink_and_text() {
+    let snapshot = filtered_fixture_glyph(
+        include_bytes!("../../tests/fixtures/moli-colr.ttf"),
+        '☆',
+        None,
+    );
+    let counts = assert_filtered_fixture_ink(&snapshot, "☆");
+    assert!(
+        counts[1] > 0 && counts[2] > 0,
+        "both color layers are visible"
+    );
+}

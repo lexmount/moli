@@ -9,3 +9,6 @@ bounds, checking that allocation uses the rendered glyph's origin.
 
 `moli-pdf.ttf` is derived from the project's generated Ahem font by
 `uv run scripts/generate-pdf-test-font.py`, under the same license.
+Its COLR stars have a blue layer above the base outline; the hollow star's
+base outline is empty while its color layers remain visible.
+`moli-colr.ttf` is the static variant, exercising empty base-outline metrics.

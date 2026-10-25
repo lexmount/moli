@@ -23,7 +23,7 @@ for name, width in [("fi", 1200), ("ffi", 1800)]:
     font["glyf"][name] = glyph
     font["hmtx"].metrics[name] = (width, 0)
 added = ["fi", "ffi"]
-for codepoint in [0x301, 0x5D0, 0x5D1, 0x5D2, 0x2605]:
+for codepoint in [0x301, 0x5D0, 0x5D1, 0x5D2, 0x2605, 0x2606]:
     name = f"uni{codepoint:04X}"
     font["glyf"][name] = copy.deepcopy(font["glyf"]["uni0066"])
     font["hmtx"].metrics[name] = (600, 0)
@@ -39,13 +39,15 @@ pen.lineTo((100, 900))
 pen.closePath()
 font["glyf"]["uni0301"] = pen.glyph()
 font["hmtx"].metrics["uni0301"] = (0, 0)
+# A COLR base glyph may be empty even though its layers have visible ink.
+font["glyf"]["uni2606"] = TTGlyphPen(None).glyph()
 font.setGlyphOrder(list(dict.fromkeys(font.getGlyphOrder() + added)))
 addOpenTypeFeaturesFromString(font, """
 feature liga { sub uni0066 uni0066 uni0069 by ffi; sub uni0066 uni0069 by fi; } liga;
 markClass uni0301 <anchor 100 900> @TOP;
 feature mark { pos base uni0061 <anchor 300 800> mark @TOP; } mark;
 """)
-font["COLR"] = buildCOLR({"uni2605": [("uni0066", 0), ("uni0301", 1)]}, glyphMap=font.getReverseGlyphMap())
+font["COLR"] = buildCOLR({name: [("uni0066", 0), ("uni0301", 1)] for name in ["uni2605", "uni2606"]}, glyphMap=font.getReverseGlyphMap())
 font["CPAL"] = buildCPAL([[(1.0, 0.2, 0.0, 1.0), (0.0, 0.3, 1.0, 1.0)]])
 font["fvar"] = newTable("fvar")
 axis = Axis()
@@ -71,3 +73,8 @@ for record in list(font["name"].names):
     if value is not None:
         font["name"].setName(value, record.nameID, record.platformID, record.platEncID, record.langID)
 font.save(root / "moli-paint/tests/fixtures/moli-pdf.ttf")
+# Static glyf metrics return an empty box for the hollow star's base glyph.
+# Its COLR layers must still determine the visible representation.
+for tag in ["gvar", "fvar", "avar"]:
+    del font[tag]
+font.save(root / "moli-paint/tests/fixtures/moli-colr.ttf")

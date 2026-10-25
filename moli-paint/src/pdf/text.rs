@@ -38,6 +38,7 @@ impl FontCache {
 // metrics together with paint. Native culling and filter allocation then share
 // the same outline, synthesis, miter extent, and transform interpretation.
 struct GlyphGeometry<'a> {
+    font: FontRef<'a>,
     metrics: GlyphMetrics<'a>,
     raw_glyf_bounds: bool,
     font_size: f32,
@@ -59,6 +60,7 @@ impl<'a> GlyphGeometry<'a> {
         // Snapshot synthesis and stroke widths are both local CSS pixels.
         let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
         Ok(Self {
+            font: face.clone(),
             metrics: face.glyph_metrics(skrifa::instance::Size::new(run.font_size), coords),
             raw_glyf_bounds: face.glyf().is_ok() && face.gvar().is_err(),
             font_size: run.font_size,
@@ -68,6 +70,21 @@ impl<'a> GlyphGeometry<'a> {
                 stroke.map_or(0.0, |stroke| stroke.width),
                 embolden,
             )),
+        })
+    }
+
+    fn image_bounds(&self, id: skrifa::GlyphId) -> Option<Rect> {
+        // The raster backend selects COLR/bitmap representations before the
+        // base outline. Their visible layers can exceed it or exist alone.
+        let is_image = self.font.color_glyphs().get(id).is_some()
+            || self
+                .font
+                .bitmap_strikes()
+                .iter()
+                .any(|strike| strike.get(id).is_some());
+        is_image.then(|| {
+            let guard = f64::from(self.font_size) * 2.0;
+            Rect::new(-guard, -guard, guard, guard)
         })
     }
 
@@ -128,7 +145,11 @@ pub(super) fn ink_bounds(snapshot: &PaintSnapshot, run: &PaintGlyphRun) -> Resul
         // Bitmap/color fonts can lack outline metrics. Retain the old em
         // guard only for these glyphs, rather than padding every glyph run.
         let guard = f64::from(run.font_size) * 2.0;
-        let local = match geometry.outline_bounds(skrifa::GlyphId::new(glyph.id)) {
+        let id = skrifa::GlyphId::new(glyph.id);
+        let local = match geometry
+            .image_bounds(id)
+            .or_else(|| geometry.outline_bounds(id))
+        {
             Some(bounds) if bounds.width() <= 0.0 || bounds.height() <= 0.0 => continue,
             Some(bounds) => bounds,
             None => Rect::new(-guard, -guard, guard, guard),
