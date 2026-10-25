@@ -134,6 +134,7 @@ impl PageScriptHost {
             initiator_url,
             target_snapshot,
             source_policy,
+            request_initiator,
         } = navigation;
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_owner = navigation_load.owner();
@@ -256,27 +257,32 @@ impl PageScriptHost {
                             configure_child_document_navigation_request(
                                 request,
                                 &initiator_url,
+                                request_initiator.as_ref(),
                                 &browser_context,
                             ),
                             initiator,
-                            source_policy.as_ref(),
+                            request_initiator.as_ref()
+                                .map(crate::runtime::RendererNavigationInitiator::referrer_policy)
+                                .or_else(|| source_policy.as_ref().and_then(
+                                    crate::runtime::RendererNavigationPolicy::referrer_policy,
+                                )),
                         )
                         .with_page_network_policy()
                         .with_network_partition_key(network_partition_key)
-                })
-                .map(|request| {
-                    crate::network::navigation::NavigationInterception::new(
-                        resource_loader.clone(),
-                        request,
-                    )
-                }),
-            service_worker_client_id,
-            browser_context_runtime,
-            resource_loader,
-            completion_tx,
-            encoding_context: self.child_document_encoding_context(handle),
-            source_policy,
-        };
+                    })
+                    .map(|request| {
+                        crate::network::navigation::NavigationInterception::new(
+                            resource_loader.clone(),
+                            request,
+                        )
+                    }),
+                service_worker_client_id,
+                browser_context_runtime,
+                resource_loader,
+                completion_tx,
+                encoding_context: self.child_document_encoding_context(handle),
+                source_policy,
+            };
         let paused_fetch =
             self.start_child_document_fetch(handle, initiating_owner, &initiating_loader, fetch);
         if let Some(pending) = self.pending_child_document_navigations.get_mut(&load_id) {

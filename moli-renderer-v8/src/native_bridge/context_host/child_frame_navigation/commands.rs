@@ -50,16 +50,15 @@ impl PageScriptHost {
             )
         });
         if request.method == "GET" {
-            let policy = initiator
-                .and_then(|source| self.document_policy_container_for_inheritance(source))
-                .map(|policy| crate::runtime::RendererNavigationPolicy::capture(&policy));
+            let request_initiator =
+                initiator.and_then(|source| self.navigation_initiator_for_owner(source));
             return self.queue_deferred_child_browsing_context_navigation_from_entry_seed(
                 scope,
                 handle,
                 request.url.as_str(),
                 entry_seed,
                 None,
-                policy,
+                request_initiator,
             );
         }
         self.reject_replaced_service_worker_child_client_navigation(
@@ -223,7 +222,7 @@ impl PageScriptHost {
         resolved_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
         initiator_url: Option<Url>,
-        source_policy: Option<crate::runtime::RendererNavigationPolicy>,
+        request_initiator: Option<crate::runtime::RendererNavigationInitiator>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
@@ -237,6 +236,9 @@ impl PageScriptHost {
             .get(&handle)
             .and_then(|entry| entry.local_history_bootstrap(&entry_seed))
             .unwrap_or_else(|| ChildBrowsingContextBootstrap::Url(url.clone()));
+        let source_policy = request_initiator
+            .as_ref()
+            .and_then(|source| source.document_policy(&url));
         self.reject_replaced_service_worker_child_client_navigation(
             handle,
             "The navigation was canceled.".to_owned(),
@@ -253,7 +255,8 @@ impl PageScriptHost {
                     ChildDocumentNavigationInitiator::BrowsingContext(None),
                     self.snapshot_child_navigation_target(handle, &url),
                 )
-                .with_source_policy(source_policy),
+                .with_source_policy(source_policy)
+                .with_request_initiator(request_initiator),
                 false,
                 None,
             )
