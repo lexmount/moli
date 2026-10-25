@@ -2053,7 +2053,7 @@ pub(super) fn finish_runtime_mutation_effects(
             }
             let inline_source = unsafe { &*host_ptr }.owner_style_sheet_processing_source(owner);
             let prepared_loads = runtime.prepare_connected_style_loads(owner, false);
-            for prepared_load in prepared_loads {
+            for mut prepared_load in prepared_loads {
                 // A native DOM callback already owns this exact live host.
                 // Commit touches only FrameOwnerStore and never dereferences
                 // the runtime pointer; apply resumes after that borrow ends.
@@ -2067,6 +2067,11 @@ pub(super) fn finish_runtime_mutation_effects(
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
+                runtime.capture_modulepreload_csp_source_location(
+                    scope,
+                    unsafe { &*host_ptr },
+                    &mut prepared_load,
+                );
                 prime_result.extend(runtime.apply_prepared_connected_style_load(
                     prepared_load,
                     inline_source.clone(),

@@ -1757,7 +1757,7 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key: None,
                 policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::WebSocket(connection),
+                continuation: PendingSubresourceContinuation::WebSocket(Box::new(connection)),
                 deferred_request_started: false,
                 blob_url_entry: None,
             },

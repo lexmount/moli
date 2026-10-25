@@ -100,6 +100,8 @@ pub(crate) struct NativeModuleGraphFetchRequest {
     module_key: Option<ModuleMapKey>,
     dependency: Option<NativeModuleGraphDependencyRequest>,
     fetch_context: Option<std::sync::Arc<super::NativeModuleFetchContext>>,
+    csp_source_location:
+        Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
 }
 
 pub(crate) struct ModuleScriptGraphFetchContinuation {
@@ -232,6 +234,7 @@ impl NativeModuleGraphFetchRequest {
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
     }
 
@@ -376,6 +379,20 @@ impl NativeModuleGraphFetchRequest {
         self.fetch_context.as_ref()
     }
 
+    pub(crate) fn with_csp_source_location(
+        mut self,
+        location: Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
+    ) -> Self {
+        self.csp_source_location = location;
+        self
+    }
+
+    pub(crate) fn csp_source_location(
+        &self,
+    ) -> Option<&crate::content_security_policy::ContentSecurityPolicySourceLocation> {
+        self.csp_source_location.as_ref()
+    }
+
     pub(crate) fn module_kind(&self) -> ModuleKind {
         self.kind
     }
@@ -510,7 +527,7 @@ impl NativeModuleGraphFetchRequest {
                 .and_then(|(response, service_worker_filter, from_service_worker)| {
                     network_result = Some(std::sync::Arc::new(Ok(response.clone())));
                     if let Some(context) = &response_context {
-                        if let Err(error) = context.check_response_url(&response) {
+                        if let Err(error) = context.check_response_url(&source_url, &response) {
                             context.record_failure(&source_url);
                             return Err(error);
                         }
@@ -3344,6 +3361,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3421,6 +3439,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3473,6 +3492,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3512,6 +3532,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3570,6 +3591,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3620,6 +3642,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3659,6 +3682,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3691,6 +3715,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -4478,6 +4503,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         };
         let (tx, rx) = oneshot::channel();
         let registry = ResourceLoadRegistry::new(
@@ -4551,6 +4577,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             fetch_context: None,
+            csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",

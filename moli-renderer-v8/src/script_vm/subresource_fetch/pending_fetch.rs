@@ -60,7 +60,7 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .start_pending_websocket_connection(
-                        connection,
+                        *connection,
                         request_url,
                         request_headers,
                         headers_overridden,
@@ -993,7 +993,7 @@ impl ScriptVm {
             PendingSubresourceContinuation::WebSocket(connection) => {
                 self._context_host
                     .borrow_mut()
-                    .fail_pending_websocket_connection(connection, error_text)
+                    .fail_pending_websocket_connection(*connection, error_text)
                     .map_err(|error| anyhow!(error))?;
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
@@ -1210,7 +1210,7 @@ impl ScriptVm {
                     self._context_host
                         .borrow_mut()
                         .fail_pending_websocket_connection(
-                            connection,
+                            *connection,
                             format!(
                                 "Fetch.fulfillRequest WebSocket response must use status 101, got {response_code}"
                             ),
@@ -1223,7 +1223,7 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .fulfill_pending_websocket_connection(
-                        connection,
+                        *connection,
                         request_url,
                         request_headers,
                         response_code,

@@ -296,10 +296,6 @@ impl PageVm {
         completion: MainModulepreloadFetchCompletion,
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
-        if let Some(context) = completion.fetch_context() {
-            self.vm_mut()
-                .report_module_fetch_context(context, current_owner == Some(owner));
-        }
         if current_owner != Some(owner) {
             let output_effect = if let Some(network_result) = completion.network_result() {
                 self.vm_mut()

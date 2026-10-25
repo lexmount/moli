@@ -12,6 +12,8 @@ pub(crate) struct NativeModuleSingleFetchRequest {
     initiator_url: Url,
     // Fetch-client defaults belong to this request, not the module's persistent options.
     document_referrer_policy: Option<String>,
+    csp_source_location:
+        Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
     module_key: ModuleMapKey,
     fetch_metadata: ModuleFetchMetadata,
 }
@@ -29,6 +31,7 @@ impl NativeModuleSingleFetchRequest {
             base_url,
             initiator_url,
             document_referrer_policy: None,
+            csp_source_location: None,
             module_key,
             fetch_metadata,
         }
@@ -37,6 +40,20 @@ impl NativeModuleSingleFetchRequest {
     pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
         self.document_referrer_policy = policy;
         self
+    }
+
+    pub(crate) fn with_csp_source_location(
+        mut self,
+        location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
+    ) -> Self {
+        self.csp_source_location = Some(location);
+        self
+    }
+
+    pub(crate) fn csp_source_location(
+        &self,
+    ) -> Option<&crate::content_security_policy::ContentSecurityPolicySourceLocation> {
+        self.csp_source_location.as_ref()
     }
 
     #[cfg(test)]
@@ -76,6 +93,7 @@ impl NativeModuleSingleFetchRequest {
             self.module_key.kind(),
         )
         .with_document_referrer_policy(self.document_referrer_policy.clone())
+        .with_csp_source_location(self.csp_source_location.clone())
     }
 }
 
