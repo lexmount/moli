@@ -15,6 +15,9 @@ function startAuxiliaryModuleProbe(base, mode) {
             if (!value) throw Error(name);
             checks.push(name);
           };
+          if (mode === 'blank' && document.URL !== 'about:blank') {
+            throw Error('initial Document URL must remain about:blank');
+          }
           if (mode === 'blocked') {
             const events = [];
             addEventListener('securitypolicyviolation', event => events.push(event));
