@@ -374,7 +374,6 @@ impl FrameDocumentParserModuleRootStartTask {
             child_handle: self.payload.child_handle,
             owner: self.owner,
             script_handle: self.payload.client.script_handle(),
-            script: self.payload.client.script().clone(),
             realm_id,
             start,
         }
@@ -386,7 +385,6 @@ pub(crate) struct FrameDocumentParserModuleRootFetchStart {
     pub(crate) child_handle: DomHandle,
     pub(crate) owner: FrameDocumentTaskOwner,
     pub(crate) script_handle: DomHandle,
-    pub(crate) script: PreparedScript,
     pub(crate) realm_id: FrameRealmId,
     pub(crate) start: FrameDocumentModuleFetchClientStart,
 }

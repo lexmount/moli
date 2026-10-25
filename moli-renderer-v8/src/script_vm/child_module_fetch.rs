@@ -13,7 +13,9 @@ use crate::{
         FrameDocumentParserModuleRootStartKind, FrameDocumentTaskOwner, FrameRealmId,
     },
     module_runtime::NativeModuleGraphFetchRequest,
-    module_runtime::{ModuleLoadError, ModuleLoadStage, NativeModuleSingleFetchRequest},
+    module_runtime::{
+        ModuleFetchMetadata, ModuleLoadError, ModuleLoadStage, NativeModuleSingleFetchRequest,
+    },
     page_task_queue::{
         RendererPageChildFrameTaskTarget, RendererPageChildParserModuleRootStartTarget,
     },
@@ -214,6 +216,45 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
                 return;
             }
         }
+        let referrer_policy = {
+            let host = context_host.borrow();
+            host.child_browsing_context_document_handle(target.child_handle())
+                .and_then(|document| {
+                    crate::context_bootstrap::document_referrer_policy_for_native_document(
+                        &host, document,
+                    )
+                })
+        };
+        let request = NativeModuleGraphFetchRequest::new(
+            key.url().clone(),
+            root.script().initiator_url.clone(),
+            ModuleFetchMetadata::from_top_level_script_fetch_metadata(
+                &root.script().fetch_metadata,
+            ),
+            key.kind(),
+        )
+        .with_document_referrer_policy(referrer_policy)
+        .with_csp_source_location(Some(Default::default()));
+        let context = match self.vm.capture_child_module_graph_fetch_context(
+            root.owner().document_owner(),
+            realm_id,
+            &request,
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                let (_child_handle, owner, client, _kind) = root.into_parts();
+                let _followup = ChildModuleScriptTerminalOwner::new(self.vm)
+                    .handle_parser_root_start_failure(
+                        owner,
+                        realm_id,
+                        key,
+                        client,
+                        ModuleLoadError::new(ModuleLoadStage::Fetch, error),
+                    );
+                return;
+            }
+        };
+        let request = request.with_fetch_context(context);
         let Some(start) = context_host
             .borrow_mut()
             .begin_current_child_module_root_fetch_client(reservation)
@@ -238,6 +279,7 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             .start_child_parser_module_root_fetch(
                 &loader,
                 fetch_start,
+                request,
                 target,
                 network_attribution,
             );
@@ -278,7 +320,39 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             disposition,
             FrameDocumentModuleFetchDisposition::StartedFetch(_)
         );
+        let mut request = task.fetch_request().clone();
         if fetch_started {
+            if request.csp_source_location().is_none() {
+                request = request.with_csp_source_location(Some(Default::default()));
+            }
+            let context = match self.vm.capture_child_module_graph_fetch_context(
+                task.owner().document_owner(),
+                task.realm_id(),
+                &request,
+            ) {
+                Ok(context) => context,
+                Err(error) => {
+                    let _ = self
+                        .vm
+                        ._context_host
+                        .borrow()
+                        .resource_completion_sender()
+                        .send_child_module_dependency_fetch(
+                            ChildModuleDependencyFetchCompletion::new(
+                                target.child_handle(),
+                                start.request_id(),
+                                task,
+                                Err(error.clone()),
+                                Some(std::sync::Arc::new(Err(error))),
+                                network_attribution,
+                            ),
+                        );
+                    return FrameDocumentModuleDependencyFetchStartOutcome::ClientAccepted {
+                        disposition,
+                    };
+                }
+            };
+            request = request.with_fetch_context(context);
             tracing::debug!(
                 owner = ?task.owner(),
                 realm_id = ?task.realm_id(),
@@ -301,6 +375,7 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
                 &loader,
                 start,
                 task,
+                request,
                 target.child_handle(),
                 network_attribution,
             );
