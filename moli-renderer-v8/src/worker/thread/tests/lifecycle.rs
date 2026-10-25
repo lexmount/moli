@@ -198,6 +198,7 @@ mod background_apis_and_worker_events;
 mod client_lifecycle_and_sync;
 mod fetch_abort_reasons;
 mod fetch_events_and_messages;
+mod keepalive_fetch;
 mod messages_clients_and_windows;
 mod worker_and_fetch_lifecycle;
 mod worker_errors_and_teardown;

@@ -346,8 +346,12 @@ fn shared_worker_constructor_callback_inner<'s>(
     .with_service_worker_runtime(context.browser_context_runtime.service_worker_runtime())
     .with_indexed_db_manager(context.indexed_db_manager)
     .with_storage_bucket_store(context.storage_bucket_store);
-    let launch_context =
-        SharedWorkerLaunchContext::new(options.name, context.request_client, execution_policy);
+    let launch_context = SharedWorkerLaunchContext::new(
+        options.name,
+        context.request_client,
+        context.resource_task_runner,
+        execution_policy,
+    );
     let params = SharedWorkerLaunchParams::new(
         key,
         script_load,
