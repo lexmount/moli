@@ -15,7 +15,6 @@ use crate::{
 };
 
 const CALLBACK: &str = "__moliObservableConsumerCallback";
-const INDEX: &str = "__moliObservableConsumerIndex";
 const HAS_ACCUMULATOR: &str = "__moliObservableHasAccumulator";
 // Unlike terminal collection state, a reducer's accumulator and callback remain
 // observable through a next() snapshot already being dispatched at cancellation.
@@ -160,22 +159,6 @@ fn consume<'s>(
     Some(promise)
 }
 
-fn index<'s>(scope: &mut v8::PinScope<'s, '_>, observer: v8::Local<'s, v8::Object>) -> u64 {
-    get_private_value(scope, observer, INDEX)
-        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
-        .map_or(0, |value| value.u64_value().0)
-}
-
-fn increment_index<'s>(scope: &mut v8::PinScope<'s, '_>, observer: v8::Local<'s, v8::Object>) {
-    let next = index(scope, observer).wrapping_add(1);
-    set_private_value(
-        scope,
-        observer,
-        INDEX,
-        v8::BigInt::new_from_u64(scope, next).into(),
-    );
-}
-
 fn set_accumulator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observer: v8::Local<'s, v8::Object>,
@@ -204,14 +187,14 @@ pub(super) fn notify<'s>(
             // observer can cancel/complete the source during this same next().
             if kind == observer::REDUCE && !has_accumulator {
                 set_accumulator(scope, observer, value);
-                increment_index(scope, observer);
+                observer::increment_index(scope, observer);
                 return;
             }
             let callback =
                 object_slot(scope, observer, CALLBACK).expect("Observable consumer callback");
             let accumulator = get_private_value(scope, observer, ACCUMULATOR)
                 .unwrap_or_else(|| v8::undefined(scope).into());
-            let idx = index(scope, observer);
+            let idx = observer::index(scope, observer);
             let arguments = [
                 accumulator,
                 value,
@@ -231,7 +214,7 @@ pub(super) fn notify<'s>(
             }
             // The draft increments after invocation; a reentrant next() sees
             // the current index. Read it again to preserve nested increments.
-            increment_index(scope, observer);
+            observer::increment_index(scope, observer);
             match (kind, result) {
                 (observer::REDUCE, Ok(value)) => set_accumulator(scope, observer, value),
                 // Predicate's boolean return conversion does not invoke

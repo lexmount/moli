@@ -21,6 +21,7 @@ pub(super) const ERROR: &str = "__moliObserverError";
 pub(super) const COMPLETE: &str = "__moliObserverComplete";
 pub(super) const INPUT_SIGNAL: &str = "__moliObserverInputSignal";
 pub(super) const ABORT_ALGORITHM: &str = "__moliObserverAbortAlgorithm";
+pub(super) const UPSTREAM_OBSERVER: &str = "__moliSubscriberUpstreamObserver";
 
 type Store = Rc<RefCell<WeakSubscribers>>;
 
