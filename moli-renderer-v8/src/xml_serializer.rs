@@ -893,16 +893,20 @@ mod tests {
 
     #[test]
     fn xml_serializer_escapes_double_quoted_attributes() {
-        let mut markup = XmlMarkup::default();
-        markup.escaped_units("a \"quoted\" > b && a < c".encode_utf16(), true);
-        assert_eq!(
-            String::from_utf16(&markup.units).unwrap(),
-            "a &quot;quoted&quot; &gt; b &amp;&amp; a &lt; c"
-        );
-        assert_eq!(
-            escape_attr("\t\n\rcafé<&\"'尾\n\u{a0}&#10;"),
-            "&#9;&#10;&#13;café&lt;&amp;&quot;'尾&#10;\u{a0}&amp;#10;"
-        );
+        for (value, expected) in [
+            (
+                "a \"quoted\" > b && a < c",
+                "a &quot;quoted&quot; &gt; b &amp;&amp; a &lt; c",
+            ),
+            (
+                "\t\n\rcafé<&\"'尾\n\u{a0}&#10;",
+                "&#9;&#10;&#13;café&lt;&amp;&quot;'尾&#10;\u{a0}&amp;#10;",
+            ),
+        ] {
+            let mut markup = XmlMarkup::default();
+            markup.escaped_units(value.encode_utf16(), true);
+            assert_eq!(String::from_utf16(&markup.units).unwrap(), expected);
+        }
     }
 
     #[test]
