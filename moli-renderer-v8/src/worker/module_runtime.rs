@@ -2124,26 +2124,9 @@ fn resolve_worker_module_specifier(specifier: &str, base_url: &Url) -> Result<Ur
     })
 }
 
-fn load_worker_static_module_dependency(
-    dependency_url: Url,
-    module_type: WorkerModuleType,
-) -> Result<WorkerModuleDependencyLoad, String> {
+fn validate_worker_module_dependency_url(dependency_url: &Url) -> Result<(), String> {
     match dependency_url.scheme() {
-        "data" => {
-            let (bytes, mime) = moli_web_mime::data_url_body_and_mime_type(dependency_url.as_str())
-                .ok_or_else(|| format!("Failed to load module worker dependency: invalid data URL `{dependency_url}`"))?;
-            let source = WorkerModuleSource::from_response_parts(
-                module_type,
-                &dependency_url,
-                &[("content-type".to_owned(), mime.into_bytes())],
-                bytes,
-            )?;
-            Ok(WorkerModuleDependencyLoad::Source {
-                url: dependency_url,
-                source,
-            })
-        }
-        "http" | "https" => Ok(WorkerModuleDependencyLoad::Network),
+        "data" | "http" | "https" => Ok(()),
         scheme => Err(format!(
             "Module worker dependency scheme `{scheme}` is not allowed"
         )),
@@ -2166,14 +2149,6 @@ fn worker_module_key_for_attributes(
         }),
         other => Err(format!("module type `{other}` is not a valid module type")),
     }
-}
-
-enum WorkerModuleDependencyLoad {
-    Source {
-        url: Url,
-        source: WorkerModuleSource,
-    },
-    Network,
 }
 
 struct WorkerModuleRuntimeEvaluationSlot {

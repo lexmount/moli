@@ -2,6 +2,8 @@ use super::*;
 use crate::worker::WorkerGlobalKind;
 use serde_json::{Value, json};
 
+mod data;
+
 struct ModuleServer {
     url: String,
     requests: Arc<parking_lot::Mutex<Vec<String>>>,

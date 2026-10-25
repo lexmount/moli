@@ -72,37 +72,13 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
                 );
             }
         };
-        let existing = self.modules.borrow().entries.contains_key(&key);
-        if !existing {
-            match load_worker_static_module_dependency(key.url.clone(), key.module_type) {
-                Ok(WorkerModuleDependencyLoad::Source { url, source }) => {
-                    let entry = create_worker_module_script(
-                        self.scope,
-                        &self.modules,
-                        &source,
-                        key,
-                        url,
-                        native_referrer_policy(request.fetch_metadata.referrer_policy)
-                            .map(str::to_owned),
-                    );
-                    return module_tree::SingleModuleFetchDisposition::Completed(ready_module(
-                        &self.modules.borrow(),
-                        entry,
-                    ));
-                }
-                Ok(WorkerModuleDependencyLoad::Network) => {}
-                Err(message) => {
-                    return module_tree::SingleModuleFetchDisposition::Completed(
-                        module_tree::ModuleFetchOutcome::Failed(
-                            module_tree::ModuleLoadError::new(
-                                module_tree::ModuleLoadStage::Fetch,
-                                message,
-                            )
-                            .with_key(request.key),
-                        ),
-                    );
-                }
-            }
+        if let Err(message) = validate_worker_module_dependency_url(&key.url) {
+            return module_tree::SingleModuleFetchDisposition::Completed(
+                module_tree::ModuleFetchOutcome::Failed(
+                    module_tree::ModuleLoadError::new(module_tree::ModuleLoadStage::Fetch, message)
+                        .with_key(request.key),
+                ),
+            );
         }
         let mut options = self.options.clone();
         options.referrer_policy =
@@ -236,12 +212,17 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
         if let Some(entry) = self.modules.borrow().loaded_entry(&key) {
             return entry_id(entry);
         }
-        let failure = Box::new(worker_bootstrap_error(
+        let mut failure = Box::new(worker_bootstrap_error(
             self.scope,
             key.url.as_str(),
             &error.message,
             WorkerParentErrorEventKind::Event,
         ));
+        if error.error_constructor != Some(module_tree::ModuleErrorConstructorKind::SyntaxError) {
+            failure.exception = crate::util::v8_string(self.scope, &error.message)
+                .map(|message| v8::Exception::type_error(self.scope, message))
+                .map(|exception| v8::Global::new(self.scope, exception));
+        }
         let script = WorkerModuleScript {
             response_url: key.url.clone(),
             key,
