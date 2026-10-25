@@ -161,7 +161,7 @@ fn start_resource_preload(
                 RequestCredentialsMode::Include
             };
             (
-                policy.for_script_preload(metadata.clone()),
+                policy.for_script_request(metadata.clone()),
                 mode,
                 credentials,
                 SubresourceResourceType::Script,
@@ -171,7 +171,7 @@ fn start_resource_preload(
         ResponsePreloadOptions::Style(options) => {
             let (mode, credentials) = options.request_mode_and_credentials();
             (
-                policy.for_style_preload(options.nonce().map(str::to_owned)),
+                policy.for_style_request(options.nonce().map(str::to_owned)),
                 mode,
                 credentials,
                 SubresourceResourceType::Stylesheet,
