@@ -56,7 +56,12 @@ impl WorkerModuleMap {
                 self.next_fetch_id = fetch_id
                     .checked_add(1)
                     .expect("worker module fetch id space exhausted");
-                let request = WorkerModuleGraphFetchRequest::new(
+                let source_location = options
+                    .root_source_location
+                    .as_ref()
+                    .filter(|(root, _)| root == &key)
+                    .map(|(_, location)| location.clone());
+                let mut request = WorkerModuleGraphFetchRequest::new(
                     fetch_id,
                     key,
                     options.initiator_url.clone(),
@@ -65,6 +70,9 @@ impl WorkerModuleMap {
                     options.referrer_policy.clone(),
                     options.browser_request_metadata,
                 );
+                if let Some(location) = source_location {
+                    request = request.with_source_location(location);
+                }
                 entry.insert(WorkerModuleMapEntry::Fetching {
                     request: Box::new(request.clone()),
                     clients: vec![client],
@@ -150,6 +158,7 @@ mod tests {
         let url = url::Url::parse("https://example.test/module.mjs").unwrap();
         let key = WorkerModuleKey::javascript_or_wasm(url.clone());
         let options = WorkerModuleGraphFetchOptions {
+            root_source_location: None,
             initiator_url: url,
             csp_source: WorkerModuleGraphFetchCspSource::DynamicImportGraph,
             referrer_policy: None,

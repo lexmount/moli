@@ -1,4 +1,3 @@
-use super::handle::WorkerErrorPhase;
 mod module_map;
 mod tree;
 
@@ -33,8 +32,12 @@ use tokio::sync::mpsc;
 use url::Url;
 
 use super::global_scope::worker_current_script_url;
-use super::handle::{WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind};
-use crate::content_security_policy::ContentSecurityPolicyUrlViolation;
+use super::handle::{
+    WorkerErrorPhase, WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind,
+};
+use crate::content_security_policy::{
+    ContentSecurityPolicySourceLocation, ContentSecurityPolicyUrlViolation,
+};
 
 #[derive(Clone)]
 pub(super) struct WorkerBootstrapError {
@@ -433,6 +436,7 @@ pub(super) fn evaluate_module_worker_bootstrap_source(
         ),
         target: WorkerModuleTreeTarget::Bootstrap,
         options: WorkerModuleGraphFetchOptions {
+            root_source_location: None,
             initiator_url: static_import_initiator_url.unwrap_or(root_url),
             csp_source: WorkerModuleGraphFetchCspSource::StaticModuleGraph,
             browser_request_metadata: BrowserRequestMetadata::Worker,
@@ -831,6 +835,7 @@ pub(super) fn run_next_worker_dynamic_module_import(scope: &mut v8::PinScope<'_,
         position: module_tree::TextPosition::default(),
     });
     let options = WorkerModuleGraphFetchOptions {
+        root_source_location: Some((key.clone(), job.source_location.clone())),
         initiator_url: job.fetch_initiator_url.clone(),
         csp_source: WorkerModuleGraphFetchCspSource::DynamicImportGraph,
         browser_request_metadata: job.browser_request_metadata(),
@@ -1320,6 +1325,7 @@ impl WorkerDynamicModuleResolver {
         attributes: ModuleAttributesKey,
         phase: ModuleImportPhase,
         audio_worklet_bootstrap: bool,
+        source_location: ContentSecurityPolicySourceLocation,
     ) {
         self.next_import_id = self
             .next_import_id
@@ -1336,6 +1342,7 @@ impl WorkerDynamicModuleResolver {
                 attributes,
                 phase,
                 audio_worklet_bootstrap,
+                source_location,
             });
     }
 }
@@ -1350,6 +1357,7 @@ struct WorkerDynamicModuleImportJob {
     attributes: ModuleAttributesKey,
     phase: ModuleImportPhase,
     audio_worklet_bootstrap: bool,
+    source_location: ContentSecurityPolicySourceLocation,
 }
 
 impl WorkerDynamicModuleImportJob {
@@ -1373,6 +1381,7 @@ struct WorkerModuleGraphFetchOptions {
     csp_source: WorkerModuleGraphFetchCspSource,
     referrer_policy: Option<String>,
     browser_request_metadata: BrowserRequestMetadata,
+    root_source_location: Option<(WorkerModuleKey, ContentSecurityPolicySourceLocation)>,
 }
 
 #[derive(Clone)]
@@ -1384,6 +1393,7 @@ pub(super) struct WorkerModuleGraphFetchRequest {
     credentials_mode: RequestCredentialsMode,
     referrer_policy: Option<String>,
     browser_request_metadata: BrowserRequestMetadata,
+    source_location: Option<ContentSecurityPolicySourceLocation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1410,7 +1420,20 @@ impl WorkerModuleGraphFetchRequest {
             credentials_mode,
             referrer_policy,
             browser_request_metadata,
+            source_location: None,
         }
+    }
+
+    fn with_source_location(
+        mut self,
+        source_location: ContentSecurityPolicySourceLocation,
+    ) -> Self {
+        self.source_location = Some(source_location);
+        self
+    }
+
+    pub(super) fn source_location(&self) -> Option<&ContentSecurityPolicySourceLocation> {
+        self.source_location.as_ref()
     }
 
     pub(super) fn module_key(&self) -> WorkerModuleKey {
@@ -2625,6 +2648,14 @@ fn queue_worker_dynamic_import<'s>(
         );
         return Some(promise);
     };
+    let source_location = super::global_scope::worker_content_security_policy_snapshot(scope)
+        .filter(|policy| {
+            !policy.header_policies.is_empty()
+                || !policy.meta_policies.is_empty()
+                || !policy.report_only_policies.is_empty()
+        })
+        .map(|_| ContentSecurityPolicySourceLocation::capture(scope))
+        .unwrap_or_default();
     dynamic_imports.borrow_mut().queue_import(
         v8::Global::new(scope, context),
         v8::Global::new(scope, resolver),
@@ -2634,6 +2665,7 @@ fn queue_worker_dynamic_import<'s>(
         attributes,
         phase,
         audio_worklet_import == AudioWorkletDynamicImport::Bootstrap,
+        source_location,
     );
     Some(promise)
 }

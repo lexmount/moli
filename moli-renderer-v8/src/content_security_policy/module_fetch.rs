@@ -109,7 +109,7 @@ impl ModuleFetchCspContext {
         let message = enforce.first().map(|violation| {
             format!(
                 "Module request blocked by Content Security Policy directive `{}`",
-                violation.effective_directive
+                violation.effective_directive,
             )
         });
         let mut state = self.0.state.lock();
@@ -130,9 +130,6 @@ impl ModuleFetchCspContext {
 
     // Coalesced/cache consumers still validate every recorded redirect against
     // their own policy. The transport owner's checks are not another owner's authority.
-    pub(crate) fn check_response(&self, response: &moli_fetch::Response) -> anyhow::Result<()> {
-        self.check_response_head(&response.head())
-    }
 
     pub(crate) fn check_response_head(
         &self,
