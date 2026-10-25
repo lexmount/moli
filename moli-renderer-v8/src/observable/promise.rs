@@ -13,6 +13,7 @@ const REJECTION_SIGNAL: &str = "__moliObservableRejectionSignal";
 const REJECTION_ALGORITHM: &str = "__moliObservableRejectionAlgorithm";
 const SETTLED: &str = "__moliObservablePromiseSettled";
 const PROMISE_OBSERVER: &str = "__moliObservablePromiseObserver";
+const CONTROLLER_SIGNAL: &str = "__moliObservableOperatorController";
 pub(super) const VALUE: &str = "__moliObservablePromiseValue";
 
 #[derive(WebApiObject)]
@@ -24,6 +25,46 @@ struct PromiseObserver<'scope> {
     resolver: v8::Local<'scope, v8::Object>,
     #[webapi(slot = SETTLED)]
     settled: bool,
+}
+
+/// Operators that may stop their own subscription use a private controller
+/// and the existing AbortSignal dependency graph, preserving caller abort order.
+pub(super) fn new_controlled_observer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: i32,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+    caller_signal: Option<ResolvedAbortSignal<'s>>,
+) -> Option<(v8::Local<'s, v8::Object>, ResolvedAbortSignal<'s>)> {
+    let controller = ResolvedAbortSignal::new(scope)?;
+    let mut sources = vec![controller];
+    sources.extend(caller_signal);
+    let signal = ResolvedAbortSignal::dependent(scope, &sources)?;
+    let observer = new_observer(scope, kind, resolver, Some(signal), caller_signal.is_some())?;
+    set_private_value(
+        scope,
+        observer,
+        CONTROLLER_SIGNAL,
+        controller.value().into(),
+    );
+    Some((observer, signal))
+}
+
+pub(super) fn abort_controller<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    if let Some(signal) = object_slot(scope, observer, CONTROLLER_SIGNAL)
+        .and_then(|signal| ResolvedAbortSignal::resolve(scope, signal))
+    {
+        // Signal-abort defaults an undefined reason, including `throw undefined`.
+        let reason = if reason.is_undefined() {
+            crate::native_bridge::abort::abort_error_value(scope)
+        } else {
+            reason
+        };
+        signal.abort(scope, reason);
+    }
 }
 
 pub(super) fn new_observer<'s>(
