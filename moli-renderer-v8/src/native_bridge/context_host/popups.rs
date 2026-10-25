@@ -266,6 +266,7 @@ enum LightweightPopupClassicScriptAdvance {
 }
 
 struct LightweightPopupDocumentProjectionSource<'a> {
+    response_status: Option<u16>,
     response_links: &'a crate::response_links::DocumentResponseLinks,
     task: LightweightPopupNavigationTaskToken,
     document_url: &'a Url,
@@ -3005,6 +3006,7 @@ impl PageScriptHost {
                         policy_container.response_content_security_policies.clone();
                 }
                 let loaded = LoadedChildDocument {
+                    response_status: snapshot.response_status,
                     response_links: Default::default(),
                     final_url: snapshot.url,
                     policy_container,
@@ -3093,6 +3095,7 @@ impl PageScriptHost {
                 );
                 Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                     LoadedChildDocument {
+                        response_status: Some(head.status),
                         response_links: crate::response_links::DocumentResponseLinks::parse(
                             &head.final_url,
                             &head.headers,
@@ -3337,6 +3340,7 @@ impl PageScriptHost {
                     scope,
                     window,
                     LightweightPopupDocumentProjectionSource {
+                        response_status: loaded.response_status,
                         response_links: &loaded.response_links,
                         task,
                         document_url: &final_url,
@@ -3803,11 +3807,18 @@ impl PageScriptHost {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
         };
+        let fields = crate::content_security_policy::ContentSecurityPolicyViolationEventFields {
+            status_code: i32::from(
+                self.content_security_policy_response_status(
+                    super::OwnerDispatchScope::LightweightPopup(popup_id),
+                )
+                .unwrap_or(0),
+            ),
+            ..crate::content_security_policy::ContentSecurityPolicyViolationEventFields::from(
+                violation,
+            )
+        };
         if send_report {
-            let fields =
-                crate::content_security_policy::ContentSecurityPolicyViolationEventFields::from(
-                    violation,
-                );
             let Some(document_owner) = self.current_lightweight_popup_document_owner(popup_id)
             else {
                 tracing::debug!(popup_id, "discarded CSP report for retired popup document");
@@ -3827,7 +3838,7 @@ impl PageScriptHost {
             scope,
             window.into(),
             window.into(),
-            violation,
+            &fields,
         ) {
             Ok(event) => {
                 self.dispatch_lightweight_popup_window_event(
@@ -3993,6 +4004,11 @@ impl PageScriptHost {
         let document_handle =
             self.remember_lightweight_popup_document_handle(scope, popup_id, document);
         if let Some(document_handle) = document_handle {
+            self.dom_host_mut()
+                .set_document_source_response_status_for_handle(
+                    document_handle,
+                    source.response_status,
+                );
             let _ = crate::context_bootstrap::install_css_runtime_state_for_document(
                 scope,
                 window,
@@ -5114,6 +5130,7 @@ impl PageScriptHost {
             scope,
             window,
             LightweightPopupDocumentProjectionSource {
+                response_status: None,
                 response_links: &Default::default(),
                 task,
                 document_url: &document_url,

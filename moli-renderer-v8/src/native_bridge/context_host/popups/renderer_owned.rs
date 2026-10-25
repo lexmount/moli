@@ -359,6 +359,7 @@ impl PageScriptHost {
             document_policy_container: policy.clone(),
             document_default_language: None,
             document_last_modified: None,
+            document_response_status: None,
             document_settings: moli_page_types::DocumentSettings {
                 #[cfg(feature = "molio")]
                 document_activity,

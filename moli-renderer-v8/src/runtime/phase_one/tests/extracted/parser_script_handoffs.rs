@@ -340,6 +340,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -471,6 +473,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -612,6 +616,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -788,6 +794,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -1114,6 +1122,8 @@ image_document: &mut state.image_document,
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),
@@ -1286,6 +1296,8 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
                 local_executor,
                 &loader,
                 &PageVmEnvConfig {
+document_response_status: None,
+
 history_policy_container: None,
 
             window_identity: Default::default(),

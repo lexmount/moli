@@ -59,6 +59,9 @@ mod local_worker_referrer;
 #[path = "service_worker_referrer.rs"]
 mod service_worker_referrer;
 
+#[path = "csp_response_status.rs"]
+mod csp_response_status;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -231,6 +234,7 @@ fn fixture_response(
         | "/child-sri-rejected.css"
         | "/child-sri-accepted.css"
         | "/child-sri-forbidden.css" => child_stylesheet_integrity::fixture_response(path, query),
+        "/csp-response-status.html" => csp_response_status::fixture_response(query),
         "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
         "/local-referrer-worker.js" | "/local-referrer-page.html" => {
             local_worker_referrer::fixture_response(path, query, request.referer.as_deref())
