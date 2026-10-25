@@ -801,6 +801,8 @@ async fn worker_xhr_report_only_csp_dispatches_without_blocking() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
+            let resolveViolation;
+            const violation = new Promise(resolve => resolveViolation = resolve);
             addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
@@ -812,9 +814,11 @@ async fn worker_xhr_report_only_csp_dispatches_without_blocking() {
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
                 });
+                resolveViolation();
             });
             const xhr = new XMLHttpRequest();
-            xhr.onload = () => {
+            xhr.onload = async () => {
+                await violation;
                 postMessage({ events, status: xhr.status, text: xhr.responseText });
                 close();
             };

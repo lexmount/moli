@@ -2446,6 +2446,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         &resolved_url,
         kind.csp_resource_kind(),
         "fetch",
+        crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
     ) {
         record_worker_subresource_failure(
             &state.borrow(),
