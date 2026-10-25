@@ -633,6 +633,70 @@ fn pdf_text_stroke_crosses_page_boundaries_without_duplicating_text() {
 }
 
 #[test]
+fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
+    use moli_layout::{PaintBlendMode, PaintCompositeMode, PaintFilter};
+    for scale in [1.0_f64, 1.5] {
+        let mut snapshot =
+            PaintSnapshot::new(PaintViewport::new(300, 300, 2.0), PaintColor::TRANSPARENT);
+        snapshot.push_fragment(PaintFragment::PushLayer {
+            opacity: 1.0,
+            blend_mode: PaintBlendMode::Normal,
+            composite: PaintCompositeMode::SrcOver,
+            clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 300.0, 300.0)),
+            transform: PaintTransform2D::IDENTITY,
+            filter: Some(PaintFilter::Opacity(0.5)),
+        });
+        let mut run = text(&mut snapshot, "A", 150.0, false);
+        run.glyphs[0].x = 150.0;
+        run.color = PaintColor::TRANSPARENT;
+        run.stroke = Some(moli_layout::PaintTextStroke {
+            width: 100.0,
+            color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            paint_first: false,
+        });
+        run.transform.coefficients = [
+            scale,
+            0.0,
+            0.0,
+            scale,
+            150.0 * (1.0 - scale),
+            150.0 * (1.0 - scale),
+        ];
+        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+        snapshot.push_fragment(PaintFragment::PopLayer);
+        let reference = crate::raster_snapshot(&snapshot).unwrap();
+        let expected_ink = reference
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| pixel[3] > 0)
+            .count();
+        assert!(expected_ink > 0);
+        let doc = document(&snapshot, &options());
+        assert_eq!(extracted(&doc, &[1]), "A");
+        let masks: Vec<_> = doc
+            .objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .filter_map(|stream| stream.dict.get(b"SMask").ok()?.as_reference().ok())
+            .map(|id| {
+                doc.get_object(id)
+                    .unwrap()
+                    .as_stream()
+                    .unwrap()
+                    .decompressed_content()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(masks.len(), 1, "one filtered text image");
+        let actual_ink = masks[0].iter().filter(|&&alpha| alpha > 0).count();
+        assert_eq!(
+            actual_ink, expected_ink,
+            "filter allocation must preserve the complete stroke, scale={scale}"
+        );
+    }
+}
+
+#[test]
 fn filtered_hollow_text_keeps_one_searchable_semantic_copy() {
     use moli_layout::{PaintBlendMode, PaintCompositeMode, PaintFilter};
     for paint_first in [false, true] {

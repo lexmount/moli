@@ -768,8 +768,17 @@ fn glyph_bounds(run: &PaintGlyphRun) -> Rect {
         );
         bounds = if i == 0 { point } else { bounds.union(point) };
     }
-    // Conservative ink extent for fallback allocation, including synthesis.
-    bounds.inflate(run.font_size as f64 * 2.0, run.font_size as f64 * 2.0)
+    // The font-size guard covers the base outline, not arbitrarily wide
+    // strokes. Include miter joins and synthesis before the run transform,
+    // just as native PDF text culling does.
+    let width = run
+        .stroke
+        .filter(|stroke| stroke.color.alpha > 0.0)
+        .map_or(0.0, |stroke| stroke.width);
+    let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y);
+    let outset = moli_layout::PaintTextStroke::ink_outset(width, embolden);
+    let padding = f64::from(run.font_size) * 2.0 + f64::from(outset);
+    bounds.inflate(padding, padding)
 }
 fn filter_padding(fragments: &[PaintFragment]) -> f64 {
     fragments
