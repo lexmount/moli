@@ -1,4 +1,5 @@
 use super::*;
+use tokio::io::AsyncReadExt;
 
 async fn import_resource_server() -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -74,6 +75,17 @@ async fn worker_fetch_and_xhr_publish_native_resource_timing() {
                     connections.spawn(async move {
                         let Ok(request) = read_http_request_head(&mut stream).await else { return };
                         let target = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                        if target == "/timing-hang?abort=false" {
+                            // The early-abort case must not race a response head
+                            // produced by the independent network executor.
+                            let mut byte = [0];
+                            match timeout(TIMEOUT, stream.read(&mut byte)).await.expect("early abort must close the transport before headers") {
+                                Ok(0) => {}
+                                Err(error) if matches!(error.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => {}
+                                other => panic!("expected aborted request transport, got {other:?}"),
+                            }
+                            return;
+                        }
                         if target.starts_with("/timing-redirect") {
                             let _ = stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /timing-data?redirected=1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                             return;
