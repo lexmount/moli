@@ -57,6 +57,7 @@ mod form_controls;
 mod layout_geometry;
 mod painting_tables;
 mod scrollbars;
+mod text_stroke;
 mod text_styles;
 mod update_lifecycle;
 mod visual_output;

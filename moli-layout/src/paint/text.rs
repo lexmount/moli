@@ -222,12 +222,14 @@ fn project_text_phase<N>(
                     clusters,
                 }),
                 transform,
-                // Clip masks (background-clip: text) use the glyph fill only.
-                stroke: if phase == TextPaintPhase::ClipMask {
-                    None
-                } else {
-                    glyph_run.style().brush.stroke
-                },
+                // Text clipping uses both fill and stroke as opaque ink,
+                // even when the authored stroke color is transparent.
+                stroke: glyph_run.style().brush.stroke.map(|mut stroke| {
+                    if phase == TextPaintPhase::ClipMask {
+                        stroke.color = PaintColor::BLACK;
+                    }
+                    stroke
+                }),
             };
             let brush = &glyph_run.style().brush;
             if phase == TextPaintPhase::Foreground {
