@@ -277,7 +277,7 @@ impl ConcurrentParseTimeRuntime {
     ) -> Result<StreamingNavigationPageCreationResult> {
         debug_assert!(!response_headers_indicate_download(&response_headers));
         let mut env = env.clone();
-        env.apply_navigation_response_headers(&final_url, &response_headers);
+        env.apply_navigation_response_metadata(&final_url, response_status, &response_headers);
 
         let content_type = content_type.or_else(|| {
             moli_web_mime::navigation_response_mime_type_from_headers(&response_headers)
@@ -1313,6 +1313,7 @@ mod tests {
             document_policy_container: Default::default(),
             document_default_language: None,
             document_last_modified: None,
+            document_response_status: None,
             document_settings: Default::default(),
             network_offline: false,
             blocked_url_patterns: Vec::new(),

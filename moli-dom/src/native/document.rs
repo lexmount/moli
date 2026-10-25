@@ -89,6 +89,7 @@ struct DocumentMetadata {
 // Document identity. Only a whole-arena snapshot may copy them unchanged.
 #[derive(Debug, Clone, Default)]
 struct DocumentArenaState {
+    source_response_status: Option<u16>,
     // Meta delivery updates policy in time order; removing the element does
     // not undo the policy it delivered to this Document.
     meta_referrer_policy: MetaReferrerPolicy,
@@ -263,6 +264,10 @@ impl Document {
         self.metadata.source_last_modified_ms
     }
 
+    pub fn source_response_status(&self) -> Option<u16> {
+        self.arena_state.source_response_status
+    }
+
     pub fn quirks_mode(&self) -> QuirksMode {
         self.metadata.quirks_mode
     }
@@ -372,6 +377,10 @@ impl Document {
 
     pub fn set_source_last_modified_ms(&mut self, timestamp_ms: Option<f64>) {
         self.metadata.source_last_modified_ms = timestamp_ms;
+    }
+
+    pub fn set_source_response_status(&mut self, status: Option<u16>) {
+        self.arena_state.source_response_status = status;
     }
 
     pub fn set_quirks_mode(&mut self, quirks_mode: QuirksMode) {

@@ -106,6 +106,7 @@ impl JsContextHost {
                         content_type,
                         character_set,
                     )
+                    .with_response_status(Some(head.status))
                     .with_policy_container(policy_container),
                 ))
             }

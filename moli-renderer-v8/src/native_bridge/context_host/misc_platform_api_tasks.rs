@@ -265,13 +265,15 @@ impl JsContextHost {
                     })
                     .unwrap_or(resolved.document_handle);
                 let target = EventTargetHandle::Node(event_target);
+                let fields = self.content_security_policy_violation_event_fields(
+                    resolved.document_handle,
+                    &violation,
+                );
                 crate::host::event_target_value(scope, host_ptr, target)
                     .ok()
                     .and_then(|value| {
-                        create_content_security_policy_violation_event(
-                            scope, value, value, &violation,
-                        )
-                        .ok()
+                        create_content_security_policy_violation_event(scope, value, value, &fields)
+                            .ok()
                     })
                     .is_some_and(|event| {
                         // SAFETY: the Host and its DocumentRuntime share one ScriptVm.

@@ -1229,6 +1229,15 @@ impl DomHost {
             .and_then(Document::source_last_modified_ms)
     }
 
+    pub fn document_source_response_status_for_handle(
+        &self,
+        document_handle: DomHandle,
+    ) -> Option<u16> {
+        self.node(document_handle)
+            .and_then(Node::as_document)
+            .and_then(Document::source_response_status)
+    }
+
     pub fn document_default_language_for_node(&self, handle: DomHandle) -> Option<String> {
         let document_handle = self.owner_document_handle(handle)?;
         self.document_meta_default_language_for_handle(document_handle)
@@ -1417,6 +1426,24 @@ impl DomHost {
         }
         document.set_source_last_modified_ms(timestamp_ms);
         self.record_mutation(MutationScope::QueryState);
+        true
+    }
+
+    pub fn set_document_source_response_status_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        status: Option<u16>,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.source_response_status() == status {
+            return false;
+        }
+        document.set_source_response_status(status);
         true
     }
 

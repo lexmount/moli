@@ -988,6 +988,7 @@ pub(super) fn stale_loaded_completion(
         ChildDocumentLoadNetworkAttribution::new(frame_id.to_owned(), None, loader_id),
         Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
             LoadedChildDocument {
+                response_status: None,
                 response_links: Default::default(),
                 final_url: Url::parse(request_url).expect("final URL"),
                 policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
