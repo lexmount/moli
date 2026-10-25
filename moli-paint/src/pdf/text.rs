@@ -6,9 +6,10 @@ use krilla::{
     surface::Surface,
     text::{Font, GlyphId, KrillaGlyph, Tag},
 };
-use moli_layout::{PaintGlyphRun, PaintSnapshot, PaintTextStroke};
+use moli_layout::{PaintGlyph, PaintGlyphRun, PaintSnapshot, PaintTextStroke};
 use peniko::kurbo::{Affine, Rect};
 use skrifa::raw::{FontRef, TableProvider};
+use skrifa::{MetadataProvider, instance::NormalizedCoord, metrics::GlyphMetrics};
 
 use super::{
     PdfError,
@@ -31,6 +32,115 @@ impl FontCache {
         self.0.insert(key, font.clone());
         Ok(font)
     }
+}
+
+// As in SkPDFStrike::Make and SkStrokeRec::GetInflationRadius, resolve font
+// metrics together with paint. Native culling and filter allocation then share
+// the same outline, synthesis, miter extent, and transform interpretation.
+struct GlyphGeometry<'a> {
+    metrics: GlyphMetrics<'a>,
+    raw_glyf_bounds: bool,
+    font_size: f32,
+    skew: f32,
+    embolden: f32,
+    ink_outset: f64,
+}
+
+impl<'a> GlyphGeometry<'a> {
+    fn new(
+        snapshot: &'a PaintSnapshot,
+        run: &PaintGlyphRun,
+        coords: &'a [NormalizedCoord],
+        stroke: Option<PaintTextStroke>,
+    ) -> Result<Self, PdfError> {
+        let data = &snapshot.font(run.font).expect("validated font").font;
+        let face = skrifa::FontRef::from_index(data.data.as_ref(), data.index)
+            .map_err(|error| PdfError::Encoding(error.to_string()))?;
+        // Snapshot synthesis and stroke widths are both local CSS pixels.
+        let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
+        Ok(Self {
+            metrics: face.glyph_metrics(skrifa::instance::Size::new(run.font_size), coords),
+            raw_glyf_bounds: face.glyf().is_ok() && face.gvar().is_err(),
+            font_size: run.font_size,
+            skew: run.glyph_skew_radians.unwrap_or_default().tan(),
+            embolden,
+            ink_outset: f64::from(PaintTextStroke::ink_outset(
+                stroke.map_or(0.0, |stroke| stroke.width),
+                embolden,
+            )),
+        })
+    }
+
+    fn outline_bounds(&self, id: skrifa::GlyphId) -> Option<Rect> {
+        let bounds = self.metrics.bounds(id)?;
+        // Static glyf metrics retain raw xMin, while the outline scaler
+        // shifts the origin to the hmtx side bearing. Variable/CFF metrics
+        // already come from the scaled outline and need no adjustment.
+        let left = if self.raw_glyf_bounds {
+            self.metrics.left_side_bearing(id).unwrap_or(bounds.x_min)
+        } else {
+            bounds.x_min
+        };
+        Some(Rect::new(
+            left as f64,
+            -bounds.y_max as f64,
+            (left + bounds.x_max - bounds.x_min) as f64,
+            -bounds.y_min as f64,
+        ))
+    }
+
+    fn advance_bounds(&self, id: skrifa::GlyphId) -> Rect {
+        // Keep spaces searchable even when they have no outline.
+        Rect::new(
+            0.0,
+            -self.font_size as f64,
+            self.metrics.advance_width(id).unwrap_or(self.font_size) as f64,
+            self.font_size as f64 * 0.2,
+        )
+    }
+
+    fn map_bounds(&self, bounds: Rect, glyph: &PaintGlyph, matrix: Affine) -> Rect {
+        let matrix = matrix
+            * Affine::translate((glyph.x as f64, glyph.y as f64))
+            * Affine::skew(-self.skew as f64, 0.0);
+        matrix.transform_rect_bbox(bounds.inflate(self.ink_outset, self.ink_outset))
+    }
+}
+
+fn normalized_coords(run: &PaintGlyphRun) -> Vec<NormalizedCoord> {
+    run.normalized_coords
+        .iter()
+        .map(|&v| NormalizedCoord::from_bits(v))
+        .collect()
+}
+
+fn visible_stroke(run: &PaintGlyphRun) -> Option<PaintTextStroke> {
+    run.stroke
+        .filter(|stroke| stroke.width.is_finite() && stroke.width > 0.0 && stroke.color.alpha > 0.0)
+}
+
+pub(super) fn ink_bounds(snapshot: &PaintSnapshot, run: &PaintGlyphRun) -> Result<Rect, PdfError> {
+    let coords = normalized_coords(run);
+    let geometry = GlyphGeometry::new(snapshot, run, &coords, visible_stroke(run))?;
+    let matrix = crate::geometry::to_backend_transform(run.transform);
+    let mut bounds: Option<Rect> = None;
+    for glyph in &run.glyphs {
+        // Bitmap/color fonts can lack outline metrics. Retain the old em
+        // guard only for these glyphs, rather than padding every glyph run.
+        let guard = f64::from(run.font_size) * 2.0;
+        let local = match geometry.outline_bounds(skrifa::GlyphId::new(glyph.id)) {
+            Some(bounds) if bounds.width() <= 0.0 || bounds.height() <= 0.0 => continue,
+            Some(bounds) => bounds,
+            None => Rect::new(-guard, -guard, guard, guard),
+        };
+        // Hinting can move the outline in local glyph space; account for it
+        // before scaling or skewing, unlike the device sampling guard below.
+        let local = geometry.map_bounds(local.inflate(1.0, 1.0), glyph, matrix);
+        bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));
+    }
+    // Raster allocation also needs room for hinting and antialiasing at the
+    // device boundary; this does not change native PDF text ownership.
+    Ok(bounds.map_or(Rect::ZERO, |bounds| bounds.inflate(1.0, 1.0)))
 }
 
 // Parley exports post-avar normalized coordinates; Krilla takes design-space
@@ -100,9 +210,7 @@ pub(super) fn draw(
     page_index: usize,
     invisible: bool,
 ) -> Result<(), PdfError> {
-    let text_stroke = run.stroke.filter(|stroke| {
-        stroke.width.is_finite() && stroke.width > 0.0 && stroke.color.alpha > 0.0
-    });
+    let text_stroke = visible_stroke(run);
     let visible_stroke = text_stroke.filter(|_| !invisible);
     let has_fill = run.color.alpha > 0.0;
     if run.glyphs.is_empty()
@@ -128,25 +236,12 @@ pub(super) fn draw(
     let matrix = crate::geometry::to_backend_transform(run.transform);
     let font = fonts.get(snapshot, run)?;
     let font_size = run.font_size;
-    let skew = run.glyph_skew_radians.unwrap_or_default().tan();
     let source_text = run.text.as_ref().map_or("", |text| text.text.as_ref());
-    let data = &snapshot.font(run.font).expect("validated font").font;
-    use skrifa::MetadataProvider;
-    let face = skrifa::FontRef::from_index(data.data.as_ref(), data.index)
-        .map_err(|error| PdfError::Encoding(error.to_string()))?;
-    let coords: Vec<_> = run
-        .normalized_coords
-        .iter()
-        .map(|v| skrifa::instance::NormalizedCoord::from_bits(*v))
-        .collect();
-    let metrics = face.glyph_metrics(skrifa::instance::Size::new(font_size), coords.as_slice());
-    // The owned snapshot stores synthetic weight expansion in CSS pixels,
-    // which are also the units used by PDF stroke widths.
-    let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
-    let ink_outset = f64::from(PaintTextStroke::ink_outset(
-        text_stroke.map_or(0.0, |stroke| stroke.width),
-        embolden,
-    ));
+    let coords = normalized_coords(run);
+    let geometry = GlyphGeometry::new(snapshot, run, &coords, text_stroke)?;
+    let metrics = &geometry.metrics;
+    let skew = geometry.skew;
+    let embolden = geometry.embolden;
     let mut batches: Vec<(bool, Vec<usize>)> = Vec::new();
     let mut start = 0;
     while start < run.glyphs.len() {
@@ -167,35 +262,11 @@ pub(super) fn draw(
         let mut bounds: Option<Rect> = None;
         for glyph in &run.glyphs[start..end] {
             let id = skrifa::GlyphId::new(glyph.id);
-            let glyph_bounds = metrics
-                .bounds(id)
-                .filter(|b| b.x_max > b.x_min && b.y_max > b.y_min);
-            // Spaces and bitmap/color fonts may have no outline box. Retain
-            // their advance box, so spaces remain actual text in the PDF.
-            let local = glyph_bounds.map_or_else(
-                || {
-                    Rect::new(
-                        0.0,
-                        -font_size as f64,
-                        metrics.advance_width(id).unwrap_or(font_size) as f64,
-                        font_size as f64 * 0.2,
-                    )
-                },
-                |b| {
-                    Rect::new(
-                        b.x_min as f64,
-                        -b.y_max as f64,
-                        b.x_max as f64,
-                        -b.y_min as f64,
-                    )
-                },
-            );
-            let glyph_matrix = matrix
-                * Affine::translate((glyph.x as f64, glyph.y as f64))
-                * Affine::skew(-skew as f64, 0.0);
-            // Stroke width is local to the glyph's transform. Expand before
-            // mapping so scaled/skewed ink reaches clip and page boundaries.
-            let local = glyph_matrix.transform_rect_bbox(local.inflate(ink_outset, ink_outset));
+            let local = geometry
+                .outline_bounds(id)
+                .filter(|bounds| bounds.width() > 0.0 && bounds.height() > 0.0)
+                .unwrap_or_else(|| geometry.advance_bounds(id));
+            let local = geometry.map_bounds(local, glyph, matrix);
             bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));
         }
         let bounds = bounds.unwrap().intersect(clip);

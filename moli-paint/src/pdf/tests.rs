@@ -635,7 +635,17 @@ fn pdf_text_stroke_crosses_page_boundaries_without_duplicating_text() {
 #[test]
 fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
     use moli_layout::{PaintBlendMode, PaintCompositeMode, PaintFilter};
-    for scale in [1.0_f64, 1.5] {
+    for (scale, width, skew, label) in [
+        (1.0_f64, 8.0, None, "A"),
+        (1.0, 100.0, None, "A"),
+        (1.5, 100.0, None, "A"),
+        (1.5, 8.0, Some(0.7), "A"),
+        (1.5, 100.0, Some(0.7), "A"),
+        (1.0, 8.0, None, "A A"),
+        (1.0, 8.0, None, "中"),
+        (1.5, 8.0, None, "B"),
+        (1.0, 2.0, None, "C"),
+    ] {
         let mut snapshot =
             PaintSnapshot::new(PaintViewport::new(300, 300, 2.0), PaintColor::TRANSPARENT);
         snapshot.push_fragment(PaintFragment::PushLayer {
@@ -646,11 +656,34 @@ fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
             transform: PaintTransform2D::IDENTITY,
             filter: Some(PaintFilter::Opacity(0.5)),
         });
-        let mut run = text(&mut snapshot, "A", 150.0, false);
-        run.glyphs[0].x = 150.0;
+        let mut run = text(&mut snapshot, label, 150.0, label == "中");
+        for glyph in &mut run.glyphs {
+            glyph.x += 140.0;
+        }
+        run.glyph_skew_radians = skew;
+        if label == "B" {
+            let font = peniko::FontData::new(
+                peniko::Blob::new(Arc::new(
+                    include_bytes!("../../tests/fixtures/moli-pdf.ttf").to_vec(),
+                )),
+                0,
+            );
+            run.font = snapshot.intern_font(&font);
+            run.normalized_coords = vec![12288];
+        }
+        if label == "C" {
+            let font = peniko::FontData::new(
+                peniko::Blob::new(Arc::new(
+                    include_bytes!("../../tests/fixtures/moli-text-stroke.ttf").to_vec(),
+                )),
+                0,
+            );
+            run.font = snapshot.intern_font(&font);
+            run.glyphs[0].id = 3;
+        }
         run.color = PaintColor::TRANSPARENT;
         run.stroke = Some(moli_layout::PaintTextStroke {
-            width: 100.0,
+            width,
             color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
             paint_first: false,
         });
@@ -662,6 +695,12 @@ fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
             150.0 * (1.0 - scale),
             150.0 * (1.0 - scale),
         ];
+        if label == "A A" {
+            let mut empty = run.clone();
+            empty.glyphs = vec![run.glyphs[1]];
+            empty.text = None;
+            snapshot.push_fragment(PaintFragment::GlyphRun(empty));
+        }
         snapshot.push_fragment(PaintFragment::GlyphRun(run));
         snapshot.push_fragment(PaintFragment::PopLayer);
         let reference = crate::raster_snapshot(&snapshot).unwrap();
@@ -672,7 +711,25 @@ fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
             .count();
         assert!(expected_ink > 0);
         let doc = document(&snapshot, &options());
-        assert_eq!(extracted(&doc, &[1]), "A");
+        assert_eq!(extracted(&doc, &[1]), label);
+        let images: Vec<_> = doc
+            .objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .filter(|stream| stream.dict.has(b"SMask"))
+            .collect();
+        assert_eq!(images.len(), 1, "one filtered text image");
+        let image_width = images[0].dict.get(b"Width").unwrap().as_i64().unwrap();
+        let image_height = images[0].dict.get(b"Height").unwrap().as_i64().unwrap();
+        if width == 8.0 && scale == 1.0 && matches!(label, "A" | "A A") {
+            // A 20px glyph plus an 8px outline should not allocate the old
+            // 224x224 image around its origin. Measure ink and keep the
+            // conservative miter margin rather than a whole-em guard.
+            assert!(
+                image_width * image_height < 20_000,
+                "oversized filter raster: {image_width}x{image_height}"
+            );
+        }
         let masks: Vec<_> = doc
             .objects
             .values()
@@ -691,7 +748,7 @@ fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
         let actual_ink = masks[0].iter().filter(|&&alpha| alpha > 0).count();
         assert_eq!(
             actual_ink, expected_ink,
-            "filter allocation must preserve the complete stroke, scale={scale}"
+            "filter allocation must preserve the complete stroke, scale={scale}, stroke={width}, skew={skew:?}, text={label:?}"
         );
     }
 }

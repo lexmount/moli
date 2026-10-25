@@ -20,11 +20,18 @@ def triangle(left: int, right: int):
 
 
 builder = FontBuilder(1000, isTTF=True)
-glyphs = {".notdef": triangle(0, 600), "A": triangle(0, 600), "B": triangle(200, 400)}
+glyphs = {
+    ".notdef": triangle(0, 600),
+    "A": triangle(0, 600),
+    "B": triangle(200, 400),
+    "C": triangle(200, 400),
+}
 builder.setupGlyphOrder(list(glyphs))
-builder.setupCharacterMap({ord("A"): "A", ord("B"): "B"})
+builder.setupCharacterMap({ord(ch): ch for ch in "ABC"})
 builder.setupGlyf(glyphs)
-builder.setupHorizontalMetrics({name: (600, 200 if name == "B" else 0) for name in glyphs})
+builder.setupHorizontalMetrics(
+    {name: (600, {"B": 200, "C": -500}.get(name, 0)) for name in glyphs}
+)
 builder.setupHorizontalHeader(ascent=800, descent=-200)
 builder.setupNameTable(
     {
@@ -41,7 +48,7 @@ builder.setupOS2(
 )
 builder.setupPost()
 builder.setupMaxp()
-builder.setupHead(created=2_082_844_800, modified=2_082_844_800)
+builder.setupHead(flags=1, created=2_082_844_800, modified=2_082_844_800)
 builder.save(
     Path(__file__).resolve().parents[1]
     / "moli-paint/tests/fixtures/moli-text-stroke.ttf"
