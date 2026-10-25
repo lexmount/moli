@@ -986,16 +986,21 @@ impl DomHost {
         did_change
     }
 
-    pub(in crate::native) fn finish_parsing_script_children(&mut self, handle: DomHandle) -> bool {
-        let children = self.child_handles(handle).collect::<Vec<_>>();
-        for child in children {
+    fn finish_appending_text_children(&mut self, handle: DomHandle) {
+        let mut child = self.first_child(handle);
+        while let Some(current) = child {
+            child = self.next_sibling(current);
             if let Some(text) = self
-                .node_mut(child)
+                .node_mut(current)
                 .and_then(|node| node.data_mut().as_text_mut())
             {
                 text.finish_appending();
             }
         }
+    }
+
+    pub(in crate::native) fn finish_parsing_script_children(&mut self, handle: DomHandle) -> bool {
+        self.finish_appending_text_children(handle);
         let Some(source) = self
             .dom
             .node(handle)
@@ -1044,6 +1049,7 @@ impl DomHost {
         if !did_change {
             return DomMutationEffects::default();
         }
+        self.finish_appending_text_children(handle);
         self.record_mutation(MutationScope::LocalState);
         let mut effects = DomMutationEffects::changed();
         effects.mark_stylesheet_owner_parsing_finished(

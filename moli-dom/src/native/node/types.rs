@@ -1,4 +1,4 @@
-use smol_str::SmolStr;
+use smol_str::{SmolStr, SmolStrBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -34,6 +34,14 @@ impl Text {
         }
         match &mut self.data {
             TextData::Appending(buffer) => buffer.push_str(data),
+            // SmolStr guarantees inline storage for up to 23 UTF-8 bytes.
+            // Keep split character tokens inline without allocating a String.
+            TextData::Compact(current) if current.len() + data.len() <= 23 => {
+                let mut buffer = SmolStrBuilder::new();
+                buffer.push_str(current.as_str());
+                buffer.push_str(data);
+                *current = buffer.finish();
+            }
             TextData::Compact(current) => {
                 let mut buffer = String::with_capacity(current.len() + data.len());
                 buffer.push_str(current.as_str());
@@ -71,6 +79,30 @@ mod tests {
         let text = Text::new("short text");
 
         assert!(matches!(text.data, TextData::Compact(data) if !data.is_heap_allocated()));
+    }
+
+    #[test]
+    fn appended_short_text_stays_inline() {
+        let mut text = Text::new("a");
+        text.append_data("<");
+        text.append_data("b");
+
+        assert_eq!(text.data(), "a<b");
+        assert!(matches!(text.data, TextData::Compact(data) if !data.is_heap_allocated()));
+    }
+
+    #[test]
+    fn appended_text_keeps_utf8_inline_until_it_exceeds_capacity() {
+        let mut text = Text::new("é".repeat(10));
+        text.append_data("界");
+
+        assert_eq!(text.data(), format!("{}界", "é".repeat(10)));
+        assert!(matches!(&text.data, TextData::Compact(data) if !data.is_heap_allocated()));
+
+        text.append_data("!");
+        assert_eq!(text.data(), format!("{}界!", "é".repeat(10)));
+        text.finish_appending();
+        assert!(Arc::ptr_eq(&text.shared_data(), &text.shared_data()));
     }
 
     #[test]
