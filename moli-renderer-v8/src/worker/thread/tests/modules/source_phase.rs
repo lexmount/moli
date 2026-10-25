@@ -55,13 +55,33 @@ impl ModuleSourceServer {
         )
     }
 
-    pub(super) async fn request(&mut self, path: &str) -> TcpStream {
-        let (actual, stream) = timeout(TIMEOUT, self.requests.recv())
+    async fn next_request(&mut self) -> (String, TcpStream) {
+        timeout(TIMEOUT, self.requests.recv())
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+    }
+
+    pub(super) async fn request(&mut self, path: &str) -> TcpStream {
+        let (actual, stream) = self.next_request().await;
         assert_eq!(actual, path);
         stream
+    }
+
+    pub(super) async fn request_pair(
+        &mut self,
+        first_path: &str,
+        second_path: &str,
+    ) -> (TcpStream, TcpStream) {
+        // Sibling fetches can reach the server in either order. Keep both
+        // sockets under test control without accepting unexpected paths.
+        let (actual, stream) = self.next_request().await;
+        if actual == first_path {
+            (stream, self.request(second_path).await)
+        } else {
+            assert_eq!(actual, second_path);
+            (self.request(first_path).await, stream)
+        }
     }
 
     pub(super) async fn respond(&mut self, path: &str, status: &str, mime: &str, body: &str) {
@@ -78,7 +98,7 @@ impl ModuleSourceServer {
         Self::write_bytes(self.request(path).await, status, mime, body).await;
     }
 
-    async fn write(stream: TcpStream, status: &str, mime: &str, body: &str) {
+    pub(super) async fn write(stream: TcpStream, status: &str, mime: &str, body: &str) {
         Self::write_bytes(stream, status, mime, body.as_bytes()).await;
     }
 
