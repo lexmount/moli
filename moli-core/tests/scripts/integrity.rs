@@ -62,6 +62,9 @@ mod csp_response_status;
 #[path = "csp_referrer.rs"]
 mod csp_referrer;
 
+#[path = "csp_connect_policy.rs"]
+mod csp_connect_policy;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -223,6 +226,9 @@ fn fixture_response(
             module_document_referrer::fixture_response(path, query, origin, cross)
         }
         "/csp-response-status.html" => csp_response_status::fixture_response(query),
+        "/csp-connect-policy.html" | "/csp-connect-resource" => {
+            csp_connect_policy::fixture_response(path, query)
+        }
         "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
         "/local-referrer-worker.js" | "/local-referrer-page.html" => {
             local_worker_referrer::fixture_response(path, query, request.referer.as_deref())
