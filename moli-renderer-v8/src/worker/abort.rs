@@ -322,18 +322,32 @@ fn run_worker_abort_steps<'s>(
         std::mem::take(&mut state.abort_algorithms)
     };
     reject_worker_fetches_for_signal(scope, signal_id, reason);
-    if !invoke_abort_algorithms(
-        scope,
-        "Worker AbortSignal abort algorithm",
-        signal,
-        reason,
-        abort_algorithms,
-    ) {
-        return false;
-    }
+    let error = {
+        v8::tc_scope!(let scope, scope);
+        if invoke_abort_algorithms(
+            scope,
+            "Worker AbortSignal abort algorithm",
+            signal,
+            reason,
+            abort_algorithms,
+        ) {
+            None
+        } else {
+            let Some(error) = scope.exception() else {
+                return false;
+            };
+            scope.reset();
+            Some(error)
+        }
+    };
     // Dispatch reads the shared listener registry after all abort algorithms.
     abort_signal_events::dispatch_abort(scope, signal);
-    true
+    if let Some(error) = error {
+        scope.throw_exception(error);
+        false
+    } else {
+        true
+    }
 }
 
 fn create_signal<'s>(

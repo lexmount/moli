@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn observable_abort_steps_keep_dom_listener_order_and_finish_after_iterator_close_errors() {
+    let mut vm = new_storage_test_vm("https://observable-abort-steps.test/");
+    let result = vm
+        .eval(&format!(
+            "JSON.stringify({})",
+            include_str!("../../../tests/fixtures/observable-abort-steps.js")
+        ))
+        .unwrap();
+    assert_eq!(result, r#"{"checks":10}"#);
+}
+
+#[test]
 fn observable_catch_preserves_recovery_order_conversion_reentrancy_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-catch.test/");
     vm.eval(&format!(

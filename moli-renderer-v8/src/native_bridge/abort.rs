@@ -59,8 +59,7 @@ struct AbortSignalState {
     signal: Option<crate::util::RealmObjectHandle>,
     aborted: bool,
     detached: bool,
-    abort_algorithms: Vec<crate::abort_signal_route::AbortAlgorithm>,
-    linked_target_listeners: Vec<AbortLinkedTargetListener>,
+    abort_steps: Vec<AbortStep>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
@@ -73,9 +72,13 @@ struct AbortLinkedTargetListener {
     capture: bool,
 }
 
+enum AbortStep {
+    Algorithm(crate::abort_signal_route::AbortAlgorithm),
+    RemoveListener(AbortLinkedTargetListener),
+}
+
 struct AbortSignalDispatch {
-    algorithms: Vec<crate::abort_signal_route::AbortAlgorithm>,
-    linked_target_listeners: Vec<AbortLinkedTargetListener>,
+    steps: Vec<AbortStep>,
     dispatch_event: bool,
 }
 
@@ -84,8 +87,7 @@ impl AbortStore {
         self.detached = true;
         for state in self.signals.values_mut() {
             state.detached = true;
-            state.abort_algorithms.clear();
-            state.linked_target_listeners.clear();
+            state.abort_steps.clear();
         }
     }
 
@@ -106,8 +108,7 @@ impl AbortStore {
             }
             handle.retain_in_realm(scope);
             state.detached = true;
-            state.abort_algorithms.clear();
-            state.linked_target_listeners.clear();
+            state.abort_steps.clear();
         }
     }
 
@@ -312,11 +313,9 @@ impl AbortStore {
         if state.detached {
             return false;
         }
-        state
-            .abort_algorithms
-            .push(crate::abort_signal_route::AbortAlgorithm::new(
-                scope, algorithm,
-            ));
+        state.abort_steps.push(AbortStep::Algorithm(
+            crate::abort_signal_route::AbortAlgorithm::new(scope, algorithm),
+        ));
         true
     }
 
@@ -332,10 +331,11 @@ impl AbortStore {
         let Some(state) = self.signal_state_mut(signal_id) else {
             return false;
         };
-        state.abort_algorithms.retain(|candidate| {
-            candidate
+        state.abort_steps.retain(|step| match step {
+            AbortStep::Algorithm(candidate) => candidate
                 .prepare(scope)
-                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into())),
+            AbortStep::RemoveListener(_) => true,
         });
         true
     }
@@ -356,20 +356,21 @@ impl AbortStore {
             return;
         };
         state
-            .linked_target_listeners
-            .push(AbortLinkedTargetListener {
+            .abort_steps
+            .push(AbortStep::RemoveListener(AbortLinkedTargetListener {
                 target,
                 event_type: event_type.to_owned(),
                 callback_id,
                 capture,
-            });
+            }));
     }
 
     pub(super) fn unregister_target_listener(&mut self, callback_id: super::EventCallbackId) {
         for state in self.signals.values_mut() {
-            state
-                .linked_target_listeners
-                .retain(|linked| linked.callback_id != callback_id);
+            state.abort_steps.retain(|step| match step {
+                AbortStep::RemoveListener(linked) => linked.callback_id != callback_id,
+                AbortStep::Algorithm(_) => true,
+            });
         }
     }
 
@@ -420,8 +421,7 @@ impl AbortStore {
     fn take_signal_abort_steps(&mut self, signal_id: u32) -> Option<AbortSignalDispatch> {
         let state = self.signal_state_mut(signal_id)?;
         Some(AbortSignalDispatch {
-            algorithms: std::mem::take(&mut state.abort_algorithms),
-            linked_target_listeners: std::mem::take(&mut state.linked_target_listeners),
+            steps: std::mem::take(&mut state.abort_steps),
             dispatch_event: !state.detached,
         })
     }
@@ -487,10 +487,9 @@ pub(crate) fn abort_signal<'s>(
         let Some(dispatch) = dispatch else {
             continue;
         };
-        let error = {
-            v8::tc_scope!(let scope, scope);
-            if event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms) {
-                for linked in dispatch.linked_target_listeners {
+        for step in dispatch.steps {
+            match step {
+                AbortStep::RemoveListener(linked) => {
                     unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
                         linked.target,
                         &linked.event_type,
@@ -498,21 +497,30 @@ pub(crate) fn abort_signal<'s>(
                         linked.capture,
                     );
                 }
-                // Snapshot listeners after earlier signals and abort algorithms.
-                if dispatch.dispatch_event {
-                    abort_signal_events::dispatch_abort(scope, signal);
+                AbortStep::Algorithm(algorithm) => {
+                    let error = {
+                        v8::tc_scope!(let scope, scope);
+                        if event::invoke_abort_algorithm(scope, signal, reason, algorithm) {
+                            None
+                        } else {
+                            let Some(error) = scope.exception() else {
+                                // V8 termination cannot resume author execution.
+                                return;
+                            };
+                            scope.reset();
+                            Some(error)
+                        }
+                    };
+                    if first_error.is_none() {
+                        first_error = error;
+                    }
                 }
-                None
-            } else {
-                let Some(error) = scope.exception() else {
-                    return;
-                };
-                scope.reset();
-                Some(error)
             }
-        };
-        if first_error.is_none() {
-            first_error = error;
+        }
+        // All registered steps, including listener removal, precede this event.
+        // A capturable IteratorClose exception must not skip its dispatch.
+        if dispatch.dispatch_event {
+            abort_signal_events::dispatch_abort(scope, signal);
         }
     }
     if let Some(error) = first_error {

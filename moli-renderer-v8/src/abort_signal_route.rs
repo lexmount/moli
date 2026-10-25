@@ -46,7 +46,7 @@ impl AbortAlgorithm {
 /// Most internal abort algorithms cannot throw. Observable iterator closing
 /// is an exception: its synchronous return() failure escapes AbortController.abort.
 /// Keep this policy on the native callback, in the existing signal-owned list.
-fn invoke_abort_algorithm<'s>(
+pub(crate) fn invoke_abort_algorithm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     label: &str,
     algorithm: v8::Local<'s, v8::Function>,
