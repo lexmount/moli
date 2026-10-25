@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn observable_async_iterator_stays_cancellable_across_gc_and_is_released_after_abort() {
+    let mut vm = new_storage_test_vm("https://observable-iterator-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-iterator-gc.js"
+    ))
+    .unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("observableIteratorGc.live.controller.abort('stop'); JSON.stringify([observableIteratorGc.live.closes, observableIteratorGc.abandoned.iterator.deref() === undefined])")
+            .unwrap(),
+        "[1,true]"
+    );
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("observableIteratorGc.live.iterator.deref() === undefined")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn observable_abort_steps_keep_dom_listener_order_and_finish_after_iterator_close_errors() {
     let mut vm = new_storage_test_vm("https://observable-abort-steps.test/");
     let result = vm

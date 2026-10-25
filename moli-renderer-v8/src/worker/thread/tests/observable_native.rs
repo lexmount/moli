@@ -1,5 +1,64 @@
 use super::*;
 
+async fn observable_worker_collect_garbage(handle: &WorkerTestHandle) {
+    let (tx, rx) = oneshot::channel();
+    assert!(
+        handle
+            .devtools_handle()
+            .inspector_tasks()
+            .collect_garbage_for_test(tx)
+    );
+    timeout(TIMEOUT, rx).await.unwrap().unwrap();
+}
+
+async fn observable_worker_evaluate(
+    handle: &WorkerTestHandle,
+    expression: &str,
+) -> serde_json::Value {
+    let (tx, rx) = oneshot::channel();
+    let request = serde_json::json!({"id": 1, "method": "Runtime.evaluate", "params": {
+        "expression": expression, "returnByValue": true
+    }});
+    assert!(handle.dispatch_runtime_protocol_message(None, request.to_string(), None, tx));
+    let messages = timeout(TIMEOUT, rx).await.unwrap().unwrap().unwrap();
+    let response = messages
+        .into_iter()
+        .map(crate::runtime::RendererRuntimeInspectorMessage::into_v8_inspector_message)
+        .find(|message| message["id"] == 1)
+        .expect("worker evaluation must return its response");
+    assert!(response.get("error").is_none(), "{response}");
+    assert!(
+        response["result"].get("exceptionDetails").is_none(),
+        "{response}"
+    );
+    response["result"]["result"]["value"].clone()
+}
+
+#[tokio::test]
+async fn worker_observable_async_iterator_stays_cancellable_across_gc() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({});",
+            include_str!("../../../../tests/fixtures/observable-iterator-gc.js")
+        ),
+        "https://observable-iterator-gc.test/worker.js".into(),
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""ready""#);
+    assert!(handle.attach_runtime_inspector_session(None));
+    observable_worker_collect_garbage(&handle).await;
+    let result = observable_worker_evaluate(&handle,
+        "observableIteratorGc.live.controller.abort('stop'); [observableIteratorGc.live.closes, observableIteratorGc.abandoned.iterator.deref() === undefined]").await;
+    assert_eq!(result, serde_json::json!([1, true]));
+    observable_worker_collect_garbage(&handle).await;
+    let result = observable_worker_evaluate(
+        &handle,
+        "observableIteratorGc.live.iterator.deref() === undefined",
+    )
+    .await;
+    assert_eq!(result, true);
+}
+
 #[tokio::test]
 async fn worker_observable_abort_steps_finish_after_iterator_close_errors() {
     ensure_v8();
