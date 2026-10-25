@@ -10,7 +10,7 @@ async fn iframe_navigation_referrer_policy_reaches_transport_document_and_csp() 
     let expression = r#"(async () => {
         const rows = [];
         for (const kind of ['http', 'srcdoc']) {
-          for (const policy of ['no-referrer', 'origin', 'unsafe-url', ' origin ', 'origin,no-referrer']) {
+          for (const policy of ['no-referrer', 'origin', 'unsafe-url', ' origin ', 'origin,no-referrer', '', 'same-origin', 'strict-origin-when-cross-origin', 'origin-when-cross-origin']) {
             const frame = document.createElement('iframe');
             frame.referrerPolicy = policy;
             if (kind === 'http') frame.src = '/csp-response-status.html?201';
@@ -65,6 +65,26 @@ async fn iframe_navigation_referrer_policy_reaches_transport_document_and_csp() 
                 true,
                 true
             ],
+            ["http", "", page_url, page_url, 201, true, true],
+            ["http", "same-origin", page_url, page_url, 201, true, true],
+            [
+                "http",
+                "strict-origin-when-cross-origin",
+                page_url,
+                page_url,
+                201,
+                true,
+                true
+            ],
+            [
+                "http",
+                "origin-when-cross-origin",
+                page_url,
+                page_url,
+                201,
+                true,
+                true
+            ],
             ["srcdoc", "no-referrer", "", "", 0, true, true],
             [
                 "srcdoc",
@@ -76,12 +96,48 @@ async fn iframe_navigation_referrer_policy_reaches_transport_document_and_csp() 
                 true
             ],
             ["srcdoc", "unsafe-url", page_url, page_url, 0, true, true],
-            ["srcdoc", " origin ", page_url, page_url, 0, true, true],
+            [
+                "srcdoc",
+                " origin ",
+                origin_referrer,
+                origin_referrer,
+                0,
+                true,
+                true
+            ],
             [
                 "srcdoc",
                 "origin,no-referrer",
-                page_url,
-                page_url,
+                origin_referrer,
+                origin_referrer,
+                0,
+                true,
+                true
+            ],
+            [
+                "srcdoc",
+                "",
+                origin_referrer,
+                origin_referrer,
+                0,
+                true,
+                true
+            ],
+            ["srcdoc", "same-origin", "", "", 0, true, true],
+            [
+                "srcdoc",
+                "strict-origin-when-cross-origin",
+                origin_referrer,
+                origin_referrer,
+                0,
+                true,
+                true
+            ],
+            [
+                "srcdoc",
+                "origin-when-cross-origin",
+                origin_referrer,
+                origin_referrer,
                 0,
                 true,
                 true
@@ -101,6 +157,10 @@ async fn iframe_navigation_referrer_policy_reaches_transport_document_and_csp() 
             Some(origin_referrer.as_str()),
             Some(page_url.as_str()),
             Some(page_url.as_str()),
+            Some(page_url.as_str()),
+            Some(page_url.as_str()),
+            Some(page_url.as_str()),
+            Some(page_url.as_str()),
             Some(page_url.as_str())
         ]
     );
@@ -117,6 +177,7 @@ async fn csp_referrer_uses_native_document_metadata_without_reading_author_gette
     let servers = IntegrityServers::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let page_url = format!("{}/csp-response-status.html?201", servers.origin);
+    let origin_referrer = format!("{}/", servers.origin);
     let blocked_url = format!("{}/blocked-csp-referrer", servers.origin);
     let mut page = browser.fetch(&page_url).await?;
     let expression = format!(
@@ -169,7 +230,7 @@ async fn csp_referrer_uses_native_document_metadata_without_reading_author_gette
             ["", "", 201, true, true, 0],
             [page_url, page_url, 404, true, true, 0],
             [page_url, page_url, 0, true, true, 0],
-            [page_url, page_url, 0, true, true, 0],
+            [origin_referrer, origin_referrer, 0, true, true, 0],
             [page_url, page_url, 0, true, true, 0]
         ])
     );

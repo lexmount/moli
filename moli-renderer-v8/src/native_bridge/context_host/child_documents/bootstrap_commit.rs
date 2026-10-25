@@ -103,9 +103,7 @@ impl JsContextHost {
                             .and_then(|source| {
                                 moli_fetch::referrer_value(
                                     &source,
-                                    // Srcdoc retains its container origin; its
-                                    // about: URL does not make this cross-origin.
-                                    &source,
+                                    &snapshot.url,
                                     Some(
                                         target_snapshot
                                             .referrer_policy(initiator, source_policy.as_ref()),

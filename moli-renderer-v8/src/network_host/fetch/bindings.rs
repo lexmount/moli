@@ -241,13 +241,13 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     }
 
     let owner = prepared.request_scope();
+    let check = prepared.connect_policy.check_url(
+        &prepared.document_url,
+        &prepared.resolved_url,
+        crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
+    );
     if let Some(violation) = host
-        .check_document_connect_csp_for_owner_with_script_location(
-            scope,
-            owner,
-            &prepared.document_url,
-            &prepared.resolved_url,
-        )
+        .queue_document_connect_csp_check_with_script_location(scope, owner, check)
         .into_blocking_violation()
     {
         let message = crate::document_runtime::document_content_security_policy_error_message(
