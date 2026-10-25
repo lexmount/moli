@@ -153,6 +153,9 @@ fn queue_native_dynamic_import<'s>(
         base_url,
         attributes,
         phase,
+    )
+    .with_csp_source_location(
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope),
     );
     if let Some((base_url, fetch_metadata)) = referrer_script {
         request = request.with_referrer_script(base_url, fetch_metadata);

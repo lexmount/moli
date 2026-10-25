@@ -760,7 +760,7 @@ impl ScriptVm {
                 network_result,
             );
     }
-    pub(crate) fn record_main_modulepreload_network_result(
+    pub(crate) fn record_main_module_network_result(
         &mut self,
         document_url: Url,
         request_url: Url,

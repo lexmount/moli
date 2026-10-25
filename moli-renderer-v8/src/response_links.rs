@@ -525,7 +525,7 @@ mod tests {
             Vec::new(),
             Default::default(),
         );
-        let allowed = policy.clone().for_style_preload(Some("az".into()));
+        let allowed = policy.clone().for_style_request(Some("az".into()));
         assert!(
             allowed
                 .check_url(
@@ -542,7 +542,7 @@ mod tests {
         );
         assert!(
             !policy
-                .for_style_preload(Some("wrong".into()))
+                .for_style_request(Some("wrong".into()))
                 .check_url(
                     &document,
                     &target,
@@ -609,13 +609,13 @@ mod tests {
         assert!(
             !policy
                 .clone()
-                .for_script_preload(ScriptFetchMetadata::default())
+                .for_script_request(ScriptFetchMetadata::default())
                 .check_url(&document, &source, Redirect::NoRedirect)
                 .has_no_violations()
         );
         let nonce =
             ScriptFetchMetadata::from_script_attributes(None, None, None, None, Some("az"), None);
-        let allowed = policy.for_script_preload(nonce);
+        let allowed = policy.for_script_request(nonce);
         assert!(
             allowed
                 .check_url(&document, &source, Redirect::NoRedirect)
@@ -632,7 +632,7 @@ mod tests {
             Vec::new(),
             Default::default(),
         )
-        .for_script_preload(ScriptFetchMetadata::default());
+        .for_script_request(ScriptFetchMetadata::default());
         assert!(
             dynamic
                 .check_url(&document, &source, Redirect::NoRedirect)
