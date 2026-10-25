@@ -113,7 +113,7 @@ use super::inspector_task_runner::{
 use super::module_runtime::{
     WorkerBootstrapError, WorkerDynamicModuleImportAdvance, WorkerModuleBootstrapResume,
     WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
-    WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCompletion, WorkerModuleGraphFetchCspSource,
+    WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCspSource, WorkerModuleGraphFetchEvent,
     WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap, WorkerModuleSource,
     evaluate_module_worker_bootstrap_source, install_classic_worker_dynamic_module_runtime,
     resume_worker_dynamic_module_evaluation, resume_worker_dynamic_module_fetch,
@@ -637,13 +637,24 @@ fn module_graph_csp_violation_message(violation: &ContentSecurityPolicyUrlViolat
     )
 }
 
+fn queue_worker_module_csp_violations(
+    event_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
+    violations: impl IntoIterator<Item = ContentSecurityPolicyUrlViolation>,
+) {
+    for violation in violations {
+        let _ = event_tx.send(WorkerModuleGraphFetchEvent::CspViolation(Box::new(
+            violation,
+        )));
+    }
+}
+
 fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
     loader: WorkerResourceLoader,
     network_partition_key: Option<String>,
     module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
     worker_global_policy: crate::content_security_policy::InheritedContentSecurityPolicy,
-    completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    event_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     let fetch_id = request.fetch_id();
     let policy = match request.csp_source() {
@@ -676,14 +687,12 @@ fn start_worker_module_graph_fetch(
         }
     }
     let initial_error = enforced.first().map(module_graph_csp_violation_message);
-    let violations = Arc::new(Mutex::new(
-        reports.into_iter().chain(enforced).collect::<Vec<_>>(),
-    ));
+    queue_worker_module_csp_violations(&event_tx, reports.into_iter().chain(enforced));
     if let Some(message) = initial_error {
-        let _ = completion_tx.send(
-            WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
-                .with_csp_violations(std::mem::take(&mut *violations.lock())),
-        );
+        let _ = event_tx.send(WorkerModuleGraphFetchEvent::completed(
+            fetch_id,
+            Err(message),
+        ));
         return;
     }
     let browser_request_metadata = request.browser_request_metadata();
@@ -694,10 +703,10 @@ fn start_worker_module_graph_fetch(
                 .with_network_partition_key(network_partition_key.clone())
                 .with_browser_request_metadata(browser_request_metadata),
             Err(error) => {
-                let _ = completion_tx.send(
-                    WorkerModuleGraphFetchCompletion::new(fetch_id, Err(error.to_string()))
-                        .with_csp_violations(std::mem::take(&mut *violations.lock())),
-                );
+                let _ = event_tx.send(WorkerModuleGraphFetchEvent::completed(
+                    fetch_id,
+                    Err(error.to_string()),
+                ));
                 return;
             }
         };
@@ -713,12 +722,12 @@ fn start_worker_module_graph_fetch(
         .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
         .with_credentials_mode(request.credentials_mode());
     let redirects = crate::network_host::FetchCspRedirectState::new(&policy);
-    let redirect_violations = violations.clone();
+    let redirect_events = event_tx.clone();
     if let Some(check) = redirects.redirect_check(
         policy.clone(),
         request.initiator_url().clone(),
         request.url().clone(),
-        move |violation| redirect_violations.lock().push(violation),
+        move |violation| queue_worker_module_csp_violations(&redirect_events, [violation]),
     ) {
         fetch_request = fetch_request.with_redirect_check(check);
     }
@@ -727,8 +736,7 @@ fn start_worker_module_graph_fetch(
     let requested_module_type = request.module_type();
     let request_credentials_mode = request.credentials_mode();
     let response_policy = policy.clone();
-    let response_violations = violations.clone();
-    let completion_tx_for_callback = completion_tx.clone();
+    let event_tx_for_callback = event_tx.clone();
     let response_started_at = Instant::now();
     let send_completion = move |result: Result<moli_fetch::Response, anyhow::Error>| {
         let result = result
@@ -749,9 +757,10 @@ fn start_worker_module_graph_fetch(
                         .check_redirect(&request_initiator_url, &response.final_url)
                         .into_violations();
                     let error = enforced.first().map(module_graph_csp_violation_message);
-                    response_violations
-                        .lock()
-                        .extend(reports.into_iter().chain(enforced));
+                    queue_worker_module_csp_violations(
+                        &event_tx_for_callback,
+                        reports.into_iter().chain(enforced),
+                    );
                     if let Some(error) = error {
                         return Err(error);
                     }
@@ -788,45 +797,39 @@ fn start_worker_module_graph_fetch(
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
             });
-        let _ = completion_tx_for_callback.send(
-            WorkerModuleGraphFetchCompletion::new(fetch_id, result)
-                .with_csp_violations(std::mem::take(&mut *response_violations.lock())),
-        );
+        let _ =
+            event_tx_for_callback.send(WorkerModuleGraphFetchEvent::completed(fetch_id, result));
     };
     let Some(load) = loader.register_load(
         ResourceLoadKind::Script,
         ResourceLoadDisposition::Ordinary,
         None,
     ) else {
-        let _ = completion_tx.send(
-            WorkerModuleGraphFetchCompletion::new(
-                fetch_id,
-                Err("worker module dependency fetch rejected during shutdown".to_owned()),
-            )
-            .with_csp_violations(std::mem::take(&mut *violations.lock())),
-        );
+        let _ = event_tx.send(WorkerModuleGraphFetchEvent::completed(
+            fetch_id,
+            Err("worker module dependency fetch rejected during shutdown".to_owned()),
+        ));
         return;
     };
     if let Err(error) = loader
         .request_client()
         .fetch_cacheable_script_text_callback_with_load(fetch_request, load, send_completion)
     {
-        let completion = WorkerModuleGraphFetchCompletion::new(
+        let completion = WorkerModuleGraphFetchEvent::completed(
             fetch_id,
             Err(format!(
                 "failed to start module worker dependency fetch `{}`: {error}",
                 request.url()
             )),
-        )
-        .with_csp_violations(std::mem::take(&mut *violations.lock()));
-        let _ = completion_tx.send(completion);
+        );
+        let _ = event_tx.send(completion);
     }
 }
 
 fn start_worker_module_graph_fetch_batch(
     requests: WorkerModuleGraphFetchBatch,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     for request in requests.iter().cloned() {
         start_worker_module_graph_fetch(
@@ -902,7 +905,7 @@ fn worker_has_pending_indexed_db_tasks(
 fn flush_one_worker_indexed_db_task(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     let flushed = crate::context_bootstrap::flush_next_indexed_db_task(scope);
     if !flushed {
@@ -915,7 +918,7 @@ fn flush_one_worker_indexed_db_task(
 fn handle_worker_dynamic_module_import_advance(
     advance: WorkerDynamicModuleImportAdvance,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     match advance {
         WorkerDynamicModuleImportAdvance::Complete
@@ -952,7 +955,7 @@ fn report_service_worker_module_script_resource(
 fn drain_worker_dynamic_module_imports(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     const MAX_DYNAMIC_IMPORT_DRAIN_STEPS: usize = 1_000;
     for _ in 0..MAX_DYNAMIC_IMPORT_DRAIN_STEPS {
@@ -967,7 +970,7 @@ fn drain_worker_dynamic_module_imports_for_context(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
@@ -981,7 +984,7 @@ fn dispatch_worker_inspector_task(
     context: &v8::Global<v8::Context>,
     task: WorkerInspectorTask,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
     let (isolate, inspector) = worker_isolate.worker_isolate_and_runtime_inspector();
     inspector.execute_task(isolate, task);
@@ -997,7 +1000,7 @@ async fn run_worker_pre_bootstrap_debugger_pause(
     worker_isolate: &mut WorkerIsolateState,
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
     script_url: &str,
     rx: &mut mpsc::UnboundedReceiver<WorkerMessage>,
     pending_bootstrap_messages: &mut VecDeque<WorkerMessage>,
@@ -1638,7 +1641,7 @@ async fn worker_main(
         mpsc::unbounded_channel::<WorkerFetchEvent>();
     let (xhr_completion_tx, mut xhr_completion_rx) = mpsc::unbounded_channel::<WorkerXhrEvent>();
     let (module_graph_fetch_tx, mut module_graph_fetch_rx) =
-        mpsc::unbounded_channel::<WorkerModuleGraphFetchCompletion>();
+        mpsc::unbounded_channel::<WorkerModuleGraphFetchEvent>();
     let (module_evaluation_tx, mut module_evaluation_rx) =
         mpsc::unbounded_channel::<WorkerModuleEvaluationCompletion>();
     let (websocket_event_tx, mut websocket_events) = WorkerWebSocketEvents::new();
@@ -2027,7 +2030,7 @@ async fn worker_main(
             Message(Option<WorkerMessage>),
             Fetch(Option<WorkerFetchEvent>),
             Xhr(Option<WorkerXhrEvent>),
-            ModuleGraphFetch(Option<Box<WorkerModuleGraphFetchCompletion>>),
+            ModuleGraphFetch(Option<WorkerModuleGraphFetchEvent>),
             ModuleEvaluation(Option<WorkerModuleEvaluationCompletion>),
             ModuleRuntime,
             IndexedDb,
@@ -2050,7 +2053,7 @@ async fn worker_main(
                 msg = rx.recv() => WorkerLoopWake::Message(msg),
                 completion = fetch_completion_rx.recv() => WorkerLoopWake::Fetch(completion),
                 completion = xhr_completion_rx.recv() => WorkerLoopWake::Xhr(completion),
-                completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion.map(Box::new)),
+                completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion),
                 completion = module_evaluation_rx.recv() => WorkerLoopWake::ModuleEvaluation(completion),
                 wake = worker_runtime_wake_rx.recv() => WorkerLoopWake::RuntimeWake(wake),
                 event = websocket_events.recv() => WorkerLoopWake::WebSocket(event),
@@ -2064,7 +2067,7 @@ async fn worker_main(
                 msg = rx.recv() => WorkerLoopWake::Message(msg),
                 completion = fetch_completion_rx.recv() => WorkerLoopWake::Fetch(completion),
                 completion = xhr_completion_rx.recv() => WorkerLoopWake::Xhr(completion),
-                completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion.map(Box::new)),
+                completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion),
                 completion = module_evaluation_rx.recv() => WorkerLoopWake::ModuleEvaluation(completion),
                 wake = worker_runtime_wake_rx.recv() => WorkerLoopWake::RuntimeWake(wake),
                 event = websocket_events.recv() => WorkerLoopWake::WebSocket(event),
@@ -3256,7 +3259,21 @@ async fn worker_main(
             WorkerLoopWake::Opfs(None) => {
                 // OPFS sender dropped, but other work may still be pending.
             }
-            WorkerLoopWake::ModuleGraphFetch(Some(completion)) => {
+            WorkerLoopWake::ModuleGraphFetch(Some(WorkerModuleGraphFetchEvent::CspViolation(
+                violation,
+            ))) => {
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                let loader = state.borrow().loader.clone();
+                dispatch_worker_csp_violation_event(scope, &loader, &violation);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::ModuleGraphFetch(Some(WorkerModuleGraphFetchEvent::Complete(
+                completion,
+            ))) => {
                 let (isolate, runtime_inspector) =
                     worker_isolate.worker_isolate_and_runtime_inspector();
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3265,10 +3282,6 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let global = ctx.global(scope);
                 if worker_dynamic_module_import_waits_for_fetch(scope, completion.fetch_id()) {
-                    for violation in completion.csp_violations() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
                     if let Some(advance) = resume_worker_dynamic_module_fetch(scope, *completion) {
                         handle_worker_dynamic_module_import_advance(
                             advance,
@@ -3278,10 +3291,6 @@ async fn worker_main(
                         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                     }
                 } else if pending_module_bootstrap.is_some() {
-                    for violation in completion.csp_violations() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
                     let bootstrap_fetch_matches = pending_module_bootstrap
                         .as_ref()
                         .and_then(|bootstrap| bootstrap.pending_requests())
