@@ -137,6 +137,13 @@ impl CompletedCdpCommandDispatchKind {
 }
 
 impl PendingCdpCommandDispatch {
+    pub fn wait_lifetime(&self) -> Option<CommandWaitLifetime> {
+        match &self.inner {
+            PendingCdpCommandDispatchKind::Fetch(pending) => pending.wait_lifetime(),
+            _ => None,
+        }
+    }
+
     fn new(inner: PendingCdpCommandDispatchKind, scheduler_events: Vec<CdpSchedulerEvent>) -> Self {
         Self {
             inner,
@@ -1205,17 +1212,24 @@ impl CdpConnection {
             CompletedCdpCommandDispatchKind::Fetch(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                let plan = Box::pin(crate::domains::fetch::complete_pending_fetch_command(
+                let step = Box::pin(crate::domains::fetch::complete_pending_fetch_command(
                     self, completed,
                 ))
                 .await;
-                append_command_output_plan(
-                    &mut out,
-                    command_context,
-                    plan,
-                    command_id,
-                    session_id.as_deref(),
-                );
+                match step {
+                    crate::domains::fetch::FetchCommandTaskStep::Pending(pending) => {
+                        return self.pending_step(PendingCdpCommandDispatchKind::Fetch(pending));
+                    }
+                    crate::domains::fetch::FetchCommandTaskStep::Complete(plan) => {
+                        append_command_output_plan(
+                            &mut out,
+                            command_context,
+                            plan,
+                            command_id,
+                            session_id.as_deref(),
+                        );
+                    }
+                }
             }
             CompletedCdpCommandDispatchKind::Io(completed) => {
                 let completed = *completed;

@@ -85,9 +85,12 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
             )
             .await;
         }
-        complete_pending_fetch_command(&mut ctx.conn, completed)
-            .await
-            .emit_into(&mut ctx.sent, Some(3), Some("SID-1"));
+        let FetchCommandTaskStep::Complete(plan) =
+            complete_pending_fetch_command(&mut ctx.conn, completed).await
+        else {
+            panic!("body read completion must terminate");
+        };
+        plan.emit_into(&mut ctx.sent, Some(3), Some("SID-1"));
         assert_eq!(
             take_response_by_id(&mut ctx, 3)["error"]["message"],
             "RequestNotFound"

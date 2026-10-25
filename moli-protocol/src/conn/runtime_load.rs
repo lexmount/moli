@@ -798,6 +798,40 @@ struct BackgroundNavigationClaim {
     cancellation: FetchCancelHandle,
 }
 
+/// Transport inputs captured while the navigation owner is available. Waiting
+/// for response headers owns neither a connection nor a renderer Page.
+pub(crate) struct PreparedNavigationRequest {
+    client: moli_core::network::ResourceRequestClient,
+    request: Request,
+    cancellation: FetchCancelHandle,
+}
+
+impl PreparedNavigationRequest {
+    pub(crate) async fn wait(self) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
+        struct CancelOnDrop(Option<FetchCancelHandle>);
+        impl Drop for CancelOnDrop {
+            fn drop(&mut self) {
+                if let Some(cancellation) = self.0.take() {
+                    cancellation.cancel();
+                }
+            }
+        }
+
+        let mut cancellation = CancelOnDrop(Some(self.cancellation.clone()));
+        let url = self.request.url.clone();
+        let response = self
+            .client
+            .fetch_raw_stream_with_cancel_and_network_metadata(self.request, self.cancellation)
+            .await
+            .with_context(|| format!("failed to fetch page `{url}`"));
+        if response.is_ok() {
+            // The streaming response now owns transport cancellation.
+            cancellation.0.take();
+        }
+        response
+    }
+}
+
 pub(crate) struct BackgroundNavigationLoadJob {
     engine: NavigationEngine,
     page_reservation: RendererDocumentPreparationTarget,
@@ -3203,6 +3237,36 @@ impl CdpConnection {
             auth,
         )
         .await
+    }
+
+    pub(crate) fn prepare_navigation_request(
+        &mut self,
+        token: &DocumentNavigationToken,
+        navigation: &NavigationDispatchState,
+        auth: Option<SubresourceAuthCredentials>,
+    ) -> anyhow::Result<PreparedNavigationRequest> {
+        let load_inputs = self.navigation_load_inputs_for_navigation(Some(token), navigation)?;
+        let cancellation = self
+            .runtime_session_owner_slot_for_owner(&navigation.owner)
+            .and_then(|slot| slot.document_navigation_cancellation_handle(token))
+            .ok_or(moli_fetch::FetchCancelled)?
+            .child_for_subrequest();
+        let request = build_navigation_network_request(
+            &load_inputs,
+            &navigation.request_method,
+            navigation.requested_url.as_str(),
+            navigation.clone_request_body_bytes(),
+            navigation.request_headers.clone(),
+            auth,
+        )?;
+        let client = self
+            .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
+            .frozen_request_client();
+        Ok(PreparedNavigationRequest {
+            client,
+            request,
+            cancellation,
+        })
     }
 
     pub(crate) async fn fetch_navigation_streaming_raw_response_for_navigation_async(

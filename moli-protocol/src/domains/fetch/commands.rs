@@ -399,16 +399,25 @@ fn start_devtools_continue_intercepted_request_command(
             pending.navigation.request_load_policy,
             None,
         );
-        return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
-            command_id,
-            owner.clone(),
-            PendingFetchCommandKind::ContinueRequest {
-                state: Box::new(PendingContinueRequestState::Navigation {
-                    pending: Box::new(pending),
-                }),
-            },
-            PendingFetchCommandOperation::Ready,
-        ));
+        let termination = super::navigation::NavigationTermination::new(
+            conn,
+            owner,
+            pending.document_navigation_token.as_ref(),
+            &pending.navigation,
+        );
+        return FetchCommandTaskStep::Pending(
+            PendingFetchCommandDispatch::new_for_owner(
+                command_id,
+                owner.clone(),
+                PendingFetchCommandKind::ContinueRequest {
+                    state: Box::new(PendingContinueRequestState::Navigation {
+                        pending: Box::new(pending),
+                    }),
+                },
+                PendingFetchCommandOperation::Ready,
+            )
+            .with_navigation_termination(termination),
+        );
     }
     pending_request_action_output_plan(
         conn,

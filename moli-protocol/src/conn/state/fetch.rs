@@ -1031,6 +1031,7 @@ pub struct TargetFetchConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TargetFetchSessionConfig {
+    wait_lifetime: crate::conn::CommandWaitLifetimeOwner,
     handle_auth_requests: bool,
     patterns: Vec<FetchInterceptionPattern>,
 }
@@ -1188,6 +1189,7 @@ impl TargetFetchConfig {
 
     #[cfg(test)]
     pub(crate) fn reset(&mut self) {
+        self.revoke_wait_lifetimes();
         *self = Self::default();
     }
 
@@ -1200,9 +1202,15 @@ impl TargetFetchConfig {
         if !self.fetch_sessions.contains_key(&session_id) {
             self.fetch_session_order.push(session_id.clone());
         }
+        let wait_lifetime = self
+            .fetch_sessions
+            .get(&session_id)
+            .map(|config| config.wait_lifetime.clone())
+            .unwrap_or_default();
         self.fetch_sessions.insert(
             session_id,
             TargetFetchSessionConfig {
+                wait_lifetime,
                 handle_auth_requests,
                 patterns,
             },
@@ -1212,13 +1220,29 @@ impl TargetFetchConfig {
 
     pub(crate) fn remove_fetch_session(&mut self, session_id: Option<&str>) -> bool {
         let key = session_id.map(str::to_owned);
-        let removed = self.fetch_sessions.remove(&key).is_some();
-        if removed {
+        if let Some(config) = self.fetch_sessions.remove(&key) {
+            config.wait_lifetime.revoke();
             self.fetch_session_order
                 .retain(|ordered_session_id| ordered_session_id != &key);
             self.rebuild_effective_state();
+            return true;
         }
-        removed
+        false
+    }
+
+    pub(crate) fn command_wait_lifetime(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<crate::conn::CommandWaitLifetime> {
+        self.fetch_sessions
+            .get(&session_id.map(str::to_owned))
+            .map(|config| config.wait_lifetime.lifetime())
+    }
+
+    fn revoke_wait_lifetimes(&self) {
+        for config in self.fetch_sessions.values() {
+            config.wait_lifetime.revoke();
+        }
     }
 
     pub(crate) fn add_network_intercept(
@@ -1301,6 +1325,12 @@ impl TargetFetchConfig {
 pub struct TargetFetchOwner {
     config: TargetFetchConfig,
     pending: TargetFetchState,
+}
+
+impl Drop for TargetFetchOwner {
+    fn drop(&mut self) {
+        self.config.revoke_wait_lifetimes();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2269,6 +2299,50 @@ mod tests {
         PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
     };
     use moli_core::page::SubresourceResourceType;
+
+    #[test]
+    fn fetch_handler_wait_lifetime_survives_updates_but_not_disable_or_owner_exit() {
+        let mut owner = TargetFetchOwner::default();
+        owner.configure(Some("first".into()), false, Vec::new());
+        owner.configure(Some("second".into()), false, Vec::new());
+        let first = owner.config.command_wait_lifetime(Some("first")).unwrap();
+        let second = owner.config.command_wait_lifetime(Some("second")).unwrap();
+        owner.configure(Some("first".into()), true, Vec::new());
+        assert!(
+            first.is_active(),
+            "updating an existing handler does not revoke it"
+        );
+        let retained_snapshot = owner.config_snapshot();
+        assert!(owner.remove_fetch_session(Some("first")));
+        assert!(!first.is_active());
+        assert!(
+            second.is_active(),
+            "disabling first does not close another handler"
+        );
+        owner.configure(Some("first".into()), false, Vec::new());
+        let replacement = owner.config.command_wait_lifetime(Some("first")).unwrap();
+        assert!(replacement.is_active());
+        assert!(
+            !first.is_active(),
+            "re-enabling the same session cannot revive an old wait"
+        );
+        let second_snapshot = owner.config_snapshot();
+        drop(owner);
+        assert!(!replacement.is_active());
+        assert!(!second.is_active());
+        assert!(
+            !retained_snapshot
+                .command_wait_lifetime(Some("first"))
+                .unwrap()
+                .is_active()
+        );
+        assert!(
+            !second_snapshot
+                .command_wait_lifetime(Some("first"))
+                .unwrap()
+                .is_active()
+        );
+    }
 
     fn test_url(path: &str) -> Url {
         Url::parse(&format!("https://example.test/{path}")).unwrap()

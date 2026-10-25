@@ -150,7 +150,9 @@ impl ResourceRequestClient {
         self.page_network_policy.clone()
     }
 
-    pub(crate) fn frozen_request_client(&self) -> Self {
+    /// Captures page request configuration for an owned operation. Headers,
+    /// cache and blocked-URL policy stay fixed; network emulation stays live.
+    pub fn frozen_request_client(&self) -> Self {
         let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),
             self.page_network_policy.frozen_request_view(),

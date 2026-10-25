@@ -1236,6 +1236,429 @@ async fn websocket_cdp_runtime_call_function_awaitpromise_fetch_interception_unb
 }
 
 #[tokio::test]
+async fn websocket_cdp_fetch_waiting_for_headers_allows_peer_and_replacement_navigation() {
+    for handle_auth in [false, true] {
+        verify_fetch_document_transport_wait("headers", handle_auth, FetchTransportFinish::Replace)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_fetch_waiting_for_auth_body_or_retry_headers_allows_replacement() {
+    for phase in ["challenge-body", "auth-retry"] {
+        verify_fetch_document_transport_wait(phase, true, FetchTransportFinish::Replace).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_fetch_transport_waits_allow_target_close_without_releasing_fixture() {
+    for phase in ["headers", "challenge-body", "auth-retry"] {
+        verify_fetch_document_transport_wait(phase, true, FetchTransportFinish::Close).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_fetch_disable_revokes_pending_transport_before_reenable() {
+    for phase in ["headers", "challenge-body", "auth-retry"] {
+        verify_fetch_document_transport_wait(phase, true, FetchTransportFinish::Disable).await;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FetchTransportFinish {
+    Replace,
+    Close,
+    Disable,
+}
+
+#[tokio::test]
+async fn websocket_cdp_fetch_frontend_disconnect_settles_other_sessions_navigation() {
+    let requested = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let requested_for_route = Arc::clone(&requested);
+    let release_for_route = Arc::clone(&release);
+    let fixture = Router::new()
+        .route(
+            "/held",
+            get(move || {
+                let requested = Arc::clone(&requested_for_route);
+                let release = Arc::clone(&release_for_route);
+                async move {
+                    requested.notify_one();
+                    release.notified().await;
+                    "stale response"
+                }
+            }),
+        )
+        .route(
+            "/replacement",
+            get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                    "<!doctype html><p>surviving session</p>",
+                )
+            }),
+        );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "fetch-owner-disconnect");
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let endpoint = format!("ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let (mut socket, _) = connect_async(&endpoint).await.unwrap();
+    let (mut fetch_frontend, _) = connect_async(&endpoint).await.unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+    let attached = send_cdp_command(
+        &mut fetch_frontend,
+        1,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId": session.target_id, "flatten": true}),
+    )
+    .await;
+    let fetch_session =
+        attached.iter().find(|message| message["id"] == 1).unwrap()["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let _ = send_cdp_command(
+        &mut fetch_frontend,
+        2,
+        "Fetch.enable",
+        Some(&fetch_session),
+        json!({"patterns": [{"urlPattern": "*held", "requestStage": "Request"}]}),
+    )
+    .await;
+    let _ = send_cdp_command(
+        &mut socket,
+        4,
+        "Page.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        6,
+        "Page.navigate",
+        Some(&session.session_id),
+        json!({"url": format!("http://{fixture_addr}/held")}),
+    )
+    .await;
+    let paused = recv_until_match(&mut fetch_frontend, |message| {
+        message["method"] == "Fetch.requestPaused"
+    })
+    .await;
+    let request_id = paused.last().unwrap()["params"]["requestId"].clone();
+    send_cdp_command_without_wait(
+        &mut fetch_frontend,
+        3,
+        "Fetch.continueRequest",
+        Some(&fetch_session),
+        json!({"requestId": request_id}),
+    )
+    .await;
+    timeout(Duration::from_secs(30), requested.notified())
+        .await
+        .unwrap();
+    // Only the Fetch owner leaves. The source navigation and its Page belong
+    // to a different live frontend and still need their terminal response.
+    fetch_frontend.close(None).await.unwrap();
+    let settled = recv_until_id(&mut socket, 6).await;
+    let settled = settled.iter().find(|message| message["id"] == 6).unwrap();
+    assert!(
+        settled.get("error").is_some() || settled["result"]["errorText"].is_string(),
+        "{settled:#?}"
+    );
+    timeout(
+        Duration::from_secs(30),
+        cdp_navigate_and_wait_for_load(
+            &mut socket,
+            8,
+            &session.session_id,
+            &format!("http://{fixture_addr}/replacement"),
+        ),
+    )
+    .await
+    .expect("detaching the Fetch owner must preserve the other session's usable target");
+    assert_eq!(
+        cdp_runtime_evaluate_string(
+            &mut socket,
+            &session.session_id,
+            9,
+            "document.querySelector('p').textContent"
+        )
+        .await,
+        "surviving session"
+    );
+    release.notify_one();
+    let _ = socket.close(None).await;
+    protocol_server.abort();
+}
+
+async fn verify_fetch_document_transport_wait(
+    phase: &'static str,
+    handle_auth: bool,
+    finish: FetchTransportFinish,
+) {
+    let requested = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let requested_for_route = Arc::clone(&requested);
+    let release_for_route = Arc::clone(&release);
+    let fixture = Router::new()
+        .route("/held", get(move |headers: axum::http::HeaderMap| {
+            let requested = Arc::clone(&requested_for_route);
+            let release = Arc::clone(&release_for_route);
+            async move {
+                let challenge_headers = [("WWW-Authenticate", "Basic realm=\"owned-wait\"")];
+                if phase == "challenge-body" {
+                    let body = axum::body::Body::from_stream(futures_util::stream::once(async move {
+                        requested.notify_one();
+                        release.notified().await;
+                        Ok::<_, std::io::Error>("authentication required")
+                    }));
+                    return (axum::http::StatusCode::UNAUTHORIZED, challenge_headers, body).into_response();
+                }
+                if phase == "auth-retry" && !headers.contains_key(axum::http::header::AUTHORIZATION) {
+                    return (axum::http::StatusCode::UNAUTHORIZED, challenge_headers, "authentication required").into_response();
+                }
+                if phase == "auth-retry" {
+                    assert_eq!(headers[axum::http::header::AUTHORIZATION], "Basic dXNlcjpwYXNz");
+                }
+                requested.notify_one();
+                release.notified().await;
+                ([(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                    "<!doctype html><script>globalThis.headerWaitMarker = 'stale';</script><p>stale</p>").into_response()
+            }
+        }))
+        .route("/replacement", get(|| async {
+            ([(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                "<!doctype html><script>globalThis.headerWaitMarker = 'replacement';</script><p>replacement</p>")
+        }));
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "fetch-transport-replacement");
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let endpoint = format!("ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let (mut socket, _) = connect_async(&endpoint).await.unwrap();
+    let (mut peer, _) = connect_async(&endpoint).await.unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+    for (id, method, params) in [
+        (4, "Page.enable", json!({})),
+        (11, "Network.enable", json!({})),
+        (
+            5,
+            "Fetch.enable",
+            json!({
+                "handleAuthRequests": handle_auth,
+                "patterns": [{"urlPattern": "*held", "requestStage": "Request"}],
+            }),
+        ),
+    ] {
+        let _ = send_cdp_command(&mut socket, id, method, Some(&session.session_id), params).await;
+    }
+    send_cdp_command_without_wait(
+        &mut socket,
+        6,
+        "Page.navigate",
+        Some(&session.session_id),
+        json!({"url": format!("http://{fixture_addr}/held")}),
+    )
+    .await;
+    let mut observed = recv_until_match(&mut socket, |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["params"]["resourceType"] == json!("Document")
+    })
+    .await;
+    let network_id = observed.last().unwrap()["params"]["networkId"].clone();
+    let request_id = observed.last().unwrap()["params"]["requestId"].clone();
+    send_cdp_command_without_wait(
+        &mut socket,
+        7,
+        "Fetch.continueRequest",
+        Some(&session.session_id),
+        json!({"requestId": request_id}),
+    )
+    .await;
+    if phase == "auth-retry" {
+        observed.extend(
+            recv_until_match(&mut socket, |message| {
+                message["method"] == "Fetch.authRequired"
+            })
+            .await,
+        );
+        let request_id = observed.last().unwrap()["params"]["requestId"].clone();
+        send_cdp_command_without_wait(&mut socket, 10, "Fetch.continueWithAuth", Some(&session.session_id), json!({
+            "requestId": request_id,
+            "authChallengeResponse": {"response": "ProvideCredentials", "username": "user", "password": "pass"},
+        })).await;
+    }
+    timeout(Duration::from_secs(30), requested.notified())
+        .await
+        .expect("fixture must hold transport");
+    let peer_reply = send_cdp_command(&mut peer, 1, "Target.getTargets", None, json!({})).await;
+    assert!(
+        peer_reply
+            .iter()
+            .any(|message| message["id"] == 1 && message.get("error").is_none())
+    );
+
+    if finish == FetchTransportFinish::Close {
+        let closed = send_cdp_command(
+            &mut peer,
+            2,
+            "Target.closeTarget",
+            None,
+            json!({"targetId": session.target_id}),
+        )
+        .await;
+        assert!(
+            closed
+                .iter()
+                .any(|message| message["id"] == 2 && message["result"]["success"] == true),
+            "{closed:#?}"
+        );
+        let targets = send_cdp_command(&mut peer, 3, "Target.getTargets", None, json!({})).await;
+        let targets = targets.iter().find(|message| message["id"] == 3).unwrap();
+        assert!(
+            !targets["result"]["targetInfos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|target| target["targetId"] == session.target_id)
+        );
+    } else {
+        let disabled = finish == FetchTransportFinish::Disable;
+        let active_continue = if phase == "auth-retry" { 10 } else { 7 };
+        if disabled {
+            let reply = send_cdp_command(
+                &mut socket,
+                12,
+                "Fetch.disable",
+                Some(&session.session_id),
+                json!({}),
+            )
+            .await;
+            assert!(
+                reply
+                    .iter()
+                    .any(|message| message["id"] == 12 && message["result"] == json!({})),
+                "{reply:#?}"
+            );
+            observed.extend(reply);
+            observed.extend(
+                send_cdp_command(
+                    &mut socket,
+                    13,
+                    "Fetch.enable",
+                    Some(&session.session_id),
+                    json!({
+                        "handleAuthRequests": true,
+                        "patterns": [{"urlPattern": "*held", "requestStage": "Request"}],
+                    }),
+                )
+                .await,
+            );
+            for id in [6, active_continue] {
+                if !observed.iter().any(|message| message["id"] == id) {
+                    observed.extend(recv_until_id(&mut socket, id).await);
+                }
+            }
+        }
+        observed.extend(
+            timeout(
+                Duration::from_secs(30),
+                cdp_navigate_and_wait_for_load(
+                    &mut socket,
+                    8,
+                    &session.session_id,
+                    &format!("http://{fixture_addr}/replacement"),
+                ),
+            )
+            .await
+            .expect("replacement must load while A's transport is still held"),
+        );
+        // The replacement committed before allowing any stale fixture result.
+        release.notify_one();
+        let expected_ids = if phase == "auth-retry" {
+            vec![6, 7, 10]
+        } else {
+            vec![6, 7]
+        };
+        for id in expected_ids {
+            if !observed.iter().any(|message| message["id"] == id) {
+                observed.extend(recv_until_id(&mut socket, id).await);
+            }
+            assert_eq!(
+                observed
+                    .iter()
+                    .filter(|message| message["id"] == id)
+                    .count(),
+                1,
+                "{observed:#?}"
+            );
+            let response = observed.iter().find(|message| message["id"] == id).unwrap();
+            if disabled && id == active_continue {
+                assert_eq!(
+                    response["error"]["message"], "CommandWaitCancelled",
+                    "{observed:#?}"
+                );
+            } else if disabled && id == 6 {
+                assert!(
+                    response.get("error").is_some() || response["result"]["errorText"].is_string(),
+                    "{observed:#?}"
+                );
+            } else if id == 6 {
+                assert_eq!(
+                    response["result"]["errorText"], "net::ERR_ABORTED",
+                    "{observed:#?}"
+                );
+            } else {
+                assert_eq!(response["result"], json!({}), "{observed:#?}");
+            }
+        }
+        if !observed.iter().any(|message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == network_id
+        }) {
+            observed.extend(
+                recv_until_match(&mut socket, |message| {
+                    message["method"] == "Network.loadingFailed"
+                        && message["params"]["requestId"] == network_id
+                })
+                .await,
+            );
+        }
+        let failures: Vec<_> = observed
+            .iter()
+            .filter(|message| {
+                message["method"] == "Network.loadingFailed"
+                    && message["params"]["requestId"] == network_id
+            })
+            .collect();
+        assert_eq!(failures.len(), 1, "{observed:#?}");
+        if disabled {
+            assert!(failures[0]["params"]["errorText"].is_string());
+        } else {
+            assert_eq!(failures[0]["params"]["errorText"], "net::ERR_ABORTED");
+        }
+        let current = cdp_runtime_evaluate_string(&mut socket, &session.session_id, 9,
+            "JSON.stringify([globalThis.headerWaitMarker, document.querySelector('p').textContent])").await;
+        assert_eq!(current, r#"["replacement","replacement"]"#);
+        assert!(
+            !observed
+                .iter()
+                .any(|message| message["method"] == "Fetch.authRequired"
+                    && phase == "challenge-body"),
+            "a stale response must not restore an auth pause"
+        );
+    }
+    release.notify_one();
+    let _ = peer.close(None).await;
+    let _ = socket.close(None).await;
+    protocol_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_cdp_fetch_continue_document_with_blocking_script_keeps_server_responsive() {
     async fn page() -> impl IntoResponse {
         (

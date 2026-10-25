@@ -39,6 +39,7 @@ mod body_spool;
 mod browser_context;
 mod command_owner_scope;
 mod command_view;
+mod command_wait_lifetime;
 mod cookie_manager_surface;
 mod cookie_owner;
 mod cookie_policy_surface;
@@ -87,6 +88,8 @@ pub(crate) use browser_context::{
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
+pub use command_wait_lifetime::CommandWaitLifetime;
+pub(crate) use command_wait_lifetime::CommandWaitLifetimeOwner;
 pub(crate) use cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 #[cfg(test)]
 pub(crate) use cookie_manager_surface::{
@@ -543,7 +546,7 @@ pub(crate) use runtime_load::{
     BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
     CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    ResponseCommitReady, StablePageNavigationCommitTarget,
+    PreparedNavigationRequest, ResponseCommitReady, StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;

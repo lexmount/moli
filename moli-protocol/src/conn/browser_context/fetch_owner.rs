@@ -222,6 +222,14 @@ fn remove_network_intercept_from_browser_context(
 }
 
 impl CdpConnection {
+    pub(crate) fn fetch_command_wait_lifetime_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<crate::conn::CommandWaitLifetime> {
+        self.target_session_owner_aggregate_fetch_config_for_owner(owner)?
+            .command_wait_lifetime(owner.session_id())
+    }
+
     pub(crate) fn target_fetch_subresource_interception_snapshot_for_owner(
         &self,
         owner: &CommandOwnerScope,

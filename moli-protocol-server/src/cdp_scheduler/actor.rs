@@ -6,8 +6,9 @@ use std::{
 use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
     BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpSchedulerEvent,
-    CommandDispatchContext, CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
-    DeferredMainDocumentLoadObservationId, ParsedCdpCommand, PendingCdpCommandDispatch,
+    CommandDispatchContext, CommandWaitLifetime, CompletedCdpCommandDispatch,
+    CompletedPageScreencastCapture, DeferredMainDocumentLoadObservationId, ParsedCdpCommand,
+    PendingCdpCommandDispatch,
     conn::{RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady},
 };
 use serde_json::json;
@@ -21,8 +22,8 @@ use crate::{
 };
 
 use super::command_task::{
-    CommandWaitCompletion, CommandWaitIdentity, CommandWaitTask, spawn_command_wait,
-    spawn_owned_wait,
+    CommandWaitCompletion, CommandWaitFailure, CommandWaitIdentity, CommandWaitTask,
+    spawn_command_wait, spawn_owned_wait,
 };
 use super::frontend_control::CdpFrontendControlState;
 use super::{
@@ -60,6 +61,7 @@ struct InFlightCommandState {
     command_context: CommandDispatchContext,
     pending_turn: u64,
     owner_session_id: Option<String>,
+    wait_lifetime: Option<CommandWaitLifetime>,
     wait_task: CommandWaitTask,
 }
 
@@ -280,6 +282,10 @@ async fn run_cdp_scheduler_actor(
                 .owner_session_id
                 .as_deref()
                 .is_some_and(|session_id| !scheduler.conn.has_attached_devtools_session(session_id))
+                || state
+                    .wait_lifetime
+                    .as_ref()
+                    .is_some_and(|lifetime| !lifetime.is_active())
             {
                 state.wait_task.abort();
             }
@@ -1668,6 +1674,7 @@ async fn start_ready_command_dispatch(
                 .session_id()
                 .map(str::to_owned)
                 .or_else(|| metadata.session_id.clone());
+            let wait_lifetime = pending.wait_lifetime();
             let wait_task =
                 start_pending_command_wait(token, 0, *pending, pending_command_completion_tx);
             in_flight_commands.insert(
@@ -1679,6 +1686,7 @@ async fn start_ready_command_dispatch(
                     command_context,
                     pending_turn: 0,
                     owner_session_id,
+                    wait_lifetime,
                     wait_task,
                 },
             );
@@ -1948,8 +1956,20 @@ async fn handle_pending_command_completion(
     let mut state = in_flight_commands
         .remove(&identity.token)
         .expect("matching in-flight command");
-    let completion_kind = completion
-        .result
+    // A successful result may already be queued when its handler is disabled.
+    // Aborting a finished task cannot revoke that result; validate the same
+    // lifetime again before any domain completion can mutate protocol state.
+    let result = if state
+        .wait_lifetime
+        .as_ref()
+        .is_some_and(|lifetime| !lifetime.is_active())
+    {
+        drop(completion.result);
+        Err(CommandWaitFailure::Cancelled)
+    } else {
+        completion.result
+    };
+    let completion_kind = result
         .as_ref()
         .map_or("WaitFailure", |completed| completed.kind_name());
     if moli_trace::cdp_runtime_trace_enabled() {
@@ -1961,7 +1981,7 @@ async fn handle_pending_command_completion(
         );
     }
     let complete_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-    let step = match completion.result {
+    let step = match result {
         Ok(completed) => {
             scheduler
                 .complete_pending_command_dispatch_with_context(
@@ -2030,6 +2050,9 @@ async fn handle_pending_command_completion(
                 .pending_turn
                 .checked_add(1)
                 .expect("pending command turn space exhausted");
+            if let Some(lifetime) = pending.wait_lifetime() {
+                state.wait_lifetime = Some(lifetime);
+            }
             let token = identity.token;
             state.wait_task = start_pending_command_wait(
                 token,
@@ -2248,6 +2271,7 @@ mod tests {
                             command_context: CommandDispatchContext::new(context),
                             pending_turn: identity.turn,
                             owner_session_id: None,
+                            wait_lifetime: None,
                             wait_task,
                         },
                     )]);
@@ -2335,6 +2359,7 @@ mod tests {
                         command_context: CommandDispatchContext::new(context),
                         pending_turn: identity.turn,
                         owner_session_id: None,
+                        wait_lifetime: None,
                         wait_task,
                     },
                 )]);
@@ -2373,6 +2398,69 @@ mod tests {
     fn in_flight_command_tokens_never_wrap() {
         let mut next = u64::MAX;
         let _ = take_next_in_flight_command_token(&mut next);
+    }
+
+    #[tokio::test]
+    async fn revoked_fetch_handler_rejects_a_success_already_queued_before_reenable() {
+        tokio::task::LocalSet::new().run_until(async {
+            let (mut scheduler, receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+                moli_protocol::CdpInitialStoragePartition::memory(),
+                moli_core::runtime::NavigationRuntimeConfig::default(),
+            );
+            let (attached, _, predecessor) = scheduler.conn.process_message_with_turn_outcome_async(&json!({
+                "id": 1, "method": "Target.attachToTarget",
+                "params": {"targetId": moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID, "flatten": true},
+            }).to_string()).await.into_protocol_event_parts();
+            assert!(predecessor.is_none());
+            let attached: Vec<_> = attached.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
+            let session_id = attached.iter().find(|message| message["id"] == 1).unwrap()["result"]["sessionId"].as_str().unwrap().to_owned();
+            let enable = json!({"id": 2, "sessionId": session_id, "method": "Fetch.enable", "params": {
+                "patterns": [{"urlPattern": "*held", "requestStage": "Request"}],
+            }});
+            let _ = scheduler.conn.process_message_with_turn_outcome_async(&enable.to_string()).await;
+            let (paused, _, predecessor) = scheduler.conn.process_message_with_turn_outcome_async(&json!({
+                "id": 3, "sessionId": session_id, "method": "Page.navigate",
+                "params": {"url": "http://unused.example/held"},
+            }).to_string()).await.into_protocol_event_parts();
+            assert!(predecessor.is_none());
+            let paused: Vec<_> = paused.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
+            let request_id = paused.iter().find(|message| message["method"] == "Fetch.requestPaused").unwrap()["params"]["requestId"].clone();
+            let command = ParsedCdpCommand::parse_str(json!({
+                "id": 4, "sessionId": session_id, "method": "Fetch.continueRequest", "params": {"requestId": request_id},
+            }).to_string()).unwrap();
+            let (step, output_release_permit, command_context) = scheduler.start_command_dispatch(&command);
+            let CommandTaskStep::Pending(pending) = step else { panic!("continuation must own a wait"); };
+            let lifetime = pending.wait_lifetime().expect("Fetch handler lifetime");
+            let completed = pending.wait().await;
+            // The wait already succeeded. Abort cannot remove this queued
+            // completion, and the same wire session will immediately re-enable.
+            let _ = scheduler.conn.process_message_with_turn_outcome_async(&json!({
+                "id": 5, "sessionId": session_id, "method": "Fetch.disable",
+            }).to_string()).await;
+            let _ = scheduler.conn.process_message_with_turn_outcome_async(&enable.to_string()).await;
+            assert!(!lifetime.is_active());
+            let identity = CommandWaitIdentity { token: 10, turn: 0 };
+            let (completion_tx, _completion_rx) = mpsc::unbounded_channel();
+            let wait_task = spawn_command_wait(identity, std::future::pending::<CompletedCdpCommandDispatch>(), &completion_tx);
+            let mut in_flight = InFlightCommands::from([(identity.token, InFlightCommandState {
+                metadata: command_metadata(&command),
+                dispatch: CommandDispatchState::pending_command(),
+                output_release_permit, command_context, pending_turn: identity.turn,
+                owner_session_id: Some(session_id), wait_lifetime: Some(lifetime), wait_task,
+            })]);
+            let mut inputs = SchedulerInputReceivers::new(receivers);
+            let mut deferred = VecDeque::new();
+            let (response_tx, _response_rx) = mpsc::unbounded_channel();
+            let mut adapter = ProtocolAdapterScheduler::default();
+            assert!(handle_pending_command_completion(
+                &CdpFrontendRouter::new(), &mut scheduler, &mut inputs, &mut deferred,
+                &response_tx, &mut adapter, &completion_tx, &mut in_flight,
+                CommandWaitCompletion { identity, result: Ok(completed) },
+            ).await);
+            assert!(in_flight.is_empty(), "a revoked queued success cannot start another network wait");
+            let failed_navigation = inputs.background_navigation_completion_rx.try_recv().expect("dropping the revoked result must settle its source navigation");
+            assert_eq!(failed_navigation.requested_url(), "http://unused.example/held");
+        }).await;
     }
 
     #[tokio::test]

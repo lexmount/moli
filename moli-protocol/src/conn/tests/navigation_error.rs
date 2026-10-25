@@ -9,6 +9,213 @@ use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, Subreso
 const OFFLINE_ERROR_TEXT: &str = "net::ERR_INTERNET_DISCONNECTED";
 
 #[tokio::test]
+async fn failed_navigation_cleanup_requires_current_request_and_exact_page() {
+    let (mut ctx, initial, navigation) = navigation_fixture();
+    ctx.conn
+        .finish_renderer_document_navigation_for_owner(&navigation.owner, &initial)
+        .unwrap();
+    ctx.conn
+        .clear_pending_document_navigation_for_owner_if_loader_matches(
+            &navigation.owner,
+            &initial.loader_id,
+        );
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let expected = crate::conn::StablePageNavigationCommitTarget {
+        target_page: ctx
+            .conn
+            .target_page_residence_identity_for_owner(&navigation.owner)
+            .unwrap(),
+        renderer_page: ctx
+            .conn
+            .renderer_page_residence_identity_for_owner(&navigation.owner)
+            .unwrap(),
+    };
+    let old = ctx
+        .conn
+        .start_document_navigation_for_owner(&navigation.owner, "same-loader".into())
+        .unwrap();
+    let current = ctx
+        .conn
+        .start_document_navigation_for_owner(&navigation.owner, "same-loader".into())
+        .unwrap();
+    assert_ne!(old, current);
+    let failed_url = Url::parse("https://failed.example/").unwrap();
+    assert!(
+        ctx.conn
+            .take_loaded_page_after_failed_navigation_for_owner(
+                &navigation.owner,
+                &old,
+                Some(&expected),
+                &failed_url,
+            )
+            .is_none(),
+        "an old request cannot discard B even when both use the same Page and loader"
+    );
+
+    let mut stale_page = expected.clone();
+    stale_page.target_page = crate::conn::TargetPageResidenceIdentity::new(
+        "other-context".into(),
+        Some("TID-1".into()),
+        expected.target_page.page_attachment_id(),
+    );
+    assert!(
+        ctx.conn
+            .take_loaded_page_after_failed_navigation_for_owner(
+                &navigation.owner,
+                &current,
+                Some(&stale_page),
+                &failed_url,
+            )
+            .is_none()
+    );
+    for renderer_page in [
+        crate::conn::RendererPageResidenceIdentity::new(
+            moli_core::RendererOwnerLocalHostId::new_for_testing(u64::MAX),
+            expected.renderer_page.page_id(),
+        ),
+        crate::conn::RendererPageResidenceIdentity::new(
+            expected.renderer_page.owner_local_host_id(),
+            moli_core::PageId::new_for_testing(u64::MAX),
+        ),
+    ] {
+        let stale_renderer = crate::conn::StablePageNavigationCommitTarget {
+            renderer_page,
+            ..expected.clone()
+        };
+        assert!(
+            ctx.conn
+                .take_loaded_page_after_failed_navigation_for_owner(
+                    &navigation.owner,
+                    &current,
+                    Some(&stale_renderer),
+                    &failed_url,
+                )
+                .is_none()
+        );
+    }
+    assert_eq!(
+        ctx.conn
+            .renderer_page_residence_identity_for_owner(&navigation.owner),
+        Some(expected.renderer_page)
+    );
+    assert!(
+        ctx.conn
+            .accepts_pending_document_navigation_for_owner(&navigation.owner, &current)
+    );
+
+    let failed_page = ctx
+        .conn
+        .take_loaded_page_after_failed_navigation_for_owner(
+            &navigation.owner,
+            &current,
+            Some(&expected),
+            &failed_url,
+        )
+        .expect("the exact failing request must still discard its unavailable Page");
+    assert!(
+        ctx.conn
+            .renderer_page_residence_identity_for_owner(&navigation.owner)
+            .is_none()
+    );
+    assert!(
+        !ctx.conn
+            .accepts_pending_document_navigation_for_owner(&navigation.owner, &current)
+    );
+    failed_page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_navigation_request_freezes_policy_and_cancels_before_headers_on_replacement() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (requested_tx, requested_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut bytes = [0; 4096];
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let size = stream.read(&mut bytes).await.unwrap();
+            assert!(size > 0);
+            request.extend_from_slice(&bytes[..size]);
+        }
+        let request = String::from_utf8_lossy(&request);
+        assert!(
+            request
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("X-Snapshot: before")),
+            "{request}"
+        );
+        requested_tx.send(()).unwrap();
+        // No headers are ever sent; EOF proves cancellation reached transport.
+        while stream.read(&mut bytes).await.unwrap_or(0) != 0 {}
+    });
+    let (mut ctx, token, mut navigation) = navigation_fixture();
+    navigation.requested_url = Url::parse(&format!("http://{address}/held")).unwrap();
+    ctx.process_async(json!({"id": 9, "sessionId": "SID-1", "method": "Network.enable"}))
+        .await;
+    ctx.expect_result(9, json!({}), Some("SID-1"));
+    ctx.process_async(json!({"id": 10, "sessionId": "SID-1", "method": "Network.setExtraHTTPHeaders", "params": {"headers": {"X-Snapshot": "before"}}})).await;
+    ctx.expect_result(10, json!({}), Some("SID-1"));
+    let job = ctx
+        .conn
+        .prepare_navigation_request(&token, &navigation, None)
+        .unwrap();
+    ctx.process_async(json!({"id": 11, "sessionId": "SID-1", "method": "Network.setExtraHTTPHeaders", "params": {"headers": {"X-Snapshot": "after"}}})).await;
+    ctx.expect_result(11, json!({}), Some("SID-1"));
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let (result, ()) = tokio::join!(job.wait(), async {
+            requested_rx.await.unwrap();
+            ctx.conn
+                .start_document_navigation_for_owner(&navigation.owner, "replacement".into())
+                .unwrap();
+        });
+        let error = result.expect_err("replacing A must cancel its header wait");
+        assert!(moli_fetch::is_fetch_cancelled(&error), "{error:#}");
+        server.await.unwrap();
+    })
+    .await;
+    result.expect("replacement must release the owned transport without headers");
+}
+
+#[tokio::test]
+async fn dropping_prepared_navigation_header_wait_cancels_its_transport() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (requested_tx, requested_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut bytes = [0; 4096];
+        assert!(stream.read(&mut bytes).await.unwrap() > 0);
+        requested_tx.send(()).unwrap();
+        while stream.read(&mut bytes).await.unwrap_or(0) != 0 {}
+    });
+    let (mut ctx, token, mut navigation) = navigation_fixture();
+    navigation.requested_url = Url::parse(&format!("http://{address}/held")).unwrap();
+    let job = ctx
+        .conn
+        .prepare_navigation_request(&token, &navigation, None)
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut wait = Box::pin(job.wait());
+        tokio::select! {
+            result = &mut wait => panic!("headers must stay held: {result:?}"),
+            requested = requested_rx => requested.unwrap(),
+        }
+        drop(wait);
+        server.await.unwrap();
+    })
+    .await
+    .expect("dropping the wait must disconnect transport while the owner is still alive");
+    assert!(
+        ctx.conn
+            .accepts_pending_document_navigation_for_owner(&navigation.owner, &token)
+    );
+}
+
+#[tokio::test]
 async fn cancelled_background_transport_does_not_prepare_a_network_error_document() {
     use tokio::io::AsyncReadExt;
 

@@ -1367,6 +1367,18 @@ pub(crate) fn superseded_intercepted_navigation_events(
     events
 }
 
+pub(crate) async fn complete_superseded_intercepted_navigation_into_buffer_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    token: &DocumentNavigationToken,
+    state: &NavigationDispatchState,
+) {
+    out.extend_background_events_after_messages(superseded_intercepted_navigation_events(
+        conn, state,
+    ));
+    finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, token).await;
+}
+
 fn fill_navigation_id_from_current_loader_for_route(
     conn: &mut CdpConnection,
     route: &CdpSessionRoute,
@@ -3475,9 +3487,13 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                             }
                             Err(error) => {
                                 if error.disposition() == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable {
-                                    conn.discard_loaded_page_after_failed_navigation_for_owner_async(
-                                        &state.owner, &failed_url,
-                                    ).await;
+                                    if let Some(expected) = stable_page_target.as_ref()
+                                        && let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
+                                            &state.owner, &token, Some(expected), &failed_url,
+                                        )
+                                    {
+                                        let _ = page.close_async().await;
+                                    }
                                 } else if let Err(rollback_error) = conn
                                     .rollback_committed_renderer_agent_candidate_for_owner(
                                         &state.owner,
@@ -3541,12 +3557,23 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                 progress_gate,
             } = navigation;
             if document_policy.invalidates_committed_document() {
-                let _ = conn
-                    .discard_loaded_page_after_failed_navigation_for_owner_async(
-                        &state.owner,
-                        &state.requested_url,
-                    )
-                    .await;
+                let expected = conn
+                    .target_page_residence_identity_for_owner(&state.owner)
+                    .zip(conn.renderer_page_residence_identity_for_owner(&state.owner))
+                    .map(|(target_page, renderer_page)| {
+                        crate::conn::StablePageNavigationCommitTarget {
+                            target_page,
+                            renderer_page,
+                        }
+                    });
+                if let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
+                    &state.owner,
+                    &token,
+                    expected.as_ref(),
+                    &state.requested_url,
+                ) {
+                    let _ = page.close_async().await;
+                }
             }
             activity::MainDocumentFailedNavigationActivity::new(
                 state,

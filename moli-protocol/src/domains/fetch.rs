@@ -139,6 +139,7 @@ pub(crate) struct PendingFetchCommandDispatch {
     owner_scope: CommandOwnerScope,
     kind: PendingFetchCommandKind,
     pending: PendingFetchCommandOperation,
+    navigation_termination: Option<navigation::NavigationTermination>,
 }
 
 pub(crate) struct CompletedFetchCommandDispatch {
@@ -146,6 +147,7 @@ pub(crate) struct CompletedFetchCommandDispatch {
     owner_scope: CommandOwnerScope,
     kind: PendingFetchCommandKind,
     completed: CompletedFetchCommandOperation,
+    navigation_termination: Option<navigation::NavigationTermination>,
 }
 
 pub(crate) enum FetchCommandTaskStep {
@@ -164,6 +166,10 @@ enum PendingFetchCommandKind {
     },
     ContinueRequest {
         state: Box<commands::PendingContinueRequestState>,
+    },
+    NavigationResponse {
+        pending: Box<crate::conn::PendingFetchNavigation>,
+        prior_journal: Option<moli_fetch::NetworkObservationJournal>,
     },
     ContinueWithAuth {
         state: Box<auth::PendingContinueWithAuthState>,
@@ -186,6 +192,7 @@ enum PendingFetchCommandKind {
 
 enum PendingFetchCommandOperation {
     Ready,
+    NavigationRequest(Box<navigation::PendingNavigationRequest>),
     Page(moli_core::page::PendingPageCommand),
     MaterializeResponseBody {
         request_id: String,
@@ -196,6 +203,7 @@ enum PendingFetchCommandOperation {
 
 enum CompletedFetchCommandOperation {
     Ready,
+    NavigationRequest(Box<anyhow::Result<navigation::NavigationRequestResponse>>),
     Page(Box<Result<moli_core::page::CompletedPageCommand, String>>),
     MaterializeResponseBody {
         request_id: String,
@@ -265,25 +273,6 @@ impl FetchCommandOutput {
         self.plan
     }
 
-    fn into_devtools_result_and_background_events(
-        mut self,
-        success_result: AutomationResult,
-    ) -> AutomationExecutionOutput {
-        let status = self.command_status.unwrap_or_else(|| {
-            Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "MissingFetchCommandResponse",
-            ))
-        });
-        let renderer_output_predecessor = self.plan.take_renderer_output_predecessor();
-        let (_, events) = self.plan.into_command_status_and_background_events();
-        AutomationExecutionOutput::from_parts(
-            status.map(|()| success_result),
-            events,
-            renderer_output_predecessor,
-        )
-    }
-
     fn record_command_status(&mut self, status: Result<(), DevToolsError>) {
         if self.command_status.is_none() {
             self.command_status = Some(status);
@@ -294,6 +283,12 @@ impl FetchCommandOutput {
 }
 
 impl PendingFetchCommandDispatch {
+    pub(crate) fn wait_lifetime(&self) -> Option<crate::conn::CommandWaitLifetime> {
+        self.navigation_termination
+            .as_ref()
+            .and_then(|termination| termination.wait_lifetime.clone())
+    }
+
     fn new(
         conn: &CdpConnection,
         command_id: Option<u64>,
@@ -316,12 +311,24 @@ impl PendingFetchCommandDispatch {
             owner_scope,
             kind,
             pending,
+            navigation_termination: None,
         }
+    }
+
+    fn with_navigation_termination(
+        mut self,
+        termination: Option<navigation::NavigationTermination>,
+    ) -> Self {
+        self.navigation_termination = termination;
+        self
     }
 
     pub(crate) async fn wait(self) -> CompletedFetchCommandDispatch {
         let completed = match self.pending {
             PendingFetchCommandOperation::Ready => CompletedFetchCommandOperation::Ready,
+            PendingFetchCommandOperation::NavigationRequest(request) => {
+                CompletedFetchCommandOperation::NavigationRequest(Box::new(request.wait().await))
+            }
             PendingFetchCommandOperation::Page(pending) => CompletedFetchCommandOperation::Page(
                 Box::new(pending.wait().await.map_err(|error| error.to_string())),
             ),
@@ -339,6 +346,7 @@ impl PendingFetchCommandDispatch {
             owner_scope: self.owner_scope,
             kind: self.kind,
             completed,
+            navigation_termination: self.navigation_termination,
         }
     }
 }
@@ -361,14 +369,14 @@ impl CompletedFetchCommandOperation {
                 .as_ref()
                 .ok()
                 .and_then(moli_core::page::CompletedPageCommand::renderer_output_predecessor),
-            Self::Ready | Self::MaterializeResponseBody { .. } => None,
+            Self::Ready | Self::MaterializeResponseBody { .. } | Self::NavigationRequest(_) => None,
         }
     }
 
     fn into_page_completion(self) -> Option<Result<moli_core::page::CompletedPageCommand, String>> {
         match self {
             Self::Page(completed) => Some(*completed),
-            Self::Ready | Self::MaterializeResponseBody { .. } => None,
+            Self::Ready | Self::MaterializeResponseBody { .. } | Self::NavigationRequest(_) => None,
         }
     }
 }
@@ -421,29 +429,29 @@ pub(crate) async fn execute_devtools_fetch_command_async_with_protocol_events(
         Ok(owner) => owner,
         Err(error) => return AutomationExecutionOutput::new(Err(error)),
     };
-    let step = start_devtools_fetch_command_for_owner(conn, None, &owner, command);
-    match step {
-        FetchCommandTaskStep::Complete(mut plan) => {
-            let renderer_output_predecessor = plan.take_renderer_output_predecessor();
-            let (status, events) = plan.into_command_status_and_background_events();
-            AutomationExecutionOutput::from_parts(
-                status
-                    .unwrap_or_else(|| {
-                        Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "MissingFetchCommandResponse",
-                        ))
-                    })
-                    .map(|()| success_result),
-                events,
-                renderer_output_predecessor,
-            )
-        }
-        FetchCommandTaskStep::Pending(pending) => {
-            let completed = pending.wait().await;
-            complete_pending_devtools_fetch_command(conn, completed)
-                .await
-                .into_devtools_result_and_background_events(success_result)
+    let mut step = start_devtools_fetch_command_for_owner(conn, None, &owner, command);
+    loop {
+        match step {
+            FetchCommandTaskStep::Complete(mut plan) => {
+                let renderer_output_predecessor = plan.take_renderer_output_predecessor();
+                let (status, events) = plan.into_command_status_and_background_events();
+                return AutomationExecutionOutput::from_parts(
+                    status
+                        .unwrap_or_else(|| {
+                            Err(DevToolsError::new(
+                                DevToolsErrorKind::Internal,
+                                "MissingFetchCommandResponse",
+                            ))
+                        })
+                        .map(|()| success_result),
+                    events,
+                    renderer_output_predecessor,
+                );
+            }
+            FetchCommandTaskStep::Pending(pending) => {
+                let completed = pending.wait().await;
+                step = complete_pending_fetch_command(conn, completed).await;
+            }
         }
     }
 }
@@ -714,31 +722,9 @@ fn network_intercept_fetch_config(
 
 pub(crate) async fn complete_pending_fetch_command(
     conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> CommandOutputPlan {
-    complete_pending_fetch_command_output(conn, completed)
-        .await
-        .into_output_plan()
-}
-
-async fn complete_pending_devtools_fetch_command(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> FetchCommandOutput {
-    complete_pending_fetch_command_output(conn, completed).await
-}
-
-async fn complete_pending_fetch_command_output(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> FetchCommandOutput {
-    complete_pending_fetch_command_inner(conn, completed).await
-}
-
-async fn complete_pending_fetch_command_inner(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> FetchCommandOutput {
+    mut completed: CompletedFetchCommandDispatch,
+) -> FetchCommandTaskStep {
+    let mut navigation_termination = completed.navigation_termination.take();
     let mut out = FetchCommandOutput::default();
     let owner_scope = completed.owner_scope.clone();
     // Every Fetch operation that crossed the renderer Page boundary must make
@@ -783,21 +769,83 @@ async fn complete_pending_fetch_command_inner(
             .await;
         }
         PendingFetchCommandKind::ContinueRequest { state } => {
+            let state = match *state {
+                commands::PendingContinueRequestState::Navigation { pending }
+                    if navigation::can_prepare_navigation_request(
+                        pending.document_navigation_token.as_ref(),
+                        &pending.navigation,
+                        pending.intercept_response,
+                        None,
+                    ) =>
+                {
+                    return navigation::start_navigation_request(
+                        conn,
+                        completed.command_id,
+                        owner_scope,
+                        *pending,
+                        None,
+                        None,
+                        navigation_termination,
+                    );
+                }
+                state => state,
+            };
             commands::complete_continue_request_command_async(
                 conn,
                 &owner_scope,
                 completed.completed.into_page_completion(),
-                *state,
+                state,
                 &mut out,
             )
             .await;
         }
+        PendingFetchCommandKind::NavigationResponse {
+            pending,
+            prior_journal,
+        } => {
+            if let CompletedFetchCommandOperation::NavigationRequest(response) = completed.completed
+            {
+                out.push_success();
+                navigation::complete_navigation_request(
+                    conn,
+                    &mut out,
+                    *pending,
+                    prior_journal,
+                    *response,
+                )
+                .await;
+            } else {
+                out.push_error(-32000, "Missing navigation response");
+            }
+        }
         PendingFetchCommandKind::ContinueWithAuth { state } => {
+            let state = match *state {
+                auth::PendingContinueWithAuthState::NavigationContinue { pending, auth }
+                    if navigation::can_prepare_navigation_request(
+                        pending.document_navigation_token.as_ref(),
+                        &pending.navigation,
+                        pending.intercept_response,
+                        Some(&auth),
+                    ) =>
+                {
+                    let prior_journal = pending.auth_response.observation_journal().clone();
+                    return navigation::start_navigation_request(
+                        conn,
+                        completed.command_id,
+                        owner_scope,
+                        auth::navigation_for_auth_retry(*pending),
+                        Some(auth),
+                        Some(prior_journal),
+                        navigation_termination,
+                    );
+                }
+                state => state,
+            };
             auth::complete_continue_with_auth_command_async(
                 conn,
                 &owner_scope,
                 completed.completed.into_page_completion(),
-                *state,
+                state,
                 &mut out,
             )
             .await;
@@ -859,7 +907,10 @@ async fn complete_pending_fetch_command_inner(
             );
         }
     }
-    out
+    if let Some(termination) = navigation_termination.as_mut() {
+        termination.disarm();
+    }
+    FetchCommandTaskStep::Complete(out.into_output_plan())
 }
 
 fn complete_enable_command(

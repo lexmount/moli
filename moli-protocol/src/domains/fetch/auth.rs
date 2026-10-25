@@ -53,6 +53,22 @@ pub(super) enum PendingContinueWithAuthState {
     },
 }
 
+pub(super) fn navigation_for_auth_retry(
+    pending: crate::conn::PendingFetchAuthNavigation,
+) -> PendingFetchNavigation {
+    PendingFetchNavigation {
+        auth_retry_budget: pending.auth_retry_budget,
+        fetch_request_id: pending.response_stage_request_id,
+        interception_session_id: pending.interception_session_id,
+        document_navigation_token: pending.document_navigation_token,
+        navigation: pending.navigation,
+        request_cookie_report: None,
+        intercept_response: pending.intercept_response,
+        response_stage_url_match_policy: pending.response_stage_url_match_policy,
+        auth_required_blocked_intercepts: Vec::new(),
+    }
+}
+
 pub(super) fn start_continue_with_auth_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -362,17 +378,26 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     "NotImplemented",
                 )));
             };
-            FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
-                command_id,
-                owner.clone(),
-                PendingFetchCommandKind::ContinueWithAuth {
-                    state: Box::new(PendingContinueWithAuthState::NavigationContinue {
-                        pending: Box::new(pending),
-                        auth,
-                    }),
-                },
-                PendingFetchCommandOperation::Ready,
-            ))
+            let termination = super::navigation::NavigationTermination::new(
+                conn,
+                owner,
+                pending.document_navigation_token.as_ref(),
+                &pending.navigation,
+            );
+            FetchCommandTaskStep::Pending(
+                PendingFetchCommandDispatch::new_for_owner(
+                    command_id,
+                    owner.clone(),
+                    PendingFetchCommandKind::ContinueWithAuth {
+                        state: Box::new(PendingContinueWithAuthState::NavigationContinue {
+                            pending: Box::new(pending),
+                            auth,
+                        }),
+                    },
+                    PendingFetchCommandOperation::Ready,
+                )
+                .with_navigation_termination(termination),
+            )
         }
     })
 }
@@ -569,17 +594,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
             load_or_pause_navigation_for_auth_as_background_events_async(
                 conn,
                 out,
-                PendingFetchNavigation {
-                    auth_retry_budget: pending.auth_retry_budget,
-                    fetch_request_id: pending.response_stage_request_id,
-                    interception_session_id: pending.interception_session_id.clone(),
-                    document_navigation_token: pending.document_navigation_token,
-                    navigation: pending.navigation,
-                    request_cookie_report: None,
-                    intercept_response: pending.intercept_response,
-                    response_stage_url_match_policy: pending.response_stage_url_match_policy,
-                    auth_required_blocked_intercepts: Vec::new(),
-                },
+                navigation_for_auth_retry(*pending),
                 Some(auth),
                 Some(prior_network_observation_journal),
             )

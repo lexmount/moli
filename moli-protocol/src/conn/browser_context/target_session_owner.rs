@@ -862,10 +862,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         Some(())
     }
 
-    pub(super) async fn discard_loaded_page_after_failed_navigation_async(
-        &mut self,
-        final_url: &Url,
-    ) -> Option<()> {
+    fn take_loaded_page_after_failed_navigation(&mut self, final_url: &Url) -> Option<Page> {
         let next_url = final_url.to_string();
         let security_origin = final_url.origin().ascii_serialization();
         let target = self.target_mut();
@@ -882,10 +879,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .clear_loaded_page_with_reason(TargetPageAbsenceReason::NavigationFailed);
         target.runtime_slot.reset_subresource_cursor();
         target.runtime_slot.clear_websocket_artifacts();
-        if let Some(page) = previous {
-            let _ = page.close_async().await;
-        }
-        Some(())
+        previous
     }
 
     pub(super) fn runtime_slot_mut(&mut self) -> &mut TargetRuntimeSlot {
@@ -1407,14 +1401,27 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn discard_loaded_page_after_failed_navigation_for_owner_async(
+    pub(crate) fn take_loaded_page_after_failed_navigation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
+        token: &crate::conn::DocumentNavigationToken,
+        expected: Option<&crate::conn::StablePageNavigationCommitTarget>,
         final_url: &Url,
-    ) -> Option<()> {
+    ) -> Option<Page> {
+        // A session and even a renderer Page can survive multiple Documents.
+        // Cleanup requires both the failed navigation and its captured Page.
+        if !self.accepts_pending_document_navigation_for_owner(owner, token)
+            || self
+                .target_page_residence_identity_for_owner(owner)
+                .as_ref()
+                != expected.map(|expected| &expected.target_page)
+            || self.renderer_page_residence_identity_for_owner(owner)
+                != expected.map(|expected| expected.renderer_page)
+        {
+            return None;
+        }
         self.target_session_owner_mut_for_owner(owner)?
-            .discard_loaded_page_after_failed_navigation_async(final_url)
-            .await
+            .take_loaded_page_after_failed_navigation(final_url)
     }
 
     async fn close_page_target_for_target_close_async(
