@@ -309,6 +309,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 resolved_url.to_string(),
                 creator_request_client.clone(),
             )
+            .with_resource_task_runner(creator_document_loader.task_runner())
             .with_script_kind(worker_options.worker_type)
             .with_content_security_policy_snapshot(inherited_policy)
             .with_referrer_policy(inherited_referrer_policy)
@@ -528,6 +529,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             nested_context.loader.request_client().clone(),
         )
         .with_interception_context(nested_context.interception_context.clone())
+        .with_resource_task_runner(nested_context.loader.task_runner())
         .with_content_security_policy_snapshot(loaded.content_security_policy)
         .with_referrer_policy(loaded.referrer_policy)
         .with_script_kind(worker_options.worker_type)
@@ -643,6 +645,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     script_url_input,
                     request_client,
                 )
+                .with_resource_task_runner(crate::network::RendererResourceTaskRunner::for_test())
                 .with_script_kind(worker_options.worker_type),
             );
             let handle_box = Box::new(worker_handle);
