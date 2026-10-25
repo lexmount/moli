@@ -43,17 +43,25 @@ async fn navigator_service_worker_intercepts_popup_csp_report_destination() {
             r#"<!doctype html>
         <script>
         let violationSeen = false;
-        self.addEventListener("securitypolicyviolation", event => {
-          violationSeen = event.type === "securitypolicyviolation" &&
-            event.effectiveDirective === "connect-src" &&
-            event.violatedDirective === "connect-src" &&
-            event.blockedURI.endsWith("/app/blocked-data") &&
-            event.disposition === "enforce" &&
-            event instanceof SecurityPolicyViolationEvent;
+        const reported = new Promise(resolve => {
+          self.addEventListener("securitypolicyviolation", event => {
+            violationSeen = event.type === "securitypolicyviolation" &&
+              event.effectiveDirective === "connect-src" &&
+              event.violatedDirective === "connect-src" &&
+              event.blockedURI.endsWith("/app/blocked-data") &&
+              event.disposition === "enforce" &&
+              event instanceof SecurityPolicyViolationEvent;
+            resolve();
+          });
         });
         (async () => {
-          await fetch("blocked-data").catch(() => {});
-          opener.postMessage("blocked:" + violationSeen, "*");
+          let eventsAtRejection = -1;
+          await fetch("blocked-data").catch(error => {
+            if (!(error instanceof TypeError)) throw error;
+            eventsAtRejection = violationSeen ? 1 : 0;
+          });
+          await reported;
+          opener.postMessage("blocked:" + (violationSeen && eventsAtRejection === 0), "*");
         })().catch(error => {
           opener.postMessage("error:" + String(error && error.message), "*");
         });
