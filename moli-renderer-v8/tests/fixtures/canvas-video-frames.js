@@ -3,6 +3,8 @@
   const progress=globalThis.__videoFrameProgress={stage:'setup',checks};
   const assert=(condition,message)=>{if(!condition)throw Error(message);};
   const set=(realm,media,name,value)=>Object.getOwnPropertyDescriptor(realm.HTMLMediaElement.prototype,name).set.call(media,value);
+  // Read frames in the completion event's Promise reaction, before another
+  // timer task can run. The native event must already expose the decoded frame.
   function ready(owner,callee,video,url) {
     return new Promise((resolve,reject)=>{
       video.oncanplaythrough=event=>{
@@ -11,7 +13,7 @@
       };
       video.onerror=()=>reject(Error('video resource failed '+url.slice(0,80)));
       set(callee,video,'preload','auto');set(callee,video,'src',url);
-    }).then(()=>new Promise(resolve=>owner.setTimeout(resolve,0)));
+    });
   }
   function context(realm,offscreen,width=20,height=20) {
     const canvas=offscreen?new realm.OffscreenCanvas(width,height):realm.document.createElement('canvas');
@@ -38,7 +40,7 @@
     return new Promise((resolve,reject)=>{
       video.onseeked=()=>{progress.operation='seeked/'+time;video.onseeked=null;try{assert(video.currentTime===time && !video.seeking,'seek position '+video.currentTime+' expected '+time+' seeking '+video.seeking);resolve();}catch(error){reject(error);}};
       set(callee,video,'currentTime',time);
-    }).then(()=>new Promise(resolve=>{progress.operation='seek-timer/'+time;callee.setTimeout(resolve,0);}));
+    });
   }
   const cases=[
     ['decoded dimensions and Canvas pixels',async(owner,callee,video,url,ctx)=>{
