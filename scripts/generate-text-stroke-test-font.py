@@ -19,18 +19,29 @@ def triangle(left: int, right: int):
     return pen.glyph()
 
 
+def line(start: tuple[int, int], end: tuple[int, int]):
+    pen = TTGlyphPen(None)
+    pen.moveTo(start)
+    pen.lineTo(end)
+    pen.closePath()
+    return pen.glyph()
+
+
 builder = FontBuilder(1000, isTTF=True)
 glyphs = {
     ".notdef": triangle(0, 600),
     "A": triangle(0, 600),
     "B": triangle(200, 400),
     "C": triangle(200, 400),
+    "D": line((300, 0), (300, 800)),
+    "E": line((0, 400), (600, 400)),
+    "space": TTGlyphPen(None).glyph(),
 }
 builder.setupGlyphOrder(list(glyphs))
-builder.setupCharacterMap({ord(ch): ch for ch in "ABC"})
+builder.setupCharacterMap({**{ord(ch): ch for ch in "ABCDE"}, ord(" "): "space"})
 builder.setupGlyf(glyphs)
 builder.setupHorizontalMetrics(
-    {name: (600, {"B": 200, "C": -500}.get(name, 0)) for name in glyphs}
+    {name: (600, {"B": 200, "C": -500, "D": 300}.get(name, 0)) for name in glyphs}
 )
 builder.setupHorizontalHeader(ascent=800, descent=-200)
 builder.setupNameTable(

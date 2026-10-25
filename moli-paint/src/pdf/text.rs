@@ -9,7 +9,12 @@ use krilla::{
 use moli_layout::{PaintGlyph, PaintGlyphRun, PaintSnapshot, PaintTextStroke};
 use peniko::kurbo::{Affine, Rect};
 use skrifa::raw::{FontRef, TableProvider};
-use skrifa::{MetadataProvider, instance::NormalizedCoord, metrics::GlyphMetrics};
+use skrifa::{
+    MetadataProvider,
+    instance::{NormalizedCoord, Size},
+    metrics::GlyphMetrics,
+    outline::{DrawSettings, pen::ControlBoundsPen},
+};
 
 use super::{
     PdfError,
@@ -88,6 +93,22 @@ impl<'a> GlyphGeometry<'a> {
         })
     }
 
+    fn outline_is_empty(&self, id: skrifa::GlyphId, coords: &'a [NormalizedCoord]) -> bool {
+        let Some(outline) = self.font.outline_glyphs().get(id) else {
+            return true;
+        };
+        let mut pen = ControlBoundsPen::default();
+        // Only called for degenerate bounds. A line still emits path commands;
+        // an actual space does not. Drawing errors keep the conservative path.
+        outline
+            .draw(
+                DrawSettings::unhinted(Size::new(self.font_size), coords),
+                &mut pen,
+            )
+            .is_ok()
+            && pen.bounding_box().is_none()
+    }
+
     fn outline_bounds(&self, id: skrifa::GlyphId) -> Option<Rect> {
         let bounds = self.metrics.bounds(id)?;
         // Static glyf metrics retain raw xMin, while the outline scaler
@@ -150,7 +171,12 @@ pub(super) fn ink_bounds(snapshot: &PaintSnapshot, run: &PaintGlyphRun) -> Resul
             .image_bounds(id)
             .or_else(|| geometry.outline_bounds(id))
         {
-            Some(bounds) if bounds.width() <= 0.0 || bounds.height() <= 0.0 => continue,
+            Some(bounds)
+                if (bounds.width() <= 0.0 || bounds.height() <= 0.0)
+                    && geometry.outline_is_empty(id, &coords) =>
+            {
+                continue;
+            }
             Some(bounds) => bounds,
             None => Rect::new(-guard, -guard, guard, guard),
         };
@@ -285,7 +311,10 @@ pub(super) fn draw(
             let id = skrifa::GlyphId::new(glyph.id);
             let local = geometry
                 .outline_bounds(id)
-                .filter(|bounds| bounds.width() > 0.0 && bounds.height() > 0.0)
+                .filter(|bounds| {
+                    (bounds.width() > 0.0 && bounds.height() > 0.0)
+                        || (geometry.ink_outset > 0.0 && !geometry.outline_is_empty(id, &coords))
+                })
                 .unwrap_or_else(|| geometry.advance_bounds(id));
             let local = geometry.map_bounds(local, glyph, matrix);
             bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));

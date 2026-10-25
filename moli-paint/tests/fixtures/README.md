@@ -6,6 +6,8 @@ Its triangle glyphs have miter ratios below and above 4, distinguishing miter
 joins from round joins and checking the bevel fallback at the miter limit.
 Glyph C has a negative left side bearing that differs from its raw `glyf`
 bounds, checking that allocation uses the rendered glyph's origin.
+Glyphs D and E are closed vertical/horizontal lines with zero fill area but
+visible stroke ink; the space glyph has no path at all.
 
 `moli-pdf.ttf` is derived from the project's generated Ahem font by
 `uv run scripts/generate-pdf-test-font.py`, under the same license.

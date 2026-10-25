@@ -944,3 +944,16 @@ fn filtered_colr_glyph_with_an_empty_base_keeps_ink_and_text() {
         "both color layers are visible"
     );
 }
+
+#[test]
+fn filtered_stroked_line_outlines_keep_ink_and_text_but_spaces_stay_empty() {
+    for (ch, expected_ink) in [('D', 3200), ('E', 2400), (' ', 0)] {
+        let snapshot = filtered_fixture_glyph(
+            include_bytes!("../../tests/fixtures/moli-text-stroke.ttf"),
+            ch,
+            Some(10.0),
+        );
+        let counts = assert_filtered_fixture_ink(&snapshot, &ch.to_string());
+        assert_eq!(counts[2], expected_ink, "glyph={ch:?}");
+    }
+}
