@@ -178,6 +178,7 @@ fn assert_initial_worker_auth_network_headers(headers: Option<&[(String, String)
     );
 }
 
+mod csp_tasks;
 mod fetch_network;
 mod fetch_redirect_modes;
 mod file_and_xhr;

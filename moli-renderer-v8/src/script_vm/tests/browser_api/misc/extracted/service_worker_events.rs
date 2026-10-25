@@ -601,6 +601,187 @@ async fn csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
         .await
         .expect("service worker paused CSP report server should finish");
 }
+#[tokio::test]
+async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            Vec::new(),
+            r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(Promise.resolve());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("fetch", event => {
+          const url = new URL(event.request.url);
+          if (url.pathname === "/app/client-worker.js") {
+            return;
+          }
+          if (url.pathname === "/app/csp-report") {
+            event.respondWith(new Response([
+              "destination=" + event.request.destination,
+              "mode=" + event.request.mode,
+              "credentials=" + event.request.credentials,
+              "method=" + event.request.method,
+              "from=service-worker",
+              "client=" + (event.clientId.length > 0)
+            ].join("|")));
+          }
+        });
+        "#,
+        ),
+        (
+            "/app/client-worker.js",
+            "text/javascript; charset=utf-8",
+            vec![(
+                "Content-Security-Policy",
+                "connect-src 'none'; report-uri /app/csp-report",
+            )],
+            r#"
+        let violationSeen = false;
+        let observed;
+        const violation = new Promise(resolve => observed = resolve);
+        self.addEventListener("securitypolicyviolation", event => {
+          violationSeen = event.type === "securitypolicyviolation" &&
+            event.effectiveDirective === "connect-src" &&
+            event.violatedDirective === "connect-src" &&
+            event.blockedURI.endsWith("/app/blocked-data") &&
+            event.disposition === "enforce" &&
+            event instanceof SecurityPolicyViolationEvent;
+          observed();
+        });
+        self.onmessage = async () => {
+          await fetch("blocked-data").catch(() => {});
+          await violation;
+          postMessage("blocked:" + violationSeen);
+        };
+        "#,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__pausedWorkerCspReportProbe = "pending";
+              (async () => {
+                await navigator.serviceWorker.register("worker.js", { scope: "./" });
+                await navigator.serviceWorker.ready;
+                globalThis.__pausedWorkerCspReportProbe = "ready";
+              })().catch((error) => {
+                globalThis.__pausedWorkerCspReportProbe =
+                  "error:" + String(error && error.message);
+              });
+            })()
+            "#,
+    )
+    .expect("paused worker CSP report setup should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__pausedWorkerCspReportProbe)",
+        "ready",
+    )
+    .await;
+
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
+    );
+    vm.eval(
+        r#"
+            (() => {
+              const worker = new Worker("client-worker.js");
+              worker.onmessage = event => {
+                globalThis.__pausedWorkerCspReportProbe = String(event.data);
+              };
+              worker.onerror = event => {
+                globalThis.__pausedWorkerCspReportProbe = "error:" + event.message;
+              };
+              worker.postMessage("start");
+            })()
+            "#,
+    )
+    .expect("paused worker CSP report trigger should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__pausedWorkerCspReportProbe)",
+        "blocked:true",
+    )
+    .await;
+
+    let report_url = format!("{base_url}/app/csp-report");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let paused_report = loop {
+        let mut infos = vm.take_pending_subresource_fetch_infos();
+        if let Some(index) = infos.iter().position(|info| {
+            info.resource_type == crate::types::SubresourceResourceType::CspReport
+                && info.url.as_str() == report_url
+        }) {
+            break infos.remove(index);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for paused worker CSP report"
+        );
+        drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
+    };
+    assert_eq!(paused_report.method, "POST");
+
+    let outcome = vm
+        .continue_pending_subresource_fetch(
+            paused_report.internal_id,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .expect("paused worker CSP report continue should start");
+    assert_eq!(
+        outcome,
+        crate::types::PendingSubresourceContinueOutcome::Started
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut items = Vec::new();
+    loop {
+        items.extend(vm.take_network_output().into_items());
+        if service_worker_csp_report_seen(
+            &items,
+            &report_url,
+            "destination=report|mode=no-cors|credentials=same-origin|method=POST|from=service-worker|client=true",
+        ) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "continued paused worker CSP report did not settle through Service Worker: {items:?}"
+        );
+        drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
+    }
+
+    server
+        .await
+        .expect("paused worker CSP report destination server should finish");
+}
+
 
 #[tokio::test]
 async fn service_worker_fetch_receives_resolved_client_referrer_and_policy() {

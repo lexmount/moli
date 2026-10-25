@@ -495,6 +495,13 @@ enum WorkerModulePendingBootstrapState {
 }
 
 impl WorkerModulePendingBootstrap {
+    pub(super) fn is_waiting_for_evaluation(&self) -> bool {
+        matches!(
+            &self.state,
+            WorkerModulePendingBootstrapState::Evaluation { .. }
+        )
+    }
+
     fn resume_tree(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
