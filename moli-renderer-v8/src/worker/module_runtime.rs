@@ -25,7 +25,9 @@ use super::global_scope::worker_current_script_url;
 use super::handle::{
     WorkerErrorPhase, WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind,
 };
-use crate::content_security_policy::ContentSecurityPolicyUrlViolation;
+use crate::content_security_policy::{
+    ContentSecurityPolicySourceLocation, ContentSecurityPolicyUrlViolation,
+};
 
 pub(super) type WorkerBootstrapError = (
     V8ExceptionReport,
@@ -64,8 +66,7 @@ struct WorkerImportMetaDeclaration<'scope> {
 pub(super) struct WorkerModuleGraphFetchCompletion {
     fetch_id: WorkerModuleGraphFetchId,
     result: Result<WorkerModuleFetchedSource, String>,
-    csp_violation: Option<ContentSecurityPolicyUrlViolation>,
-    csp_report_only_violation: Option<ContentSecurityPolicyUrlViolation>,
+    csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
 }
 
 pub(super) struct WorkerModuleFetchedSource {
@@ -217,24 +218,15 @@ impl WorkerModuleGraphFetchCompletion {
         Self {
             fetch_id,
             result,
-            csp_violation: None,
-            csp_report_only_violation: None,
+            csp_violations: Vec::new(),
         }
     }
 
-    pub(super) fn with_csp_violation(
+    pub(super) fn with_csp_violations(
         mut self,
-        violation: ContentSecurityPolicyUrlViolation,
+        violations: Vec<ContentSecurityPolicyUrlViolation>,
     ) -> Self {
-        self.csp_violation = Some(violation);
-        self
-    }
-
-    pub(super) fn with_csp_report_only_violation(
-        mut self,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        self.csp_report_only_violation = Some(violation);
+        self.csp_violations = violations;
         self
     }
 
@@ -242,12 +234,8 @@ impl WorkerModuleGraphFetchCompletion {
         self.fetch_id
     }
 
-    pub(super) fn csp_violation(&self) -> Option<&ContentSecurityPolicyUrlViolation> {
-        self.csp_violation.as_ref()
-    }
-
-    pub(super) fn csp_report_only_violation(&self) -> Option<&ContentSecurityPolicyUrlViolation> {
-        self.csp_report_only_violation.as_ref()
+    pub(super) fn csp_violations(&self) -> &[ContentSecurityPolicyUrlViolation] {
+        &self.csp_violations
     }
 
     pub(super) fn result(&self) -> Result<&WorkerModuleFetchedSource, &str> {
@@ -1043,6 +1031,7 @@ impl WorkerDynamicModuleResolver {
         attributes: ModuleAttributesKey,
         phase: ModuleImportPhase,
         audio_worklet_bootstrap: bool,
+        source_location: ContentSecurityPolicySourceLocation,
     ) {
         self.pending_imports
             .push_back(WorkerDynamicModuleImportJob::new(
@@ -1054,6 +1043,7 @@ impl WorkerDynamicModuleResolver {
                 attributes,
                 phase,
                 audio_worklet_bootstrap,
+                source_location,
             ));
     }
 
@@ -1102,6 +1092,7 @@ struct WorkerDynamicModuleImportJob {
     attributes: ModuleAttributesKey,
     phase: ModuleImportPhase,
     audio_worklet_bootstrap: bool,
+    source_location: ContentSecurityPolicySourceLocation,
     root_key: Option<WorkerModuleKey>,
     resolved_entry: Option<usize>,
     state: WorkerDynamicModuleImportJobState,
@@ -1128,6 +1119,7 @@ impl WorkerDynamicModuleImportJob {
         attributes: ModuleAttributesKey,
         phase: ModuleImportPhase,
         audio_worklet_bootstrap: bool,
+        source_location: ContentSecurityPolicySourceLocation,
     ) -> Self {
         Self {
             context,
@@ -1138,6 +1130,7 @@ impl WorkerDynamicModuleImportJob {
             attributes,
             phase,
             audio_worklet_bootstrap,
+            source_location,
             root_key: None,
             resolved_entry: None,
             state: WorkerDynamicModuleImportJobState::Graph,
@@ -1208,18 +1201,21 @@ fn advance_worker_dynamic_module_import(
             WorkerModuleDependencyLoad::NeedFetch(_) => {
                 let fetch_id = reserve_worker_module_graph_fetch_id(scope);
                 return Ok(WorkerDynamicModuleImportAdvance::NeedFetches(
-                    WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
-                        fetch_id,
-                        module_key,
-                        job.fetch_initiator_url.clone(),
-                        WorkerModuleGraphFetchCspSource::DynamicImportGraph,
-                        None,
-                        job.specifier.clone(),
-                        job.attributes.clone(),
-                        graph.borrow().credentials_mode(),
-                        inherited_referrer_policy,
-                        job.browser_request_metadata(),
-                    )),
+                    WorkerModuleGraphFetchBatch::single(
+                        WorkerModuleGraphFetchRequest::new(
+                            fetch_id,
+                            module_key,
+                            job.fetch_initiator_url.clone(),
+                            WorkerModuleGraphFetchCspSource::DynamicImportGraph,
+                            None,
+                            job.specifier.clone(),
+                            job.attributes.clone(),
+                            graph.borrow().credentials_mode(),
+                            inherited_referrer_policy,
+                            job.browser_request_metadata(),
+                        )
+                        .with_source_location(job.source_location.clone()),
+                    ),
                 ));
             }
         },
@@ -1743,6 +1739,7 @@ pub(super) struct WorkerModuleGraphFetchRequest {
     credentials_mode: RequestCredentialsMode,
     referrer_policy: Option<String>,
     browser_request_metadata: BrowserRequestMetadata,
+    source_location: Option<ContentSecurityPolicySourceLocation>,
 }
 
 #[derive(Clone)]
@@ -1830,7 +1827,20 @@ impl WorkerModuleGraphFetchRequest {
             credentials_mode,
             referrer_policy,
             browser_request_metadata,
+            source_location: None,
         }
+    }
+
+    fn with_source_location(
+        mut self,
+        source_location: ContentSecurityPolicySourceLocation,
+    ) -> Self {
+        self.source_location = Some(source_location);
+        self
+    }
+
+    pub(super) fn source_location(&self) -> Option<&ContentSecurityPolicySourceLocation> {
+        self.source_location.as_ref()
     }
 
     pub(super) fn fetch_id(&self) -> WorkerModuleGraphFetchId {
@@ -1937,6 +1947,24 @@ pub(super) enum WorkerModuleType {
 }
 
 impl WorkerModuleType {
+    pub(super) fn csp_resource_kind(
+        self,
+        source: WorkerModuleGraphFetchCspSource,
+    ) -> crate::content_security_policy::ContentSecurityPolicyResourceKind {
+        use crate::content_security_policy::ContentSecurityPolicyResourceKind as Kind;
+        match self {
+            Self::Json | Self::Text => Kind::WorkerConnect,
+            Self::JavaScriptOrWebAssembly => match source {
+                WorkerModuleGraphFetchCspSource::StaticModuleGraph => {
+                    Kind::WorkerStaticModuleImport
+                }
+                WorkerModuleGraphFetchCspSource::DynamicImportGraph => {
+                    Kind::WorkerDynamicModuleImport
+                }
+            },
+        }
+    }
+
     pub(super) fn response_kind(
         self,
         url: &Url,
@@ -3345,6 +3373,14 @@ fn queue_worker_dynamic_import<'s>(
         );
         return Some(promise);
     };
+    let source_location = super::global_scope::worker_content_security_policy_snapshot(scope)
+        .filter(|policy| {
+            !policy.header_policies.is_empty()
+                || !policy.meta_policies.is_empty()
+                || !policy.report_only_policies.is_empty()
+        })
+        .map(|_| ContentSecurityPolicySourceLocation::capture(scope))
+        .unwrap_or_default();
     dynamic_imports.borrow_mut().queue_import(
         v8::Global::new(scope, context),
         v8::Global::new(scope, resolver),
@@ -3354,6 +3390,7 @@ fn queue_worker_dynamic_import<'s>(
         attributes,
         phase,
         audio_worklet_import == AudioWorkletDynamicImport::Bootstrap,
+        source_location,
     );
     Some(promise)
 }
