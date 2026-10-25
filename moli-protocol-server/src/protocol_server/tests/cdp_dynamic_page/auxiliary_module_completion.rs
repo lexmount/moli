@@ -42,10 +42,15 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                     [("content-type", mime), ("access-control-allow-origin", "*")],
                     body,
                 ).into_response();
-                if uri.path() == "/popup-blocked" {
+                let policy = match uri.path() {
+                    "/parent" => Some("script-src 'self' 'unsafe-eval'; connect-src 'self'"),
+                    "/popup-blocked" => Some("script-src 'unsafe-eval'; connect-src 'self'"),
+                    _ => None,
+                };
+                if let Some(policy) = policy {
                     response.headers_mut().insert(
                         "content-security-policy",
-                        axum::http::HeaderValue::from_static("script-src 'unsafe-eval'; connect-src 'self'"),
+                        axum::http::HeaderValue::from_static(policy),
                     );
                 }
                 response
@@ -66,6 +71,8 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
 
     // Never discover or attach a frontend to the auxiliary target. Its own
     // networking tasks must finish while only the opener is being observed.
+    // The blank Document inherits 'self' from its opener without changing
+    // its about:blank URL to the opener's URL.
     for mode in ["blank", "navigate", "blocked"] {
         let source = format!(
             "{}\nstartAuxiliaryModuleProbe({}, {});true",
