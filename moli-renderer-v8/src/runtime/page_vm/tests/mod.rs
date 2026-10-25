@@ -134,6 +134,7 @@ mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod dictionary_links;
+mod document_module_policy;
 mod document_script_completion;
 #[cfg(feature = "devtools")]
 mod dom_publication;
@@ -2303,7 +2304,7 @@ async fn drive_page_work_until_done_with_producer_wake<W>(
             .eval("String(globalThis.__wsStreamDone ?? null)")
             .unwrap_or_else(|error| format!("<failed to read __wsStreamDone: {error}>"));
         panic!(
-            "{context}; events={events}; done={done}; stream_events={stream_events}; stream_done={stream_done}"
+            "{context}; events={events}; done={done}; stream_events={stream_events}; stream_done={stream_done}; module_policy={module_policy}"
         );
     }
     Ok(())

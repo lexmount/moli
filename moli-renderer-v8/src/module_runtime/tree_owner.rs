@@ -9,7 +9,7 @@ use crate::script_vm::ScriptVm;
 use super::{
     ModuleEntryId, ModuleFetchMetadata, ModuleIdentityHash, ModuleLoadError,
     ModuleMapFetchDisposition, ModuleMapKey, ModuleRecordEntry, ModuleRequestRecord,
-    ModuleResolvedDependency, ModuleSource, NativeDocumentModulator,
+    ModuleResolvedDependency, ModuleSource, NativeDocumentModulator, NativeModuleGraphFetchRequest,
     NativeModuleMapSingleModuleClient,
 };
 
@@ -58,6 +58,11 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
         &mut self,
         context: &crate::content_security_policy::ModuleFetchCspContext,
     );
+
+    fn prepare_module_fetch(
+        &mut self,
+        request: NativeModuleGraphFetchRequest,
+    ) -> Result<NativeModuleGraphFetchRequest, ModuleLoadError>;
 
     fn suspend_module_fetch_waiter(
         &mut self,
@@ -162,6 +167,13 @@ impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentO
         context: &crate::content_security_policy::ModuleFetchCspContext,
     ) {
         (*self).queue_module_fetch_csp_violations(context);
+    }
+
+    fn prepare_module_fetch(
+        &mut self,
+        request: NativeModuleGraphFetchRequest,
+    ) -> Result<NativeModuleGraphFetchRequest, ModuleLoadError> {
+        (*self).prepare_module_fetch(request)
     }
 
     fn suspend_module_fetch_waiter(
@@ -365,6 +377,13 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
         self.vm.queue_module_fetch_csp_violations(context);
     }
 
+    fn prepare_module_fetch(
+        &mut self,
+        request: NativeModuleGraphFetchRequest,
+    ) -> Result<NativeModuleGraphFetchRequest, ModuleLoadError> {
+        self.vm.prepare_main_module_graph_fetch(request)
+    }
+
     fn module_request_document_referrer_policy(&self) -> Option<String> {
         self.vm.module_request_document_referrer_policy(None)
     }
@@ -552,6 +571,17 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
         context: &crate::content_security_policy::ModuleFetchCspContext,
     ) {
         self.vm.queue_module_fetch_csp_violations(context);
+    }
+
+    fn prepare_module_fetch(
+        &mut self,
+        request: NativeModuleGraphFetchRequest,
+    ) -> Result<NativeModuleGraphFetchRequest, ModuleLoadError> {
+        let context = self
+            .vm
+            .capture_child_module_graph_fetch_context(self.document_owner, self.realm_id, &request)
+            .map_err(|error| ModuleLoadError::new(super::ModuleLoadStage::Fetch, error))?;
+        Ok(request.with_fetch_context(context))
     }
 
     fn suspend_module_fetch_waiter(

@@ -26,6 +26,7 @@ struct Inner {
     owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
     state: Mutex<State>,
     violation_reporter: Option<Arc<dyn Fn(ContentSecurityPolicyUrlViolation) + Send + Sync>>,
+    source_location: Option<super::ContentSecurityPolicySourceLocation>,
 }
 
 #[derive(Default)]
@@ -74,7 +75,18 @@ impl ModuleFetchCspContext {
             owner_scope,
             state: Mutex::new(State::default()),
             violation_reporter: None,
+            source_location: None,
         }))
+    }
+
+    pub(crate) fn with_source_location(
+        mut self,
+        location: Option<super::ContentSecurityPolicySourceLocation>,
+    ) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("module source location is bound before fetch context sharing")
+            .source_location = location;
+        self
     }
 
     /// Install the networking report route before sharing this fetch context.
@@ -110,7 +122,7 @@ impl ModuleFetchCspContext {
     }
 
     fn check_hop(&self, url: &Url, ordinal: usize) -> anyhow::Result<()> {
-        let (report, enforce) = (self.0.check)(
+        let (mut report, mut enforce) = (self.0.check)(
             url,
             self.original_url(),
             if ordinal == 0 {
@@ -119,6 +131,17 @@ impl ModuleFetchCspContext {
                 ContentSecurityPolicyRedirectStatus::FollowedRedirect
             },
         );
+        if let Some(source_location) = &self.0.source_location {
+            let redirected = super::ContentSecurityPolicySourceLocation::default();
+            let location = if ordinal == 0 {
+                source_location
+            } else {
+                &redirected
+            };
+            for violation in report.iter_mut().chain(&mut enforce) {
+                location.apply_to(violation);
+            }
+        }
         let message = enforce.first().map(|violation| {
             format!(
                 "Module request blocked by Content Security Policy directive `{}`",

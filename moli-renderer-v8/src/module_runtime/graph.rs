@@ -1095,6 +1095,22 @@ impl NativeModuleGraphJob {
                             key.clone(),
                             fetch.dependency().cloned(),
                         );
+                    let location = if request.is_top_level_tree_fetch() {
+                        self.dynamic_import_request()
+                            .and_then(PendingDynamicModuleImport::csp_source_location)
+                            .cloned()
+                    } else {
+                        None
+                    };
+                    let request =
+                        request.with_csp_source_location(Some(location.unwrap_or_default()));
+                    let request = match owner.prepare_module_fetch(request) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            owner.mark_module_failed(key.clone(), error.clone());
+                            return Err(error);
+                        }
+                    };
                     let context =
                         match owner.module_fetch_csp_context(&key, &request.fetch_metadata) {
                             Ok(context) => context,
@@ -1103,6 +1119,12 @@ impl NativeModuleGraphJob {
                                 return Err(error);
                             }
                         };
+                    let context = match request.fetch_context() {
+                        Some(fetch) => {
+                            fetch.route_native_csp(context, request.csp_source_location().cloned())
+                        }
+                        None => context,
+                    };
                     let admission = context.check_initial_request(key.url());
                     owner.queue_module_fetch_csp_violations(&context);
                     if let Err(error) = admission {
