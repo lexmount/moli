@@ -94,7 +94,24 @@ pub(super) struct WorkerModuleGraphFetchCompletion {
     key: WorkerModuleKey,
     fetch_id: WorkerModuleGraphFetchId,
     result: Result<WorkerModuleFetchedSource, module_tree::ModuleLoadError>,
-    csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
+}
+
+/// Module CSP reports are independent networking tasks and can arrive before a response.
+pub(super) enum WorkerModuleGraphFetchEvent {
+    CspViolation(Box<ContentSecurityPolicyUrlViolation>),
+    Complete(Box<WorkerModuleGraphFetchCompletion>),
+}
+
+impl WorkerModuleGraphFetchEvent {
+    pub(super) fn completed(
+        fetch_id: WorkerModuleGraphFetchId,
+        key: WorkerModuleKey,
+        result: Result<WorkerModuleFetchedSource, String>,
+    ) -> Self {
+        Self::Complete(Box::new(WorkerModuleGraphFetchCompletion::new(
+            fetch_id, key, result,
+        )))
+    }
 }
 
 pub(super) struct WorkerModuleFetchedSource {
@@ -235,26 +252,11 @@ impl WorkerModuleGraphFetchCompletion {
             key,
             fetch_id,
             result,
-            csp_violations: Vec::new(),
         }
     }
 
     pub(super) fn fetch_id(&self) -> WorkerModuleGraphFetchId {
         self.fetch_id
-    }
-
-    pub(super) fn with_csp_violations(
-        mut self,
-        violations: Vec<ContentSecurityPolicyUrlViolation>,
-    ) -> Self {
-        self.csp_violations = violations;
-        self
-    }
-
-    pub(super) fn csp_violations(
-        &self,
-    ) -> impl Iterator<Item = &ContentSecurityPolicyUrlViolation> {
-        self.csp_violations.iter()
     }
 
     pub(super) fn result(

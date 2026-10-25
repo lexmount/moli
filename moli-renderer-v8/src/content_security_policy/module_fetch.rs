@@ -25,6 +25,7 @@ struct Inner {
     original_url: Url,
     owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
     state: Mutex<State>,
+    violation_reporter: Option<Arc<dyn Fn(ContentSecurityPolicyUrlViolation) + Send + Sync>>,
 }
 
 #[derive(Default)]
@@ -72,7 +73,19 @@ impl ModuleFetchCspContext {
             original_url,
             owner_scope,
             state: Mutex::new(State::default()),
+            violation_reporter: None,
         }))
+    }
+
+    /// Install the networking report route before sharing this fetch context.
+    pub(crate) fn with_violation_reporter(
+        mut self,
+        reporter: impl Fn(ContentSecurityPolicyUrlViolation) + Send + Sync + 'static,
+    ) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("module reporting route is bound before fetch context sharing")
+            .violation_reporter = Some(Arc::new(reporter));
+        self
     }
 
     pub(crate) fn owner_scope(&self) -> Option<crate::native_bridge::OwnerDispatchScope> {
@@ -119,8 +132,15 @@ impl ModuleFetchCspContext {
             .any(|(n, checked)| *n == ordinal && checked == url)
         {
             state.checked_hops.push((ordinal, url.clone()));
-            state.violations.extend(report);
-            state.violations.extend(enforce);
+            if let Some(reporter) = &self.0.violation_reporter {
+                drop(state);
+                for violation in report.into_iter().chain(enforce) {
+                    reporter(violation);
+                }
+            } else {
+                state.violations.extend(report);
+                state.violations.extend(enforce);
+            }
         }
         match message {
             Some(message) => anyhow::bail!(message),
