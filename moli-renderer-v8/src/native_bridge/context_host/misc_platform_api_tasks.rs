@@ -265,10 +265,8 @@ impl JsContextHost {
                     })
                     .unwrap_or(resolved.document_handle);
                 let target = EventTargetHandle::Node(event_target);
-                let fields = self.content_security_policy_violation_event_fields(
-                    resolved.document_handle,
-                    &violation,
-                );
+                let metadata = self.document_csp_violation_metadata(resolved.document_handle);
+                let fields = metadata.event_fields(&violation);
                 crate::host::event_target_value(scope, host_ptr, target)
                     .ok()
                     .and_then(|value| {

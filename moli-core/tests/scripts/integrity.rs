@@ -59,6 +59,9 @@ mod service_worker_referrer;
 #[path = "csp_response_status.rs"]
 mod csp_response_status;
 
+#[path = "csp_referrer.rs"]
+mod csp_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,

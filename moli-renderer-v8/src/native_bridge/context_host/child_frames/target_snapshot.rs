@@ -1,4 +1,5 @@
 use super::super::JsContextHost;
+use super::super::child_documents::ChildDocumentNavigationInitiator;
 use crate::{
     content_security_policy::IframeCspAttribute,
     document_runtime::{DocumentPolicyContainer, DomHandle},
@@ -11,9 +12,30 @@ use url::Url;
 pub(in crate::native_bridge::context_host) struct ChildNavigationTargetSnapshot {
     required_csp: Option<IframeCspAttribute>,
     embedding_origin: Option<String>,
+    owner_referrer_policy: Option<String>,
+    creator_referrer_policy: Option<String>,
 }
 
 impl ChildNavigationTargetSnapshot {
+    pub(in crate::native_bridge::context_host) fn referrer_policy<'a>(
+        &'a self,
+        initiator: ChildDocumentNavigationInitiator,
+        source_policy: Option<&'a crate::runtime::RendererNavigationPolicy>,
+    ) -> &'a str {
+        let owner_policy = if initiator == ChildDocumentNavigationInitiator::FrameOwnerElement {
+            if self.embedding_origin.as_deref() == Some("null") {
+                return "no-referrer";
+            }
+            self.owner_referrer_policy.as_deref()
+        } else {
+            None
+        };
+        let source_policy = source_policy
+            .and_then(crate::runtime::RendererNavigationPolicy::referrer_policy)
+            .or(self.creator_referrer_policy.as_deref());
+        moli_fetch::effective_referrer_policy(owner_policy, source_policy)
+    }
+
     pub(in crate::native_bridge::context_host) fn apply_response_policy(
         &self,
         policy: &mut DocumentPolicyContainer,
@@ -33,6 +55,8 @@ impl ChildNavigationTargetSnapshot {
     pub(in crate::native_bridge::context_host) fn configure_request(
         &self,
         mut request: moli_fetch::Request,
+        initiator: ChildDocumentNavigationInitiator,
+        source_policy: Option<&crate::runtime::RendererNavigationPolicy>,
     ) -> moli_fetch::Request {
         // A reused request cannot supply its own requirement or retain a
         // previous target's header. There is at most one authoritative value.
@@ -43,7 +67,14 @@ impl ChildNavigationTargetSnapshot {
                 policy.as_str().as_bytes().to_vec(),
             ));
         }
-        request
+        let metadata = request
+            .subresource_request_metadata()
+            .cloned()
+            .unwrap_or_default();
+        request.with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+            referrer_policy: Some(self.referrer_policy(initiator, source_policy).to_owned()),
+            ..metadata
+        })
     }
 }
 
@@ -57,16 +88,33 @@ impl JsContextHost {
         let embedding_origin = owner
             .and_then(|owner| self.window_access_origin_for_dispatch_scope(owner))
             .map(|origin| origin.serialized_origin());
+        let creator_policy =
+            owner.and_then(|owner| self.document_policy_container_for_inheritance(owner));
+        let creator_referrer_policy = creator_policy
+            .as_ref()
+            .and_then(|policy| policy.referrer_policy.clone());
+        let is_iframe = self.dom_host().is_html_element_named(handle, "iframe");
+        let owner_referrer_policy = if is_iframe {
+            self.dom_host()
+                .get_attribute(handle, "referrerpolicy")
+                .as_deref()
+                .map(crate::native_bridge::element::canonical_referrer_policy_value)
+                .filter(|policy| !policy.is_empty())
+                .map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let snapshot = ChildNavigationTargetSnapshot {
+            embedding_origin,
+            owner_referrer_policy,
+            creator_referrer_policy,
+            ..Default::default()
+        };
         if self.bypass_content_security_policy() {
-            return ChildNavigationTargetSnapshot {
-                embedding_origin,
-                ..Default::default()
-            };
+            return snapshot;
         }
-        let inherited = owner
-            .and_then(|owner| self.document_policy_container_for_inheritance(owner))
-            .and_then(|policy| policy.required_content_security_policy);
-        let required_csp = if self.dom_host().is_html_element_named(handle, "iframe") {
+        let inherited = creator_policy.and_then(|policy| policy.required_content_security_policy);
+        let required_csp = if is_iframe {
             self.dom_host()
                 .get_attribute(handle, "csp")
                 .as_deref()
@@ -83,7 +131,7 @@ impl JsContextHost {
             .or(inherited);
         ChildNavigationTargetSnapshot {
             required_csp,
-            embedding_origin,
+            ..snapshot
         }
     }
 }
@@ -111,7 +159,11 @@ mod tests {
                 required_csp: policy,
                 ..Default::default()
             };
-            let request = snapshot.configure_request(request);
+            let request = snapshot.configure_request(
+                request,
+                ChildDocumentNavigationInitiator::FrameOwnerElement,
+                None,
+            );
             let mut expected = vec![
                 ("Cookie".into(), vec![0xe9]),
                 ("Sec-Required-CSP-Other".into(), b"kept".to_vec()),

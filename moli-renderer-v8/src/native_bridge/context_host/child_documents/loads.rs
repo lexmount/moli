@@ -200,7 +200,6 @@ impl JsContextHost {
                     .and_then(|entry| entry.navigation_entry_seed().session_history.admitted_entry),
                 target,
                 target_url: target_url.clone(),
-                referrer_source_url: initiator_url.clone(),
                 resource_loader: resource_loader.clone(),
                 reserved_service_worker_client_id: service_worker_client_id,
                 document_credentialless,
@@ -221,19 +220,21 @@ impl JsContextHost {
         resource_loader.spawn_resource_task(async move {
             let result = async {
                 let request = target_snapshot
-                    .configure_request(configure_child_document_navigation_request(
-                        child_document_load_request(bootstrap).ok_or_else(|| {
-                            "unsupported child document navigation bootstrap".to_owned()
-                        })?,
-                        &initiator_url,
-                        &browser_context,
-                    ))
+                    .configure_request(
+                        configure_child_document_navigation_request(
+                            child_document_load_request(bootstrap).ok_or_else(|| {
+                                "unsupported child document navigation bootstrap".to_owned()
+                            })?,
+                            &initiator_url,
+                            &browser_context,
+                        ),
+                        initiator,
+                        source_policy.as_ref(),
+                    )
                     .with_page_network_policy()
                     .with_network_partition_key(network_partition_key);
                 let request_snapshot = ChildDocumentRequestSnapshot {
-                    request_url: request.url.as_str().to_owned(),
-                    request_method: request.method.clone(),
-                    request_headers: request.request_headers.to_byte_strings(),
+                    request: request.clone(),
                     target: target_snapshot,
                     source_policy,
                 };
@@ -662,13 +663,6 @@ impl JsContextHost {
                         sandbox,
                         &loaded.policy_container.permissions_policy,
                     );
-                let document_referrer = moli_fetch::referrer_header_value(
-                    &pending.referrer_source_url,
-                    &final_url,
-                    None,
-                    None,
-                )
-                .unwrap_or_default();
                 self.clear_child_browsing_context_pending_navigation(handle);
                 let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                     self.clear_pending_service_worker_child_client_if_matches(
@@ -694,7 +688,6 @@ impl JsContextHost {
                 entry.set_document_permissions_policy(permissions_policy);
                 entry.commit_pending_child_document_load(
                     &final_url,
-                    &document_referrer,
                     &loaded.policy_container,
                     sandbox,
                     document_credentialless,
@@ -930,9 +923,7 @@ struct ChildDocumentTiming<'a> {
 }
 
 struct ChildDocumentRequestSnapshot {
-    request_url: String,
-    request_method: String,
-    request_headers: Vec<(String, String)>,
+    request: moli_fetch::Request,
     target: ChildNavigationTargetSnapshot,
     source_policy: Option<crate::runtime::RendererNavigationPolicy>,
 }
@@ -944,15 +935,30 @@ fn child_document_load_outcome_from_response(
     timing: ChildDocumentTiming<'_>,
     encoding_context: &super::encoding::ChildDocumentEncodingContext,
 ) -> Result<ChildDocumentLoadOutcome, String> {
+    let ChildDocumentRequestSnapshot {
+        mut request,
+        target,
+        source_policy,
+    } = request;
+    // Reuse Fetch's redirect state machine so a later permissive policy cannot
+    // restore a referrer already omitted or reduced on an earlier hop.
+    for redirect in &head.redirect_chain {
+        if redirect.source != moli_fetch::RedirectSource::Internal {
+            request.update_referrer_for_redirect(&redirect.from_url, &redirect.headers);
+        }
+    }
+    let document_referrer = request
+        .referrer_header_value(&head.final_url)
+        .unwrap_or_default();
     let response_body = SubresourceResponseBody::from_bytes(
         body.try_into_materialized_bytes()
             .map_err(|_| "child document response body should remain materialized".to_owned())?,
     );
     let encoded_data_length = response_body.len();
     let network = crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-        request_url: request.request_url,
-        request_method: request.request_method,
-        request_headers: request.request_headers,
+        request_url: request.url.as_str().to_owned(),
+        request_method: request.method,
+        request_headers: request.request_headers.to_byte_strings(),
         final_url: head.final_url.as_str().to_owned(),
         status: head.status,
         response_headers: head.headers.clone(),
@@ -984,12 +990,10 @@ fn child_document_load_outcome_from_response(
         &head.final_url,
         None,
         None,
-        request.source_policy.as_ref(),
+        source_policy.as_ref(),
     );
-    if !request
-        .target
-        .apply_response_policy(&mut policy_container, &head.final_url, &head.headers)
-    {
+    policy_container.document_referrer = document_referrer;
+    if !target.apply_response_policy(&mut policy_container, &head.final_url, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::blocked_response(
             head.final_url,
             Some(network),
@@ -1087,6 +1091,95 @@ fn child_document_load_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use url::Url;
+
+    fn referrer_redirect(
+        from_url: Url,
+        to_url: Url,
+        policy: &str,
+        source: moli_fetch::RedirectSource,
+    ) -> moli_fetch::RedirectInfo {
+        moli_fetch::RedirectInfo {
+            source,
+            from_url,
+            to_url,
+            status: 302,
+            headers: vec![("Referrer-Policy".to_owned(), policy.as_bytes().to_vec())],
+            network_extra_info_available: false,
+            request_extra_info: None,
+            response_extra_info: None,
+            redirect_has_extra_info: false,
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        }
+    }
+
+    #[test]
+    fn child_document_referrer_keeps_redirect_reductions_after_policy_relaxation() {
+        let creator = Url::parse("https://creator.test/private?secret#fragment").unwrap();
+        let start = Url::parse("https://child.test/start").unwrap();
+        let middle = Url::parse("https://child.test/middle").unwrap();
+        let final_url = Url::parse("https://child.test/final").unwrap();
+        for source in [
+            moli_fetch::RedirectSource::Network,
+            moli_fetch::RedirectSource::ServiceWorker,
+        ] {
+            for (first_policy, expected) in
+                [("no-referrer", ""), ("origin", "https://creator.test/")]
+            {
+                let request = moli_fetch::Request::get_with_url(start.clone())
+                    .with_initiator_url(&creator)
+                    .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+                        referrer_policy: Some("unsafe-url".to_owned()),
+                        ..Default::default()
+                    });
+                let outcome = child_document_load_outcome_from_response(
+                    ChildDocumentRequestSnapshot {
+                        request,
+                        target: Default::default(),
+                        source_policy: None,
+                    },
+                    moli_fetch::ResponseHead {
+                        final_url: final_url.clone(),
+                        status: 200,
+                        status_text: None,
+                        headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: true,
+                        redirect_chain: vec![
+                            referrer_redirect(start.clone(), middle.clone(), first_policy, source),
+                            referrer_redirect(
+                                middle.clone(),
+                                final_url.clone(),
+                                "unsafe-url",
+                                source,
+                            ),
+                        ],
+                        from_cache: false,
+                        cache_state: Default::default(),
+                        preload_state: Default::default(),
+                        negotiated_http_version: None,
+                    },
+                    moli_fetch::ResponseBody::materialized_bytes(
+                        b"<!doctype html><body>child".to_vec(),
+                    ),
+                    ChildDocumentTiming {
+                        origin: None,
+                        response: Default::default(),
+                    },
+                    &super::super::encoding::ChildDocumentEncodingContext::default(),
+                )
+                .unwrap();
+                let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
+                    panic!("child should load")
+                };
+                assert_eq!(document.policy_container.document_referrer, expected);
+            }
+        }
+    }
 
     #[test]
     fn child_document_resource_timing_filters_cross_origin_redirects_before_discarding_them() {
@@ -1136,9 +1229,7 @@ mod tests {
             for timing_origin in [Some(&origin), None] {
                 let outcome = child_document_load_outcome_from_response(
                     ChildDocumentRequestSnapshot {
-                        request_url: home.as_str().to_owned(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
+                        request: moli_fetch::Request::get_with_url(home.clone()),
                         target: Default::default(),
                         source_policy: None,
                     },
@@ -1175,9 +1266,9 @@ mod tests {
         let body_bytes = b"<!doctype html><p>child network body \xff</p>".to_vec();
         let outcome = child_document_load_outcome_from_response(
             ChildDocumentRequestSnapshot {
-                request_url: "https://example.test/child".to_owned(),
-                request_method: "GET".to_owned(),
-                request_headers: Vec::new(),
+                request: moli_fetch::Request::get_with_url(
+                    url::Url::parse("https://example.test/child").unwrap(),
+                ),
                 target: Default::default(),
                 source_policy: None,
             },
