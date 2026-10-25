@@ -309,10 +309,6 @@ impl ChildBrowsingContextEntry {
         self.live_bootstrap.security_origin_inherited()
     }
 
-    pub(super) fn content_security_policy_inherited(&self) -> bool {
-        self.live_bootstrap.content_security_policy_inherited()
-    }
-
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {
         self.document_policy_container().clone()
     }
@@ -532,7 +528,6 @@ impl ChildBrowsingContextEntry {
     pub(super) fn commit_pending_child_document_load(
         &mut self,
         final_url: &Url,
-        document_referrer: &str,
         policy_container: &ChildDocumentPolicyContainer,
         sandbox: DocumentSandboxPolicy,
         credentialless: bool,
@@ -542,7 +537,8 @@ impl ChildBrowsingContextEntry {
         self.reset_performance_time_origin();
         self.clear_document_runtime_state();
         self.rewrite_current_navigation_url_after_load(final_url);
-        self.document_policy_container.document_referrer = document_referrer.to_owned();
+        self.document_policy_container.document_referrer =
+            policy_container.document_referrer.clone();
         self.apply_loaded_referrer_policy_to_current_document(
             policy_container.referrer_policy.clone(),
         );
@@ -588,6 +584,13 @@ impl ChildBrowsingContextEntry {
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
         if let Some(snapshot) = snapshot {
+            if matches!(
+                &self.live_bootstrap,
+                ChildBrowsingContextBootstrap::Srcdoc { .. }
+            ) {
+                self.document_policy_container.document_referrer =
+                    snapshot.policy_container.document_referrer.clone();
+            }
             self.sync_document_policy_from_snapshot(snapshot);
         }
         self.commit_current_navigation_entry_seed();
