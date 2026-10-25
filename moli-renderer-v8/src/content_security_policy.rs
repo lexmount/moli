@@ -134,7 +134,7 @@ fn send_content_security_policy_report_request(loader: &ResourceRequestClient, r
 }
 
 /// The script location available when a CSP violation is created.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ContentSecurityPolicySourceLocation(Option<(String, i32, i32)>);
 
 impl ContentSecurityPolicySourceLocation {

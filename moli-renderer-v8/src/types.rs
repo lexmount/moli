@@ -94,7 +94,7 @@ pub(super) enum PendingSubresourceContinuation {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
     EventSource(Box<PendingEventSourceRequest>),
-    Fetch(PendingWindowFetchContinuation),
+    Fetch(Box<PendingWindowFetchContinuation>),
     FontFace(Box<PendingFontFaceFetch>),
     Image {
         image_handle: crate::document_runtime::DomHandle,
@@ -122,7 +122,7 @@ pub(super) enum PendingSubresourceContinuation {
         // Taking its clock prevents that later task from reporting twice.
         timing: Option<crate::context_bootstrap::FetchResourceTiming>,
     },
-    WebSocket(PendingWebSocketConnection),
+    WebSocket(Box<PendingWebSocketConnection>),
     WorkerFetch {
         worker_id: DedicatedWorkerId,
         fetch_id: u32,
@@ -399,8 +399,8 @@ impl PendingWindowFetchContinuation {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         redirect_mode: moli_fetch::RequestRedirectMode,
         integrity: String,
-    ) -> Self {
-        Self {
+    ) -> Box<Self> {
+        Box::new(Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             timing: crate::context_bootstrap::FetchResourceTiming::new(),
             keepalive,
@@ -409,7 +409,7 @@ impl PendingWindowFetchContinuation {
             csp_report_context,
             redirect_mode,
             integrity,
-        }
+        })
     }
 
     pub(super) fn keepalive(&self) -> bool {

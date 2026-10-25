@@ -1,5 +1,7 @@
 use super::*;
 
+mod csp;
+
 use crate::dom::native::NativeNodeId;
 use crate::module_runtime::{
     ModulePreloadJobRun, NativeModulepreloadFetchStart, NativeModulepreloadLinkClient,

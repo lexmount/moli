@@ -712,6 +712,7 @@ async fn response_modulepreload_reports_csp_without_dispatching_into_replacement
                     crate::native_bridge::OwnerDispatchScope::Child(handle),
                     crate::module_runtime::ModuleKind::JavaScript,
                     &crate::module_runtime::ModuleFetchMetadata::default(),
+                    None,
                 )
                 .map_err(anyhow::Error::msg)?;
             let error = context
@@ -742,10 +743,13 @@ async fn response_modulepreload_reports_csp_without_dispatching_into_replacement
                 Some(&error),
             )
             .with_fetch_context(Some(context));
-            let mut source = RendererPageNetworkingSource::new_for_test();
+            let mut source = page_vm.page_resource_completion_queue();
             source.enqueue_local_for_test(
                 RendererPageResourceCompletion::child_modulepreload_fetch(root, completion),
             );
+            page_vm
+                .apply_one_page_resource_terminal_owner_admission_for_test(&mut source)?
+                .expect("CSP task must precede the module terminal on the networking source");
             let outcome = page_vm
                 .apply_one_page_resource_terminal_owner_admission_for_test(&mut source)?
                 .expect("one modulepreload completion");
@@ -759,7 +763,10 @@ async fn response_modulepreload_reports_csp_without_dispatching_into_replacement
             let events = page_vm
                 .vm_mut()
                 .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test();
-            assert_eq!(events, usize::from(!replace_realm));
+            assert_eq!(
+                events, 0,
+                "networking CSP tasks must not add a duplicate post-parse event"
+            );
             assert_eq!(
                 page_vm.vm_mut().eval("String(modulepreloadCspEvents)")?,
                 if replace_realm { "0" } else { "1" }
@@ -793,6 +800,7 @@ async fn response_modulepreload_redirect_guard_does_not_retain_its_document_fetc
                 crate::native_bridge::OwnerDispatchScope::Top,
                 crate::module_runtime::ModuleKind::JavaScript,
                 &crate::module_runtime::ModuleFetchMetadata::default(),
+                None,
             )
             .map_err(anyhow::Error::msg)?;
         let source = Url::parse("https://modulepreload-redirect-context.test/module.js")?;

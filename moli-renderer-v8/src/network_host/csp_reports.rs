@@ -113,6 +113,7 @@ impl ContentSecurityPolicyReportOwner {
 #[derive(Clone)]
 pub(crate) struct WindowCspReportRequestContext {
     identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
+    event_realm: Option<crate::frame_owner_model::FrameRealmId>,
     resource_loader: crate::network::context::DocumentResourceLoader,
     request_client: ResourceRequestClient,
     frame_id: Option<String>,
@@ -135,6 +136,25 @@ impl std::fmt::Debug for WindowCspReportRequestContext {
 impl WindowCspReportRequestContext {
     pub(crate) fn identity(&self) -> crate::native_bridge::WindowDocumentNetworkRequestIdentity {
         self.identity
+    }
+
+    pub(crate) fn event_target_is_current(&self, host: &JsContextHost) -> bool {
+        if !host.window_document_owner_is_current_for_dispatch_scope(
+            self.identity.owner(),
+            self.identity.dispatch_scope(),
+        ) {
+            return false;
+        }
+        match self.identity.dispatch_scope() {
+            crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+                self.event_realm.is_some()
+                    && host
+                        .current_child_document_module_fetch_target(handle)
+                        .map(|target| target.realm_id())
+                        == self.event_realm
+            }
+            _ => true,
+        }
     }
 
     fn register_report_load(
@@ -522,6 +542,12 @@ fn window_csp_report_request_context_for_identity(
     };
     Some(WindowCspReportRequestContext {
         identity,
+        event_realm: match identity.dispatch_scope() {
+            crate::native_bridge::OwnerDispatchScope::Child(handle) => host
+                .current_child_document_module_fetch_target(handle)
+                .map(|target| target.realm_id()),
+            _ => None,
+        },
         request_client: resource_loader.frozen_request_client(),
         resource_loader,
         frame_id,

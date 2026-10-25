@@ -2680,7 +2680,8 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_and_reports_init
                         page_vm
                             .vm_mut()
                             .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
-                        1
+                        0,
+                        "the networking CSP task must already have dispatched the event"
                     );
                     let observed = page_vm
                         .vm_mut()
@@ -2804,7 +2805,8 @@ async fn window_fetch_document_csp_report_only_redirect_reports_initial_url() {
                     page_vm
                         .vm_mut()
                         .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
-                    1
+                    0,
+                    "the networking CSP task must already have dispatched the event"
                 );
                 page_vm
                     .vm_mut()
