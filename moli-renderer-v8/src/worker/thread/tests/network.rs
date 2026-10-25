@@ -187,3 +187,4 @@ mod opfs_storage;
 mod websockets;
 mod worker_globals;
 mod worker_storage_security;
+mod xhr_csp_tasks;

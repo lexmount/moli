@@ -309,29 +309,19 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         }
     }
 
-    dispatch_worker_content_security_policy_report_only_violation_for_state(
+    // XHR reaches the report-only pre-request check before enforced CSP;
+    // Fetch's separate preliminary allow check has the opposite order.
+    let csp_error = check_worker_request_csp(
         scope,
         &state,
         &prepared.document_url,
         &prepared.resolved_url,
         crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        "xhr",
+        crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
     );
-    let csp_violation = {
-        let state_ref = state.borrow();
-        worker_content_security_policy_violation(
-            &state_ref,
-            &prepared.document_url,
-            &prepared.resolved_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-        )
-    };
-    let request_error = if let Some(violation) = csp_violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(
-            scope, &state, &violation,
-        );
-        Some(worker_content_security_policy_error_message(
-            &violation, "xhr",
-        ))
+    let request_error = if csp_error.is_some() {
+        csp_error
     } else if let Err(error) = url_policy {
         Some(error.to_string())
     } else if should_request_be_blocked_due_to_bad_port(&prepared.resolved_url) {
@@ -424,12 +414,22 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     if let Some(result) = local_response {
         // Local responses and network errors still complete asynchronously, so
         // abort(), open() and timeout processing use the ordinary pending XHR.
-        let _ = state.borrow().xhr_completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
-            xhr_id,
-            result,
-            local_request: Some(Box::new(worker_xhr_info(&prepared))),
-            csp_violations: Vec::new(),
-        })));
+        let state = state.borrow();
+        let local_request = Box::new(worker_xhr_info(&prepared));
+        match result {
+            Ok(response) => {
+                let _ = state.xhr_completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+                    xhr_id,
+                    result: Ok(response),
+                    local_request: Some(local_request),
+                    csp_violations: Vec::new(),
+                })));
+            }
+            Err(error_text) => {
+                let _ = state.worker_wake_tx.send(WorkerMessage::DispatchXhrFailure { xhr_id, error_text, local_request });
+            }
+        }
+
         return true;
     }
 

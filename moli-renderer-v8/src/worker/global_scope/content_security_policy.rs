@@ -19,8 +19,8 @@ use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind};
 use crate::protocol_types::PendingSubresourceFetchInfo;
 use crate::service_worker_runtime::service_worker_fetch_request_metadata;
 use crate::types::SubresourceResourceType;
-use moli_fetch::{BrowserRequestMetadata, Request};
 use crate::worker::WorkerMessage;
+use moli_fetch::{BrowserRequestMetadata, Request};
 
 use super::{WorkerGlobalState, get_worker_state, request_body_text};
 
@@ -64,6 +64,7 @@ pub(crate) fn check_worker_webtransport_csp(
         request_url,
         ContentSecurityPolicyResourceKind::WorkerConnect,
         "WebTransport",
+        ContentSecurityPolicyDisposition::Enforce,
     )
 }
 
@@ -74,6 +75,7 @@ pub(super) fn check_worker_request_csp(
     request_url: &Url,
     kind: ContentSecurityPolicyResourceKind,
     operation: &'static str,
+    first_disposition: ContentSecurityPolicyDisposition,
 ) -> Option<String> {
     let (check, wake_tx) = {
         let state = state.borrow();
@@ -102,9 +104,13 @@ pub(super) fn check_worker_request_csp(
         .map(|violation| worker_content_security_policy_error_message(violation, operation));
     let location =
         crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
+    let (first, second) = match first_disposition {
+        ContentSecurityPolicyDisposition::Enforce => (enforced, report_only),
+        ContentSecurityPolicyDisposition::Report => (report_only, enforced),
+    };
     // Preserve the initiating call site, but report in a later worker task so
-    // listeners cannot reenter the request API before its promise is returned.
-    for mut violation in enforced.into_iter().chain(report_only) {
+    // listeners cannot reenter the request API before it returns.
+    for mut violation in first.into_iter().chain(second) {
         location.apply_to(&mut violation);
         // Admit the native keepalive report before a rejection handler can
         // close this worker. Event delivery remains a separate task; the
@@ -362,10 +368,11 @@ fn send_worker_content_security_policy_report_for_state(
     let cancel = moli_fetch::FetchCancelHandle::new();
     let Some(load) = loader.register_load(
         ResourceLoadKind::CspReport,
-        ResourceLoadDisposition::Keepalive { body_bytes: request.body.as_ref().map_or(0, bytes::Bytes::len) },
+        ResourceLoadDisposition::Keepalive {
+            body_bytes: request.body.as_ref().map_or(0, bytes::Bytes::len),
+        },
         Some(cancel.clone()),
     ) else {
-
         return;
     };
     let info = PendingSubresourceFetchInfo {
@@ -517,48 +524,6 @@ pub(super) fn worker_content_security_policy_report_only_violation_with_redirect
         redirect_status,
         ContentSecurityPolicyDisposition::Report,
     )
-}
-
-pub(super) fn dispatch_worker_content_security_policy_report_only_violation_for_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: &Rc<RefCell<WorkerGlobalState>>,
-    protected_url: &Url,
-    request_url: &Url,
-    kind: ContentSecurityPolicyResourceKind,
-) {
-    dispatch_worker_content_security_policy_report_only_violation_with_redirect_status_for_state(
-        scope,
-        state,
-        protected_url,
-        request_url,
-        kind,
-        ContentSecurityPolicyRedirectStatus::NoRedirect,
-    );
-}
-
-pub(super) fn dispatch_worker_content_security_policy_report_only_violation_with_redirect_status_for_state<
-    's,
->(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: &Rc<RefCell<WorkerGlobalState>>,
-    protected_url: &Url,
-    request_url: &Url,
-    kind: ContentSecurityPolicyResourceKind,
-    redirect_status: ContentSecurityPolicyRedirectStatus,
-) {
-    let violation = {
-        let state_ref = state.borrow();
-        worker_content_security_policy_report_only_violation_with_redirect_status(
-            &state_ref,
-            protected_url,
-            request_url,
-            kind,
-            redirect_status,
-        )
-    };
-    if let Some(violation) = violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-    }
 }
 
 pub(super) fn worker_content_security_policy_error_message(
