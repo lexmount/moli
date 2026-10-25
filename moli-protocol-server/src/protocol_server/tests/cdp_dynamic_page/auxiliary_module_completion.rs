@@ -17,7 +17,10 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                         "export { default } from './module.js';",
                     ),
                     "/module.json" => (StatusCode::OK, "application/json", "{\"answer\":42}"),
+                    "/module.txt" => (StatusCode::OK, "text/plain", "module-text"),
+                    "/module.css" => (StatusCode::OK, "text/css", "body { color: green; }"),
                     "/missing.js" => (StatusCode::NOT_FOUND, "text/javascript", "not found"),
+                    "/blocked.js" => (StatusCode::OK, "text/javascript", "export default 99;"),
                     "/parser.js" => (StatusCode::OK, "text/javascript", "globalThis.parserModuleAnswer = 42;"),
                     "/runtime.js" => (StatusCode::OK, "text/javascript", "globalThis.runtimeModuleAnswer = 42;"),
                     "/popup-navigate" => (
@@ -34,11 +37,18 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                 if uri.path().contains('.') {
                     observed.lock().push(uri.path().to_owned());
                 }
-                (
+                let mut response = (
                     status,
                     [("content-type", mime), ("access-control-allow-origin", "*")],
                     body,
-                ).into_response()
+                ).into_response();
+                if uri.path() == "/popup-blocked" {
+                    response.headers_mut().insert(
+                        "content-security-policy",
+                        axum::http::HeaderValue::from_static("script-src 'unsafe-eval'; connect-src 'self'"),
+                    );
+                }
+                response
             }
         })),
         "auxiliary-module-completion",
@@ -56,7 +66,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
 
     // Never discover or attach a frontend to the auxiliary target. Its own
     // networking tasks must finish while only the opener is being observed.
-    for mode in ["blank", "navigate"] {
+    for mode in ["blank", "navigate", "blocked"] {
         let source = format!(
             "{}\nstartAuxiliaryModuleProbe({}, {});true",
             include_str!("../../../../tests/fixtures/auxiliary-module-completion.js"),
@@ -77,14 +87,20 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                     assert_eq!(result["retainedWindow"], true, "{mode}: {result}");
                     assert_eq!(
                         result["checks"],
-                        json!([
-                            "parser",
-                            "runtime",
-                            "javascript",
-                            "graph",
-                            "json",
-                            "fetch-error"
-                        ]),
+                        if mode == "blocked" {
+                            json!(["blocked", "violation"])
+                        } else {
+                            json!([
+                                "parser",
+                                "runtime",
+                                "javascript",
+                                "graph",
+                                "json",
+                                "text",
+                                "css",
+                                "fetch-error"
+                            ])
+                        },
                         "{mode}: {result}"
                     );
                     break;
@@ -100,6 +116,8 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
         "/module.js",
         "/graph.js",
         "/module.json",
+        "/module.txt",
+        "/module.css",
         "/missing.js",
         "/runtime.js",
     ] {
@@ -116,5 +134,6 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
             .count(),
         1
     );
+    assert!(!requests.iter().any(|request| request == "/blocked.js"));
     abort_test_cdp_server(server).await;
 }
