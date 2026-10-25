@@ -486,6 +486,13 @@ impl WorkerModulePendingBootstrap {
         }
     }
 
+    pub(super) fn is_waiting_for_evaluation(&self) -> bool {
+        matches!(
+            &self.state,
+            WorkerModulePendingBootstrapState::Evaluation { .. }
+        )
+    }
+
     pub(super) fn resume(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
