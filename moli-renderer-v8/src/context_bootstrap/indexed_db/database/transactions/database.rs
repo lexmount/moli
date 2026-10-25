@@ -1,7 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
     INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
-    IdbTransactionDurability, indexed_db_transaction_start_wake, object_store_info_from_database_metadata,
+    IdbTransactionDurability, indexed_db_transaction_start_wake,
+    object_store_info_from_database_metadata,
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
     set_indexed_db_transaction_start_request,
 };
