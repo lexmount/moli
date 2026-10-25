@@ -92,6 +92,29 @@ impl JsContextHost {
                     if let Some(policy) = &source_policy {
                         policy.apply_to(&mut snapshot.policy_container, &snapshot.url);
                     }
+                    if matches!(&bootstrap, ChildBrowsingContextBootstrap::Srcdoc { .. }) {
+                        let source_url = initiator_url.clone().or_else(|| {
+                            self.owner_dispatch_scope_for_node(handle)
+                                .and_then(|owner| {
+                                    self.document_referrer_source_url_for_dispatch_scope(owner)
+                                })
+                        });
+                        snapshot.policy_container.document_referrer = source_url
+                            .and_then(|source| {
+                                moli_fetch::referrer_value(
+                                    &source,
+                                    // Srcdoc retains its container origin; its
+                                    // about: URL does not make this cross-origin.
+                                    &source,
+                                    Some(
+                                        target_snapshot
+                                            .referrer_policy(initiator, source_policy.as_ref()),
+                                    ),
+                                    None,
+                                )
+                            })
+                            .unwrap_or_default();
+                    }
                     snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
                     if !target_snapshot.apply_response_policy(
                         &mut snapshot.policy_container,
