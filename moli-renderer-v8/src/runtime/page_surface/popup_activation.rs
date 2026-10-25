@@ -17,6 +17,10 @@ struct NavigationPolicyData {
 }
 
 impl RendererNavigationPolicy {
+    pub(crate) fn referrer_policy(&self) -> Option<&str> {
+        self.0.referrer_policy.as_deref()
+    }
+
     pub(crate) fn capture(policy: &crate::document_runtime::DocumentPolicyContainer) -> Self {
         Self(Arc::new(NavigationPolicyData {
             referrer_policy: policy.referrer_policy.clone(),
