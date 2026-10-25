@@ -123,6 +123,10 @@ impl WorkerResourceLoader {
         &self.request_client
     }
 
+    pub(crate) fn task_runner(&self) -> RendererResourceTaskRunner {
+        self.authority.loads.task_runner()
+    }
+
     pub(crate) fn begin_detach(&self) -> bool {
         let mut state = self.authority.state.lock();
         if *state != WorkerResourceLoaderState::Active {
