@@ -12,14 +12,6 @@ struct DetachedFocusEventInitDeclaration<'scope> {
     related_target: v8::Local<'scope, v8::Value>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct DetachedSimpleEventInitDeclaration {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-}
-
 fn build_focus_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -40,24 +32,6 @@ fn build_focus_event<'s>(
     Some(value)
 }
 
-fn build_simple_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor =
-        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Event").ok()?;
-    let init = DetachedSimpleEventInitDeclaration::new(bubbles, cancelable, composed)
-        .bind(scope)
-        .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    let value = constructor.new_instance(scope, &[event_type.into(), init.into()])?;
-    crate::context_bootstrap::mark_event_trusted(scope, value);
-    Some(value)
-}
-
 pub(super) fn dispatch_detached_simple_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -66,7 +40,9 @@ pub(super) fn dispatch_detached_simple_event<'s>(
     cancelable: bool,
     composed: bool,
 ) -> bool {
-    let Some(event) = build_simple_event(scope, event_type, bubbles, cancelable, composed) else {
+    let Some(event) = crate::native_bridge::element::construct_simple_event(
+        scope, event_type, bubbles, cancelable, composed,
+    ) else {
         return true;
     };
     dispatch_node_event(scope, target, event)
