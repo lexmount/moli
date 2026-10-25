@@ -63,6 +63,7 @@ fn install_child_error_observers(
         globalThis.__parentErrors = 0;
         globalThis.__scriptErrors = 0;
         globalThis.__scriptLoads = 0;
+        globalThis.__scriptTerminalEvents = [];
         globalThis.__coercions = 0;
         globalThis.__unhandled = 0;
         addEventListener('error', event => {{ ++__parentErrors; event.preventDefault(); }});
@@ -86,8 +87,12 @@ fn install_child_error_observers(
             return true;
         }};
         const script = child.document.querySelector('script[type=module]');
-        script.addEventListener('error', () => ++__scriptErrors);
-        script.addEventListener('load', () => {{ ++__scriptLoads; __childErrorOrder.push('script-load'); }});
+        const recordScriptEvent = event => __scriptTerminalEvents.push([
+            event instanceof child.Event, event.isTrusted, event.target === script,
+            event.bubbles, event.cancelable, event.composed
+        ]);
+        script.addEventListener('error', event => {{ ++__scriptErrors; recordScriptEvent(event); }});
+        script.addEventListener('load', event => {{ ++__scriptLoads; recordScriptEvent(event); __childErrorOrder.push('script-load'); }});
     "#
     ))?;
     Ok(())
@@ -252,6 +257,9 @@ async fn child_module_error_reporting_distinguishes_fetch_parse_and_evaluation_f
             assert_eq!(page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "[__childErrors.length, __childOnerrors.length, __parentErrors, __scriptErrors, __scriptLoads, __unhandled].join('|')",
             )?, expected, "{kind}");
+            assert_eq!(page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "__scriptTerminalEvents.length === __scriptErrors + __scriptLoads && __scriptTerminalEvents.every(row => JSON.stringify(row) === '[true,true,true,false,false,false]')",
+            )?, "true", "{kind}");
             assert_eq!(page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(&format!(r#"
                 __childErrors.every((entry, i) => entry[1] && entry[2] && entry[3] &&
                     entry[0] === __childOnerrors[i] &&
