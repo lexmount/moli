@@ -671,15 +671,17 @@ fn start_worker_module_graph_fetch(
     };
     let resource_kind = request.module_type().csp_resource_kind(resource_kind);
     let initiator = request.initiator_url().clone();
-    let csp_context = crate::content_security_policy::ModuleFetchCspContext::new(
+    let csp_context = crate::content_security_policy::ModuleFetchCspContext::new_with_policy_list(
         request.url().clone(),
         None,
         move |url, original_url, redirect_status| {
             let check = |policies: &[ContentSecurityPolicy], disposition| {
-                crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
-                    policies, &initiator, url, original_url, resource_kind,
-                    redirect_status, disposition, &endpoints,
-                )
+                policies.iter().filter_map(|policy| {
+                    crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
+                        std::slice::from_ref(policy), &initiator, url, original_url, resource_kind,
+                        redirect_status, disposition, &endpoints,
+                    )
+                }).collect()
             };
             (
                 check(&report, ContentSecurityPolicyDisposition::Report),
