@@ -733,9 +733,12 @@ fn start_worker_module_graph_fetch(
                     redirect_status, disposition, &policy.reporting_endpoints, crate::content_security_policy::ContentSecurityPolicyUrlRequest::Standard,
                 )?;
                 if !report_uri_enabled { violation.report_uri_endpoints.clear(); }
-                if redirect_status == ContentSecurityPolicyRedirectStatus::NoRedirect {
-                    if let Some(location) = &source_location { location.apply_to(&mut violation); }
-                }
+                let location = if redirect_status == ContentSecurityPolicyRedirectStatus::NoRedirect {
+                    source_location.clone().unwrap_or_default()
+                } else {
+                    crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+                };
+                location.apply_to(&mut violation);
                 Some(violation)
             }).collect::<Vec<_>>()
             };
@@ -752,6 +755,30 @@ fn start_worker_module_graph_fetch(
             fetch_id,
             request.module_key(),
             Err(error.to_string()),
+        ));
+        return;
+    }
+    // Local modules use the same policy and completion queue as HTTP modules,
+    // without applying transport emulation or recording an HTTP script resource.
+    if let Some(response) =
+        crate::network_host::local_url_response_result(request.url(), "GET", &[])
+    {
+        let result = response
+            .map_err(|error| error.to_string())
+            .and_then(|response| {
+                let (head, bytes) = response.into_byte_parts();
+                let source = WorkerModuleSource::from_response_parts(
+                    request.module_type(),
+                    &head.final_url,
+                    &head.headers,
+                    bytes,
+                )?;
+                Ok(WorkerModuleFetchedSource::new(head.final_url, source))
+            });
+        let _ = completion_tx.send(WorkerModuleGraphFetchEvent::completed(
+            fetch_id,
+            request.module_key(),
+            result,
         ));
         return;
     }
