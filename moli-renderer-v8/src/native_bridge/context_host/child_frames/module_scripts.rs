@@ -13,8 +13,7 @@ use crate::{
         FrameDocumentTaskOwner, FrameRealmId, FrameRequestKind,
     },
     module_runtime::{
-        ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleMapKey, NativeModuleGraphFetchRequest,
-        NativeModuleSingleFetchRequest,
+        ModuleGraphFetchedSource, NativeModuleGraphFetchRequest, NativeModuleSingleFetchRequest,
     },
     page_task_queue::RendererPageChildParserModuleRootStartTarget,
     planning::PreparedScript,
@@ -865,6 +864,7 @@ impl JsContextHost {
         loader: &crate::network::context::DocumentResourceLoader,
         start: FrameDocumentModuleFetchClientStart,
         task: FrameDocumentModuleDependencyFetchTask,
+        request: NativeModuleGraphFetchRequest,
         child_handle: DomHandle,
         network_attribution: ChildModuleFetchNetworkAttribution,
     ) {
@@ -877,7 +877,6 @@ impl JsContextHost {
                 .finish_document_request(start.owner().document_id, start.request_id());
             return;
         }
-        let request = task.fetch_request().clone();
         let owner = task.owner();
         debug_assert_eq!(owner.document_owner(), start.owner());
         let request_id = start.request_id();
@@ -922,6 +921,7 @@ impl JsContextHost {
         &mut self,
         loader: &crate::network::context::DocumentResourceLoader,
         fetch_start: FrameDocumentParserModuleRootFetchStart,
+        request: NativeModuleGraphFetchRequest,
         target: ChildDocumentModuleFetchTarget,
         network_attribution: ChildModuleFetchNetworkAttribution,
     ) {
@@ -931,16 +931,6 @@ impl JsContextHost {
         ) {
             return;
         }
-        let policy = self
-            .child_browsing_context_document_handle(target.child_handle())
-            .and_then(|document| {
-                crate::context_bootstrap::document_referrer_policy_for_native_document(
-                    self, document,
-                )
-            });
-        let request =
-            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key())
-                .with_document_referrer_policy(policy);
         let completion_tx = self.resource_completion_tx.clone();
         debug_assert_eq!(target.child_handle(), fetch_start.child_handle);
         let script_handle = fetch_start.script_handle;
@@ -1050,16 +1040,4 @@ impl JsContextHost {
             network_result,
         );
     }
-}
-
-fn child_parser_module_root_fetch_request(
-    script: &PreparedScript,
-    key: &ModuleMapKey,
-) -> NativeModuleGraphFetchRequest {
-    NativeModuleGraphFetchRequest::new(
-        key.url().clone(),
-        script.initiator_url.clone(),
-        ModuleFetchMetadata::from_top_level_script_fetch_metadata(&script.fetch_metadata),
-        key.kind(),
-    )
 }
