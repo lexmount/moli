@@ -680,10 +680,12 @@ fn start_worker_module_graph_fetch(
             ContentSecurityPolicyRedirectStatus::NoRedirect,
         )
         .into_violations();
-    if let Some(location) = request.source_location() {
-        for violation in reports.iter_mut().chain(&mut enforced) {
-            location.apply_to(violation);
-        }
+    // Descendant module fetches have no JavaScript caller location.
+    let unspecified_location =
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default();
+    let location = request.source_location().unwrap_or(&unspecified_location);
+    for violation in reports.iter_mut().chain(&mut enforced) {
+        location.apply_to(violation);
     }
     let initial_error = enforced.first().map(module_graph_csp_violation_message);
     queue_worker_module_csp_violations(&event_tx, reports.into_iter().chain(enforced));
@@ -692,6 +694,26 @@ fn start_worker_module_graph_fetch(
             fetch_id,
             Err(message),
         ));
+        return;
+    }
+    // Local modules use the same policy and completion queue as HTTP modules,
+    // without applying transport emulation or recording an HTTP script resource.
+    if let Some(response) =
+        crate::network_host::local_url_response_result(request.url(), "GET", &[])
+    {
+        let result = response
+            .map_err(|error| error.to_string())
+            .and_then(|response| {
+                let (head, bytes) = response.into_byte_parts();
+                let source = WorkerModuleSource::from_response_parts(
+                    request.module_type(),
+                    &head.final_url,
+                    &head.headers,
+                    bytes,
+                )?;
+                Ok(WorkerModuleFetchedSource::new(head.final_url, source))
+            });
+        let _ = event_tx.send(WorkerModuleGraphFetchEvent::completed(fetch_id, result));
         return;
     }
     let browser_request_metadata = request.browser_request_metadata();
