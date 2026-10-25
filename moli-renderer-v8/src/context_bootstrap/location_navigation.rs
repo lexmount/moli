@@ -64,7 +64,6 @@ struct LocationNavigationOptions<'s> {
     user_initiated: bool,
     dispatch_child_navigate_event_for_all_kinds: bool,
     force_exact_same_document_navigation: bool,
-    explicit_initiator_url: Option<url::Url>,
     explicit_navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
     download_source_document: Option<crate::document_runtime::DomHandle>,
     source_can_access_target: Option<bool>,
@@ -117,7 +116,6 @@ pub(crate) fn navigate_location_object_for_hyperlink<'s>(
             source_can_access_target: Some(options.source_can_access_target),
             hyperlink: true,
             force_exact_same_document_navigation: true,
-            explicit_initiator_url: Some(options.initiator.url().clone()),
             explicit_navigation_initiator: Some(options.initiator),
             named_hyperlink_popup: options.named_popup,
             ..LocationNavigationOptions::default()
@@ -432,7 +430,7 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
     location: v8::Local<'s, v8::Object>,
     target: &url::Url,
     delay_ms: u32,
-    initiator_url: url::Url,
+    initiator: crate::runtime::RendererNavigationInitiator,
 ) {
     let Some(current_href) = location_href_slot(scope, location) else {
         return;
@@ -451,8 +449,8 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
         LocationNavigationOptions {
             dispatch_child_navigate_event_for_all_kinds: true,
             force_exact_same_document_navigation: same_document_fragment,
-            explicit_initiator_url: Some(initiator_url),
-            ..Default::default()
+            explicit_navigation_initiator: Some(initiator),
+            ..LocationNavigationOptions::default()
         },
     );
 }
@@ -524,7 +522,6 @@ fn navigate_location_object_with_options<'s>(
         user_initiated,
         dispatch_child_navigate_event_for_all_kinds,
         force_exact_same_document_navigation,
-        explicit_initiator_url,
         explicit_navigation_initiator,
         download_source_document,
         source_can_access_target,
@@ -573,6 +570,9 @@ fn navigate_location_object_with_options<'s>(
     };
     // Entering the destination realm must not turn it into the initiator.
     // Freeze the incumbent Document before navigation events can run script.
+    let explicit_initiator_url = explicit_navigation_initiator
+        .as_ref()
+        .map(|source| source.url().clone());
     let navigation_source = if matches!(kind, LocationNavigationKind::Reload) {
         None
     } else {
@@ -1052,7 +1052,7 @@ fn navigate_location_object_with_options<'s>(
                         initiator_url,
                         navigation_source
                             .as_ref()
-                            .and_then(|(initiator, _)| initiator.document_policy(&resolved)),
+                            .map(|source| source.initiator.clone()),
                     )
                 } else {
                     false
@@ -1291,7 +1291,10 @@ fn capture_location_navigation_source<'s>(
     // Same-owner navigation already captures its origin environment separately.
     // Its policy still needs to cross the browser navigation boundary.
     if source_host == target_host {
-        return Some((initiator, None));
+        return Some(LocationNavigationSource {
+            initiator,
+            initial_document_environment: None,
+        });
     }
     policy.document_referrer = initiator.outgoing_referrer();
     let base_url = super::window_runtime::entered_window_api_base_url(scope, host);

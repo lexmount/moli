@@ -59,15 +59,23 @@ pub(in crate::native_bridge::context_host) use parser_store::ChildDocumentParser
 fn configure_child_document_navigation_request(
     request: moli_fetch::Request,
     initiator_url: &Url,
+    source: Option<&crate::runtime::RendererNavigationInitiator>,
     browser_context: &moli_cookie_jar::BrowserCookieFacadeContext,
 ) -> moli_fetch::Request {
     let request = request
         .with_browser_site_context(browser_context.clone())
         .with_subframe_navigation_cookie_context();
     // Form requests already captured the submitting Document's origin and
-    // referrer policy; the iframe owner's URL must not overwrite them.
+    // post-formdata referrer policy. Preserve that admission snapshot.
     if request.request_origin().is_some() {
         request
+    } else if let Some(source) = source {
+        // srcdoc cannot recover either value from its URL.
+        request
+            .with_initiator_url(initiator_url)
+            .with_request_origin(source.origin())
+            .with_fetch_referrer(source.url().as_str())
+            .expect("navigation initiator retains a parsed URL")
     } else {
         request
             .with_initiator_url(initiator_url)
