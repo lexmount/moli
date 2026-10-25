@@ -20,7 +20,7 @@ impl ChildNavigationTargetSnapshot {
     pub(in crate::native_bridge::context_host) fn referrer_policy<'a>(
         &'a self,
         initiator: ChildDocumentNavigationInitiator,
-        source_policy: Option<&'a crate::runtime::RendererNavigationPolicy>,
+        source_referrer_policy: Option<&'a str>,
     ) -> &'a str {
         let owner_policy = if initiator == ChildDocumentNavigationInitiator::FrameOwnerElement {
             if self.embedding_origin.as_deref() == Some("null") {
@@ -30,9 +30,7 @@ impl ChildNavigationTargetSnapshot {
         } else {
             None
         };
-        let source_policy = source_policy
-            .and_then(crate::runtime::RendererNavigationPolicy::referrer_policy)
-            .or(self.creator_referrer_policy.as_deref());
+        let source_policy = source_referrer_policy.or(self.creator_referrer_policy.as_deref());
         moli_fetch::effective_referrer_policy(owner_policy, source_policy)
     }
 
@@ -56,7 +54,7 @@ impl ChildNavigationTargetSnapshot {
         &self,
         mut request: moli_fetch::Request,
         initiator: ChildDocumentNavigationInitiator,
-        source_policy: Option<&crate::runtime::RendererNavigationPolicy>,
+        source_referrer_policy: Option<&str>,
     ) -> moli_fetch::Request {
         // A reused request cannot supply its own requirement or retain a
         // previous target's header. There is at most one authoritative value.
@@ -72,7 +70,10 @@ impl ChildNavigationTargetSnapshot {
             .cloned()
             .unwrap_or_default();
         request.with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
-            referrer_policy: Some(self.referrer_policy(initiator, source_policy).to_owned()),
+            referrer_policy: Some(
+                self.referrer_policy(initiator, source_referrer_policy)
+                    .to_owned(),
+            ),
             ..metadata
         })
     }

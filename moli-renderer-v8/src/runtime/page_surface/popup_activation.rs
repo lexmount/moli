@@ -117,6 +117,10 @@ impl RendererNavigationInitiator {
         moli_url::WebOrigin::from_serialized(&self.data.origin)
     }
 
+    pub(crate) fn referrer_policy(&self) -> &str {
+        &self.data.referrer_policy
+    }
+
     pub fn document_policy(&self, destination: &url::Url) -> Option<RendererNavigationPolicy> {
         RendererNavigationPolicy::applies_to(destination).then(|| self.data.policy.clone())
     }

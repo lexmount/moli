@@ -125,6 +125,7 @@ impl JsContextHost {
             initiator_url,
             target_snapshot,
             source_policy,
+            request_initiator,
         } = navigation;
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_loader = self.document_resource_loader_for_owner(navigation_load.owner())?;
@@ -226,10 +227,18 @@ impl JsContextHost {
                                 "unsupported child document navigation bootstrap".to_owned()
                             })?,
                             &initiator_url,
+                            request_initiator.as_ref(),
                             &browser_context,
                         ),
                         initiator,
-                        source_policy.as_ref(),
+                        request_initiator
+                            .as_ref()
+                            .map(crate::runtime::RendererNavigationInitiator::referrer_policy)
+                            .or_else(|| {
+                                source_policy.as_ref().and_then(
+                                    crate::runtime::RendererNavigationPolicy::referrer_policy,
+                                )
+                            }),
                     )
                     .with_page_network_policy()
                     .with_network_partition_key(network_partition_key);

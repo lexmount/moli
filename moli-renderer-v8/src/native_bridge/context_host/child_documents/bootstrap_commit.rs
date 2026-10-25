@@ -25,6 +25,7 @@ impl JsContextHost {
             initiator_url,
             target_snapshot,
             source_policy,
+            request_initiator,
         } = navigation;
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
@@ -85,6 +86,14 @@ impl JsContextHost {
             return Some(ChildDocumentCommitResult::ready(None));
         }
         self.cancel_child_meta_refresh_navigation(handle);
+        let source_referrer_policy = request_initiator
+            .as_ref()
+            .map(crate::runtime::RendererNavigationInitiator::referrer_policy)
+            .or_else(|| {
+                source_policy
+                    .as_ref()
+                    .and_then(crate::runtime::RendererNavigationPolicy::referrer_policy)
+            });
         let cached_snapshot =
             match self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap) {
                 LocalChildDocumentPreparation::Ready(snapshot) => {
@@ -93,12 +102,16 @@ impl JsContextHost {
                         policy.apply_to(&mut snapshot.policy_container, &snapshot.url);
                     }
                     if matches!(&bootstrap, ChildBrowsingContextBootstrap::Srcdoc { .. }) {
-                        let source_url = initiator_url.clone().or_else(|| {
-                            self.owner_dispatch_scope_for_node(handle)
-                                .and_then(|owner| {
-                                    self.document_referrer_source_url_for_dispatch_scope(owner)
-                                })
-                        });
+                        let source_url = request_initiator
+                            .as_ref()
+                            .map(|source| source.url().clone())
+                            .or_else(|| initiator_url.clone())
+                            .or_else(|| {
+                                self.owner_dispatch_scope_for_node(handle)
+                                    .and_then(|owner| {
+                                        self.document_referrer_source_url_for_dispatch_scope(owner)
+                                    })
+                            });
                         snapshot.policy_container.document_referrer = source_url
                             .and_then(|source| {
                                 moli_fetch::referrer_value(
@@ -106,7 +119,7 @@ impl JsContextHost {
                                     &snapshot.url,
                                     Some(
                                         target_snapshot
-                                            .referrer_policy(initiator, source_policy.as_ref()),
+                                            .referrer_policy(initiator, source_referrer_policy),
                                     ),
                                     None,
                                 )
@@ -171,7 +184,8 @@ impl JsContextHost {
                         initiator,
                         target_snapshot,
                     )
-                    .with_source_policy(source_policy),
+                    .with_source_policy(source_policy)
+                    .with_request_initiator(request_initiator),
                 )
                 .is_some()
             {

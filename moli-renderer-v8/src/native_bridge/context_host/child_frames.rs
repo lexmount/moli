@@ -103,6 +103,9 @@ pub(super) struct PendingChildFrameNavigation {
     pub(super) initiator: ChildDocumentNavigationInitiator,
     pub(super) target_snapshot: ChildNavigationTargetSnapshot,
     pub(super) source_policy: Option<crate::runtime::RendererNavigationPolicy>,
+    /// The source's native origin and referrer survive beforeunload and the
+    /// target's later navigation-owner transition, including for HTTP targets.
+    pub(super) request_initiator: Option<crate::runtime::RendererNavigationInitiator>,
 }
 
 impl PendingChildFrameNavigation {
@@ -118,6 +121,7 @@ impl PendingChildFrameNavigation {
             initiator,
             target_snapshot,
             source_policy: None,
+            request_initiator: None,
         }
     }
 
@@ -126,6 +130,14 @@ impl PendingChildFrameNavigation {
         policy: Option<crate::runtime::RendererNavigationPolicy>,
     ) -> Self {
         self.source_policy = policy;
+        self
+    }
+
+    pub(super) fn with_request_initiator(
+        mut self,
+        initiator: Option<crate::runtime::RendererNavigationInitiator>,
+    ) -> Self {
+        self.request_initiator = initiator;
         self
     }
 }
