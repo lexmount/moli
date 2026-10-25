@@ -2603,6 +2603,7 @@ mod websocket_close_info_numbers;
 
 mod websocket_stream_dictionary;
 
+mod webtransport_csp;
 mod webtransport_frontend;
 mod window_cross_origin_getters;
 mod window_event_receivers;
