@@ -181,6 +181,7 @@ mod opfs_storage;
 mod websockets;
 mod worker_globals;
 mod worker_storage_security;
+mod xhr_csp_tasks;
 
 #[tokio::test]
 async fn worker_fetch_referrer_inputs_reach_the_network() {
