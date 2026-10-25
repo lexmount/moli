@@ -21,8 +21,8 @@ use crate::broadcast_channel_runtime::{
     BroadcastChannelStorageKey, SharedBroadcastChannelRegistry,
 };
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyUrlViolation,
+    ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
+    ContentSecurityPolicyUrlViolation,
 };
 use crate::context_bootstrap::flush_one_pending_file_reading_task;
 use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
@@ -645,41 +645,44 @@ fn start_worker_module_graph_fetch(
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
-    let (policy, resource_kind) = match request.csp_source() {
-        WorkerModuleGraphFetchCspSource::StaticModuleGraph => (
+    let policy = match request.csp_source() {
+        WorkerModuleGraphFetchCspSource::StaticModuleGraph => {
             crate::content_security_policy::InheritedContentSecurityPolicy {
                 self_url: Some(request.initiator_url().clone()),
                 header_policies: module_static_import_content_security_policies,
                 ..Default::default()
-            },
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
-        ),
-        WorkerModuleGraphFetchCspSource::DynamicImportGraph => (
-            worker_global_policy,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
-        ),
-    };
-    let initial_csp_report_only_violation = policy.url_violation(
-        request.initiator_url(),
-        request.url(),
-        resource_kind,
-        ContentSecurityPolicyRedirectStatus::NoRedirect,
-        ContentSecurityPolicyDisposition::Report,
-    );
-    if let Some(violation) = policy.url_violation(
-        request.initiator_url(),
-        request.url(),
-        resource_kind,
-        ContentSecurityPolicyRedirectStatus::NoRedirect,
-        ContentSecurityPolicyDisposition::Enforce,
-    ) {
-        let message = module_graph_csp_violation_message(&violation);
-        let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
-            .with_csp_violation(violation);
-        if let Some(report_only_violation) = initial_csp_report_only_violation {
-            completion = completion.with_csp_report_only_violation(report_only_violation);
+            }
         }
-        let _ = completion_tx.send(completion);
+        WorkerModuleGraphFetchCspSource::DynamicImportGraph => worker_global_policy,
+    };
+    let policy =
+        crate::document_runtime::DocumentRequestPolicySnapshot::from_inherited_policy(&policy)
+            .for_resource_kind(
+                request
+                    .module_type()
+                    .csp_resource_kind(request.csp_source()),
+            );
+    let (mut reports, mut enforced) = policy
+        .check_url(
+            request.initiator_url(),
+            request.url(),
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .into_violations();
+    if let Some(location) = request.source_location() {
+        for violation in reports.iter_mut().chain(&mut enforced) {
+            location.apply_to(violation);
+        }
+    }
+    let initial_error = enforced.first().map(module_graph_csp_violation_message);
+    let violations = Arc::new(Mutex::new(
+        reports.into_iter().chain(enforced).collect::<Vec<_>>(),
+    ));
+    if let Some(message) = initial_error {
+        let _ = completion_tx.send(
+            WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
+                .with_csp_violations(std::mem::take(&mut *violations.lock())),
+        );
         return;
     }
     let browser_request_metadata = request.browser_request_metadata();
@@ -690,10 +693,10 @@ fn start_worker_module_graph_fetch(
                 .with_network_partition_key(network_partition_key.clone())
                 .with_browser_request_metadata(browser_request_metadata),
             Err(error) => {
-                let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
-                    fetch_id,
-                    Err(error.to_string()),
-                ));
+                let _ = completion_tx.send(
+                    WorkerModuleGraphFetchCompletion::new(fetch_id, Err(error.to_string()))
+                        .with_csp_violations(std::mem::take(&mut *violations.lock())),
+                );
                 return;
             }
         };
@@ -708,17 +711,25 @@ fn start_worker_module_graph_fetch(
         .with_initiator_url(request.initiator_url())
         .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
         .with_credentials_mode(request.credentials_mode());
+    let redirects = crate::network_host::FetchCspRedirectState::new(&policy);
+    let redirect_violations = violations.clone();
+    if let Some(check) = redirects.redirect_check(
+        policy.clone(),
+        request.initiator_url().clone(),
+        request.url().clone(),
+        move |violation| redirect_violations.lock().push(violation),
+    ) {
+        fetch_request = fetch_request.with_redirect_check(check);
+    }
     let requested_url = request.url().clone();
     let request_initiator_url = request.initiator_url().clone();
     let requested_module_type = request.module_type();
     let request_credentials_mode = request.credentials_mode();
     let response_policy = policy.clone();
-    let response_resource_kind = resource_kind;
+    let response_violations = violations.clone();
     let completion_tx_for_callback = completion_tx.clone();
     let response_started_at = Instant::now();
     let send_completion = move |result: Result<moli_fetch::Response, anyhow::Error>| {
-        let mut csp_violation = None;
-        let mut csp_report_only_violation = initial_csp_report_only_violation;
         let result = result
             .map_err(|error| {
                 format!("failed to fetch module worker dependency `{requested_url}`: {error}")
@@ -730,32 +741,19 @@ fn start_worker_module_graph_fetch(
                     false,
                 )
                 .map_err(|error| error.to_string())?;
-                let redirect_status = if response.redirect_chain.is_empty() {
-                    ContentSecurityPolicyRedirectStatus::NoRedirect
-                } else {
-                    ContentSecurityPolicyRedirectStatus::FollowedRedirect
-                };
-                if redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
-                    && csp_report_only_violation.is_none()
+                if !response.redirect_chain.is_empty()
+                    && !redirects.was_checked(&response.final_url)
                 {
-                    csp_report_only_violation = response_policy.url_violation(
-                        &request_initiator_url,
-                        &response.final_url,
-                        response_resource_kind,
-                        redirect_status,
-                        ContentSecurityPolicyDisposition::Report,
-                    );
-                }
-                if let Some(violation) = response_policy.url_violation(
-                    &request_initiator_url,
-                    &response.final_url,
-                    response_resource_kind,
-                    redirect_status,
-                    ContentSecurityPolicyDisposition::Enforce,
-                ) {
-                    let message = module_graph_csp_violation_message(&violation);
-                    csp_violation = Some(violation);
-                    return Err(message);
+                    let (reports, enforced) = response_policy
+                        .check_redirect(&request_initiator_url, &response.final_url)
+                        .into_violations();
+                    let error = enforced.first().map(module_graph_csp_violation_message);
+                    response_violations
+                        .lock()
+                        .extend(reports.into_iter().chain(enforced));
+                    if let Some(error) = error {
+                        return Err(error);
+                    }
                 }
                 crate::network_host::validate_fetch_response_security_policy(
                     &request_initiator_url,
@@ -789,46 +787,37 @@ fn start_worker_module_graph_fetch(
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
             });
-        let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, result);
-        if let Some(violation) = csp_report_only_violation {
-            completion = completion.with_csp_report_only_violation(violation);
-        }
-        if let Some(violation) = csp_violation {
-            completion = completion.with_csp_violation(violation);
-        }
-        let _ = completion_tx_for_callback.send(completion);
+        let _ = completion_tx_for_callback.send(
+            WorkerModuleGraphFetchCompletion::new(fetch_id, result)
+                .with_csp_violations(std::mem::take(&mut *response_violations.lock())),
+        );
     };
     let Some(load) = loader.register_load(
         ResourceLoadKind::Script,
         ResourceLoadDisposition::Ordinary,
         None,
     ) else {
-        let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
-            fetch_id,
-            Err("worker module dependency fetch rejected during shutdown".to_owned()),
-        ));
+        let _ = completion_tx.send(
+            WorkerModuleGraphFetchCompletion::new(
+                fetch_id,
+                Err("worker module dependency fetch rejected during shutdown".to_owned()),
+            )
+            .with_csp_violations(std::mem::take(&mut *violations.lock())),
+        );
         return;
     };
     if let Err(error) = loader
         .request_client()
         .fetch_cacheable_script_text_callback_with_load(fetch_request, load, send_completion)
     {
-        let mut completion = WorkerModuleGraphFetchCompletion::new(
+        let completion = WorkerModuleGraphFetchCompletion::new(
             fetch_id,
             Err(format!(
                 "failed to start module worker dependency fetch `{}`: {error}",
                 request.url()
             )),
-        );
-        if let Some(violation) = policy.url_violation(
-            request.initiator_url(),
-            request.url(),
-            resource_kind,
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            ContentSecurityPolicyDisposition::Report,
-        ) {
-            completion = completion.with_csp_report_only_violation(violation);
-        }
+        )
+        .with_csp_violations(std::mem::take(&mut *violations.lock()));
         let _ = completion_tx.send(completion);
     }
 }
@@ -3267,11 +3256,7 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let global = ctx.global(scope);
                 if worker_dynamic_module_import_waits_for_fetch(scope, completion.fetch_id()) {
-                    if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
-                    if let Some(violation) = completion.csp_violation() {
+                    for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
@@ -3284,11 +3269,7 @@ async fn worker_main(
                         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                     }
                 } else if pending_module_bootstrap.is_some() {
-                    if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
-                    if let Some(violation) = completion.csp_violation() {
+                    for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }

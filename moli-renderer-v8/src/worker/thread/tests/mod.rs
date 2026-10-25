@@ -6,6 +6,7 @@ mod error_reporting_guard;
 mod native_exception_data;
 
 mod event_target_prototype;
+mod module_csp;
 mod notification_init;
 mod request_init;
 mod text_codecs;
