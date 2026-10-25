@@ -59,11 +59,12 @@ impl NativeModuleFetchContext {
         let loader = host.document_resource_loader_for_dispatch_scope(owner)?;
         let policy = host.document_connect_policy_snapshot_for_owner(owner)?;
         let policy = match kind {
-            ModuleKind::Css => policy.for_style_preload(metadata.nonce().map(str::to_owned)),
-            ModuleKind::Json => policy,
-            _ => policy.for_script_preload(crate::planning::ScriptFetchMetadata {
+            ModuleKind::Css => policy.for_style_request(metadata.nonce().map(str::to_owned)),
+            ModuleKind::Json | ModuleKind::Text => policy,
+            _ => policy.for_script_request(crate::planning::ScriptFetchMetadata {
                 nonce: metadata.nonce().map(str::to_owned),
                 integrity: metadata.integrity().map(str::to_owned),
+                parser_inserted: metadata.parser_inserted,
                 ..Default::default()
             }),
         };
@@ -82,17 +83,20 @@ impl NativeModuleFetchContext {
                 document_url: loader.fetch_context().document_url().clone(),
             },
             request_origin: loader.fetch_context().request_origin(),
-            destination: if kind == ModuleKind::Css {
-                ServiceWorkerRequestDestination::Style
-            } else {
-                ServiceWorkerRequestDestination::Script
+            destination: match kind {
+                ModuleKind::Css => ServiceWorkerRequestDestination::Style,
+                ModuleKind::Json => ServiceWorkerRequestDestination::Json,
+                ModuleKind::Text => ServiceWorkerRequestDestination::Text,
+                ModuleKind::JavaScript | ModuleKind::WebAssembly => {
+                    ServiceWorkerRequestDestination::Script
+                }
             },
             resource_type: if kind == ModuleKind::Css {
                 SubresourceResourceType::Stylesheet
             } else {
                 SubresourceResourceType::Script
             },
-            // Modulepreload uses the single-module script fetch algorithm,
+            // All these requests use the single-module script fetch algorithm,
             // including its script initiator, regardless of its DOM source.
             timing: Mutex::new(FetchResourceTiming::for_initiator_type("script")),
             entry: Mutex::default(),
@@ -127,7 +131,7 @@ impl NativeModuleFetchContext {
         }
         let error = enforced
             .first()
-            .map(|v| document_content_security_policy_error_message(v, "modulepreload"));
+            .map(|v| document_content_security_policy_error_message(v, "module"));
         for violation in reports.into_iter().chain(enforced) {
             queue_module_csp_violation(&self.completion_tx, &self.report_context, violation);
         }
@@ -237,7 +241,7 @@ impl NativeModuleFetchContext {
                         }
                     }
                 } => result,
-                Ok(()) = cancel_rx => { cancel.cancel(); Err(anyhow::anyhow!("modulepreload fetch cancelled when its Document retired")) }
+                Ok(()) = cancel_rx => { cancel.cancel(); Err(anyhow::anyhow!("module fetch cancelled when its Document retired")) }
             };
             let native = load.response_timing();
             load.finish();

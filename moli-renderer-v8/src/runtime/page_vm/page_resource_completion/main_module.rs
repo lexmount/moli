@@ -140,6 +140,9 @@ impl PageVm {
             completion.network_attribution().document_url(),
             completion.network_attribution().request_url(),
             completion.network_result(),
+            completion
+                .fetch_context()
+                .and_then(|context| context.take_performance_entry()),
         );
         self.vm_mut()
             .apply_current_main_parser_module_graph_fetch_completion(
@@ -191,6 +194,9 @@ impl PageVm {
             completion.network_attribution().document_url(),
             completion.network_attribution().request_url(),
             completion.network_result(),
+            completion
+                .fetch_context()
+                .and_then(|context| context.take_performance_entry()),
         );
         let document_owner = completion.target().document_owner();
         let actions = self
@@ -259,6 +265,9 @@ impl PageVm {
             completion.network_attribution().document_url(),
             completion.network_attribution().request_url(),
             completion.network_result(),
+            completion
+                .fetch_context()
+                .and_then(|context| context.take_performance_entry()),
         );
         let document_owner = completion.target().import_owner().task_owner();
         let graph_body: crate::script_vm::MainDynamicImportGraphFetchBodySettlement = self
@@ -334,7 +343,7 @@ impl PageVm {
         }
 
         let output_effect = if let Some(network_result) = completion.network_result() {
-            self.vm_mut().record_main_modulepreload_network_result(
+            self.vm_mut().record_main_module_network_result(
                 completion.network_attribution().document_url().clone(),
                 completion.network_attribution().request_url().clone(),
                 network_result.as_ref(),
@@ -362,14 +371,16 @@ impl PageVm {
         document_url: &url::Url,
         request_url: &url::Url,
         network_result: Option<&crate::types::SharedNavigationResponseResult>,
+        native_entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
     ) -> PageResourceCompletionOutputEffect {
         let Some(network_result) = network_result else {
             return PageResourceCompletionOutputEffect::None;
         };
-        self.vm_mut().record_script_subresource_network_result(
+        self.vm_mut().record_main_module_network_result(
             document_url.clone(),
             request_url.clone(),
             network_result.as_ref(),
+            native_entry,
         );
         PageResourceCompletionOutputEffect::CaptureRequired
     }

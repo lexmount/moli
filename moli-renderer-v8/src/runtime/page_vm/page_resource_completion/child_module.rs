@@ -124,7 +124,9 @@ impl PageVm {
                     completion.target(),
                     completion.network_attribution(),
                     completion.network_result(),
-                    None,
+                    completion
+                        .fetch_context()
+                        .and_then(|context| context.take_performance_entry()),
                 ),
         );
         let _followup = self

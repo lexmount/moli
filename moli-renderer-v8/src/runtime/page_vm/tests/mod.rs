@@ -134,6 +134,7 @@ mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod dictionary_links;
+mod document_module_policy;
 mod document_script_completion;
 mod element_toggle_event;
 mod fetch_blob_reading;

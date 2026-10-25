@@ -34,6 +34,8 @@ pub(crate) struct PendingDynamicModuleImport {
     attributes: ModuleAttributesKey,
     phase: ModuleImportPhase,
     fetch_metadata: super::ModuleFetchMetadata,
+    csp_source_location:
+        Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,7 +199,22 @@ impl PendingDynamicModuleImport {
             attributes,
             phase,
             fetch_metadata: super::ModuleFetchMetadata::default(),
+            csp_source_location: None,
         }
+    }
+
+    pub(crate) fn with_csp_source_location(
+        mut self,
+        location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
+    ) -> Self {
+        self.csp_source_location = Some(location);
+        self
+    }
+
+    pub(crate) fn csp_source_location(
+        &self,
+    ) -> Option<&crate::content_security_policy::ContentSecurityPolicySourceLocation> {
+        self.csp_source_location.as_ref()
     }
 
     pub(crate) fn with_referrer_script(
@@ -539,12 +556,7 @@ impl DynamicModuleInflightFetch {
         self.request.tree_client()
     }
 
-    pub(crate) fn fetch_metadata(&self) -> &super::ModuleFetchMetadata {
-        self.request.fetch_metadata()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn request_for_test(&self) -> &NativeModuleGraphFetchRequest {
+    pub(crate) fn request(&self) -> &NativeModuleGraphFetchRequest {
         &self.request
     }
 
