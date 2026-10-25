@@ -2439,41 +2439,14 @@ pub(super) fn start_worker_resource_fetch<'s>(
         },
     );
 
-    let report_only_violation = {
-        let state_ref = state.borrow();
-        worker_content_security_policy_report_only_violation(
-            &state_ref,
-            &document_url,
-            &resolved_url,
-            kind.csp_resource_kind(),
-        )
-    };
-    let csp_violation = {
-        let state_ref = state.borrow();
-        worker_content_security_policy_violation(
-            &state_ref,
-            &document_url,
-            &resolved_url,
-            kind.csp_resource_kind(),
-        )
-    };
-    let csp_source_location = if report_only_violation.is_none() && csp_violation.is_none() {
-        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
-    } else {
-        crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope)
-    };
-    if let Some(mut violation) = report_only_violation {
-        csp_source_location.apply_to(&mut violation);
-        dispatch_worker_content_security_policy_violation_event_for_state(
-            scope, &state, &violation,
-        );
-    }
-    if let Some(mut violation) = csp_violation {
-        csp_source_location.apply_to(&mut violation);
-        dispatch_worker_content_security_policy_violation_event_for_state(
-            scope, &state, &violation,
-        );
-        let message = worker_content_security_policy_error_message(&violation, "fetch");
+    if let Some(message) = check_worker_request_csp(
+        scope,
+        &state,
+        &document_url,
+        &resolved_url,
+        kind.csp_resource_kind(),
+        "fetch",
+    ) {
         record_worker_subresource_failure(
             &state.borrow(),
             document_url,

@@ -2075,8 +2075,26 @@ async fn worker_main(
             Timer,
         }
 
+        // CSP tasks can settle promises awaited by a module's evaluation.
+        // Release them once evaluation has started, while other bootstrap
+        // messages keep their existing admission and relative order.
+        let ready_csp_message = pending_module_bootstrap
+            .as_ref()
+            .filter(|bootstrap| bootstrap.is_waiting_for_evaluation())
+            .and_then(|_| {
+                pending_bootstrap_messages.iter().position(|message| {
+                    matches!(
+                        message,
+                        WorkerMessage::DispatchContentSecurityPolicyViolation(_)
+                    )
+                })
+            })
+            .and_then(|index| pending_bootstrap_messages.remove(index));
+
         // Wait for either a message, a fetch completion, or a timer.
-        let wake = if pending_module_bootstrap.is_none()
+        let wake = if let Some(message) = ready_csp_message {
+            WorkerLoopWake::Message(Some(message))
+        } else if pending_module_bootstrap.is_none()
             && let Some(message) = pending_bootstrap_messages.pop_front()
         {
             WorkerLoopWake::Message(Some(message))
@@ -2865,7 +2883,10 @@ async fn worker_main(
             WorkerLoopWake::Message(Some(
                 WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
             )) => {
-                if pending_module_bootstrap.is_some() {
+                if pending_module_bootstrap
+                    .as_ref()
+                    .is_some_and(|bootstrap| !bootstrap.is_waiting_for_evaluation())
+                {
                     pending_bootstrap_messages.push_back(
                         WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
                     );

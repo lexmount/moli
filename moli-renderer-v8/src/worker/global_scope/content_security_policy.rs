@@ -70,13 +70,34 @@ pub(crate) fn check_worker_webtransport_csp(
     request_url: &Url,
 ) -> Option<String> {
     let state = get_worker_state(scope)?;
+    let document_url = state.borrow().current_script_url.clone()?;
+    check_worker_request_csp(
+        scope,
+        &state,
+        &document_url,
+        request_url,
+        ContentSecurityPolicyResourceKind::WorkerConnect,
+        "WebTransport",
+    )
+}
+
+pub(super) fn check_worker_request_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    document_url: &Url,
+    request_url: &Url,
+    kind: ContentSecurityPolicyResourceKind,
+    operation: &'static str,
+) -> Option<String> {
     let (check, wake_tx) = {
         let state = state.borrow();
-        let document_url = state.current_script_url.as_ref()?;
-        let policy = worker_request_policy_snapshot(
-            &state,
-            ContentSecurityPolicyResourceKind::WorkerConnect,
-        );
+        worker_policies(&state, ContentSecurityPolicyDisposition::Enforce)
+            .chain(worker_policies(
+                &state,
+                ContentSecurityPolicyDisposition::Report,
+            ))
+            .next()?;
+        let policy = worker_request_policy_snapshot(&state, kind);
         (
             policy.check_url(
                 document_url,
@@ -92,11 +113,17 @@ pub(crate) fn check_worker_webtransport_csp(
     let (report_only, enforced) = check.into_violations();
     let message = enforced
         .first()
-        .map(|violation| worker_content_security_policy_error_message(violation, "WebTransport"));
+        .map(|violation| worker_content_security_policy_error_message(violation, operation));
     let location =
         crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
+    // Preserve the initiating call site, but report in a later worker task so
+    // listeners cannot reenter the request API before its promise is returned.
     for mut violation in enforced.into_iter().chain(report_only) {
         location.apply_to(&mut violation);
+        // Admit the native keepalive report before a rejection handler can
+        // close this worker. Event delivery remains a separate task; the
+        // per-worker report history suppresses another transport submission.
+        send_worker_content_security_policy_reports_for_state(state, &violation);
         let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
             Box::new(violation),
         ));
