@@ -28,7 +28,15 @@ impl crate::script_vm::ScriptVm {
                 })
             })
             .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string()))?;
-        Ok(request.with_fetch_context(context))
+        let csp = self.document_runtime.module_fetch_csp_context(
+            request.source_url(),
+            request.module_kind(),
+            request.fetch_metadata(),
+        );
+        let csp = context.route_native_csp(csp, request.csp_source_location().cloned());
+        Ok(request
+            .with_csp_context(Some(csp))
+            .with_fetch_context(context))
     }
 
     pub(crate) fn capture_child_module_graph_fetch_context(

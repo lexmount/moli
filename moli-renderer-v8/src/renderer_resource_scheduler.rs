@@ -62,22 +62,6 @@ impl MainModuleFetchSchedule {
         }
     }
 
-    fn send_completion(
-        self,
-        completion_tx: &RendererResourceCompletionSender,
-        result: std::result::Result<ModuleGraphFetchedSource, String>,
-        network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: MainModuleFetchNetworkAttribution,
-    ) {
-        self.send_completion_with_context(
-            completion_tx,
-            result,
-            network_result,
-            network_attribution,
-            None,
-        );
-    }
-
     fn send_completion_with_context(
         self,
         completion_tx: &RendererResourceCompletionSender,
@@ -196,38 +180,63 @@ impl RendererResourceScheduler {
         service_worker: crate::dynamic_script_owner::DynamicScriptServiceWorkerContext,
     ) {
         let schedule = MainModuleFetchSchedule::Runtime(target);
+        let csp_context = request.csp_context().cloned();
+        let fetch_context = request.fetch_context().cloned();
         let attribution = MainModuleFetchNetworkAttribution::new(
             service_worker.document_url.clone(),
             script.url.clone(),
         );
         let request_origin = loader.fetch_context().request_origin();
-        let request = match request.request(&request_origin) {
+        let mut request = match request.request(&request_origin) {
             Ok(request) => request.with_resource_type(crate::planning::script_fetch_resource_type(
                 script.kind,
                 script.mode,
             )),
             Err(error) => {
                 let error = error.to_string();
-                schedule.send_completion(
+                schedule.send_completion_with_context(
                     &self.completion_tx,
                     Err(error.clone()),
                     Some(Arc::new(Err(error))),
                     attribution,
+                    fetch_context,
                 );
                 return;
             }
         };
+        // The script-element loader retains its source/SRI handling; the
+        // graph's exact Document context owns initial and redirect CSP checks.
+        if let Some(context) = &fetch_context
+            && csp_context.is_none()
+        {
+            if let Err(error) = context.check_initial(&script.url) {
+                // No transport was admitted. Deliver the script failure and
+                // policy reports without fabricating a network terminal.
+                schedule.send_completion_with_context(
+                    &self.completion_tx,
+                    Err(error),
+                    None,
+                    attribution,
+                    fetch_context,
+                );
+                return;
+            }
+            if let Some(check) = context.redirect_check(&script.url) {
+                request = request.with_redirect_check(check);
+            }
+        }
         let Some(load) = loader.register_load(
             crate::network::loads::ResourceLoadKind::Script,
             crate::network::loads::ResourceLoadDisposition::Ordinary,
             None,
         ) else {
             let error = "Document detached before module root fetch registration".to_owned();
-            schedule.send_completion(
+            schedule.send_completion_with_context(
                 &self.completion_tx,
                 Err(error.clone()),
                 Some(Arc::new(Err(error))),
                 attribution,
+                fetch_context,
             );
             return;
         };
@@ -251,14 +260,25 @@ impl RendererResourceScheduler {
                 _ = cancel_rx => {
                     let error = "module root fetch cancelled".to_owned();
                     load.finish();
-                    schedule.send_completion(
+                    schedule.send_completion_with_context(
                         &completion_tx, Err(error.clone()), Some(Arc::new(Err(error))), attribution,
+                        fetch_context,
                     );
                     return;
                 }
             };
             load.finish();
-            let result = outcome.source_result.map(|source| {
+            let policy_error = match outcome.network_result.as_deref() {
+                Some(Ok(response)) => match &csp_context {
+                    Some(context) => context.check_response_head(&response.head()).err().map(|error| error.to_string()),
+                    None => fetch_context.as_ref().and_then(|context| context.check_response_url(&script.url, response).err()),
+                },
+                _ => None,
+            };
+            let result = outcome.source_result.and_then(|source| {
+                if let Some(error) = policy_error {
+                    return Err(error);
+                }
                 let response = outcome
                     .network_result
                     .as_deref()
@@ -274,7 +294,7 @@ impl RendererResourceScheduler {
                         )
                     },
                 );
-                ModuleGraphFetchedSource::new(
+                Ok(ModuleGraphFetchedSource::new(
                     url,
                     outcome
                         .source_bytes
@@ -284,9 +304,15 @@ impl RendererResourceScheduler {
                             crate::module_runtime::ModuleSource::binary,
                         ),
                 )
-                .with_response_referrer_policy(referrer_policy)
+                .with_response_referrer_policy(referrer_policy))
             });
-            schedule.send_completion(&completion_tx, result, outcome.network_result, attribution);
+            schedule.send_completion_with_context(
+                &completion_tx,
+                result,
+                outcome.network_result,
+                attribution,
+                fetch_context,
+            );
         });
     }
 
