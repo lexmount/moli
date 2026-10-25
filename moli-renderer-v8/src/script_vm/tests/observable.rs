@@ -1,6 +1,76 @@
 use super::*;
 
 #[test]
+fn observable_subscription_abort_callbacks_do_not_root_discarded_graphs() {
+    let mut vm = new_storage_test_vm("https://observable-abort-callback-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-abort-callback-gc.js"
+    ))
+    .unwrap();
+    vm.renderer_document_isolate
+        .clone()
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.clear_kept_objects();
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(Object.fromEntries(Object.entries(observableAbortCallbackGc.abandoned).map(([name, refs]) => [name, refs.every(ref => ref.deref() === undefined)])))")
+            .unwrap(),
+        r#"{"when":true,"nested":true,"first":true}"#
+    );
+}
+
+#[test]
+fn observable_subscription_abort_callbacks_survive_gc_and_release_finished_work() {
+    let mut vm = new_storage_test_vm("https://observable-live-abort-callback-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-abort-callback-gc.js"
+    ))
+    .unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify((() => {
+          const live = observableAbortCallbackGc.live;
+          live.target.target.dispatchEvent(new Event('tick'));
+          const target = live.signal.target.deref();
+          target.dispatchEvent(new Event('tick'));
+          live.signal.producer.complete();
+          target.dispatchEvent(new Event('tick'));
+          live.caller.controller.abort('caller');
+          const releasedSource = [live.weakSource.outer.deref() === undefined,
+            live.weakSource.signal.deref() === undefined];
+          live.weakSource.inner.deref().next(7);
+          return [live.target.events, live.signal.events, live.signal.teardowns,
+            live.signal.abortEvents, live.signal.signal.aborted,
+            live.complete.token.deref() === undefined, live.remove.token.deref() === undefined,
+            live.caller.teardowns, ...releasedSource];
+        })())"#
+        )
+        .unwrap(),
+        "[1,1,1,1,true,true,true,1,true,true]"
+    );
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([...['target', 'inner', 'token'].map(key => observableAbortCallbackGc.live.signal[key].deref() === undefined), observableAbortCallbackGc.live.caller.inner.deref() === undefined, observableAbortCallbackGc.live.caller.reason === 'caller', observableAbortCallbackGc.live.weakSource.inner.deref() === undefined, observableAbortCallbackGc.live.weakSource.value === 7])")
+            .unwrap(),
+        "[true,true,true,true,true,true,true]"
+    );
+}
+
+#[test]
 fn observable_switch_map_does_not_accumulate_internal_signal_roots_or_registrations() {
     let mut vm = new_storage_test_vm("https://observable-switch-map-signal-gc.test/");
     let counts = |vm: &mut StandaloneScriptVmHarness| {

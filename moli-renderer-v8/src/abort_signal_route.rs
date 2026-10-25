@@ -24,10 +24,13 @@ pub(crate) enum AbortAlgorithm {
 impl AbortAlgorithm {
     pub(crate) fn new<'s>(
         scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
         function: v8::Local<'s, v8::Function>,
+        sources: &[v8::Local<'s, v8::Object>],
     ) -> Self {
         if crate::util::get_private_value(scope, function.into(), WEAK_ABORT_ALGORITHM)
             .is_some_and(|value| value.is_true())
+            || SubscriptionSignals::retain_algorithm(scope, signal, function, sources)
         {
             Self::Weak(v8::Weak::new(scope, function))
         } else {
@@ -80,13 +83,10 @@ pub(crate) fn invoke_abort_algorithms<'s>(
     label: &str,
     signal: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
-    algorithms: Vec<AbortAlgorithm>,
+    algorithms: Vec<v8::Local<'s, v8::Function>>,
 ) -> bool {
     let mut first_error = None;
     for algorithm in algorithms {
-        let Some(algorithm) = algorithm.prepare(scope) else {
-            continue;
-        };
         let exception = {
             v8::tc_scope!(let scope, scope);
             if invoke_abort_algorithm(scope, label, algorithm, signal, reason) {

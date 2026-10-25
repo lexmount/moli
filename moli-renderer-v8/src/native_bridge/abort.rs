@@ -78,8 +78,13 @@ enum AbortStep {
     RemoveListener(AbortLinkedTargetListener),
 }
 
-struct AbortSignalDispatch {
-    steps: Vec<AbortStep>,
+enum PreparedAbortStep<'s> {
+    Algorithm(v8::Local<'s, v8::Function>),
+    RemoveListener(AbortLinkedTargetListener),
+}
+
+struct AbortSignalDispatch<'s> {
+    steps: Vec<PreparedAbortStep<'s>>,
     dispatch_event: bool,
 }
 
@@ -132,7 +137,12 @@ impl AbortStore {
         scope: &mut v8::PinScope<'s, '_>,
         context: v8::Local<'s, v8::Context>,
     ) {
-        for state in self.signals.values_mut() {
+        let signal_ids: Vec<_> = self.signals.keys().copied().collect();
+        for id in signal_ids {
+            let sources = self.source_signal_objects(scope, id);
+            let Some(state) = self.signal_state_mut(id) else {
+                continue;
+            };
             let Some(handle) = state.signal.as_mut() else {
                 continue;
             };
@@ -145,6 +155,9 @@ impl AbortStore {
             handle.retain_in_realm(scope);
             state.detached = true;
             state.abort_steps.clear();
+            crate::abort_signal_route::SubscriptionSignals::clear_algorithms(
+                scope, signal, &sources,
+            );
         }
     }
 
@@ -319,6 +332,19 @@ impl AbortStore {
             .and_then(|signal| signal.to_local(scope))
     }
 
+    fn source_signal_objects<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        id: u32,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        self.signal_state(id)
+            .and_then(|state| state.source_signals.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|id| self.signal_object(scope, *id))
+            .collect()
+    }
+
     pub(super) fn signal_aborted<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -344,14 +370,23 @@ impl AbortStore {
         let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
             return false;
         };
+        let sources = self.source_signal_objects(scope, signal_id);
         let Some(state) = self.signal_state_mut(signal_id) else {
             return false;
         };
         if state.detached {
             return false;
         }
+        // Resolve the canonical owner even when registration uses a world wrapper.
+        let Some(owner) = state
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.to_local(scope))
+        else {
+            return false;
+        };
         state.abort_steps.push(AbortStep::Algorithm(
-            crate::abort_signal_route::AbortAlgorithm::new(scope, algorithm),
+            crate::abort_signal_route::AbortAlgorithm::new(scope, owner, algorithm, &sources),
         ));
         true
     }
@@ -365,9 +400,19 @@ impl AbortStore {
         let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
             return false;
         };
+        let sources = self.source_signal_objects(scope, signal_id);
         let Some(state) = self.signal_state_mut(signal_id) else {
             return false;
         };
+        if let Some(owner) = state
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.to_local(scope))
+        {
+            crate::abort_signal_route::SubscriptionSignals::release_algorithm(
+                scope, owner, algorithm, &sources,
+            );
+        }
         state.abort_steps.retain(|step| match step {
             AbortStep::Algorithm(candidate) => candidate
                 .prepare(scope)
@@ -468,10 +513,35 @@ impl AbortStore {
         Some(signals)
     }
 
-    fn take_signal_abort_steps(&mut self, signal_id: u32) -> Option<AbortSignalDispatch> {
+    fn take_signal_abort_steps<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal_id: u32,
+    ) -> Option<AbortSignalDispatch<'s>> {
+        let sources = self.source_signal_objects(scope, signal_id);
         let state = self.signal_state_mut(signal_id)?;
+        let steps = std::mem::take(&mut state.abort_steps)
+            .into_iter()
+            .filter_map(|step| match step {
+                AbortStep::Algorithm(algorithm) => {
+                    algorithm.prepare(scope).map(PreparedAbortStep::Algorithm)
+                }
+                AbortStep::RemoveListener(linked) => {
+                    Some(PreparedAbortStep::RemoveListener(linked))
+                }
+            })
+            .collect();
+        if let Some(signal) = state
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.to_local(scope))
+        {
+            crate::abort_signal_route::SubscriptionSignals::clear_algorithms(
+                scope, signal, &sources,
+            );
+        }
         Some(AbortSignalDispatch {
-            steps: std::mem::take(&mut state.abort_steps),
+            steps,
             dispatch_event: !state.detached,
         })
     }
@@ -533,13 +603,13 @@ pub(crate) fn abort_signal<'s>(
         let dispatch = unsafe { &mut *host_ptr }
             .native_bridge_mut()
             .abort
-            .take_signal_abort_steps(signal_id);
+            .take_signal_abort_steps(scope, signal_id);
         let Some(dispatch) = dispatch else {
             continue;
         };
         for step in dispatch.steps {
             match step {
-                AbortStep::RemoveListener(linked) => {
+                PreparedAbortStep::RemoveListener(linked) => {
                     unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
                         linked.target,
                         &linked.event_type,
@@ -547,7 +617,7 @@ pub(crate) fn abort_signal<'s>(
                         linked.capture,
                     );
                 }
-                AbortStep::Algorithm(algorithm) => {
+                PreparedAbortStep::Algorithm(algorithm) => {
                     let error = {
                         v8::tc_scope!(let scope, scope);
                         if event::invoke_abort_algorithm(scope, signal, reason, algorithm) {

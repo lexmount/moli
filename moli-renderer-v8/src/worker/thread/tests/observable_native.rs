@@ -1,6 +1,71 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_observable_subscription_abort_callbacks_do_not_root_discarded_graphs() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({});",
+            include_str!("../../../../tests/fixtures/observable-abort-callback-gc.js")
+        ),
+        "https://observable-abort-callback-gc.test/worker.js".into(),
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""ready""#);
+    assert!(handle.attach_runtime_inspector_session(None));
+    observable_worker_collect_garbage(&handle).await;
+    assert_eq!(
+        observable_worker_evaluate(&handle,
+            "Object.fromEntries(Object.entries(observableAbortCallbackGc.abandoned).map(([name, refs]) => [name, refs.every(ref => ref.deref() === undefined)]))").await,
+        serde_json::json!({"when": true, "nested": true, "first": true})
+    );
+}
+
+#[tokio::test]
+async fn worker_observable_subscription_abort_callbacks_survive_gc_and_release_finished_work() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({});",
+            include_str!("../../../../tests/fixtures/observable-abort-callback-gc.js")
+        ),
+        "https://observable-live-abort-callback-gc.test/worker.js".into(),
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""ready""#);
+    assert!(handle.attach_runtime_inspector_session(None));
+    observable_worker_collect_garbage(&handle).await;
+    let result = observable_worker_evaluate(
+        &handle,
+        r#"(() => {
+      const live = observableAbortCallbackGc.live;
+      live.target.target.dispatchEvent(new Event('tick'));
+      const target = live.signal.target.deref();
+      target.dispatchEvent(new Event('tick'));
+      live.signal.producer.complete();
+      target.dispatchEvent(new Event('tick'));
+      live.caller.controller.abort('caller');
+      const releasedSource = [live.weakSource.outer.deref() === undefined,
+        live.weakSource.signal.deref() === undefined];
+      live.weakSource.inner.deref().next(7);
+      return [live.target.events, live.signal.events, live.signal.teardowns,
+        live.signal.abortEvents, live.signal.signal.aborted,
+        live.complete.token.deref() === undefined, live.remove.token.deref() === undefined,
+        live.caller.teardowns, ...releasedSource];
+    })()"#,
+    )
+    .await;
+    assert_eq!(
+        result,
+        serde_json::json!([1, 1, 1, 1, true, true, true, 1, true, true])
+    );
+    observable_worker_collect_garbage(&handle).await;
+    assert_eq!(
+        observable_worker_evaluate(&handle,
+            "[...['target', 'inner', 'token'].map(key => observableAbortCallbackGc.live.signal[key].deref() === undefined), observableAbortCallbackGc.live.caller.inner.deref() === undefined, observableAbortCallbackGc.live.caller.reason === 'caller', observableAbortCallbackGc.live.weakSource.inner.deref() === undefined, observableAbortCallbackGc.live.weakSource.value === 7]").await,
+        serde_json::json!([true, true, true, true, true, true, true])
+    );
+}
+
+#[tokio::test]
 async fn worker_observable_internal_signal_cycles_are_collectible() {
     ensure_v8();
     let mut handle = spawn_worker(

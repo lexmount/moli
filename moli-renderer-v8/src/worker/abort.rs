@@ -184,6 +184,19 @@ impl WorkerAbortStore {
             .and_then(|signal| signal.to_local(scope))
     }
 
+    fn source_signal_objects<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        id: u32,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        self.signal_state(id)
+            .and_then(|state| state.source_signals.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|id| self.signal_object(scope, *id))
+            .collect()
+    }
+
     fn signal_reason<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -212,12 +225,20 @@ impl WorkerAbortStore {
         let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
             return false;
         };
+        let sources = self.source_signal_objects(scope, signal_id);
         let Some(state) = self.signal_state_mut(signal_id) else {
+            return false;
+        };
+        let Some(owner) = state
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.to_local(scope))
+        else {
             return false;
         };
         state
             .abort_algorithms
-            .push(AbortAlgorithm::new(scope, algorithm));
+            .push(AbortAlgorithm::new(scope, owner, algorithm, &sources));
         true
     }
 
@@ -230,9 +251,19 @@ impl WorkerAbortStore {
         let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
             return false;
         };
+        let sources = self.source_signal_objects(scope, signal_id);
         let Some(state) = self.signal_state_mut(signal_id) else {
             return false;
         };
+        if let Some(owner) = state
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.to_local(scope))
+        {
+            crate::abort_signal_route::SubscriptionSignals::release_algorithm(
+                scope, owner, algorithm, &sources,
+            );
+        }
         state.abort_algorithms.retain(|candidate| {
             candidate
                 .prepare(scope)
@@ -366,10 +397,24 @@ fn run_worker_abort_steps<'s>(
 ) -> bool {
     let abort_algorithms = {
         let mut store = store.borrow_mut();
+        let sources = store.source_signal_objects(scope, signal_id);
         let Some(state) = store.signal_state_mut(signal_id) else {
             return true;
         };
-        std::mem::take(&mut state.abort_algorithms)
+        let algorithms = std::mem::take(&mut state.abort_algorithms)
+            .into_iter()
+            .filter_map(|algorithm| algorithm.prepare(scope))
+            .collect();
+        if let Some(owner) = state
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.to_local(scope))
+        {
+            crate::abort_signal_route::SubscriptionSignals::clear_algorithms(
+                scope, owner, &sources,
+            );
+        }
+        algorithms
     };
     reject_worker_fetches_for_signal(scope, signal_id, reason);
     let error = {
