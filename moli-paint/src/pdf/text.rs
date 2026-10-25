@@ -139,14 +139,9 @@ pub(super) fn draw(
         .map(|v| skrifa::instance::NormalizedCoord::from_bits(*v))
         .collect();
     let metrics = face.glyph_metrics(skrifa::instance::Size::new(font_size), coords.as_slice());
-    // Parley/glifo embolden is in font units; PDF stroke widths are pixels.
-    let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0) * font_size
-        / f32::from(
-            face.head()
-                .map_err(|error| PdfError::Encoding(error.to_string()))?
-                .units_per_em()
-                .max(1),
-        );
+    // The owned snapshot stores synthetic weight expansion in CSS pixels,
+    // which are also the units used by PDF stroke widths.
+    let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
     let mut batches: Vec<(bool, Vec<usize>)> = Vec::new();
     let mut start = 0;
     while start < run.glyphs.len() {

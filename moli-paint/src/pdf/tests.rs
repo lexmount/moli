@@ -502,28 +502,36 @@ fn text_stroke_is_exported_as_a_pdf_stroke_with_one_semantic_copy() {
 }
 
 #[test]
-fn text_stroke_pdf_embolden_scales_font_units_to_pixels() {
-    let mut snapshot = snapshot();
-    let mut run = text(&mut snapshot, "Bold", 35.0, false);
-    let data = &snapshot.font(run.font).unwrap().font;
-    use skrifa::raw::TableProvider;
-    let face = skrifa::FontRef::from_index(data.data.as_ref(), data.index).unwrap();
-    let upem = f32::from(face.head().unwrap().units_per_em());
-    run.glyph_embolden = moli_layout::PaintPoint::new(upem / run.font_size, upem / run.font_size);
-    run.stroke = Some(moli_layout::PaintTextStroke {
-        width: 2.0,
-        color: PaintColor::BLACK,
-        paint_first: false,
-    });
-    snapshot.push_fragment(PaintFragment::GlyphRun(run));
-    let doc = document(&snapshot, &options());
-    assert_eq!(extracted(&doc, &[1]), "Bold");
-    assert!(content_operations(&doc).iter().any(|op| {
-        op.operator == "w"
-            && op
-                .operands
-                .first()
-                .and_then(|o| o.as_float().ok())
-                .is_some_and(|width| (width - 4.0).abs() < 0.001)
-    }));
+fn pdf_synthetic_bold_uses_css_pixels_with_and_without_text_stroke() {
+    for cjk in [false, true] {
+        for font_size in [16.0, 32.0, 64.0] {
+            for stroke in [false, true] {
+                let mut snapshot = snapshot();
+                let label = if cjk { "中" } else { "B" };
+                let mut run = text(&mut snapshot, label, 90.0, cjk);
+                run.font_size = font_size;
+                run.glyph_embolden = PaintPoint::new(0.3, 0.3);
+                run.stroke = stroke.then_some(moli_layout::PaintTextStroke {
+                    width: 2.0,
+                    color: PaintColor::BLACK,
+                    paint_first: false,
+                });
+                snapshot.push_fragment(PaintFragment::GlyphRun(run));
+                let doc = document(&snapshot, &options());
+                assert_eq!(extracted(&doc, &[1]), label);
+                let widths: Vec<_> = content_operations(&doc)
+                    .iter()
+                    .filter(|op| op.operator == "w")
+                    .filter_map(|op| op.operands.first()?.as_float().ok())
+                    .collect();
+                assert!(
+                    widths.iter().any(|width| (width - 0.6).abs() < 0.001),
+                    "cjk={cjk}, size={font_size}, stroke={stroke}: {widths:?}"
+                );
+                if stroke {
+                    assert!(widths.iter().any(|width| (width - 2.6).abs() < 0.001));
+                }
+            }
+        }
+    }
 }
