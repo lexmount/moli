@@ -47,7 +47,9 @@ impl ScriptVm {
             .and_then(|handle| self.document_runtime.resolve_host_script_handle(handle))
             .or(Some(script.node_id));
         let csp_script_request = self.content_security_policy_script_element_request(script);
-        if script.source_kind == ScriptSourceKind::External
+        let check_source_policy = script.source_kind == ScriptSourceKind::External
+            && !prepared_script_uses_external_module_graph(script);
+        if check_source_policy
             && let Some(violation) = self
                 .document_runtime
                 .script_element_request_csp_report_only_violation_with_request(
@@ -57,7 +59,7 @@ impl ScriptVm {
         {
             self.queue_content_security_policy_violation_event_best_effort(&violation);
         }
-        if script.source_kind == ScriptSourceKind::External
+        if check_source_policy
             && let Some(violation) = self
                 .document_runtime
                 .script_element_request_csp_violation_with_request(&script.url, csp_script_request)

@@ -1111,19 +1111,26 @@ impl NativeModuleGraphJob {
                             return Err(error);
                         }
                     };
-                    let context =
-                        match owner.module_fetch_csp_context(&key, &request.fetch_metadata) {
-                            Ok(context) => context,
-                            Err(error) => {
-                                owner.mark_module_failed(key.clone(), error.clone());
-                                return Err(error);
+                    let context = match request.csp_context().cloned() {
+                        Some(context) => context,
+                        None => {
+                            let context = match owner
+                                .module_fetch_csp_context(&key, &request.fetch_metadata)
+                            {
+                                Ok(context) => context,
+                                Err(error) => {
+                                    owner.mark_module_failed(key.clone(), error.clone());
+                                    return Err(error);
+                                }
+                            };
+                            match request.fetch_context() {
+                                Some(fetch) => fetch.route_native_csp(
+                                    context,
+                                    request.csp_source_location().cloned(),
+                                ),
+                                None => context,
                             }
-                        };
-                    let context = match request.fetch_context() {
-                        Some(fetch) => {
-                            fetch.route_native_csp(context, request.csp_source_location().cloned())
                         }
-                        None => context,
                     };
                     let admission = context.check_initial_request(key.url());
                     owner.queue_module_fetch_csp_violations(&context);
