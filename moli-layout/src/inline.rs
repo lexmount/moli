@@ -649,8 +649,8 @@ pub(crate) fn build_inline_fragments(
                 // Parley exposes typographic cluster boxes rather than
                 // exact outline bounds. A two-em guard is deliberately
                 // conservative for italic/color-glyph overhang, while the
-                // style sidecar adds arbitrary CSS shadow/decoration
-                // displacement. This work happens once, alongside final
+                // style sidecar adds CSS stroke, shadow, and decoration
+                // ink. This work happens once, alongside final
                 // fragment materialization, not during every paint.
                 let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
                 let line = &mut fragments.lines[line_index];
@@ -787,6 +787,24 @@ impl TextPaintOutsets {
 
 fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<TextPaintOutsets> {
     let mut outsets = TextPaintOutsets::default();
+    if let Some(stroke) = style.brush.stroke {
+        if !stroke.width.is_finite() {
+            return None;
+        }
+        // Include the outer half of the stroke and its possible miter joins.
+        // Transparent strokes still contribute to background-clip:text masks.
+        let miter_limit = kurbo::Stroke::default().miter_limit as f32;
+        let outset = stroke.width.max(0.0) * 0.5 * miter_limit;
+        if !outset.is_finite() {
+            return None;
+        }
+        outsets = TextPaintOutsets {
+            top: outset,
+            right: outset,
+            bottom: outset,
+            left: outset,
+        };
+    }
     for shadow in style
         .brush
         .shadows
