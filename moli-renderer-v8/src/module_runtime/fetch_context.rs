@@ -57,15 +57,15 @@ impl NativeModuleFetchContext {
         source_location: Option<ContentSecurityPolicySourceLocation>,
     ) -> Option<Arc<Self>> {
         let loader = host.document_resource_loader_for_dispatch_scope(owner)?;
-        let mut policy = host.document_connect_policy_snapshot_for_owner(owner)?;
-        policy = if kind == ModuleKind::Css {
-            policy.for_style_preload(metadata.nonce().map(str::to_owned))
-        } else {
-            policy.for_script_preload(crate::planning::ScriptFetchMetadata {
+        let policy = host.document_connect_policy_snapshot_for_owner(owner)?;
+        let policy = match kind {
+            ModuleKind::Css => policy.for_style_preload(metadata.nonce().map(str::to_owned)),
+            ModuleKind::Json => policy,
+            _ => policy.for_script_preload(crate::planning::ScriptFetchMetadata {
                 nonce: metadata.nonce().map(str::to_owned),
                 integrity: metadata.integrity().map(str::to_owned),
                 ..Default::default()
-            })
+            }),
         };
         let report_context =
             crate::network_host::capture_window_csp_report_request_context(scope, host, owner)?;
