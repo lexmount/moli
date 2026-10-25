@@ -142,6 +142,7 @@ pub(super) fn draw(
     // The owned snapshot stores synthetic weight expansion in CSS pixels,
     // which are also the units used by PDF stroke widths.
     let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
+    let ink_outset = f64::from(embolden + text_stroke.map_or(0.0, |stroke| stroke.width * 0.5));
     let mut batches: Vec<(bool, Vec<usize>)> = Vec::new();
     let mut start = 0;
     while start < run.glyphs.len() {
@@ -188,9 +189,9 @@ pub(super) fn draw(
             let glyph_matrix = matrix
                 * Affine::translate((glyph.x as f64, glyph.y as f64))
                 * Affine::skew(-skew as f64, 0.0);
-            let local = glyph_matrix
-                .transform_rect_bbox(local)
-                .inflate(f64::from(embolden), f64::from(embolden));
+            // Stroke width is local to the glyph's transform. Expand before
+            // mapping so scaled/skewed ink reaches clip and page boundaries.
+            let local = glyph_matrix.transform_rect_bbox(local.inflate(ink_outset, ink_outset));
             bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));
         }
         let bounds = bounds.unwrap().intersect(clip);

@@ -535,3 +535,55 @@ fn pdf_synthetic_bold_uses_css_pixels_with_and_without_text_stroke() {
         }
     }
 }
+
+#[test]
+fn pdf_text_stroke_only_ink_survives_clipping_and_transforms() {
+    for scale in [1.0_f32, 2.0] {
+        let mut snapshot = snapshot();
+        let mut run = text(&mut snapshot, "A", 50.0, false);
+        run.glyphs[0].x = 70.0;
+        run.stroke = Some(moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            paint_first: false,
+        });
+        run.transform.coefficients = [f64::from(scale), 0.0, 0.0, f64::from(scale), 0.0, 0.0];
+        snapshot.push_fragment(PaintFragment::push_clip(PaintRect::new(
+            0.0,
+            0.0,
+            67.0 * scale,
+            100.0 * scale,
+        )));
+        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+        snapshot.push_fragment(PaintFragment::PopLayer);
+        let doc = document(&snapshot, &options());
+        assert_eq!(extracted(&doc, &[1]), "A", "scale={scale}");
+        assert!(content_operations(&doc).iter().any(|op| {
+            op.operator == "S"
+                || (op.operator == "Tr"
+                    && op.operands.first().and_then(|o| o.as_i64().ok()) == Some(1))
+        }));
+    }
+}
+
+#[test]
+fn pdf_text_stroke_crosses_page_boundaries_without_duplicating_text() {
+    let mut snapshot = snapshot();
+    let mut run = text(&mut snapshot, "A", 299.0, false);
+    run.stroke = Some(moli_layout::PaintTextStroke {
+        width: 8.0,
+        color: PaintColor::BLACK,
+        paint_first: false,
+    });
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    let doc = document(&snapshot, &options());
+    assert_eq!(extracted(&doc, &[1, 2]), "A");
+    let page = doc.get_pages()[&2];
+    let operations = lopdf::content::Content::decode(&doc.get_page_content(page))
+        .unwrap()
+        .operations;
+    assert!(
+        operations.iter().any(|op| op.operator == "S"),
+        "the second page must retain the outline crossing the page edge"
+    );
+}
