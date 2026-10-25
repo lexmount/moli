@@ -55,6 +55,7 @@ pub(crate) struct ChildBrowsingContextSnapshot {
     pub(crate) resource_was_cached: bool,
     pub(crate) content_type: Option<String>,
     pub(crate) character_set: String,
+    pub(crate) response_status: Option<u16>,
     pub(crate) policy_container: DocumentPolicyContainer,
 }
 
@@ -89,6 +90,7 @@ impl ChildBrowsingContextSnapshot {
             resource_was_cached: false,
             content_type,
             character_set: character_set.into(),
+            response_status: None,
             policy_container: DocumentPolicyContainer::default(),
         }
     }
@@ -123,6 +125,11 @@ impl ChildBrowsingContextSnapshot {
 
     pub(crate) fn with_resource_was_cached(mut self, resource_was_cached: bool) -> Self {
         self.resource_was_cached = resource_was_cached;
+        self
+    }
+
+    pub(crate) fn with_response_status(mut self, status: Option<u16>) -> Self {
+        self.response_status = status;
         self
     }
 

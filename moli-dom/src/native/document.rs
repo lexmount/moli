@@ -69,6 +69,7 @@ pub struct Document {
     css_target: Option<NativeNodeId>,
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
+    source_response_status: Option<u16>,
     base_url_state: DocumentBaseUrlState,
     // Meta delivery updates policy in time order; removing the element does
     // not undo the policy it delivered to this Document.
@@ -103,6 +104,7 @@ impl Document {
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
+            source_response_status: None,
             meta_referrer_policy: MetaReferrerPolicy::default(),
             svg_user_transform: None,
         }
@@ -125,6 +127,7 @@ impl Document {
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
+            source_response_status: None,
             meta_referrer_policy: MetaReferrerPolicy::default(),
             svg_user_transform: None,
         }
@@ -173,6 +176,7 @@ impl Document {
     pub(super) fn clone_for_new_document(&self) -> Self {
         Self {
             active_parser_was_aborted: false,
+            source_response_status: None,
             meta_referrer_policy: MetaReferrerPolicy::default(),
             svg_user_transform: None,
             ..self.clone()
@@ -220,6 +224,10 @@ impl Document {
 
     pub fn source_last_modified_ms(&self) -> Option<f64> {
         self.source_last_modified_ms
+    }
+
+    pub fn source_response_status(&self) -> Option<u16> {
+        self.source_response_status
     }
 
     pub fn quirks_mode(&self) -> QuirksMode {
@@ -310,6 +318,10 @@ impl Document {
 
     pub fn set_source_last_modified_ms(&mut self, timestamp_ms: Option<f64>) {
         self.source_last_modified_ms = timestamp_ms;
+    }
+
+    pub fn set_source_response_status(&mut self, status: Option<u16>) {
+        self.source_response_status = status;
     }
 
     pub fn set_quirks_mode(&mut self, quirks_mode: QuirksMode) {

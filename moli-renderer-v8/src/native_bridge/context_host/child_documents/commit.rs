@@ -204,6 +204,11 @@ impl JsContextHost {
         self.dom_host_mut()
             .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
         self.dom_host_mut()
+            .set_document_source_response_status_for_handle(
+                document_handle,
+                snapshot.response_status,
+            );
+        self.dom_host_mut()
             .set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
         // Navigation-created Documents start loading before parser scripts can
         // observe them. Keep the generic detached/initial-empty default complete.

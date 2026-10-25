@@ -501,8 +501,10 @@ impl JsContextHost {
                     // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
                     unsafe { &mut *self.runtime }
                         .record_content_security_policy_inspector_issue(Some(handle), violation);
-                    let fields =
-                        ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
+                    let fields = ContentSecurityPolicyViolationEventFields {
+                        status_code: i32::from(loaded.response_status.unwrap_or(0)),
+                        ..ContentSecurityPolicyViolationEventFields::from_url_violation(violation)
+                    };
                     send_content_security_policy_reports(
                         &reports,
                         pending.resource_loader.request_client(),
@@ -710,6 +712,7 @@ impl JsContextHost {
                     loaded.content_type,
                     loaded.character_set,
                 )
+                .with_response_status(loaded.response_status)
                 .with_resource_was_cached(resource_was_cached);
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)
             }
@@ -1024,6 +1027,7 @@ fn child_document_load_outcome_from_response(
     };
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
+            response_status: Some(head.status),
             response_links: crate::response_links::DocumentResponseLinks::parse(
                 &head.final_url,
                 &head.headers,

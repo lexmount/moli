@@ -718,6 +718,7 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         document_policy_container: Default::default(),
         document_default_language: None,
         document_last_modified: None,
+        document_response_status: None,
         document_settings: Default::default(),
         network_offline: false,
         blocked_url_patterns: Vec::new(),

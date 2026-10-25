@@ -1758,6 +1758,7 @@ impl ChildModulepreloadFetchCompletion {
 
 #[derive(Debug)]
 pub(super) struct LoadedChildDocument {
+    pub(super) response_status: Option<u16>,
     pub(super) response_links: crate::response_links::DocumentResponseLinks,
     pub(super) final_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
@@ -1786,6 +1787,7 @@ impl ChildDocumentLoadOutcome {
         >,
     ) -> Self {
         Self::BlockedResponse(Box::new(LoadedChildDocument {
+            response_status: None,
             final_url,
             policy_container: DocumentPolicyContainer {
                 required_content_security_policy,

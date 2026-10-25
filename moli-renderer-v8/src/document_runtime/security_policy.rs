@@ -2280,7 +2280,12 @@ impl DocumentRuntime {
             .current_main_document_task_owner()
             .ok_or_else(|| anyhow::anyhow!("main CSP violation document owner is unavailable"))?;
         if send_report {
-            let fields = ContentSecurityPolicyViolationEventFields::from(violation);
+            let fields = self.content_security_policy_violation_event_fields(
+                target
+                    .and_then(|target| self.dom_host.owner_document_handle(target))
+                    .unwrap_or_else(|| self.document_handle()),
+                violation,
+            );
             let report_owner = event_owner.unwrap_or(document_owner);
             let child_handle = event_owner.and(target).and_then(|document| {
                 host.child_browsing_context_host_for_document_handle(document)
@@ -2361,11 +2366,19 @@ impl DocumentRuntime {
             })
             .unwrap_or_else(|| scope.get_current_context());
         let scope = &mut v8::ContextScope::new(scope, context);
+        let document = match event_target {
+            EventTargetHandle::Node(handle) => self
+                .dom_host
+                .owner_document_handle(handle)
+                .unwrap_or_else(|| self.document_handle()),
+            _ => self.document_handle(),
+        };
+        let fields = self.content_security_policy_violation_event_fields(document, violation);
         let event = create_content_security_policy_violation_event(
             scope,
             event_target_value,
             event_target_value,
-            violation,
+            &fields,
         )
         .map_err(anyhow::Error::msg)?;
         self.dispatch_public_event_best_effort(
@@ -2377,6 +2390,21 @@ impl DocumentRuntime {
         )
         .map_err(anyhow::Error::msg)?;
         Ok(())
+    }
+
+    pub(crate) fn content_security_policy_violation_event_fields<'a>(
+        &self,
+        document: DomHandle,
+        violation: &'a DocumentContentSecurityPolicyViolation,
+    ) -> ContentSecurityPolicyViolationEventFields<'a> {
+        ContentSecurityPolicyViolationEventFields {
+            status_code: i32::from(
+                self.dom_host
+                    .document_source_response_status_for_handle(document)
+                    .unwrap_or(0),
+            ),
+            ..ContentSecurityPolicyViolationEventFields::from(violation)
+        }
     }
 
     fn document_content_security_policies_for_optional_document(
@@ -3038,13 +3066,10 @@ pub(crate) fn create_content_security_policy_violation_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     current_target: v8::Local<'s, v8::Value>,
     target: v8::Local<'s, v8::Value>,
-    violation: &DocumentContentSecurityPolicyViolation,
+    fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> anyhow::Result<v8::Local<'s, v8::Object>> {
-    let event = create_security_policy_violation_event(
-        scope,
-        &ContentSecurityPolicyViolationEventFields::from(violation),
-    )
-    .ok_or_else(|| anyhow::anyhow!("failed to create CSP violation event"))?;
+    let event = create_security_policy_violation_event(scope, fields)
+        .ok_or_else(|| anyhow::anyhow!("failed to create CSP violation event"))?;
     let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         v8str(scope, "target").into(),

@@ -614,6 +614,28 @@ mod tests {
     }
 
     #[test]
+    fn document_response_metadata_survives_stream_replacement_but_not_cloning() {
+        let mut host = test_host();
+        let document = host.document_handle();
+        assert_eq!(
+            host.document_source_response_status_for_handle(document),
+            None
+        );
+        assert!(host.set_document_source_response_status_for_handle(document, Some(404)));
+        host.reset_html_document_shell();
+        assert_eq!(
+            host.document_source_response_status_for_handle(document),
+            Some(404)
+        );
+        let clone = host.clone_node(document, true).unwrap();
+        assert_eq!(host.document_source_response_status_for_handle(clone), None);
+        assert_eq!(
+            host.document_source_response_status_for_handle(document),
+            Some(404)
+        );
+    }
+
+    #[test]
     fn element_copies_preserve_native_identity_and_target_template_document() {
         const HTML: &str = "http://www.w3.org/1999/xhtml";
         let mut source = test_host();
