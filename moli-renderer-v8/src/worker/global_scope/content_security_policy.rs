@@ -65,6 +65,45 @@ pub(super) fn worker_request_policy_snapshot(
     .for_resource_kind(kind)
 }
 
+pub(crate) fn check_worker_webtransport_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    request_url: &Url,
+) -> Option<String> {
+    let state = get_worker_state(scope)?;
+    let (check, wake_tx) = {
+        let state = state.borrow();
+        let document_url = state.current_script_url.as_ref()?;
+        let policy = worker_request_policy_snapshot(
+            &state,
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+        );
+        (
+            policy.check_url(
+                document_url,
+                request_url,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ),
+            state.worker_wake_tx.clone(),
+        )
+    };
+    if check.has_no_violations() {
+        return None;
+    }
+    let (report_only, enforced) = check.into_violations();
+    let message = enforced
+        .first()
+        .map(|violation| worker_content_security_policy_error_message(violation, "WebTransport"));
+    let location =
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
+    for mut violation in enforced.into_iter().chain(report_only) {
+        location.apply_to(&mut violation);
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    message
+}
+
 fn worker_policy_url<'a>(state: &'a WorkerGlobalState, protected_url: &'a Url) -> &'a Url {
     state
         .content_security_policy_snapshot

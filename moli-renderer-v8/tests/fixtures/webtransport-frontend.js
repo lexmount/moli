@@ -53,12 +53,12 @@
   await check('absolute URLs reject wrong schemes malformed hosts and fragments', () => {
     for (const url of ['http://example.test/', 'ws://example.test/', 'https:///', 'https://example.test/#', 'https://example.test/#x', 'https://example.test:65536/']) throws(() => new C(url), 'SyntaxError');
   });
-  await check('relative URLs use the live API base URL', () => {
+  await check('relative URLs are rejected regardless of the live API base URL', () => {
     const base = document.createElement('base');
     document.head.prepend(base);
     try {
       base.href = 'https://example.test/directory/';
-      for (const input of [null, '', 'relative', '/root']) new C(input).close();
+      for (const input of [null, '', 'relative', '/root', '//example.test/']) throws(() => new C(input), 'SyntaxError');
       base.href = 'http://example.test/';
       throws(() => new C('relative'), 'SyntaxError');
       new C('https://example.test/').close();
