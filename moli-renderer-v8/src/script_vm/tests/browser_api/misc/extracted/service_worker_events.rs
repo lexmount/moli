@@ -638,6 +638,8 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
             )],
             r#"
         let violationSeen = false;
+        let observed;
+        const violation = new Promise(resolve => observed = resolve);
         self.addEventListener("securitypolicyviolation", event => {
           violationSeen = event.type === "securitypolicyviolation" &&
             event.effectiveDirective === "connect-src" &&
@@ -645,9 +647,11 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
             event.blockedURI.endsWith("/app/blocked-data") &&
             event.disposition === "enforce" &&
             event instanceof SecurityPolicyViolationEvent;
+          observed();
         });
         self.onmessage = async () => {
           await fetch("blocked-data").catch(() => {});
+          await violation;
           postMessage("blocked:" + violationSeen);
         };
         "#,
