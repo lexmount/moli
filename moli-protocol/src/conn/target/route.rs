@@ -187,6 +187,14 @@ impl CdpConnection {
                 .any(|attached_target_id| attached_target_id == target_id)
     }
 
+    /// Whether this exact DevTools session still owns an attached route.
+    /// A detached command owner must not keep an external wait alive.
+    pub fn has_attached_devtools_session(&self, session_id: &str) -> bool {
+        self.target_control
+            .attached_session_route(session_id)
+            .is_some()
+    }
+
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
         self.target_control

@@ -35,6 +35,7 @@ const PAGE_SCREENCAST_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 mod actor;
 mod adapter_scheduler;
 mod command_dispatch;
+mod command_task;
 mod frontend_control;
 mod instance_command;
 mod protocol_residence;
@@ -869,40 +870,7 @@ impl CdpScheduler {
         };
         let output_release_permit =
             CommandOutputReleasePermit::new(response_flush_permit, runtime_output_barrier);
-        let step = match dispatch_step {
-            CdpCommandTaskStep::Pending(mut pending) => {
-                let scheduler_events = pending.take_scheduler_events();
-                self.apply_scheduler_events(scheduler_events);
-                CommandTaskStep::Pending(pending)
-            }
-            CdpCommandTaskStep::Complete(result) => {
-                let (
-                    events,
-                    post_renderer_output_events,
-                    renderer_output_boundary,
-                    post_response_events,
-                    scheduler_events,
-                    renderer_output_predecessor,
-                ) = result.into_renderer_owner_turn_parts();
-                CommandTaskStep::Complete(Box::new(
-                    CommandTurnOutput::new_with_post_response_events(
-                        self.route_background_events_around_inflight_navigation(events),
-                        self.route_background_events_around_inflight_navigation(
-                            post_response_events,
-                        )
-                        .into_background_events(),
-                        scheduler_events,
-                    )
-                    .with_renderer_output_boundary(
-                        renderer_output_boundary,
-                        self.route_background_events_around_inflight_navigation(
-                            post_renderer_output_events,
-                        ),
-                    )
-                    .with_renderer_output_predecessor(renderer_output_predecessor),
-                ))
-            }
-        };
+        let step = self.materialize_command_dispatch_step(dispatch_step);
         (step, output_release_permit, command_context)
     }
 
@@ -911,11 +879,31 @@ impl CdpScheduler {
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> CommandTaskStep {
-        match self
+        let step = self
             .conn
             .complete_pending_command_dispatch_with_context(completed, command_context)
-            .await
-        {
+            .await;
+        self.materialize_command_dispatch_step(step)
+    }
+
+    pub(crate) fn complete_failed_command_wait_with_context(
+        &mut self,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        message: &str,
+        command_context: &mut CommandDispatchContext,
+    ) -> CommandTaskStep {
+        let step = self.conn.complete_failed_command_wait_with_context(
+            command_id,
+            session_id,
+            message,
+            command_context,
+        );
+        self.materialize_command_dispatch_step(step)
+    }
+
+    fn materialize_command_dispatch_step(&mut self, step: CdpCommandTaskStep) -> CommandTaskStep {
+        match step {
             CdpCommandTaskStep::Pending(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);

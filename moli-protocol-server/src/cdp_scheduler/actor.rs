@@ -20,6 +20,10 @@ use crate::{
     cdp_frontend_router::{CdpFrontendRouter, CdpPreparedFrontendCommand},
 };
 
+use super::command_task::{
+    CommandWaitCompletion, CommandWaitIdentity, CommandWaitTask, spawn_command_wait,
+    spawn_owned_wait,
+};
 use super::frontend_control::CdpFrontendControlState;
 use super::{
     CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpCookieSnapshot,
@@ -36,6 +40,7 @@ struct PendingRuntimeDeferredReplyState {
     output_release_permit: CommandOutputReleasePermit,
     command_context: CommandDispatchContext,
     output_session_id: Option<String>,
+    response_task: Option<CommandWaitTask>,
 }
 
 #[derive(Clone)]
@@ -54,12 +59,11 @@ struct InFlightCommandState {
     output_release_permit: CommandOutputReleasePermit,
     command_context: CommandDispatchContext,
     pending_turn: u64,
+    owner_session_id: Option<String>,
+    wait_task: CommandWaitTask,
 }
 
-struct PendingCommandCompletion {
-    token: u64,
-    completed: CompletedCdpCommandDispatch,
-}
+type PendingCommandCompletion = CommandWaitCompletion<CompletedCdpCommandDispatch>;
 
 struct BlockedCommandDispatch {
     command: ParsedCdpCommand,
@@ -271,6 +275,25 @@ async fn run_cdp_scheduler_actor(
         if scheduler_input_rx.renderer_publication_rx.is_closed() {
             break;
         }
+        for state in in_flight_commands.values() {
+            if state
+                .owner_session_id
+                .as_deref()
+                .is_some_and(|session_id| !scheduler.conn.has_attached_devtools_session(session_id))
+            {
+                state.wait_task.abort();
+            }
+        }
+        for pending in &pending_runtime_deferred_replies {
+            if pending
+                .output_session_id
+                .as_deref()
+                .is_some_and(|session_id| !scheduler.conn.has_attached_devtools_session(session_id))
+                && let Some(task) = &pending.response_task
+            {
+                task.abort();
+            }
+        }
         let page_javascript_blocked =
             page_javascript_owner_is_blocked(&scheduler, &in_flight_commands);
         adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
@@ -423,6 +446,23 @@ async fn run_cdp_scheduler_actor(
                 }
             }
         }
+    }
+    // Revoke owned waits before releasing the connection. Their cancellation
+    // completions can no longer consume an in-flight entry or publish a reply.
+    let mut waits = in_flight_commands
+        .drain()
+        .map(|(_, state)| state.wait_task)
+        .collect::<Vec<_>>();
+    waits.extend(
+        pending_runtime_deferred_replies
+            .drain(..)
+            .filter_map(|pending| pending.response_task),
+    );
+    for task in &waits {
+        task.abort();
+    }
+    for task in waits {
+        task.cancel_and_join().await;
     }
     CdpCookieSnapshot::from_profile_backed_cookies(scheduler.snapshot_profile_backed_cookies())
 }
@@ -721,6 +761,7 @@ impl PendingRuntimeDeferredReplyState {
             output_release_permit,
             command_context,
             output_session_id,
+            response_task: None,
         }
     }
 }
@@ -1247,12 +1288,12 @@ fn enqueue_pending_runtime_deferred_reply_state(
             .take_scheduler_deferred_inspector_reply_receiver()
     {
         let session_id = pending.pending.session_id().map(str::to_owned);
-        start_deferred_runtime_inspector_response_wait(
+        pending.response_task = Some(start_deferred_runtime_inspector_response_wait(
             command_id,
             session_id,
             response_rx,
             deferred_runtime_response_tx,
-        );
+        ));
     }
     pending_runtime_deferred_replies.push_back(pending);
 }
@@ -1272,18 +1313,21 @@ fn start_deferred_runtime_inspector_response_wait(
     session_id: Option<String>,
     response_rx: RuntimeInspectorAsyncCompletionReceiver,
     response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-) {
+) -> CommandWaitTask {
     let response_tx = response_tx.clone();
-    tokio::task::spawn_local(async move {
-        let response = response_rx
-            .await
-            .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
+    spawn_owned_wait(response_rx, move |response| {
+        let response = match response {
+            Ok(response) => {
+                response.map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned())
+            }
+            Err(failure) => Err(failure.message().to_owned()),
+        };
         let _ = response_tx.send(RuntimeInspectorResponseReady::new(
             command_id,
             session_id.as_deref(),
             response,
         ));
-    });
+    })
 }
 
 async fn handle_deferred_runtime_inspector_response_result(
@@ -1363,14 +1407,15 @@ fn take_next_in_flight_command_token(next_token: &mut u64) -> u64 {
 
 fn start_pending_command_wait(
     token: u64,
+    turn: u64,
     pending: PendingCdpCommandDispatch,
     completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
-) {
-    let completion_tx = completion_tx.clone();
-    tokio::task::spawn_local(async move {
-        let completed = pending.wait().await;
-        let _ = completion_tx.send(PendingCommandCompletion { token, completed });
-    });
+) -> CommandWaitTask {
+    spawn_command_wait(
+        CommandWaitIdentity { token, turn },
+        pending.wait(),
+        completion_tx,
+    )
 }
 
 fn trace_in_flight_command(
@@ -1619,6 +1664,12 @@ async fn start_ready_command_dispatch(
         CommandTaskStep::Pending(pending) => {
             trace_command(command, "command_dispatch_pending", None, None, None);
             let token = take_next_in_flight_command_token(next_in_flight_command_token);
+            let owner_session_id = pending
+                .session_id()
+                .map(str::to_owned)
+                .or_else(|| metadata.session_id.clone());
+            let wait_task =
+                start_pending_command_wait(token, 0, *pending, pending_command_completion_tx);
             in_flight_commands.insert(
                 token,
                 InFlightCommandState {
@@ -1627,9 +1678,10 @@ async fn start_ready_command_dispatch(
                     output_release_permit,
                     command_context,
                     pending_turn: 0,
+                    owner_session_id,
+                    wait_task,
                 },
             );
-            start_pending_command_wait(token, *pending, pending_command_completion_tx);
             true
         }
     }
@@ -1881,14 +1933,25 @@ async fn handle_pending_command_completion(
     in_flight_commands: &mut InFlightCommands,
     completion: PendingCommandCompletion,
 ) -> bool {
-    let Some(mut state) = in_flight_commands.remove(&completion.token) else {
+    let identity = completion.identity;
+    if in_flight_commands
+        .get(&identity.token)
+        .is_none_or(|state| state.pending_turn != identity.turn)
+    {
         tracing::debug!(
-            token = completion.token,
-            "dropping stale pending command completion without actor state"
+            token = identity.token,
+            turn = identity.turn,
+            "dropping stale pending command completion without matching actor state"
         );
         return true;
-    };
-    let completion_kind = completion.completed.kind_name();
+    }
+    let mut state = in_flight_commands
+        .remove(&identity.token)
+        .expect("matching in-flight command");
+    let completion_kind = completion
+        .result
+        .as_ref()
+        .map_or("WaitFailure", |completed| completed.kind_name());
     if moli_trace::cdp_runtime_trace_enabled() {
         tracing::info!(
             target: "moli_cdp_runtime",
@@ -1898,12 +1961,22 @@ async fn handle_pending_command_completion(
         );
     }
     let complete_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-    let step = scheduler
-        .complete_pending_command_dispatch_with_context(
-            completion.completed,
+    let step = match completion.result {
+        Ok(completed) => {
+            scheduler
+                .complete_pending_command_dispatch_with_context(
+                    completed,
+                    &mut state.command_context,
+                )
+                .await
+        }
+        Err(failure) => scheduler.complete_failed_command_wait_with_context(
+            state.metadata.id,
+            state.metadata.session_id.as_deref(),
+            failure.message(),
             &mut state.command_context,
-        )
-        .await;
+        ),
+    };
     if let Some(started) = complete_started {
         tracing::info!(
             target: "moli_cdp_runtime",
@@ -1953,10 +2026,18 @@ async fn handle_pending_command_completion(
                     pending_kind = pending.kind_name(),
                 );
             }
-            state.pending_turn = state.pending_turn.wrapping_add(1);
-            let token = completion.token;
+            state.pending_turn = state
+                .pending_turn
+                .checked_add(1)
+                .expect("pending command turn space exhausted");
+            let token = identity.token;
+            state.wait_task = start_pending_command_wait(
+                token,
+                state.pending_turn,
+                *pending,
+                pending_command_completion_tx,
+            );
             in_flight_commands.insert(token, state);
-            start_pending_command_wait(token, *pending, pending_command_completion_tx);
             true
         }
         CommandTaskStep::Complete(output) => {
@@ -2107,6 +2188,185 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::cdp_scheduler::command_task::CommandWaitFailure;
+
+    fn empty_scheduler_inputs() -> SchedulerInputReceivers {
+        let (_background_event_tx, background_event_rx) = mpsc::unbounded_channel();
+        let (_navigation_tx, background_navigation_completion_rx) = mpsc::unbounded_channel();
+        let (_renderer_tx, renderer_publication_rx) =
+            moli_core::renderer_output_transport_channel();
+        let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
+        SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
+            document_activity_completion_rx,
+            background_event_rx,
+            background_navigation_completion_rx,
+            renderer_publication_rx,
+        })
+    }
+
+    #[tokio::test]
+    async fn failed_wait_uses_normal_response_routing_and_finishes_once() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (failure, writer_available) in [
+                    (CommandWaitFailure::Panicked, true),
+                    (CommandWaitFailure::Cancelled, true),
+                    (CommandWaitFailure::Panicked, false),
+                    (CommandWaitFailure::Cancelled, false),
+                ] {
+                    let router = CdpFrontendRouter::new();
+                    let (sink, writer) =
+                        crate::cdp_writer::CdpSocketSink::with_stalled_writer_for_test(8);
+                    let mut writer = writer_available.then_some(writer);
+                    router
+                        .register_browser_frontend(1, "browser-session".to_owned(), sink)
+                        .unwrap();
+                    let command =
+                        ParsedCdpCommand::parse_str(r#"{"id":42,"method":"Browser.getVersion"}"#)
+                            .unwrap();
+                    let Some(CdpPreparedFrontendCommand::Command(command)) =
+                        router.prepare_command(1, Ok(command))
+                    else {
+                        panic!("frontend command must be admitted");
+                    };
+                    let metadata = command_metadata(&command);
+                    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+                    let (permit, context) = scheduler.conn.begin_command_response_flush_permit();
+                    let identity = CommandWaitIdentity { token: 10, turn: 2 };
+                    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
+                    let wait_task = spawn_command_wait(
+                        identity,
+                        std::future::pending::<CompletedCdpCommandDispatch>(),
+                        &completion_tx,
+                    );
+                    let mut in_flight = InFlightCommands::from([(
+                        identity.token,
+                        InFlightCommandState {
+                            metadata,
+                            dispatch: CommandDispatchState::pending_command(),
+                            output_release_permit: CommandOutputReleasePermit::new(permit, None),
+                            command_context: CommandDispatchContext::new(context),
+                            pending_turn: identity.turn,
+                            owner_session_id: None,
+                            wait_task,
+                        },
+                    )]);
+                    let mut inputs = empty_scheduler_inputs();
+                    let mut deferred = VecDeque::new();
+                    let (response_tx, _response_rx) = mpsc::unbounded_channel();
+                    let mut adapter = ProtocolAdapterScheduler::default();
+                    let continued = handle_pending_command_completion(
+                        &router,
+                        &mut scheduler,
+                        &mut inputs,
+                        &mut deferred,
+                        &response_tx,
+                        &mut adapter,
+                        &completion_tx,
+                        &mut in_flight,
+                        CommandWaitCompletion {
+                            identity,
+                            result: Err(failure),
+                        },
+                    )
+                    .await;
+                    assert!(
+                        continued,
+                        "a disconnected frontend must not stop other clients"
+                    );
+                    assert!(in_flight.is_empty());
+                    if let Some(writer) = &mut writer {
+                        let message = writer.take_message();
+                        assert_eq!(message["id"], 42);
+                        assert_eq!(message["error"]["code"], -32000);
+                        assert_eq!(message["error"]["message"], failure.message());
+                    }
+
+                    // Retiring the entry aborts its wait. Its cancellation report
+                    // is now stale and cannot publish a second command response.
+                    let late = completion_rx.recv().await.unwrap();
+                    assert!(
+                        handle_pending_command_completion(
+                            &router,
+                            &mut scheduler,
+                            &mut inputs,
+                            &mut deferred,
+                            &response_tx,
+                            &mut adapter,
+                            &completion_tx,
+                            &mut in_flight,
+                            late,
+                        )
+                        .await
+                    );
+                    assert!(in_flight.is_empty());
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn stale_wait_round_cannot_consume_current_in_flight_state() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let router = CdpFrontendRouter::new();
+                let mut scheduler = CdpScheduler::new(CdpConnection::new());
+                let (permit, context) = scheduler.conn.begin_command_response_flush_permit();
+                let (completion_tx, _completion_rx) = mpsc::unbounded_channel();
+                let identity = CommandWaitIdentity { token: 10, turn: 2 };
+                let wait_task = spawn_command_wait(
+                    identity,
+                    std::future::pending::<CompletedCdpCommandDispatch>(),
+                    &completion_tx,
+                );
+                let mut in_flight = InFlightCommands::from([(
+                    identity.token,
+                    InFlightCommandState {
+                        metadata: InFlightCommandMetadata {
+                            method: Some("Browser.getVersion".to_owned()),
+                            id: Some(42),
+                            session_id: None,
+                            started: None,
+                            executes_page_javascript: false,
+                            command_output_session_id: None,
+                        },
+                        dispatch: CommandDispatchState::pending_command(),
+                        output_release_permit: CommandOutputReleasePermit::new(permit, None),
+                        command_context: CommandDispatchContext::new(context),
+                        pending_turn: identity.turn,
+                        owner_session_id: None,
+                        wait_task,
+                    },
+                )]);
+                let mut inputs = empty_scheduler_inputs();
+                let mut deferred = VecDeque::new();
+                let (response_tx, _response_rx) = mpsc::unbounded_channel();
+                let mut adapter = ProtocolAdapterScheduler::default();
+                assert!(
+                    handle_pending_command_completion(
+                        &router,
+                        &mut scheduler,
+                        &mut inputs,
+                        &mut deferred,
+                        &response_tx,
+                        &mut adapter,
+                        &completion_tx,
+                        &mut in_flight,
+                        CommandWaitCompletion {
+                            identity: CommandWaitIdentity {
+                                turn: 1,
+                                ..identity
+                            },
+                            result: Err(CommandWaitFailure::Cancelled),
+                        },
+                    )
+                    .await
+                );
+                assert_eq!(in_flight.len(), 1);
+                assert_eq!(in_flight[&identity.token].pending_turn, 2);
+            })
+            .await;
+    }
 
     #[test]
     #[should_panic(expected = "in-flight CDP command token space exhausted")]

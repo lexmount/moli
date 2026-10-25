@@ -35,6 +35,78 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn command_wait_failure_preserves_context_events_and_does_not_ack_early() {
+    let mut conn = CdpConnection::new();
+    let (permit, flush) = conn.begin_command_response_flush_permit();
+    let observer = flush.receiver().unwrap();
+    let mut context = CommandDispatchContext::new(flush);
+    context.push_protocol_event(BackgroundProtocolEvent::immediate(json!({
+        "method": "Test.beforeResponse", "params": {}
+    })));
+    context.extend_post_response_events([BackgroundProtocolEvent::immediate(json!({
+        "method": "Test.afterResponse", "params": {}
+    }))]);
+
+    let CdpCommandTaskStep::Complete(outcome) = conn.complete_failed_command_wait_with_context(
+        Some(42),
+        Some("SID-output"),
+        "CommandWaitPanicked",
+        &mut context,
+    ) else {
+        panic!("wait failure must terminate the command");
+    };
+    let (before, renderer_tail, boundary, after, _, predecessor) =
+        outcome.into_renderer_owner_turn_parts();
+    assert!(renderer_tail.is_empty());
+    assert!(boundary.is_none() && predecessor.is_none());
+    let before = before
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    let after = after
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0]["method"], "Test.beforeResponse");
+    assert_eq!(
+        before[1],
+        json!({
+            "id": 42, "sessionId": "SID-output",
+            "error": {"code": -32000, "message": "CommandWaitPanicked"}
+        })
+    );
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["method"], "Test.afterResponse");
+    assert!(
+        !*observer.borrow(),
+        "buffered errors do not prove wire delivery"
+    );
+    permit.finish();
+    assert!(*observer.borrow());
+}
+
+#[test]
+fn command_wait_failure_delivery_drop_cancels_instead_of_claiming_ack() {
+    let mut conn = CdpConnection::new();
+    let (permit, flush) = conn.begin_command_response_flush_permit();
+    let observer = flush.receiver().unwrap();
+    let mut context = CommandDispatchContext::new(flush);
+    let _ = conn.complete_failed_command_wait_with_context(
+        Some(42),
+        None,
+        "CommandWaitCancelled",
+        &mut context,
+    );
+    assert!(!*observer.borrow());
+    drop(permit);
+    assert!(
+        observer.has_changed().is_err(),
+        "failed delivery must release flush observers"
+    );
+}
+
 fn complete_messages(step: CdpCommandTaskStep) -> Vec<Value> {
     match step {
         CdpCommandTaskStep::Complete(outcome) => outcome.into_parts().0,

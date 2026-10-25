@@ -427,6 +427,23 @@ impl CdpConnection {
         self.complete_with_protocol_events(command_context, protocol_events)
     }
 
+    /// Finalizes an externally failed command through the same context/output
+    /// boundary as ordinary completion, including events retained at start.
+    pub fn complete_failed_command_wait_with_context(
+        &mut self,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        message: &str,
+        command_context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        self.complete_with_output_plan(
+            command_context,
+            CommandOutputPlan::error(-32000, message),
+            command_id,
+            session_id,
+        )
+    }
+
     fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
         let scheduler_events = self.take_scheduler_events();
         CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(
