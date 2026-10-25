@@ -3276,6 +3276,30 @@ async fn worker_main(
             WorkerLoopWake::Fetch(None) => {
                 // Fetch sender dropped, but other work may still be pending.
             }
+            WorkerLoopWake::Message(Some(WorkerMessage::DispatchXhrFailure {
+                xhr_id,
+                error_text,
+                local_request,
+            })) => {
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                drain_worker_xhr_event(
+                    scope,
+                    &state,
+                    WorkerXhrEvent::Completion(Box::new(
+                        super::global_scope::WorkerXhrCompletion {
+                            csp_violations: Vec::new(),
+                            local_request: Some(local_request),
+                            xhr_id,
+                            result: Err(error_text),
+                        },
+                    )),
+                );
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Xhr(Some(completion)) => {
                 let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
                 let scope = &mut scope.init();
