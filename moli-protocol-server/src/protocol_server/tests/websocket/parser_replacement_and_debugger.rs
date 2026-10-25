@@ -1236,6 +1236,185 @@ async fn websocket_cdp_runtime_call_function_awaitpromise_fetch_interception_unb
 }
 
 #[tokio::test]
+async fn websocket_cdp_fetch_continue_document_with_blocking_script_keeps_server_responsive() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><script>globalThis.continuedDocument = true;</script>\
+             <script src=/app.js></script><p>loaded</p>",
+        )
+    }
+
+    for (pattern, handle_auth_requests) in
+        [("*", false), ("*page", false), ("*", true), ("*page", true)]
+    {
+        let script_requested = Arc::new(tokio::sync::Notify::new());
+        let release_script = Arc::new(tokio::sync::Notify::new());
+        let requested_for_route = Arc::clone(&script_requested);
+        let release_for_route = Arc::clone(&release_script);
+        let fixture = Router::new().route("/page", get(page)).route(
+            "/app.js",
+            get(move || {
+                let requested = Arc::clone(&requested_for_route);
+                let release = Arc::clone(&release_for_route);
+                async move {
+                    requested.notify_one();
+                    release.notified().await;
+                    (
+                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
+                        "globalThis.continuedScript = true;",
+                    )
+                }
+            }),
+        );
+        let (fixture_addr, _fixture_server) =
+            spawn_dedicated_fixture_server(fixture, "fetch-continued-document");
+        let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+        let endpoint = format!("ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+        let (mut socket, _) = connect_async(&endpoint).await.expect("connect CDP client");
+        let (mut other, _) = connect_async(&endpoint)
+            .await
+            .expect("connect independent CDP client");
+        let context_id = cdp_create_browser_context(&mut socket, 1).await;
+        let session = cdp_create_attached_target(&mut socket, 2, &context_id).await;
+        let _ = send_cdp_command(
+            &mut socket,
+            4,
+            "Page.enable",
+            Some(&session.session_id),
+            json!({}),
+        )
+        .await;
+        let _ = send_cdp_command(
+            &mut socket,
+            5,
+            "Fetch.enable",
+            Some(&session.session_id),
+            json!({
+                "patterns": [{"urlPattern": pattern, "requestStage": "Request"}],
+                "handleAuthRequests": handle_auth_requests,
+            }),
+        )
+        .await;
+        send_cdp_command_without_wait(
+            &mut socket,
+            6,
+            "Page.navigate",
+            Some(&session.session_id),
+            json!({"url": format!("http://{fixture_addr}/page")}),
+        )
+        .await;
+        let mut observed = recv_until_match(&mut socket, |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["resourceType"] == json!("Document")
+        })
+        .await;
+        let request_id = observed.last().unwrap()["params"]["requestId"].clone();
+        observed.extend(
+            send_cdp_command(
+                &mut socket,
+                7,
+                "Fetch.continueRequest",
+                Some(&session.session_id),
+                json!({"requestId": request_id}),
+            )
+            .await,
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|message| { message["id"] == json!(7) && message["result"] == json!({}) })
+        );
+
+        if pattern == "*" {
+            if !observed.iter().any(|message| {
+                message["method"] == json!("Fetch.requestPaused")
+                    && message["params"]["resourceType"] == json!("Script")
+            }) {
+                observed.extend(
+                    recv_until_match(&mut socket, |message| {
+                        message["method"] == json!("Fetch.requestPaused")
+                            && message["params"]["resourceType"] == json!("Script")
+                    })
+                    .await,
+                );
+            }
+            let paused = observed
+                .iter()
+                .find(|message| {
+                    message["method"] == json!("Fetch.requestPaused")
+                        && message["params"]["resourceType"] == json!("Script")
+                })
+                .unwrap();
+            assert_eq!(paused["sessionId"], session.session_id);
+            let request_id = paused["params"]["requestId"].clone();
+            observed.extend(
+                send_cdp_command(
+                    &mut socket,
+                    8,
+                    "Fetch.continueRequest",
+                    Some(&session.session_id),
+                    json!({"requestId": request_id}),
+                )
+                .await,
+            );
+        }
+        timeout(Duration::from_secs(30), script_requested.notified())
+            .await
+            .expect("continued document must start its parser-blocking script request");
+        if !observed.iter().any(|message| message["id"] == json!(6)) {
+            observed.extend(recv_until_id(&mut socket, 6).await);
+        }
+        let targets = send_cdp_command(&mut other, 1, "Target.getTargets", None, json!({})).await;
+        assert!(targets.iter().any(|message| {
+            message["result"]["targetInfos"]
+                .as_array()
+                .is_some_and(|targets| {
+                    targets
+                        .iter()
+                        .any(|target| target["targetId"] == session.target_id)
+                })
+        }));
+        let pending = cdp_runtime_evaluate_string(
+            &mut socket,
+            &session.session_id,
+            9,
+            "JSON.stringify([globalThis.continuedDocument === true, globalThis.continuedScript === true, document.readyState])",
+        )
+        .await;
+        assert_eq!(pending, r#"[true,false,"loading"]"#, "pattern: {pattern}");
+        release_script.notify_one();
+        if !observed
+            .iter()
+            .any(|message| message["method"] == json!("Page.loadEventFired"))
+        {
+            observed.extend(
+                recv_until_match(&mut socket, |message| {
+                    message["method"] == json!("Page.loadEventFired")
+                })
+                .await,
+            );
+        }
+        assert!(
+            observed
+                .iter()
+                .any(|message| { message["id"] == json!(6) && message.get("error").is_none() })
+        );
+        let completed = cdp_runtime_evaluate_string(
+            &mut socket,
+            &session.session_id,
+            10,
+            "JSON.stringify([globalThis.continuedScript === true, document.querySelector('p').textContent])",
+        )
+        .await;
+        assert_eq!(completed, r#"[true,"loaded"]"#, "pattern: {pattern}");
+        let _ = other.close(None).await;
+        let _ = socket.close(None).await;
+        protocol_server.abort();
+    }
+}
+
+#[tokio::test]
 async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_session() {
     async fn page() -> impl IntoResponse {
         (

@@ -1857,7 +1857,7 @@ pub(super) async fn complete_continue_response_command_async(
     }
 }
 
-fn continue_streaming_document_response_in_background(
+pub(super) fn continue_streaming_document_response_in_background(
     conn: &mut CdpConnection,
     sender: tokio::sync::mpsc::UnboundedSender<page::BackgroundNavigationCompletion>,
     pending: PendingStreamingDocumentResponseNavigation,

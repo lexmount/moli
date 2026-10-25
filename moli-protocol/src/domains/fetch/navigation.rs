@@ -2,8 +2,9 @@ use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType}
 use crate::conn::{
     CdpConnection, CommandOwnerScope, DocumentBodySource, DocumentNavigationToken,
     FetchAuthChallenge, NavigationDispatchState, NavigationLoadOutcome, PendingFetchNavigation,
-    PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
-    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest, decode_data_url_response,
+    PendingStreamingDocumentResponseNavigation, PendingSubresourceFetchAuthStage,
+    PendingSubresourceFetchAuthStageChain, PendingSubresourceFetchOwnerKind,
+    PendingSubresourceFetchRequest, decode_data_url_response,
 };
 use crate::domains::{command_output::CommandOutputBuffer, network, page};
 use moli_cookie_jar::StoredCookieQueryReport;
@@ -83,7 +84,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
 
     if should_handle_auth {
         let has_auth_credentials = auth.is_some();
-        if pending.intercept_response && navigation_response_stage_auth_can_stream(auth.as_ref()) {
+        if navigation_response_stage_auth_can_stream(auth.as_ref()) {
             match conn
                 .fetch_navigation_streaming_raw_response_for_navigation_async(
                     &pending.navigation,
@@ -206,7 +207,9 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
         return;
     }
 
-    if pending.intercept_response && pending.navigation.requested_url.scheme() != "data" {
+    if matches!(pending.navigation.requested_url.scheme(), "http" | "https")
+        || (pending.intercept_response && pending.navigation.requested_url.scheme() != "data")
+    {
         match conn
             .fetch_navigation_streaming_raw_response_for_navigation_async(&pending.navigation, None)
             .await
@@ -511,6 +514,29 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     }
 
     if !prepare_navigation_response_stage(conn, &mut pending, &response_head.final_url) {
+        // Parser-blocking scripts need the scheduler to process renderer
+        // output, so do not wait for document parsing inside this command.
+        if let Some(document_navigation_token) = pending.document_navigation_token.clone()
+            && let Some(sender) =
+                conn.background_navigation_completion_sender_for_owner(&pending.navigation.owner)
+        {
+            let (response, network_observation_journal) =
+                response.into_parts_with_observation_journal();
+            super::commands::continue_streaming_document_response_in_background(
+                conn,
+                sender,
+                PendingStreamingDocumentResponseNavigation {
+                    document_navigation_token,
+                    navigation: pending.navigation,
+                    response,
+                    network_observation_journal,
+                    body_progress_source: network::MainDocumentBodyProgressSource::default(),
+                },
+                None,
+                Vec::new(),
+            );
+            return;
+        }
         let navigation = conn
             .build_navigation_from_streaming_raw_response_for_navigation_async(
                 pending.document_navigation_token.as_ref(),
