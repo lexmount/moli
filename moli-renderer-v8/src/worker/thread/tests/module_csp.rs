@@ -467,3 +467,54 @@ async fn worker_synthetic_module_static_imports_use_outside_connect_csp() {
         }
     }
 }
+
+#[tokio::test]
+async fn worker_module_fetch_reports_every_violated_policy() {
+    ensure_v8();
+    let (base_url, server) = spawn_raw_path_response_http_server(vec![(
+        "/worker/value.js",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: 16\r\nConnection: close\r\n\r\nexport default 7".to_owned(),
+        Duration::ZERO,
+    )]).await;
+    let options = WorkerSpawnOptions::new(
+        r#"
+        const events = [];
+        addEventListener("securitypolicyviolation", event => {
+            events.push([event.originalPolicy, event.disposition]);
+        });
+        try {
+            await import('./value.js');
+            postMessage({loaded: true, events});
+        } catch {
+            postMessage({loaded: false, events});
+        }
+        close();
+        "#
+        .to_owned(),
+        format!("{base_url}/worker/main.js"),
+    )
+    .with_script_kind(WorkerScriptKind::Module)
+    .with_content_security_policies(vec![
+        "script-src 'none'".into(),
+        "script-src 'none'; img-src 'self'".into(),
+    ])
+    .with_content_security_report_only_policies(vec![
+        "default-src 'none'".into(),
+        "script-src https://assets.test".into(),
+    ]);
+    let mut handle = spawn_test_worker_with_options(options);
+    let result = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(result)).unwrap();
+    handle.terminate_and_join();
+    server.abort();
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "loaded": false,
+            "events": [
+                ["default-src 'none'", "report"], ["script-src https://assets.test", "report"],
+                ["script-src 'none'", "enforce"], ["script-src 'none'; img-src 'self'", "enforce"],
+            ],
+        })
+    );
+}

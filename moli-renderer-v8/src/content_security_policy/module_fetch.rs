@@ -10,8 +10,8 @@ type Check = dyn Fn(
         &Url,
         ContentSecurityPolicyRedirectStatus,
     ) -> (
-        Option<ContentSecurityPolicyUrlViolation>,
-        Option<ContentSecurityPolicyUrlViolation>,
+        Vec<ContentSecurityPolicyUrlViolation>,
+        Vec<ContentSecurityPolicyUrlViolation>,
     ) + Send
     + Sync;
 
@@ -63,6 +63,30 @@ impl ModuleFetchCspContext {
         + Sync
         + 'static,
     ) -> Self {
+        Self::new_with_policy_list(
+            original_url,
+            owner_scope,
+            move |url, original_url, status| {
+                let (report, enforce) = check(url, original_url, status);
+                (report.into_iter().collect(), enforce.into_iter().collect())
+            },
+        )
+    }
+
+    pub(crate) fn new_with_policy_list(
+        original_url: Url,
+        owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
+        check: impl Fn(
+            &Url,
+            &Url,
+            ContentSecurityPolicyRedirectStatus,
+        ) -> (
+            Vec<ContentSecurityPolicyUrlViolation>,
+            Vec<ContentSecurityPolicyUrlViolation>,
+        ) + Send
+        + Sync
+        + 'static,
+    ) -> Self {
         Self(Arc::new(Inner {
             check: Box::new(check),
             original_url,
@@ -102,30 +126,23 @@ impl ModuleFetchCspContext {
                 ContentSecurityPolicyRedirectStatus::FollowedRedirect
             },
         );
+        let message = enforce.first().map(|violation| {
+            format!(
+                "Module request blocked by Content Security Policy directive `{}`",
+                violation.effective_directive
+            )
+        });
         let mut state = self.0.state.lock();
-        if state
+        if !state
             .checked_hops
             .iter()
             .any(|(checked_ordinal, checked_url)| *checked_ordinal == ordinal && checked_url == url)
         {
-            if let Some(enforce) = enforce {
-                anyhow::bail!(
-                    "Module request blocked by Content Security Policy directive `{}`",
-                    enforce.effective_directive
-                );
-            }
-            return Ok(());
+            state.checked_hops.push((ordinal, url.clone()));
+            state.violations.extend(report);
+            state.violations.extend(enforce);
         }
-        state.checked_hops.push((ordinal, url.clone()));
-        if let Some(report) = report {
-            state.violations.push(report);
-        }
-        if let Some(enforce) = enforce {
-            let message = format!(
-                "Module request blocked by Content Security Policy directive `{}`",
-                enforce.effective_directive
-            );
-            state.violations.push(enforce);
+        if let Some(message) = message {
             anyhow::bail!(message);
         }
         Ok(())
