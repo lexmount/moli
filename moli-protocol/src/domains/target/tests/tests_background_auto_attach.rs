@@ -410,6 +410,9 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
     })).await;
     let navigation = take_response_by_id(&mut ctx, 10358);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
+    let loader_id = navigation["result"]["loaderId"]
+        .as_str()
+        .expect("navigation should identify its document generation");
     let binding_called = ctx
         .wait_for_scheduler_message("pre-document binding invocation", |message| {
             message["method"] == json!("Runtime.bindingCalled")
@@ -421,12 +424,14 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
         json!("payload-preload")
     );
     assert_eq!(binding_called["sessionId"], json!(session_id));
-    // A preload binding can fire before the parser reaches #ok. Observe this
-    // session's load event before inspecting the new document's contents.
-    ctx.wait_for_scheduler_message("pre-document background target load", |message| {
-        message["method"] == json!("Page.loadEventFired")
-            && message["sessionId"].as_str() == Some(session_id.as_str())
-    })
+    // The preload binding runs at document start, before parsing reaches #ok.
+    // Observe this document's load without enabling Runtime event surfaces.
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&session_id),
+        &second_target_id,
+        loader_id,
+    )
     .await;
     assert!(
         ctx.sent.iter().all(|message| {
@@ -449,7 +454,7 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
     let evaluation = take_response_by_id(&mut ctx, 10359);
     let payload = evaluation["result"]["result"]["value"]
         .as_str()
-        .expect("evaluation payload should be a string");
+        .unwrap_or_else(|| panic!("evaluation payload should be a string: {evaluation:?}"));
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
     assert_eq!(payload["kind"], json!("function"));
