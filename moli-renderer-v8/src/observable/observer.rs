@@ -10,6 +10,9 @@ pub(super) const LAST: i32 = 2;
 pub(super) const TO_ARRAY: i32 = 3;
 pub(super) const FOR_EACH: i32 = 4;
 pub(super) const REDUCE: i32 = 5;
+pub(super) const SOME: i32 = 6;
+pub(super) const EVERY: i32 = 7;
+pub(super) const FIND: i32 = 8;
 pub(super) const SUBSCRIBER: &str = "__moliObservableNativeSubscriber";
 
 #[derive(Clone, Copy)]
@@ -47,7 +50,9 @@ pub(super) fn notify<'s>(
             match kind {
                 FIRST => first::notify(scope, observer, notification),
                 LAST | TO_ARRAY => collect::notify(scope, observer, notification, kind),
-                FOR_EACH | REDUCE => consume::notify(scope, observer, notification, kind),
+                FOR_EACH | REDUCE | SOME | EVERY | FIND => {
+                    consume::notify(scope, observer, notification, kind);
+                }
                 _ => unreachable!("unknown native Observable observer"),
             }
             let exception = scope.exception();
