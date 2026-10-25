@@ -33,6 +33,7 @@ impl RendererSharedWorkerHost {
             script_url.clone(),
             launch_context.request_client,
         )
+        .with_resource_task_runner(launch_context.resource_task_runner)
         .with_script_kind(execution_policy.script_kind)
         .with_module_static_import_initiator_url(
             execution_policy.module_static_import_initiator_url,

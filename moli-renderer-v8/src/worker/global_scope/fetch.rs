@@ -269,7 +269,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         &headers.to_byte_strings(),
         blob_url_entry.as_ref(),
     );
-    tokio::task::spawn_local(async move {
+    // IO holds only native state. The lease cancels ordinary work at teardown
+    // while its captured executor keeps detached keepalive transport running.
+    load.task_runner().spawn(async move {
         let loader = load.request_client();
         let (result, network_request_headers) = if !authorized_blob
             && let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
@@ -580,7 +582,8 @@ fn spawn_worker_fetch_service_worker(
         return;
     }
 
-    tokio::task::spawn_local(async move {
+    // A controlled request can fall back after the client Worker has closed.
+    load.task_runner().spawn(async move {
         match direct_completion_rx.await {
             Ok(ServiceWorkerDirectFetchResult::Fallback) => {
                 spawn_worker_fetch_network(

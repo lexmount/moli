@@ -446,6 +446,7 @@ impl JsContextHost {
             module_credentials_mode: moli_fetch::RequestCredentialsMode,
             module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
             request_client: crate::network::ResourceRequestClient,
+            resource_task_runner: crate::network::RendererResourceTaskRunner,
         }
 
         enum FinishLoadingAction {
@@ -482,6 +483,7 @@ impl JsContextHost {
                             module_credentials_mode: *module_credentials_mode,
                             module_static_import_policy: module_static_import_policy.take(),
                             request_client: outside_settings_load.request_client(),
+                            resource_task_runner: outside_settings_load.task_runner(),
                         }))
                     }
                 }
@@ -498,6 +500,7 @@ impl JsContextHost {
             module_credentials_mode,
             module_static_import_policy,
             request_client,
+            resource_task_runner,
         } = match action {
             FinishLoadingAction::MissingOrRunning => return false,
             FinishLoadingAction::DiscardTerminated => {
@@ -522,6 +525,7 @@ impl JsContextHost {
             script_url,
             request_client,
         )
+        .with_resource_task_runner(resource_task_runner)
         .with_script_kind(script_kind)
         .with_module_credentials_mode(module_credentials_mode)
         .with_referrer_policy(response_referrer_policy)

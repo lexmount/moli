@@ -803,6 +803,7 @@ async fn worker_importscripts_cached_redirects_use_the_current_worker_policy() {
                 format!("{}/worker.js", source.url),
                 client.clone(),
             )
+            .with_resource_task_runner(crate::network::RendererResourceTaskRunner::for_test())
             .with_content_security_policies(vec![if blocked {
                 "script-src 'self'".into()
             } else {

@@ -115,6 +115,10 @@ impl WorkerResourceLoader {
         &self.request_client
     }
 
+    pub(crate) fn task_runner(&self) -> RendererResourceTaskRunner {
+        self.authority.loads.task_runner()
+    }
+
     pub(crate) fn content_security_policy_reports(
         &self,
     ) -> &crate::content_security_policy::ContentSecurityPolicyReports {
