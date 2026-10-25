@@ -1005,7 +1005,7 @@ impl JsContextHost {
                 violation.line_number = line;
                 violation.column_number = column;
             }
-            self.queue_inline_csp_violation_task(scope, owner, element, violation);
+            self.queue_content_security_policy_violation_task(scope, owner, element, violation);
         }
         enforced_violations.is_empty()
     }
@@ -1113,7 +1113,15 @@ impl JsContextHost {
         }
         let location =
             crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
-        self.dispatch_document_connect_csp_check(scope, owner, check, Some(&location))
+        let (mut reports, mut enforced) = check.into_violations();
+        for violation in enforced.iter_mut().chain(&mut reports) {
+            location.apply_to(violation);
+            self.queue_content_security_policy_violation_task(scope, owner, None, violation);
+        }
+        match enforced.into_iter().next() {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
+        }
     }
 
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(
@@ -1132,7 +1140,7 @@ impl JsContextHost {
         ) else {
             return DocumentCspOutcome::Allowed;
         };
-        self.dispatch_document_connect_csp_check(scope, owner, check, None)
+        self.dispatch_document_connect_csp_check(scope, owner, check)
     }
 
     fn dispatch_document_connect_csp_check<'s>(
@@ -1140,19 +1148,8 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         owner: OwnerDispatchScope,
         check: DocumentContentSecurityPolicyCheck,
-        source_location: Option<
-            &crate::content_security_policy::ContentSecurityPolicySourceLocation,
-        >,
     ) -> DocumentCspOutcome {
-        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
-        if let Some(source_location) = source_location {
-            for violation in report_only_violations
-                .iter_mut()
-                .chain(&mut enforced_violations)
-            {
-                source_location.apply_to(violation);
-            }
-        }
+        let (report_only_violations, enforced_violations) = check.into_violations();
         let host_ptr: *mut JsContextHost = self;
         for violation in report_only_violations {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
