@@ -563,10 +563,10 @@ impl ScriptVm {
             return Ok(FrameDocumentModuleTerminalQueueFollowup::terminal_warning_recorded());
         };
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
+            Ok(fetched_source) => self.module_graph_fetched_source_for_request(
                 load_id,
                 fetched_source,
-                child_inflight.inflight.fetch_metadata(),
+                child_inflight.inflight.request(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,

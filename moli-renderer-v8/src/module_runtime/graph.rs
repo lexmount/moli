@@ -1060,16 +1060,22 @@ impl NativeModuleGraphJob {
                             key.clone(),
                             fetch.dependency().cloned(),
                         );
-                    owner.dispatch_module_fetch_csp_report_only_violation(
-                        &key,
-                        &request.fetch_metadata,
-                    );
-                    if let Some(error) =
-                        owner.csp_blocked_module_fetch_error(&key, &request.fetch_metadata)
-                    {
-                        owner.mark_module_failed(key.clone(), error.clone());
-                        return Err(error);
-                    }
+                    let location = if request.is_top_level_tree_fetch() {
+                        self.dynamic_import_request()
+                            .and_then(PendingDynamicModuleImport::csp_source_location)
+                            .cloned()
+                    } else {
+                        None
+                    };
+                    let request =
+                        request.with_csp_source_location(Some(location.unwrap_or_default()));
+                    let request = match owner.prepare_module_fetch(request) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            owner.mark_module_failed(key.clone(), error.clone());
+                            return Err(error);
+                        }
+                    };
                     trace_module_tree_fetch_emitted(fetch.request(), &key);
                     requests.push(request);
                 }
@@ -3286,16 +3292,21 @@ mod tests {
                     owner,
                 )
                 .expect("an admitted inline root must not undergo external URL CSP checks");
-                let advance = advance_module_script_graph(&mut vm, job);
+                let advance = advance_module_script_graph(&mut vm, job).expect(
+                    "graph admission must defer CSP reporting to the fetch networking tasks",
+                );
+                let fetch = expect_single_fetch(advance, "inline dependency fetch");
+                assert_eq!(fetch.pending_fetch_key().unwrap().url(), &dependency_url);
+                let check = fetch
+                    .request()
+                    .fetch_context()
+                    .expect("Document fetch settings")
+                    .check_initial(&dependency_url);
                 if allow_dependency {
-                    let fetch = expect_single_fetch(advance.unwrap(), "allowed inline dependency");
-                    assert_eq!(fetch.pending_fetch_key().unwrap().url(), &dependency_url);
+                    assert!(check.is_ok());
                 } else {
-                    let Err(error) = advance else {
-                        panic!("inline roots must not exempt their imports from CSP");
-                    };
-                    assert_eq!(error.stage(), ModuleLoadStage::Fetch);
-                    assert!(error.message().contains(dependency_url.as_str()));
+                    let error = check.expect_err("inline roots must not exempt imports from CSP");
+                    assert!(error.contains(dependency_url.as_str()));
                 }
             }
         }

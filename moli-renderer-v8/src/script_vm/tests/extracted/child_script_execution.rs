@@ -1920,7 +1920,7 @@ async fn child_dynamic_import_root_fetch_uses_child_import_map_and_initiator_url
     let root_fetch = vm
         .take_child_dynamic_module_import_fetch(task_owner.document_owner(), realm_id, 1)
         .expect("child dynamic import graph start should retain its root fetch");
-    let root_fetch = root_fetch.inflight.request_for_test();
+    let root_fetch = root_fetch.inflight.request();
 
     assert_eq!(
         root_fetch.source_url().as_str(),

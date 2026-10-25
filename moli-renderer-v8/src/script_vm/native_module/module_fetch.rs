@@ -501,10 +501,10 @@ impl ScriptVm {
                 )
             })?;
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
+            Ok(fetched_source) => self.module_graph_fetched_source_for_request(
                 load_id,
                 fetched_source,
-                graph_continuation.request().fetch_metadata(),
+                graph_continuation.request(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
@@ -762,7 +762,7 @@ impl ScriptVm {
                 network_result,
             );
     }
-    pub(crate) fn record_main_modulepreload_network_result(
+    pub(crate) fn record_main_module_network_result(
         &mut self,
         document_url: Url,
         request_url: Url,
@@ -855,6 +855,22 @@ impl ScriptVm {
             .borrow_mut()
             .record_css_module_failure_for_url(key.url());
     }
+    pub(crate) fn module_graph_fetched_source_for_request(
+        &mut self,
+        load_id: u64,
+        fetched_source: ModuleGraphFetchedSource,
+        request: &crate::module_runtime::NativeModuleGraphFetchRequest,
+    ) -> std::result::Result<ModuleGraphFetchedSource, ModuleLoadError> {
+        if request.fetch_context().is_some() {
+            return Ok(fetched_source);
+        }
+        self.module_graph_fetched_source_or_csp_error(
+            load_id,
+            fetched_source,
+            request.fetch_metadata(),
+        )
+    }
+
     pub(crate) fn module_graph_fetched_source_or_csp_error(
         &mut self,
         load_id: u64,
@@ -1391,10 +1407,10 @@ impl ScriptVm {
             ));
         };
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
+            Ok(fetched_source) => self.module_graph_fetched_source_for_request(
                 load_id,
                 fetched_source,
-                graph_continuation.request().fetch_metadata(),
+                graph_continuation.request(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
@@ -1457,10 +1473,10 @@ impl ScriptVm {
         };
 
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
+            Ok(fetched_source) => self.module_graph_fetched_source_for_request(
                 load_id,
                 fetched_source,
-                graph_continuation.request().fetch_metadata(),
+                graph_continuation.request(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
@@ -1522,10 +1538,10 @@ impl ScriptVm {
             "dynamic-import resolver claim must match the authorized exact import owner"
         );
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
+            Ok(fetched_source) => self.module_graph_fetched_source_for_request(
                 target.load_id(),
                 fetched_source,
-                inflight.fetch_metadata(),
+                inflight.request(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,

@@ -94,7 +94,8 @@ impl MainModuleFetchSchedule {
                         result,
                         network_result,
                         network_attribution,
-                    ),
+                    )
+                    .with_fetch_context(fetch_context),
                 );
             }
             Self::Runtime(target) => {
@@ -104,7 +105,8 @@ impl MainModuleFetchSchedule {
                         result,
                         network_result,
                         network_attribution,
-                    ),
+                    )
+                    .with_fetch_context(fetch_context),
                 );
             }
             Self::DynamicImport(target) => {
@@ -114,7 +116,8 @@ impl MainModuleFetchSchedule {
                         result,
                         network_result,
                         network_attribution,
-                    ),
+                    )
+                    .with_fetch_context(fetch_context),
                 );
             }
             Self::Modulepreload(target) => {
@@ -396,6 +399,8 @@ impl RendererResourceScheduler {
         let requester = ModuleGraphFetchRequester::DynamicImport;
         let ordering = ModuleGraphFetchOrdering::Runtime;
         let request = prioritized_module_graph_fetch_request(requester, ordering, request);
+        let fetch_context = request.fetch_context().cloned();
+        let callback_context = fetch_context.clone();
         let request_url = request.source_url().clone();
         trace_module_graph_fetch_scheduled(load_id, requester, ordering, &request_url);
 
@@ -419,7 +424,8 @@ impl RendererResourceScheduler {
                         result,
                         network_result,
                         callback_attribution,
-                    ),
+                    )
+                    .with_fetch_context(callback_context),
                 );
             };
         if let Err(error) = request.fetch_source_for_document(&loader, send_completion) {
@@ -438,7 +444,8 @@ impl RendererResourceScheduler {
                     Err(error.clone()),
                     Some(Arc::new(Err(error))),
                     network_attribution,
-                ),
+                )
+                .with_fetch_context(fetch_context),
             );
         }
     }

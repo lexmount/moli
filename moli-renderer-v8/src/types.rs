@@ -1628,6 +1628,7 @@ pub(super) struct ChildDynamicImportFetchCompletion {
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: ChildModuleFetchNetworkAttribution,
+    fetch_context: Option<std::sync::Arc<crate::module_runtime::NativeModuleFetchContext>>,
 }
 
 impl ChildDynamicImportFetchCompletion {
@@ -1644,7 +1645,22 @@ impl ChildDynamicImportFetchCompletion {
             result,
             network_result,
             network_attribution,
+            fetch_context: None,
         }
+    }
+
+    pub(super) fn with_fetch_context(
+        mut self,
+        context: Option<std::sync::Arc<crate::module_runtime::NativeModuleFetchContext>>,
+    ) -> Self {
+        self.fetch_context = context;
+        self
+    }
+
+    pub(super) fn fetch_context(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::module_runtime::NativeModuleFetchContext>> {
+        self.fetch_context.as_ref()
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {
