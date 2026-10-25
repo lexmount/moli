@@ -3801,17 +3801,12 @@ impl JsContextHost {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
         };
-        let fields = crate::content_security_policy::ContentSecurityPolicyViolationEventFields {
-            status_code: i32::from(
-                self.content_security_policy_response_status(
-                    super::OwnerDispatchScope::LightweightPopup(popup_id),
-                )
-                .unwrap_or(0),
-            ),
-            ..crate::content_security_policy::ContentSecurityPolicyViolationEventFields::from(
-                violation,
-            )
-        };
+        let metadata = self
+            .document_csp_violation_metadata_for_owner(super::OwnerDispatchScope::LightweightPopup(
+                popup_id,
+            ))
+            .unwrap_or_default();
+        let fields = metadata.event_fields(violation);
         if send_report {
             let Some(document_owner) = self.current_lightweight_popup_document_owner(popup_id)
             else {

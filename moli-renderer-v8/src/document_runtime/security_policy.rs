@@ -26,6 +26,33 @@ use crate::util::v8str;
 
 pub(crate) type DocumentContentSecurityPolicyViolation = ContentSecurityPolicyUrlViolation;
 
+/// Native Document metadata retained independently of a queued report's owner.
+#[derive(Clone, Default)]
+pub(crate) struct DocumentCspViolationMetadata {
+    pub(crate) response_status: u16,
+    pub(crate) referrer: String,
+}
+
+impl DocumentCspViolationMetadata {
+    pub(crate) fn apply_fields<'a>(
+        &'a self,
+        fields: ContentSecurityPolicyViolationEventFields<'a>,
+    ) -> ContentSecurityPolicyViolationEventFields<'a> {
+        ContentSecurityPolicyViolationEventFields {
+            referrer: &self.referrer,
+            status_code: i32::from(self.response_status),
+            ..fields
+        }
+    }
+
+    pub(crate) fn event_fields<'a>(
+        &'a self,
+        violation: &'a DocumentContentSecurityPolicyViolation,
+    ) -> ContentSecurityPolicyViolationEventFields<'a> {
+        self.apply_fields(ContentSecurityPolicyViolationEventFields::from(violation))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DocumentSubresourceCspKind {
     Image,
@@ -2280,12 +2307,12 @@ impl DocumentRuntime {
             .current_main_document_task_owner()
             .ok_or_else(|| anyhow::anyhow!("main CSP violation document owner is unavailable"))?;
         if send_report {
-            let fields = self.content_security_policy_violation_event_fields(
+            let metadata = host.document_csp_violation_metadata(
                 target
                     .and_then(|target| self.dom_host.owner_document_handle(target))
                     .unwrap_or_else(|| self.document_handle()),
-                violation,
             );
+            let fields = metadata.event_fields(violation);
             let report_owner = event_owner.unwrap_or(document_owner);
             let child_handle = event_owner.and(target).and_then(|document| {
                 host.child_browsing_context_host_for_document_handle(document)
@@ -2373,7 +2400,8 @@ impl DocumentRuntime {
                 .unwrap_or_else(|| self.document_handle()),
             _ => self.document_handle(),
         };
-        let fields = self.content_security_policy_violation_event_fields(document, violation);
+        let metadata = unsafe { &*host_ptr }.document_csp_violation_metadata(document);
+        let fields = metadata.event_fields(violation);
         let event = create_content_security_policy_violation_event(
             scope,
             event_target_value,
@@ -2390,21 +2418,6 @@ impl DocumentRuntime {
         )
         .map_err(anyhow::Error::msg)?;
         Ok(())
-    }
-
-    pub(crate) fn content_security_policy_violation_event_fields<'a>(
-        &self,
-        document: DomHandle,
-        violation: &'a DocumentContentSecurityPolicyViolation,
-    ) -> ContentSecurityPolicyViolationEventFields<'a> {
-        ContentSecurityPolicyViolationEventFields {
-            status_code: i32::from(
-                self.dom_host
-                    .document_source_response_status_for_handle(document)
-                    .unwrap_or(0),
-            ),
-            ..ContentSecurityPolicyViolationEventFields::from(violation)
-        }
     }
 
     fn document_content_security_policies_for_optional_document(

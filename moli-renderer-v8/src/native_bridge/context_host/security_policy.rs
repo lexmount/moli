@@ -6,14 +6,13 @@ use crate::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
         ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
         ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyStyleElementRequest,
-        ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
-        current_script_violation_location,
+        TrustedTypesForScriptRequirements, current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
         DocumentContentSecurityPolicyCheck, DocumentContentSecurityPolicyViolation,
-        DocumentPolicyContainer, DocumentSubresourceCspKind, DomHandle,
-        create_content_security_policy_violation_event,
+        DocumentCspViolationMetadata, DocumentPolicyContainer, DocumentSubresourceCspKind,
+        DomHandle, create_content_security_policy_violation_event,
     },
     native_bridge::{
         active_child_window_handle, active_lightweight_popup_id,
@@ -1791,10 +1790,25 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn content_security_policy_response_status(
+    pub(crate) fn document_csp_violation_metadata(
+        &self,
+        document: DomHandle,
+    ) -> DocumentCspViolationMetadata {
+        DocumentCspViolationMetadata {
+            response_status: self
+                .dom_host()
+                .document_source_response_status_for_handle(document)
+                .unwrap_or(0),
+            referrer: self
+                .document_referrer_for_document_handle(document)
+                .to_owned(),
+        }
+    }
+
+    pub(crate) fn document_csp_violation_metadata_for_owner(
         &self,
         owner: OwnerDispatchScope,
-    ) -> Option<u16> {
+    ) -> Option<DocumentCspViolationMetadata> {
         let document = match owner {
             OwnerDispatchScope::Top => Some(self.document_handle()),
             OwnerDispatchScope::Child(handle) => {
@@ -1804,8 +1818,7 @@ impl JsContextHost {
                 self.lightweight_popup_document_handle(popup_id)
             }
         }?;
-        self.dom_host()
-            .document_source_response_status_for_handle(document)
+        Some(self.document_csp_violation_metadata(document))
     }
 
     fn dispatch_child_content_security_policy_violation_event<'s>(
@@ -1818,13 +1831,10 @@ impl JsContextHost {
         let window = self
             .child_browsing_context_window_wrapper(scope, handle)
             .ok_or_else(|| anyhow::anyhow!("child window wrapper is unavailable"))?;
-        let fields = ContentSecurityPolicyViolationEventFields {
-            status_code: i32::from(
-                self.content_security_policy_response_status(OwnerDispatchScope::Child(handle))
-                    .unwrap_or(0),
-            ),
-            ..ContentSecurityPolicyViolationEventFields::from(violation)
-        };
+        let metadata = self
+            .document_csp_violation_metadata_for_owner(OwnerDispatchScope::Child(handle))
+            .unwrap_or_default();
+        let fields = metadata.event_fields(violation);
         let event = create_content_security_policy_violation_event(
             scope,
             window.into(),

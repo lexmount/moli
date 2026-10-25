@@ -572,6 +572,15 @@ impl JsContextHost {
         self.document_resource_loader_for_window_owner(target.owner())
     }
 
+    pub(crate) fn document_referrer_for_document_handle(&self, document: DomHandle) -> &str {
+        if document == self.document_handle() {
+            return &self.document_policy_container().document_referrer;
+        }
+        self.child_browsing_context_referrer_for_document_handle(document)
+            .or_else(|| self.lightweight_popup_referrer_for_document_handle(document))
+            .unwrap_or("")
+    }
+
     pub(crate) fn document_referrer_source_url_for_dispatch_scope(
         &self,
         dispatch_scope: crate::native_bridge::OwnerDispatchScope,
