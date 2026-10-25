@@ -502,6 +502,50 @@ fn text_stroke_is_exported_as_a_pdf_stroke_with_one_semantic_copy() {
 }
 
 #[test]
+fn pdf_text_stroke_sets_the_miter_limit_and_keeps_miter_only_ink() {
+    let mut snapshot = snapshot();
+    let mut run = text(&mut snapshot, "A", 130.0, false);
+    let font = peniko::FontData::new(
+        peniko::Blob::new(Arc::new(
+            include_bytes!("../../tests/fixtures/moli-text-stroke.ttf").to_vec(),
+        )),
+        0,
+    );
+    run.font = snapshot.intern_font(&font);
+    run.font_size = 100.0;
+    run.glyphs[0].id = 1;
+    run.glyphs[0].x = 50.0;
+    run.color = PaintColor::TRANSPARENT;
+    run.stroke = Some(moli_layout::PaintTextStroke {
+        width: 10.0,
+        color: PaintColor::BLACK,
+        paint_first: false,
+    });
+    // Only the miter tip (y=36..45) enters this clip; the unexpanded glyph
+    // starts at y=50, and a round join reaches no further than y=45.
+    snapshot.push_fragment(PaintFragment::push_clip(PaintRect::new(
+        75.0, 36.0, 10.0, 7.0,
+    )));
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+    let doc = document(&snapshot, &options());
+    assert_eq!(extracted(&doc, &[1]), "A");
+    let operations = content_operations(&doc);
+    assert!(
+        operations.iter().any(|op| {
+            op.operator == "M" && op.operands.first().and_then(|o| o.as_float().ok()) == Some(4.0)
+        }),
+        "text strokes must explicitly set miter limit 4"
+    );
+    assert!(
+        !operations.iter().any(|op| {
+            op.operator == "j" && op.operands.first().and_then(|o| o.as_i64().ok()) == Some(1)
+        }),
+        "text strokes must not use round joins"
+    );
+}
+
+#[test]
 fn pdf_synthetic_bold_uses_css_pixels_with_and_without_text_stroke() {
     for cjk in [false, true] {
         for font_size in [16.0, 32.0, 64.0] {

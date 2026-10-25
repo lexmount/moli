@@ -687,6 +687,44 @@ fn paint_order_stroke_fill_paints_the_stroke_beneath_the_fill() {
 }
 
 #[test]
+fn text_stroke_uses_miter_joins_and_bevels_above_limit_four() {
+    let mut snapshot = snapshot(240, 180, 1.0);
+    let font = peniko::FontData::new(
+        Blob::from(include_bytes!("../../tests/fixtures/moli-text-stroke.ttf").to_vec()),
+        0,
+    );
+    let mut run = ahem_run(&mut snapshot, None, 0.0);
+    run.font = snapshot.intern_font(&font);
+    run.font_size = 100.0;
+    run.color = PaintColor::TRANSPARENT;
+    run.stroke = Some(moli_layout::PaintTextStroke {
+        width: 10.0,
+        color: RED,
+        paint_first: false,
+    });
+    run.glyphs = vec![
+        moli_layout::PaintGlyph {
+            id: 1,
+            x: 50.0,
+            y: 130.0,
+        },
+        moli_layout::PaintGlyph {
+            id: 2,
+            x: 150.0,
+            y: 130.0,
+        },
+    ];
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    let image = raster_snapshot(&snapshot).unwrap();
+    // A's miter ratio is 2.85: the pointed join reaches above a round join.
+    assert!(is_red(pixel(&image, 80, 38)), "{:?}", pixel(&image, 80, 38));
+    // B's ratio is 8.06: limit 4 bevels the tip instead of rounding it or
+    // allowing the long spike produced by PDF's default limit of 10.
+    assert_eq!(pixel(&image, 180, 43), [255, 255, 255, 255]);
+    assert!(is_red(pixel(&image, 180, 52)));
+}
+
+#[test]
 fn text_stroke_follows_synthetic_bold_outline_expansion() {
     let stroke = Some(moli_layout::PaintTextStroke {
         width: 2.0,

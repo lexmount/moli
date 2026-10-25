@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use krilla::{
     geom::Point,
-    paint::Stroke,
+    paint::{LineJoin, Stroke},
     surface::Surface,
     text::{Font, GlyphId, KrillaGlyph, Tag},
 };
-use moli_layout::{PaintGlyphRun, PaintSnapshot};
+use moli_layout::{PaintGlyphRun, PaintSnapshot, PaintTextStroke};
 use peniko::kurbo::{Affine, Rect};
 use skrifa::raw::{FontRef, TableProvider};
 
@@ -143,7 +143,10 @@ pub(super) fn draw(
     // The owned snapshot stores synthetic weight expansion in CSS pixels,
     // which are also the units used by PDF stroke widths.
     let embolden = run.glyph_embolden.x.max(run.glyph_embolden.y).max(0.0);
-    let ink_outset = f64::from(embolden + text_stroke.map_or(0.0, |stroke| stroke.width * 0.5));
+    let ink_outset = f64::from(PaintTextStroke::ink_outset(
+        text_stroke.map_or(0.0, |stroke| stroke.width),
+        embolden,
+    ));
     let mut batches: Vec<(bool, Vec<usize>)> = Vec::new();
     let mut start = 0;
     while start < run.glyphs.len() {
@@ -279,6 +282,8 @@ pub(super) fn draw(
                     paint: paint.paint,
                     opacity: paint.opacity,
                     width: stroke.width + 2.0 * embolden,
+                    line_join: LineJoin::Miter,
+                    miter_limit: PaintTextStroke::MITER_LIMIT,
                     ..Default::default()
                 }));
                 surface.draw_glyphs(
@@ -306,6 +311,8 @@ pub(super) fn draw(
                 paint: paint.paint.clone(),
                 opacity: paint.opacity,
                 width: 2.0 * embolden,
+                line_join: LineJoin::Miter,
+                miter_limit: PaintTextStroke::MITER_LIMIT,
                 ..Default::default()
             }));
             surface.set_fill(Some(paint));

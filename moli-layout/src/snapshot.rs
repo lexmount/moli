@@ -669,6 +669,18 @@ pub struct PaintTextStroke {
     pub paint_first: bool,
 }
 
+impl PaintTextStroke {
+    /// Ordinary HTML text uses miter joins with this fixed limit, matching
+    /// Chromium's PaintFlags. Backends must not substitute their defaults.
+    pub const MITER_LIMIT: f32 = 4.0;
+
+    /// Conservative ink expansion in local CSS pixels for a centered miter
+    /// stroke, including the widening used to follow synthetic bold.
+    pub fn ink_outset(width: f32, embolden: f32) -> f32 {
+        (width.max(0.0) * 0.5 + embolden.max(0.0)) * Self::MITER_LIMIT
+    }
+}
+
 /// Owned text mapping retained across the layout/paint boundary for document export.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintTextSemantics {

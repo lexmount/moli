@@ -793,8 +793,7 @@ fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<
         }
         // Include the outer half of the stroke and its possible miter joins.
         // Transparent strokes still contribute to background-clip:text masks.
-        let miter_limit = kurbo::Stroke::default().miter_limit as f32;
-        let outset = stroke.width.max(0.0) * 0.5 * miter_limit;
+        let outset = crate::PaintTextStroke::ink_outset(stroke.width, 0.0);
         if !outset.is_finite() {
             return None;
         }

@@ -15,8 +15,9 @@ use anyrender::PaintScene;
 use anyrender::{Filter, filters::FilterEffect};
 use moli_layout::{
     PaintColor, PaintSnapshot, PaintTextDecoration, PaintTextDecorationStyle, PaintTextShadow,
+    PaintTextStroke,
 };
-use peniko::kurbo::{Affine, BezPath, Cap, Rect, Stroke, Vec2};
+use peniko::kurbo::{Affine, BezPath, Cap, Join, Rect, Stroke, Vec2};
 use peniko::{Fill, Mix};
 use std::sync::Arc;
 
@@ -110,7 +111,9 @@ pub(super) fn paint_glyph_run(
                 false,
                 &run.normalized_coords,
                 Vec2::ZERO,
-                &Stroke::new(f64::from(width) + 2.0 * embolden),
+                &Stroke::new(f64::from(width) + 2.0 * embolden)
+                    .with_join(Join::Miter)
+                    .with_miter_limit(f64::from(PaintTextStroke::MITER_LIMIT)),
                 to_backend_color(stroke.color),
                 1.0,
                 transform,
