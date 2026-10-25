@@ -29,7 +29,7 @@ use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exceptio
 #[cfg(test)]
 use crate::network::ResourceRequestClientOwner;
 use crate::network::{
-    ResourceRequestClient,
+    RendererResourceTaskRunner, ResourceRequestClient,
     context::{WorkerResourceLoader, WorkerResourceOwner},
     loads::{ResourceLoadDisposition, ResourceLoadKind},
 };
@@ -187,6 +187,10 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) script_source: WorkerScriptSource,
     pub(crate) script_url: String,
     pub(crate) request_client: ResourceRequestClient,
+    /// Dedicated/shared Workers inherit the browser resource executor so a
+    /// self-closing global cannot destroy detached keepalive transports.
+    /// Service Workers without a creator executor use their own owner loop.
+    resource_task_runner: Option<RendererResourceTaskRunner>,
     pub(crate) script_kind: WorkerScriptKind,
     pub(crate) module_static_import_initiator_url: Option<url::Url>,
     pub(crate) module_credentials_mode: RequestCredentialsMode,
@@ -297,6 +301,7 @@ impl WorkerSpawnOptions {
             script_url,
             request_client_owner.handle(),
         );
+        options.resource_task_runner = Some(RendererResourceTaskRunner::for_test());
         options.test_request_client_owner = Some(request_client_owner);
         options
     }
@@ -322,6 +327,7 @@ impl WorkerSpawnOptions {
             script_source,
             script_url,
             request_client,
+            resource_task_runner: None,
             script_kind: WorkerScriptKind::Classic,
             module_static_import_initiator_url: None,
             module_credentials_mode: RequestCredentialsMode::SameOrigin,
@@ -373,6 +379,11 @@ impl WorkerSpawnOptions {
                 self.test_request_client_owner = Some(owner);
             }
         }
+        self
+    }
+
+    pub(crate) fn with_resource_task_runner(mut self, runner: RendererResourceTaskRunner) -> Self {
+        self.resource_task_runner = Some(runner);
         self
     }
 
@@ -1355,6 +1366,11 @@ pub(crate) fn spawn_test_worker_with_options(mut options: WorkerSpawnOptions) ->
 }
 
 pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHandle {
+    assert!(
+        options.resource_task_runner.is_some()
+            || matches!(options.global_kind, WorkerGlobalKind::Service { .. }),
+        "Dedicated/shared Workers must inherit their creator resource executor"
+    );
     #[cfg(test)]
     assert!(
         options.test_request_client_owner.is_none(),
@@ -1364,6 +1380,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         script_source,
         script_url,
         request_client,
+        resource_task_runner,
         script_kind,
         module_static_import_initiator_url,
         module_credentials_mode,
@@ -1419,6 +1436,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 script_source,
                 script_url,
                 request_client,
+                resource_task_runner,
                 script_kind,
                 module_static_import_initiator_url,
                 module_credentials_mode,
@@ -1554,6 +1572,7 @@ async fn worker_main(
     script_source: WorkerScriptSource,
     script_url: String,
     request_client: ResourceRequestClient,
+    resource_task_runner: Option<RendererResourceTaskRunner>,
     script_kind: WorkerScriptKind,
     module_static_import_initiator_url: Option<url::Url>,
     module_credentials_mode: RequestCredentialsMode,
@@ -1590,8 +1609,10 @@ async fn worker_main(
 ) {
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
-    let resource_task_runner = crate::network::RendererResourceTaskRunner::from_current_tokio()
-        .expect("Worker owner loop must expose its resource task runner");
+    let resource_task_runner = resource_task_runner.unwrap_or_else(|| {
+        RendererResourceTaskRunner::from_current_tokio()
+            .expect("Worker owner loop must expose its resource task runner")
+    });
     let loader = resource_loader_for_worker_context(
         request_client,
         &network_policy,

@@ -82,6 +82,7 @@ pub(crate) struct SharedWorkerLaunchParams {
 pub(crate) struct SharedWorkerLaunchContext {
     pub(super) name: String,
     pub(super) request_client: ResourceRequestClient,
+    pub(super) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(super) execution_policy: SharedWorkerExecutionPolicy,
 }
 
@@ -207,11 +208,13 @@ impl SharedWorkerLaunchContext {
     pub(crate) fn new(
         name: String,
         request_client: ResourceRequestClient,
+        resource_task_runner: crate::network::RendererResourceTaskRunner,
         execution_policy: SharedWorkerExecutionPolicy,
     ) -> Self {
         Self {
             name,
             request_client,
+            resource_task_runner,
             execution_policy,
         }
     }
