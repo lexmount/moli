@@ -512,6 +512,7 @@ impl FrameDocumentModulepreloadStartActionHooks for ScriptVmChildModulepreloadSt
             crate::native_bridge::OwnerDispatchScope::Child(target.child_handle()),
             request.module_kind(),
             request.fetch_metadata(),
+            request.csp_source_location().cloned(),
         ) {
             Ok(context) => context,
             Err(error) => {

@@ -2133,6 +2133,11 @@ impl DocumentRuntime {
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
+                self.capture_modulepreload_csp_source_location(
+                    scope,
+                    unsafe { &*host_ptr },
+                    &mut prepared_load,
+                );
                 prime_result.extend(self.apply_prepared_connected_style_load(
                     prepared_load,
                     inline_source.clone(),

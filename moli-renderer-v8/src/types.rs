@@ -402,8 +402,8 @@ impl PendingWindowFetchContinuation {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         redirect_mode: moli_fetch::RequestRedirectMode,
         integrity: String,
-    ) -> Self {
-        Self {
+    ) -> Box<Self> {
+        Box::new(Self {
             intercepted_request: None,
             response_metadata: None,
             promise: PendingWindowFetchPromise::Active(resolver),
@@ -415,7 +415,7 @@ impl PendingWindowFetchContinuation {
             csp_report_context,
             redirect_mode,
             integrity,
-        }
+        })
     }
 
     pub(super) fn with_intercepted_request(mut self, request: moli_fetch::Request) -> Self {
