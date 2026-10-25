@@ -168,26 +168,18 @@ pub(super) fn constructor<'s>(
         .get_creation_context(scope)
         .expect("WebTransport realm");
     let scope = &mut v8::ContextScope::new(scope, context);
-    let base = if let Some(host) = context_host_ptr_from_global_bridge(scope) {
-        Some(super::window_runtime::entered_window_api_base_url(
-            scope,
-            unsafe { &*host },
-        ))
-    } else {
-        crate::worker::worker_current_script_url(scope)
+    // WebTransport parses an absolute URL, without the Document/worker base.
+    let url = match url::Url::parse(&parsed.url) {
+        Ok(url) if url.scheme() == "https" && url.fragment().is_none() => url,
+        _ => {
+            webidl::throw_dom_exception(
+                scope,
+                "SyntaxError",
+                "WebTransport requires an absolute HTTPS URL without a fragment.",
+            );
+            return;
+        }
     };
-    let url = match base {
-        Some(base) => base.join(&parsed.url),
-        None => url::Url::parse(&parsed.url),
-    };
-    if !url.is_ok_and(|url| url.scheme() == "https" && url.fragment().is_none()) {
-        webidl::throw_dom_exception(
-            scope,
-            "SyntaxError",
-            "WebTransport requires an HTTPS URL without a fragment.",
-        );
-        return;
-    }
     let options = parsed.options;
     if options.allow_pooling && !options.server_certificate_hashes.is_empty() {
         webidl::throw_dom_exception(
@@ -216,6 +208,7 @@ pub(super) fn constructor<'s>(
     if !options.headers.validate(scope) {
         return;
     }
+    let csp_error = connection_csp_error(scope, &url);
     let ready = v8::PromiseResolver::new(scope).expect("WebTransport ready promise");
     let closed = v8::PromiseResolver::new(scope).expect("WebTransport closed promise");
     let draining = v8::PromiseResolver::new(scope).expect("WebTransport draining promise");
@@ -244,8 +237,39 @@ pub(super) fn constructor<'s>(
     )
     .initialize(scope, owner)
     .expect("WebTransport native slots");
-    tasks::queue_connection_failure(scope, owner);
+    if let Some(message) = csp_error {
+        // CSP rejection is observable at the first microtask checkpoint;
+        // violation events still use the owning context's queued task source.
+        tasks::fail(scope, owner, &message);
+    } else {
+        tasks::queue_connection_failure(scope, owner);
+    }
     rv.set(owner.into());
+}
+
+fn connection_csp_error(scope: &mut v8::PinScope<'_, '_>, url: &url::Url) -> Option<String> {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return crate::worker::check_worker_webtransport_csp(scope, url);
+    };
+    // Borrowing a constructor does not transfer its policy to the caller.
+    // SAFETY: the context bridge belongs to this callback's live ScriptVm.
+    let host = unsafe { &mut *host_ptr };
+    let owner = host
+        .current_runtime_window_execution_context_identity(scope)?
+        .dispatch_scope();
+    let document_url = host
+        .document_resource_loader_for_dispatch_scope(owner)?
+        .fetch_context()
+        .document_url()
+        .clone();
+    host.check_document_connect_csp_for_owner_with_script_location(scope, owner, &document_url, url)
+        .into_blocking_violation()
+        .map(|violation| {
+            crate::document_runtime::document_content_security_policy_error_message(
+                &violation,
+                "WebTransport",
+            )
+        })
 }
 
 fn target<'s>(
