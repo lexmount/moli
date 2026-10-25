@@ -8,6 +8,6 @@ fn main_and_child_window_global_prototype_chains_are_immutable() {
         .eval(&format!("JSON.stringify({script})"))
         .expect("Window global prototype probe should evaluate");
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(result["checks"], 142);
+    assert_eq!(result["checks"], 186);
     assert_eq!(result["failures"], serde_json::json!([]));
 }
