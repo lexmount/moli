@@ -50,6 +50,7 @@ pub(super) struct AbortStore {
     next_signal_id: u32,
     next_controller_id: u32,
     signals: HashMap<u32, AbortSignalState>,
+    subscription_signals: crate::abort_signal_route::SubscriptionSignals,
     controllers: HashMap<u32, u32>,
     detached: bool,
 }
@@ -83,6 +84,41 @@ struct AbortSignalDispatch {
 }
 
 impl AbortStore {
+    fn collect_subscription_signals(&mut self) {
+        let collected = self.subscription_signals.take_collected();
+        if collected.is_empty() {
+            return;
+        }
+        // Sweep identities and both weak dependency sets in one batch. A long
+        // lived downstream must not accumulate completed switchMap inner IDs.
+        self.signals.retain(|id, state| {
+            if collected.contains(id) {
+                return false;
+            }
+            state.dependent_signals.retain(|id| !collected.contains(id));
+            if let Some(sources) = state.source_signals.as_mut() {
+                sources.retain(|id| !collected.contains(id));
+            }
+            true
+        });
+    }
+
+    pub(super) fn track_subscription_signal<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        let Some(id) = Self::signal_id_from_object(scope, signal) else {
+            return false;
+        };
+        let weak = self.subscription_signals.track(scope, signal, id);
+        let Some(state) = self.signal_state_mut(id) else {
+            return false;
+        };
+        state.signal = Some(weak);
+        true
+    }
+
     pub(super) fn clear_for_context_teardown(&mut self) {
         self.detached = true;
         for state in self.signals.values_mut() {
@@ -204,6 +240,7 @@ impl AbortStore {
         aborted: bool,
         reason: Option<v8::Local<'_, v8::Value>>,
     ) -> u32 {
+        self.collect_subscription_signals();
         let signal_id = self.alloc_signal_id();
         let mut state = AbortSignalState {
             aborted,
@@ -380,6 +417,7 @@ impl AbortStore {
         signal: v8::Local<'s, v8::Object>,
         reason: v8::Local<'s, v8::Value>,
     ) -> Option<Vec<(u32, v8::Local<'s, v8::Object>)>> {
+        self.collect_subscription_signals();
         let signal_id = Self::signal_id_from_object(scope, signal)?;
         if Self::signal_aborted_from_object(scope, signal) {
             return None;
@@ -393,7 +431,13 @@ impl AbortStore {
         // The dispatch snapshot roots this signal through all synchronous abort
         // steps. Its stored reason may reference the signal or a captured stack;
         // the completed registry must not turn that V8 graph into a Rust root.
-        state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+        if state
+            .signal
+            .as_ref()
+            .is_some_and(crate::util::RealmObjectHandle::is_strong)
+        {
+            state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+        }
         let dependent_signals = state.dependent_signals.clone();
         // Publish every reason before any author callback can reenter abort.
         let mut signals = vec![(signal_id, signal)];
@@ -411,7 +455,13 @@ impl AbortStore {
                 .and_then(|signal| signal.to_local(scope))
             {
                 Self::publish_signal_abort(scope, signal, reason);
-                state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+                if state
+                    .signal
+                    .as_ref()
+                    .is_some_and(crate::util::RealmObjectHandle::is_strong)
+                {
+                    state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+                }
                 signals.push((dependent_signal_id, signal));
             }
         }
@@ -557,4 +607,23 @@ pub(crate) fn create_signal<'s>(
         .abort
         .init_signal(scope, signal, aborted, reason);
     Some(signal)
+}
+
+#[cfg(test)]
+pub(crate) fn signal_registry_counts_for_test(host: &mut super::JsContextHost) -> (usize, usize) {
+    let store = &mut host.native_bridge_mut().abort;
+    store.collect_subscription_signals();
+    (
+        store.signals.len(),
+        store
+            .signals
+            .values()
+            .filter(|state| {
+                state
+                    .signal
+                    .as_ref()
+                    .is_some_and(crate::util::RealmObjectHandle::is_strong)
+            })
+            .count(),
+    )
 }

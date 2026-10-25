@@ -35,10 +35,10 @@ pub(super) fn new_controlled_observer<'s>(
     resolver: v8::Local<'s, v8::PromiseResolver>,
     caller_signal: Option<ResolvedAbortSignal<'s>>,
 ) -> Option<(v8::Local<'s, v8::Object>, ResolvedAbortSignal<'s>)> {
-    let controller = ResolvedAbortSignal::new(scope)?;
+    let controller = ResolvedAbortSignal::new_for_subscription(scope)?;
     let mut sources = vec![controller];
     sources.extend(caller_signal);
-    let signal = ResolvedAbortSignal::dependent(scope, &sources)?;
+    let signal = ResolvedAbortSignal::dependent_for_subscription(scope, &sources)?;
     let observer = new_observer(scope, kind, resolver, Some(signal), caller_signal.is_some())?;
     set_private_value(
         scope,

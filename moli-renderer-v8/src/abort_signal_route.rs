@@ -10,6 +10,9 @@
 use crate::context_bootstrap::context_host_ptr_from_global_bridge;
 use crate::webidl;
 
+mod subscription;
+pub(crate) use subscription::SubscriptionSignals;
+
 const RETHROW_ABORT_ALGORITHM: &str = "__moliRethrowAbortAlgorithm";
 const WEAK_ABORT_ALGORITHM: &str = "__moliWeakAbortAlgorithm";
 
@@ -145,19 +148,22 @@ impl<'s> webidl::WebIdlConverter<'s> for ResolvedAbortSignal<'s> {
 impl<'s> ResolvedAbortSignal<'s> {
     /// Uses the same dependency graph as AbortSignal.any, without calling a
     /// mutable JavaScript static method or relaying through author event listeners.
-    pub(crate) fn dependent(scope: &mut v8::PinScope<'s, '_>, sources: &[Self]) -> Option<Self> {
+    pub(crate) fn dependent_for_subscription(
+        scope: &mut v8::PinScope<'s, '_>,
+        sources: &[Self],
+    ) -> Option<Self> {
         let sources: Vec<_> = sources.iter().map(|source| source.signal).collect();
         let signal = if context_host_ptr_from_global_bridge(scope).is_some() {
             crate::native_bridge::abort::new_dependent_abort_signal(scope, &sources)?
         } else {
             crate::worker::abort::new_worker_dependent_abort_signal(scope, &sources)?
         };
-        Self::resolve(scope, signal)
+        Self::resolve_for_subscription(scope, signal)
     }
 
     /// Creates a signal in the current realm without consulting author-visible
     /// constructors or maintaining another store for native algorithms.
-    pub(crate) fn new(scope: &mut v8::PinScope<'s, '_>) -> Option<Self> {
+    pub(crate) fn new_for_subscription(scope: &mut v8::PinScope<'s, '_>) -> Option<Self> {
         let signal = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             crate::native_bridge::abort::create_signal(
                 scope,
@@ -168,7 +174,27 @@ impl<'s> ResolvedAbortSignal<'s> {
         } else {
             crate::worker::abort::new_worker_abort_signal(scope)?
         };
-        Self::resolve(scope, signal)
+        Self::resolve_for_subscription(scope, signal)
+    }
+
+    // Public controllers/any()/timeout() keep their existing native retention.
+    // These fresh private signals are owned by the actual subscription graph,
+    // whose traced slots also retain every weak native cancellation callback.
+    fn resolve_for_subscription(
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        let resolved = Self::resolve(scope, signal)?;
+        let tracked = match resolved.owner {
+            AbortSignalOwner::Window => {
+                let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+                unsafe { &mut *host_ptr }.track_subscription_abort_signal(scope, signal)
+            }
+            AbortSignalOwner::Worker => {
+                crate::worker::abort::track_subscription_abort_signal(scope, signal)
+            }
+        };
+        tracked.then_some(resolved)
     }
 
     pub(crate) fn resolve(

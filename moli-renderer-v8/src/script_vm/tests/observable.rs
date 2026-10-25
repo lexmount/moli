@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn observable_switch_map_does_not_accumulate_internal_signal_roots_or_registrations() {
+    let mut vm = new_storage_test_vm("https://observable-switch-map-signal-gc.test/");
+    let counts = |vm: &mut StandaloneScriptVmHarness| {
+        vm.with_default_context_scope(|_scope, host_ptr| {
+            Ok(
+                crate::native_bridge::abort::signal_registry_counts_for_test(unsafe {
+                    &mut *host_ptr
+                }),
+            )
+        })
+        .unwrap()
+    };
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    let initial = counts(&mut vm);
+    vm.eval("new Observable(s => { globalThis.signalGcProducer = s; }).switchMap(() => []).subscribe();").unwrap();
+    let active = counts(&mut vm);
+    for _ in 0..4 {
+        vm.eval("for (let i = 0; i < 256; i++) signalGcProducer.next(i);")
+            .unwrap();
+        collect(&mut vm);
+        assert_eq!(
+            counts(&mut vm),
+            active,
+            "completed inners must release signals and native dependency IDs"
+        );
+    }
+    vm.eval("signalGcProducer.complete(); delete globalThis.signalGcProducer;")
+        .unwrap();
+    collect(&mut vm);
+    assert_eq!(counts(&mut vm), initial);
+}
+
+#[test]
+fn observable_internal_signal_cycles_are_collectible() {
+    let mut vm = new_storage_test_vm("https://observable-signal-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-signal-gc.js"
+    ))
+    .unwrap();
+    vm.renderer_document_isolate
+        .clone()
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.clear_kept_objects();
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        vm.eval("observableSignalGc.every(ref => ref.deref() === undefined)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn observable_async_iterator_stays_cancellable_across_gc_and_is_released_after_abort() {
     let mut vm = new_storage_test_vm("https://observable-iterator-gc.test/");
     vm.eval(include_str!(

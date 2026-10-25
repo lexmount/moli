@@ -1,5 +1,28 @@
 use super::*;
 
+#[tokio::test]
+async fn worker_observable_internal_signal_cycles_are_collectible() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({});",
+            include_str!("../../../../tests/fixtures/observable-signal-gc.js")
+        ),
+        "https://observable-signal-gc.test/worker.js".into(),
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""ready""#);
+    assert!(handle.attach_runtime_inspector_session(None));
+    observable_worker_collect_garbage(&handle).await;
+    assert_eq!(
+        observable_worker_evaluate(
+            &handle,
+            "observableSignalGc.every(ref => ref.deref() === undefined)"
+        )
+        .await,
+        true
+    );
+}
+
 async fn observable_worker_collect_garbage(handle: &WorkerTestHandle) {
     let (tx, rx) = oneshot::channel();
     assert!(

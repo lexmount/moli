@@ -24,6 +24,7 @@ pub(super) struct WorkerAbortStore {
     next_signal_id: u32,
     next_controller_id: u32,
     signals: HashMap<u32, WorkerAbortSignalState>,
+    subscription_signals: crate::abort_signal_route::SubscriptionSignals,
     controllers: HashMap<u32, u32>,
 }
 
@@ -38,6 +39,41 @@ pub(super) struct WorkerAbortSignalState {
 }
 
 impl WorkerAbortStore {
+    fn collect_subscription_signals(&mut self) {
+        let collected = self.subscription_signals.take_collected();
+        if collected.is_empty() {
+            return;
+        }
+        // Sweep identities and both weak dependency sets in one batch. A long
+        // lived downstream must not accumulate completed switchMap inner IDs.
+        self.signals.retain(|id, state| {
+            if collected.contains(id) {
+                return false;
+            }
+            state.dependent_signals.retain(|id| !collected.contains(id));
+            if let Some(sources) = state.source_signals.as_mut() {
+                sources.retain(|id| !collected.contains(id));
+            }
+            true
+        });
+    }
+
+    pub(super) fn track_subscription_signal<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        let Some(id) = Self::signal_id_from_object(scope, signal) else {
+            return false;
+        };
+        let weak = self.subscription_signals.track(scope, signal, id);
+        let Some(state) = self.signal_state_mut(id) else {
+            return false;
+        };
+        state.signal = Some(weak);
+        true
+    }
+
     fn alloc_signal_id(&mut self) -> u32 {
         self.next_signal_id = self
             .next_signal_id
@@ -81,6 +117,7 @@ impl WorkerAbortStore {
         aborted: bool,
         reason: Option<v8::Local<'_, v8::Value>>,
     ) -> u32 {
+        self.collect_subscription_signals();
         let signal_id = self.alloc_signal_id();
         let mut state = WorkerAbortSignalState {
             aborted,
@@ -247,6 +284,7 @@ fn abort_worker_signal<'s>(
     };
     let signals_to_abort = {
         let mut store = store.borrow_mut();
+        store.collect_subscription_signals();
         let Some(state) = store.signal_state_mut(signal_id) else {
             return;
         };
@@ -257,7 +295,13 @@ fn abort_worker_signal<'s>(
         set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
         // The local dispatch snapshot keeps the source and dependents alive.
         // A completed registry retains neither their objects nor their reasons.
-        state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+        if state
+            .signal
+            .as_ref()
+            .is_some_and(crate::util::RealmObjectHandle::is_strong)
+        {
+            state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+        }
         let dependent_signals = state.dependent_signals.clone();
 
         // Mark the complete dependency list before callbacks can reenter abort().
@@ -276,7 +320,13 @@ fn abort_worker_signal<'s>(
                 .and_then(|signal| signal.to_local(scope))
             {
                 set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
-                state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+                if state
+                    .signal
+                    .as_ref()
+                    .is_some_and(crate::util::RealmObjectHandle::is_strong)
+                {
+                    state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
+                }
                 signals_to_abort.push((dependent_signal_id, signal));
             }
         }
@@ -727,4 +777,14 @@ fn worker_abort_signal_timeout_fire_callback(
     let reason = worker_timeout_error_value(scope);
     abort_worker_signal(&store, scope, signal, reason);
     rv.set_undefined();
+}
+
+pub(crate) fn track_subscription_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(store) = worker_abort_store(scope) else {
+        return false;
+    };
+    store.borrow_mut().track_subscription_signal(scope, signal)
 }
