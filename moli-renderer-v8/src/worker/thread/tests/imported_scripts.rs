@@ -805,6 +805,7 @@ async fn worker_importscripts_cached_redirects_use_the_current_worker_policy() {
                 format!("{}/worker.js", source.url),
                 client.clone(),
             )
+            .with_resource_task_runner(crate::network::RendererResourceTaskRunner::for_test())
             .with_content_security_policies(vec![if blocked {
                 "script-src 'self'".into()
             } else {
@@ -928,7 +929,14 @@ async fn worker_importscripts_cross_origin_redirect_chain_stays_muted_after_retu
         worker_test_request_client(),
     );
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
-    assert_eq!(expect_post_json(message), r#""TypeError""#);
+    let record = expect_subresource_network_record(message);
+    assert_eq!(record.url().as_str(), format!("{worker_url}/done"));
+    assert!(record.request_handle().is_some());
+    assert!(matches!(
+        record.outcome(),
+        crate::types::SubresourceNetworkOutcome::Success { .. }
+    ));
+    assert_eq!(recv_post_json(&mut handle).await, r#""TypeError""#);
     assert_eq!(
         server.await.unwrap(),
         ["/worker/redirect.js", "/worker/creator.js", "/done"]
