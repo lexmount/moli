@@ -1,4 +1,6 @@
 use super::*;
+use crate::page_task_queue::ContentSecurityPolicyViolationEventTask;
+use crate::script_vm::security_policy::ContentSecurityPolicyViolationBodyExecution;
 
 // Header policy checks have accepted this response. A later body error
 // retains its HTTP status and body information for both Fetch and XHR timing.
@@ -505,23 +507,59 @@ impl ScriptVm {
             violation,
         );
         let identity = report_context.identity();
-        if !self
-            ._context_host
-            .borrow()
-            .window_document_owner_is_current_for_dispatch_scope(
-                identity.owner(),
-                identity.dispatch_scope(),
-            )
-        {
+        if !report_context.event_target_is_current(&self._context_host.borrow()) {
             return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
         }
-        self.with_default_context_scope(|scope, host_ptr| {
-            // SAFETY: the default context scope keeps this ScriptVm's host alive.
-            unsafe { &mut *host_ptr }.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(
-                scope, host_ptr, identity, violation,
-            );
-            Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
-        })
+        let Some(owner) = self.current_main_document_task_owner() else {
+            return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+        };
+        let task = match identity.dispatch_scope() {
+            OwnerDispatchScope::LightweightPopup(_) => {
+                return self.with_default_context_scope(|scope, host_ptr| {
+                    // SAFETY: the default context scope keeps this ScriptVm's host alive.
+                    unsafe { &mut *host_ptr }.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(
+                        scope, host_ptr, identity, violation,
+                    );
+                    Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+                });
+            }
+            OwnerDispatchScope::Child(handle) => {
+                let host = self._context_host.borrow();
+                let Some(document) = host.child_browsing_context_document_handle(handle) else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                let Some(event_owner) = host.current_child_document_task_owner(handle) else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                ContentSecurityPolicyViolationEventTask::for_element(
+                    owner,
+                    document,
+                    violation.clone(),
+                )
+                .with_event_document_owner(Some(event_owner))
+            }
+            OwnerDispatchScope::Top => {
+                ContentSecurityPolicyViolationEventTask::new(owner, violation.clone())
+            }
+        };
+        self.document_runtime
+            .record_content_security_policy_inspector_issue(task.target(), violation);
+        // This networking task already owns the CSP event. Dispatch its body
+        // now; queueing another lifecycle task would let module rejection win.
+        match self.dispatch_content_security_policy_violation_event_body(&task) {
+            ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument => {
+                Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
+            }
+            ContentSecurityPolicyViolationBodyExecution::DispatchAttempted(result) => {
+                if let Err(error) = result {
+                    self.record_runtime_warning(format_args!(
+                        "securitypolicyviolation networking task failed for `{}`: {error}",
+                        violation.blocked_uri,
+                    ));
+                }
+                Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+            }
+        }
     }
 
     fn apply_async_xhr_upload_event(

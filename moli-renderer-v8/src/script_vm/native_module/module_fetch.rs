@@ -241,6 +241,7 @@ impl ScriptVm {
             crate::native_bridge::OwnerDispatchScope::Top,
             request.module_key().kind(),
             request.fetch_metadata(),
+            request.csp_source_location().cloned(),
         )?;
         let resource_scheduler = self.resource_scheduler().with_module_fetch_context(context);
         let outcome = self
@@ -261,6 +262,7 @@ impl ScriptVm {
             crate::native_bridge::OwnerDispatchScope::Top,
             request.module_key().kind(),
             request.fetch_metadata(),
+            request.csp_source_location().cloned(),
         )?;
         let resource_scheduler = self.resource_scheduler().with_module_fetch_context(context);
         let outcome = self

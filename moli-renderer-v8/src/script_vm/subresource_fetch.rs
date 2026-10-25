@@ -223,6 +223,9 @@ fn report_window_csp_redirect_violation<'s>(
         report_context,
         violation,
     );
+    if !report_context.event_target_is_current(&context_host.borrow()) {
+        return;
+    }
     let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
     context_host
         .borrow_mut()

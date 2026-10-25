@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use url::Url;
 
 use crate::{
+    content_security_policy::ContentSecurityPolicySourceLocation,
     context_bootstrap::{FetchResourceTiming, ResourcePerformanceEntry},
     document_runtime::{
         DocumentContentSecurityPolicyViolation, DocumentRequestPolicySnapshot,
@@ -14,6 +15,7 @@ use crate::{
     native_bridge::{JsContextHost, OwnerDispatchScope},
     network::loads::ResourceLoadLease,
     network_host::{FetchCspRedirectState, WindowCspReportRequestContext},
+    page_task_queue::RendererResourceCompletionSender,
     protocol_types::NavigationResponse,
     service_worker_runtime::ServiceWorkerRequestDestination,
     types::SubresourceResourceType,
@@ -27,7 +29,8 @@ pub(crate) struct NativeModuleFetchContext {
     policy: DocumentRequestPolicySnapshot,
     report_context: WindowCspReportRequestContext,
     redirects: FetchCspRedirectState,
-    violations: Arc<Mutex<Vec<DocumentContentSecurityPolicyViolation>>>,
+    completion_tx: RendererResourceCompletionSender,
+    source_location: Option<ContentSecurityPolicySourceLocation>,
     service_worker: DynamicScriptServiceWorkerContext,
     request_origin: moli_url::WebOrigin,
     destination: ServiceWorkerRequestDestination,
@@ -47,10 +50,11 @@ impl std::fmt::Debug for NativeModuleFetchContext {
 impl NativeModuleFetchContext {
     pub(crate) fn capture(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &mut JsContextHost,
+        host: &JsContextHost,
         owner: OwnerDispatchScope,
         kind: ModuleKind,
         metadata: &ModuleFetchMetadata,
+        source_location: Option<ContentSecurityPolicySourceLocation>,
     ) -> Option<Arc<Self>> {
         let loader = host.document_resource_loader_for_dispatch_scope(owner)?;
         let mut policy = host.document_connect_policy_snapshot_for_owner(owner)?;
@@ -70,7 +74,8 @@ impl NativeModuleFetchContext {
             policy,
             report_context,
             redirects,
-            violations: Arc::default(),
+            completion_tx: host.resource_completion_sender(),
+            source_location,
             service_worker: DynamicScriptServiceWorkerContext {
                 browser_context_runtime: host.browser_context_runtime(),
                 client_id: host.service_worker_client_id_for_subresource_owner(owner),
@@ -97,6 +102,7 @@ impl NativeModuleFetchContext {
     pub(crate) fn check_initial(&self, url: &Url) -> Result<(), String> {
         self.check_url(
             url,
+            url,
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
         )
     }
@@ -104,18 +110,27 @@ impl NativeModuleFetchContext {
     fn check_url(
         &self,
         url: &Url,
+        request_url: &Url,
         redirect: crate::content_security_policy::ContentSecurityPolicyRedirectStatus,
     ) -> Result<(), String> {
-        let (reports, enforced) = self
+        let (mut reports, mut enforced) = self
             .policy
             .check_url(&self.service_worker.document_url, url, redirect)
             .into_violations();
+        for violation in reports.iter_mut().chain(&mut enforced) {
+            if matches!(redirect, crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect) {
+                violation.blocked_uri = crate::content_security_policy::csp_url_for_report(request_url);
+                ContentSecurityPolicySourceLocation::default().apply_to(violation);
+            } else if let Some(location) = &self.source_location {
+                location.apply_to(violation);
+            }
+        }
         let error = enforced
             .first()
             .map(|v| document_content_security_policy_error_message(v, "modulepreload"));
-        self.violations
-            .lock()
-            .extend(reports.into_iter().chain(enforced));
+        for violation in reports.into_iter().chain(enforced) {
+            queue_module_csp_violation(&self.completion_tx, &self.report_context, violation);
+        }
         error.map_or(Ok(()), Err)
     }
 
@@ -125,18 +140,23 @@ impl NativeModuleFetchContext {
     ) -> Option<RequestRedirectCheck> {
         // A Service Worker can retain a redirect guard after its client
         // cancels. Keep only report data, not the Document/browser runtime.
-        let violations = self.violations.clone();
+        let report_context = self.report_context.clone();
+        let completion_tx = self.completion_tx.clone();
         self.redirects.redirect_check(
             self.policy.clone(),
             self.service_worker.document_url.clone(),
             request_url.clone(),
-            move |violation| violations.lock().push(violation),
+            move |violation| queue_module_csp_violation(&completion_tx, &report_context, violation),
         )
     }
 
-    pub(crate) fn check_response_url(&self, response: &NavigationResponse) -> Result<(), String> {
+    pub(crate) fn check_response_url(
+        &self,
+        request_url: &Url,
+        response: &NavigationResponse,
+    ) -> Result<(), String> {
         if response.redirected && !self.redirects.was_checked(&response.final_url) {
-            self.check_url(&response.final_url, crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect)
+            self.check_url(&response.final_url, request_url, crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect)
         } else {
             Ok(())
         }
@@ -183,26 +203,6 @@ impl NativeModuleFetchContext {
         self.entry.lock().take()
     }
 
-    pub(crate) fn report_violations(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host: &mut JsContextHost,
-        dispatch_dom_events: bool,
-    ) {
-        let violations = std::mem::take(&mut *self.violations.lock());
-        let host_ptr = host as *mut JsContextHost;
-        for violation in violations {
-            crate::network_host::send_content_security_policy_violation_report_from_window_context(
-                host,
-                &self.report_context,
-                &violation,
-            );
-            if dispatch_dom_events {
-                host.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(scope, host_ptr, self.report_context.identity(), &violation);
-            }
-        }
-    }
-
     pub(crate) fn fetch(
         self: Arc<Self>,
         load: ResourceLoadLease,
@@ -244,4 +244,19 @@ impl NativeModuleFetchContext {
             callback(result, native);
         }));
     }
+}
+
+fn queue_module_csp_violation(
+    completion_tx: &RendererResourceCompletionSender,
+    report_context: &WindowCspReportRequestContext,
+    violation: DocumentContentSecurityPolicyViolation,
+) {
+    // CSP events and module terminals share the HTML networking source. Each
+    // violation gets its own task even while the module response is pending.
+    let _ = completion_tx.send_async_subresource_event(
+        crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+            report_context: Box::new(report_context.clone()),
+            violation: Box::new(violation),
+        },
+    );
 }

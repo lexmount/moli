@@ -285,6 +285,8 @@ pub(in crate::document_runtime) struct QueuedConnectedStyleLoad {
     inline_source: Option<Arc<OwnerStyleSheetSource>>,
     event_admission: Option<ConnectedStyleLoadEventAdmission>,
     document_referrer_policy: Option<String>,
+    csp_source_location:
+        Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
 }
 
 impl QueuedConnectedStyleLoad {
@@ -293,12 +295,16 @@ impl QueuedConnectedStyleLoad {
         inline_source: Option<Arc<OwnerStyleSheetSource>>,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
         document_referrer_policy: Option<String>,
+        csp_source_location: Option<
+            crate::content_security_policy::ContentSecurityPolicySourceLocation,
+        >,
     ) -> Arc<Self> {
         Arc::new(Self {
             owner,
             inline_source,
             event_admission,
             document_referrer_policy,
+            csp_source_location,
         })
     }
 
@@ -308,6 +314,12 @@ impl QueuedConnectedStyleLoad {
 
     pub(in crate::document_runtime) fn document_referrer_policy(&self) -> Option<&str> {
         self.document_referrer_policy.as_deref()
+    }
+
+    pub(in crate::document_runtime) fn csp_source_location(
+        &self,
+    ) -> Option<&crate::content_security_policy::ContentSecurityPolicySourceLocation> {
+        self.csp_source_location.as_ref()
     }
 
     pub(in crate::document_runtime) fn inline_source(&self) -> Option<&Arc<OwnerStyleSheetSource>> {
