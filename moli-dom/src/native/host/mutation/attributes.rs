@@ -569,31 +569,29 @@ impl DomHost {
             slot_changes.record(self, &mut effects, handle);
             return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
-        if records_enabled && prior_value.as_ref() == Some(&new_value) {
+        if prior_value.as_ref() == Some(&new_value) {
             let mut effects = DomMutationEffects::default();
-            effects.queue_attribute_mutation_record(
-                handle,
-                local_name,
-                namespace,
-                prior_value.clone(),
-                Some(new_value.clone()),
-            );
-            return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
-        }
-        if prior_value.as_ref() == Some(&new_value)
-            && namespace.is_none_or(str::is_empty)
-            && self.is_html_element_named(handle, "meta")
-            && matches!(local_name, "content" | "http-equiv")
-        {
-            let mut effects = DomMutationEffects::default();
-            effects.mark_attribute_change(
-                handle,
-                local_name,
-                None,
-                prior_value.clone(),
-                Some(new_value.clone()),
-                records_enabled,
-            );
+            if namespace.is_none_or(str::is_empty)
+                && self.is_html_element_named(handle, "meta")
+                && matches!(local_name, "content" | "http-equiv")
+            {
+                effects.mark_attribute_change(
+                    handle,
+                    local_name,
+                    None,
+                    prior_value.clone(),
+                    Some(new_value.clone()),
+                    records_enabled,
+                );
+            } else if records_enabled {
+                effects.queue_attribute_mutation_record(
+                    handle,
+                    local_name,
+                    namespace,
+                    prior_value.clone(),
+                    Some(new_value.clone()),
+                );
+            }
             return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
         DomAttributeMutationOutcome::new(

@@ -43,6 +43,9 @@ mod meta_referrer_policy;
 #[path = "referrer_policy_inheritance.rs"]
 mod referrer_policy_inheritance;
 
+#[path = "srcdoc_navigation_referrer.rs"]
+mod srcdoc_navigation_referrer;
+
 #[path = "fetch_client_referrer.rs"]
 mod fetch_client_referrer;
 
@@ -218,6 +221,9 @@ fn fixture_response(
         }
         "/document-referrer.html" | "/document-referrer.js" => {
             module_document_referrer::fixture_response(path, query, origin, cross)
+        }
+        "/navigation-referrer-source" | "/navigation-referrer-target" => {
+            srcdoc_navigation_referrer::fixture_response(path, query)
         }
         "/csp-response-status.html" => csp_response_status::fixture_response(query),
         "/csp-connect-policy.html" | "/csp-connect-resource" => {

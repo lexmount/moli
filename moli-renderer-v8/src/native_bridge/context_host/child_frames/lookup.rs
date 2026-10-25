@@ -678,12 +678,17 @@ impl JsContextHost {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
         };
+        let request_initiator = pending_navigation
+            .request_initiator
+            .clone()
+            .or_else(|| initiator.and_then(|source| self.navigation_initiator_for_owner(source)));
         let source_policy = pending_navigation.source_policy.clone().or_else(|| {
-            initiator
-                .and_then(|source| self.document_policy_container_for_inheritance(source))
-                .map(|policy| crate::runtime::RendererNavigationPolicy::capture(&policy))
+            let url = Self::child_browsing_context_bootstrap_url(&pending_navigation.bootstrap)?;
+            request_initiator.as_ref()?.document_policy(&url)
         });
-        let pending_navigation = pending_navigation.with_source_policy(source_policy);
+        let pending_navigation = pending_navigation
+            .with_source_policy(source_policy)
+            .with_request_initiator(request_initiator);
         self.cancel_planned_form_navigation_for_url(
             super::super::OwnerDispatchScope::Child(handle),
             Self::child_browsing_context_bootstrap_url(&pending_navigation.bootstrap).as_ref(),
