@@ -1443,14 +1443,26 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled during shutdown"),
             ));
         }
-        if let Err(error) = result {
-            if job.cancel_handle.is_cancelled() {
-                return Err((
-                    job.response_tx,
-                    anyhow::Error::new(crate::FetchCancelled)
-                        .context("fetch runtime request cancelled"),
-                ));
-            }
+        if job.cancel_handle.is_cancelled() {
+            return Err((
+                job.response_tx,
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled"),
+            ));
+        }
+        // A retired redirect deliberately returns CURLE_WRITE_ERROR from its
+        // header callback. Cancellation above still takes precedence.
+        let header_terminated = easy.as_ref().is_some_and(|easy| {
+            easy.get_ref()
+                .buffered()
+                .is_some_and(ResponseCollector::header_terminated)
+        });
+        if let Err(error) = result
+            && !(header_terminated
+                && error
+                    .downcast_ref::<curl::Error>()
+                    .is_some_and(curl::Error::is_write_error))
+        {
             if let Some(response) = easy.as_mut().and_then(take_failed_proxy_connect_response) {
                 let response = proxy_connect_raw_response(
                     &job.current_url,

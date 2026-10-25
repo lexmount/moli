@@ -148,8 +148,8 @@ impl ManualCorsRedirectState {
         &self.preflight_request_headers
     }
 
-    // Construct this copy at transport dispatch, after configuring Fetch
-    // policy: a later with_redirect_mode(Follow) would enable runtime following.
+    // Each dispatch owns one hop; this browser loop advances URLs and runs
+    // the next preflight while preserving Fetch's redirect policy.
     fn single_hop_transport_request(&self) -> Request {
         self.request.clone().with_single_hop()
     }
@@ -242,9 +242,7 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
-    if !request.auth_requires_buffered_transport()
-        && request.redirect_mode() == RequestRedirectMode::Follow
-    {
+    if !request.auth_requires_buffered_transport() {
         // Materialize only the accepted final response. Waiting for buffered
         // intermediate bodies here lets an unfinished redirect block the next
         // hop and its preflight indefinitely.
@@ -267,11 +265,10 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
         ));
     }
 
-    // Auth challenge-response and manual/error redirect compatibility still
-    // use the buffered collector, which waits for each response's entire body.
-    // Unfinished bodies can stall these paths until cancellation or timeout.
-    // Covered by buffered_redirect_body_wait_is_cancellable_without_committing_completion
-    // in moli-fetch/src/tests/response_progress.rs.
+    // Connection-oriented auth negotiation remains inside libcurl: reusing an
+    // HTTP/1 connection can require draining its challenge body. Cancellation
+    // stays available during negotiation. The buffered collector retires any
+    // subsequent redirect at headers, just like the raw streaming path.
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
     let cancel_handle = cancel_handle.unwrap_or_default();
 
@@ -330,18 +327,13 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
         let network_extra_info_available = observed.request_observation().is_some();
         let head = observed.response().head();
         match redirects.advance(head, network_extra_info_available)? {
-            ManualCorsRedirectTransition::FinalResponse => {
+            ManualCorsRedirectTransition::FinalResponse
+            | ManualCorsRedirectTransition::ManualResponse { .. } => {
                 cancel_handle.adopt_response_progress(&observed.response().cancellation_handle());
                 let redirect_chain = redirects.into_redirect_chain();
                 observed.response_mut().redirected = !redirect_chain.is_empty();
                 observed.response_mut().redirect_chain = redirect_chain;
                 return Ok(observed);
-            }
-            ManualCorsRedirectTransition::ManualResponse { response_url } => {
-                return Err(format!(
-                    "manual redirect unexpectedly entered follow-mode streaming from {}",
-                    response_url
-                ));
             }
             ManualCorsRedirectTransition::FollowedRedirect => {}
         }
@@ -1369,6 +1361,77 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn manual_and_error_redirects_finish_without_waiting_for_body() -> Result<()> {
+        for mode in [RequestRedirectMode::Manual, RequestRedirectMode::Error] {
+            for manual_preflight_loop in [false, true] {
+                let listener = TcpListener::bind("127.0.0.1:0").await?;
+                let url = Url::parse(&format!("http://{}/start", listener.local_addr()?))?;
+                let server = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await?;
+                    assert!(
+                        read_http_request_text(&mut stream)
+                            .await?
+                            .starts_with("GET /start ")
+                    );
+                    stream
+                        .write_all(
+                            concat!(
+                                "HTTP/1.1 302 Found\r\n",
+                                "Location: /final\r\n",
+                                "Content-Length: 100\r\n",
+                                "Connection: close\r\n\r\n",
+                            )
+                            .as_bytes(),
+                        )
+                        .await?;
+                    // No body is sent. Completion must close this hop from headers.
+                    assert_eq!(stream.read(&mut [0_u8; 1]).await?, 0);
+                    Ok::<_, anyhow::Error>(())
+                });
+                let headers = if manual_preflight_loop {
+                    vec![("X-Test".to_owned(), "yes".to_owned())]
+                } else {
+                    Vec::new()
+                };
+                let request = Request::new("GET", url.as_str(), None, headers.clone())?
+                    .with_initiator_url(&url.join("/page")?)
+                    .with_request_origin(moli_url::WebOrigin::from_url(&url))
+                    .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+                    .with_redirect_mode(mode);
+                assert_eq!(
+                    browser_request_needs_manual_preflight_redirects(&request, &headers),
+                    manual_preflight_loop
+                );
+                let loader_owner = ResourceRequestClient::new(&FetchConfig::default())?;
+                let cancel = FetchCancelHandle::new();
+                let result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    fetch_browser_subresource_with_preflight_headers(
+                        loader_owner.handle(),
+                        request,
+                        Some(cancel.clone()),
+                        headers,
+                    ),
+                )
+                .await?;
+                if mode == RequestRedirectMode::Manual {
+                    let response = result.map_err(anyhow::Error::msg)?;
+                    assert_eq!(response.status, 302);
+                    assert_eq!(response.final_url, url);
+                    assert!(response.body_text().is_empty());
+                    assert!(cancel.response_completion_is_committed());
+                    assert!(!cancel.cancel_if_response_pending());
+                } else {
+                    assert_eq!(result.unwrap_err(), redirect_mode_error_message(&url));
+                }
+                assert!(!cancel.is_cancelled());
+                tokio::time::timeout(Duration::from_secs(5), server).await???;
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn buffered_xhr_discards_unfinished_redirect_and_preflight_bodies() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1463,11 +1526,10 @@ mod tests {
         .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
-        // A later policy setter re-enables runtime following. The browser loop
-        // must reapply single-hop handling at dispatch to preflight the next URL.
+        // Reapplying Follow must preserve the browser's ownership of each hop.
         .with_single_hop()
         .with_redirect_mode(RequestRedirectMode::Follow);
-        assert!(request.transport_follows_redirects());
+        assert!(!request.transport_follows_redirects());
 
         let cancel = FetchCancelHandle::new();
         let response = tokio::time::timeout(

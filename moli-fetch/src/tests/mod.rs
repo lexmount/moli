@@ -277,6 +277,48 @@ fn single_hop_requests_preserve_redirect_mode() {
     }
 }
 
+#[test]
+fn redirect_policy_setters_preserve_caller_owned_following() -> Result<()> {
+    for handling in [
+        RequestRedirectHandling::Follow,
+        RequestRedirectHandling::FollowByCaller,
+        RequestRedirectHandling::Manual,
+        RequestRedirectHandling::Error,
+    ] {
+        for mode in [
+            RequestRedirectMode::Follow,
+            RequestRedirectMode::Manual,
+            RequestRedirectMode::Error,
+        ] {
+            let request = Request::get("https://example.test/start")?
+                .with_redirect_handling(handling)
+                .with_redirect_mode(mode);
+            let expected = match (handling, mode) {
+                (RequestRedirectHandling::FollowByCaller, RequestRedirectMode::Follow) => {
+                    RequestRedirectHandling::FollowByCaller
+                }
+                (_, mode) => mode.into(),
+            };
+            assert_eq!(
+                request.redirect_handling(),
+                expected,
+                "{handling:?}, {mode:?}"
+            );
+            assert_eq!(request.redirect_mode(), mode);
+        }
+    }
+    let hop = Request::get("https://example.test/start")?
+        .with_single_hop()
+        .with_redirect_mode(RequestRedirectMode::Follow)
+        .with_redirect_mode(RequestRedirectMode::Follow);
+    assert!(!hop.transport_follows_redirects());
+    assert!(
+        hop.with_redirect_handling(RequestRedirectHandling::Follow)
+            .transport_follows_redirects()
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn http_transport_rejects_file_urls_in_every_response_mode() -> Result<()> {
     const FILE_URL: &str = "file:///moli-policy-must-not-open";

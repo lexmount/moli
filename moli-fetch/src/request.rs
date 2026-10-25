@@ -863,18 +863,21 @@ impl Request {
     }
 
     /// Stops at this hop while preserving the browser's redirect policy.
-    /// Apply this at transport dispatch, after configuring the policy:
-    /// a later [`Self::with_redirect_mode`] call resets redirect ownership.
+    /// Reapplying the `Follow` policy preserves this caller-owned handling.
     pub fn with_single_hop(mut self) -> Self {
         self.redirect_handling = self.redirect_handling.single_hop();
         self
     }
 
-    /// Sets the browser's redirect policy and its default transport handling.
-    /// `Follow` enables runtime following, including after `with_single_hop()`.
-    /// Caller-owned redirect loops must apply [`Self::with_single_hop`] last.
+    /// Sets the browser's redirect policy, preserving `FollowByCaller` when
+    /// reapplying `Follow`. To explicitly give following back to the runtime,
+    /// use [`Self::with_redirect_handling`] with [`RequestRedirectHandling::Follow`].
     pub fn with_redirect_mode(mut self, redirect_mode: RequestRedirectMode) -> Self {
-        self.redirect_handling = redirect_mode.into();
+        if self.redirect_handling != RequestRedirectHandling::FollowByCaller
+            || redirect_mode != RequestRedirectMode::Follow
+        {
+            self.redirect_handling = redirect_mode.into();
+        }
         self
     }
 
