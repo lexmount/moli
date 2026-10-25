@@ -399,36 +399,10 @@ impl ChildBrowsingContextEntry {
         self.document_sandbox_policy().allows_scripts
     }
 
-    pub(super) fn response_content_security_policies(&self) -> &[ContentSecurityPolicy] {
-        self.document_policy_container
-            .response_content_security_policies
-            .as_slice()
-    }
-
     pub(super) fn document_content_security_policies(&self) -> &[ContentSecurityPolicy] {
         self.document_policy_container
             .document_content_security_policies
             .as_slice()
-    }
-
-    pub(super) fn response_content_security_report_only_policies(
-        &self,
-    ) -> &[ContentSecurityPolicy] {
-        self.document_policy_container
-            .response_content_security_report_only_policies
-            .as_slice()
-    }
-
-    pub(super) fn has_response_content_security_policies(&self) -> bool {
-        !self.response_content_security_policies().is_empty()
-    }
-
-    pub(super) fn content_security_reporting_endpoints(
-        &self,
-    ) -> crate::content_security_policy::ContentSecurityPolicyReportingEndpoints {
-        self.document_policy_container
-            .content_security_reporting_endpoints
-            .clone()
     }
 
     pub(super) fn apply_loaded_document_policy(
