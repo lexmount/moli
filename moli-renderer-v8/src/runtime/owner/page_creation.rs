@@ -937,6 +937,8 @@ impl RendererOwnerHandle {
                     history_policy_container,
                     document_default_language,
                     document_last_modified,
+                    document_response_status: (!moli_url::is_about_blank(&final_url))
+                        .then_some(response_status),
                     document_settings,
                     network_offline,
                     blocked_url_patterns,

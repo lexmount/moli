@@ -1791,6 +1791,23 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn content_security_policy_response_status(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<u16> {
+        let document = match owner {
+            OwnerDispatchScope::Top => Some(self.document_handle()),
+            OwnerDispatchScope::Child(handle) => {
+                self.child_browsing_context_document_handle(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_document_handle(popup_id)
+            }
+        }?;
+        self.dom_host()
+            .document_source_response_status_for_handle(document)
+    }
+
     fn dispatch_child_content_security_policy_violation_event<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -1801,14 +1818,20 @@ impl JsContextHost {
         let window = self
             .child_browsing_context_window_wrapper(scope, handle)
             .ok_or_else(|| anyhow::anyhow!("child window wrapper is unavailable"))?;
+        let fields = ContentSecurityPolicyViolationEventFields {
+            status_code: i32::from(
+                self.content_security_policy_response_status(OwnerDispatchScope::Child(handle))
+                    .unwrap_or(0),
+            ),
+            ..ContentSecurityPolicyViolationEventFields::from(violation)
+        };
         let event = create_content_security_policy_violation_event(
             scope,
             window.into(),
             window.into(),
-            violation,
+            &fields,
         )?;
         if send_report {
-            let fields = ContentSecurityPolicyViolationEventFields::from(violation);
             let document_owner =
                 self.current_child_document_task_owner(handle)
                     .ok_or_else(|| {

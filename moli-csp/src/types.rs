@@ -140,6 +140,7 @@ impl ContentSecurityPolicyReportingEndpoints {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct ContentSecurityPolicyViolationEventFields<'a> {
     pub document_uri: &'a str,
     pub referrer: &'a str,

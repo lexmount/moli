@@ -1100,6 +1100,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
     pub(crate) document_default_language: Option<String>,
     pub(crate) document_last_modified: Option<f64>,
+    pub(crate) document_response_status: Option<u16>,
     pub(crate) document_settings: moli_page_types::DocumentSettings,
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
@@ -1138,11 +1139,14 @@ impl PageVmEnvConfig {
             .collect()
     }
 
-    pub(crate) fn apply_navigation_response_headers(
+    pub(crate) fn apply_navigation_response_metadata(
         &mut self,
         final_url: &Url,
+        status: u16,
         headers: &[(String, Vec<u8>)],
     ) {
+        // Blank Documents inherit policy, but have no fetched response.
+        self.document_response_status = (!moli_url::is_about_blank(final_url)).then_some(status);
         self.about_document_state = self
             .about_document_state
             .take()
@@ -4672,6 +4676,9 @@ impl PageVm {
             self.vm_mut()
                 .document_runtime
                 .set_document_source_last_modified(env.document_last_modified);
+            self.vm_mut()
+                .document_runtime
+                .set_document_source_response_status(env.document_response_status);
         }
         self.vm_mut()
             .set_stored_document_start_scripts(&env.document_start_scripts);

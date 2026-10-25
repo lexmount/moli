@@ -343,6 +343,13 @@ impl DocumentRuntime {
             .set_document_source_last_modified_for_handle(document_handle, timestamp_ms);
     }
 
+    pub(crate) fn set_document_source_response_status(&mut self, status: Option<u16>) {
+        let document_handle = self.dom_host.document_handle();
+        let _ = self
+            .dom_host
+            .set_document_source_response_status_for_handle(document_handle, status);
+    }
+
     pub(crate) fn take_style_source_document_sync_pending(&mut self) -> bool {
         std::mem::take(&mut self.style_source_document_sync_pending)
     }

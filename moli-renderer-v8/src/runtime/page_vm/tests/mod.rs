@@ -709,6 +709,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
             },
             document_default_language: None,
             document_last_modified: None,
+            document_response_status: None,
             document_settings: Default::default(),
             network_offline: false,
             blocked_url_patterns: Vec::new(),

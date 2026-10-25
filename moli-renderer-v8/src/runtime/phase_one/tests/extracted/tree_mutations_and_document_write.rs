@@ -1142,6 +1142,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                 document_policy_container: Default::default(),
                 document_default_language: None,
                 document_last_modified: None,
+                document_response_status: None,
                 document_settings: Default::default(),
                 network_offline: false,
                 blocked_url_patterns: Vec::new(),

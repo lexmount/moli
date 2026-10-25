@@ -1497,6 +1497,7 @@ impl PageVm {
             },
             document_default_language: None,
             document_last_modified: None,
+            document_response_status: None,
             document_settings: moli_page_types::DocumentSettings {
                 script_execution_disabled: self.script_execution_disabled(),
                 ..self.document_settings.clone()
