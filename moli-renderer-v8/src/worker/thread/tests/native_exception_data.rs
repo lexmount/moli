@@ -11,5 +11,5 @@ async fn worker_exception_data_has_no_invented_failure_stack() {
     let message = timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap();
     let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(result["rows"].as_array().unwrap().len(), 24, "{result}");
+    assert_eq!(result["rows"].as_array().unwrap().len(), 28, "{result}");
 }
