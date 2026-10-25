@@ -1,6 +1,7 @@
 use tracing::debug;
 
 use super::*;
+use crate::content_security_policy::ContentSecurityPolicySourceLocation;
 use crate::frame_owner_model::MainDocumentStyleLoadEventBinding;
 use crate::link_as::{LinkAsDestination, link_as_destination};
 use crate::module_runtime::{
@@ -144,6 +145,7 @@ pub(crate) struct PreparedConnectedStyleLoad {
     remember_before_initial_scan: bool,
     event_plan: ConnectedStyleLoadEventPlan,
     document_referrer_policy: Option<String>,
+    csp_source_location: Option<ContentSecurityPolicySourceLocation>,
 }
 
 #[derive(Debug)]
@@ -209,6 +211,7 @@ impl PreparedConnectedStyleLoad {
             remember_before_initial_scan,
             event_plan,
             document_referrer_policy: None,
+            csp_source_location: None,
         }
     }
 
@@ -308,6 +311,30 @@ impl DocumentRuntime {
         prepared
     }
 
+    pub(in crate::document_runtime) fn capture_modulepreload_csp_source_location(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host: &PageScriptHost,
+        prepared: &mut PreparedConnectedStyleLoad,
+    ) {
+        let modulepreload = self
+            .dom_host
+            .node(prepared.owner)
+            .and_then(Node::as_element)
+            .filter(|element| element.is_html_element("link"))
+            .and_then(|element| element.attribute("rel"))
+            .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"));
+        if modulepreload
+            && host
+                .owner_dispatch_scope_for_node(prepared.owner)
+                .and_then(|owner| host.document_connect_policy_snapshot_for_owner(owner))
+                .is_some_and(|policy| policy.has_policies())
+        {
+            prepared.csp_source_location =
+                Some(ContentSecurityPolicySourceLocation::capture(scope));
+        }
+    }
+
     pub(crate) fn start_connected_modulepreloads_in_current_scope(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -322,9 +349,23 @@ impl DocumentRuntime {
         let Some(owner) = host.current_main_document_task_owner() else {
             return;
         };
-        let scheduler = host.resource_scheduler();
         for start in starts {
             let (request, client) = start.into_parts();
+            let context = crate::module_runtime::NativeModuleFetchContext::capture(
+                scope,
+                host,
+                crate::native_bridge::OwnerDispatchScope::Top,
+                request.module_key().kind(),
+                request.fetch_metadata(),
+                request.csp_source_location().cloned(),
+            );
+            let Some(context) = context else {
+                result.push_runtime_warning(
+                    "connected modulepreload lost its exact Document fetch context",
+                );
+                continue;
+            };
+            let scheduler = host.resource_scheduler().with_module_fetch_context(context);
             match self
                 .start_main_document_modulepreload_link_fetch(owner, &scheduler, request, client)
             {
@@ -597,6 +638,7 @@ impl DocumentRuntime {
             host_ptr,
             Some(event_admission),
             prepared.document_referrer_policy,
+            prepared.csp_source_location,
         )
     }
 
@@ -832,6 +874,7 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
         document_referrer_policy: Option<String>,
+        csp_source_location: Option<ContentSecurityPolicySourceLocation>,
     ) -> ConnectedStyleLoadPrimeResult {
         if self.current_document_resource_loader().is_some()
             && !self.parser_created_style_import_waits_for_blocking_discovery(handle)
@@ -842,6 +885,7 @@ impl DocumentRuntime {
                 host_ptr,
                 event_admission,
                 document_referrer_policy,
+                csp_source_location,
             )
         } else {
             self.stylesheet_lifecycle.pending_connected_loads.push_back(
@@ -850,6 +894,7 @@ impl DocumentRuntime {
                     inline_source,
                     event_admission,
                     document_referrer_policy,
+                    csp_source_location,
                 ),
             );
             ConnectedStyleLoadPrimeResult::default()
@@ -909,6 +954,7 @@ impl DocumentRuntime {
                 host_ptr,
                 queued.event_admission(),
                 queued.document_referrer_policy().map(str::to_owned),
+                queued.csp_source_location().cloned(),
             ));
         }
         result
@@ -945,6 +991,7 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
         document_referrer_policy: Option<String>,
+        csp_source_location: Option<ContentSecurityPolicySourceLocation>,
     ) -> ConnectedStyleLoadPrimeResult {
         let mut result = ConnectedStyleLoadPrimeResult::default();
         if !self.dom_host.is_connected(handle) {
@@ -1087,7 +1134,13 @@ impl DocumentRuntime {
                 );
                 return result;
             }
-            if is_modulepreload && self.queue_connected_child_modulepreload(handle, &url, host_ptr)
+            if is_modulepreload
+                && self.queue_connected_child_modulepreload(
+                    handle,
+                    &url,
+                    host_ptr,
+                    csp_source_location.clone(),
+                )
             {
                 return result;
             }
@@ -1125,6 +1178,11 @@ impl DocumentRuntime {
                 self.stylesheet_lifecycle
                     .owner_states
                     .install_pending_native_modulepreload(Arc::clone(&client));
+                let preload = if let Some(location) = csp_source_location {
+                    preload.with_csp_source_location(location)
+                } else {
+                    preload
+                };
                 result.push_modulepreload_start(ConnectedModulepreloadStart::new(preload, client));
                 return result;
             }
@@ -2041,6 +2099,7 @@ impl DocumentRuntime {
         handle: DomHandle,
         url: &url::Url,
         host_ptr: *mut PageScriptHost,
+        csp_source_location: Option<ContentSecurityPolicySourceLocation>,
     ) -> bool {
         let Some(document) = self.dom_host.owner_document_handle(handle) else {
             return false;
@@ -2083,11 +2142,13 @@ impl DocumentRuntime {
             integrity,
             crate::context_bootstrap::document_referrer_policy_for_native_document(host, document),
         ) {
-            let _ = host.queue_child_modulepreload_fetch_for_current_document(
-                child,
-                handle,
-                candidate.request,
-            );
+            let request = if let Some(location) = csp_source_location {
+                candidate.request.with_csp_source_location(location)
+            } else {
+                candidate.request
+            };
+            let _ =
+                host.queue_child_modulepreload_fetch_for_current_document(child, handle, request);
         }
         true
     }
@@ -2194,6 +2255,7 @@ impl DocumentRuntime {
                 handle,
                 None,
                 load_event_binding.map(ConnectedStyleLoadEventAdmission::LoadDelaying),
+                None,
                 None,
             ));
     }
@@ -4180,7 +4242,14 @@ mod tests {
         let loader = ResourceRequestClient::new(&FetchConfig::default())?;
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
 
-        runtime.prime_connected_style_load_handle(link, None, std::ptr::null_mut(), None, None);
+        runtime.prime_connected_style_load_handle(
+            link,
+            None,
+            std::ptr::null_mut(),
+            None,
+            None,
+            None,
+        );
         let first = runtime
             .active_stylesheet_link_client_for_test(link)
             .expect("first style preload client");
@@ -4191,7 +4260,14 @@ mod tests {
                 .dom_host
                 .set_attribute(link, "crossorigin", "use-credentials")
         );
-        runtime.prime_connected_style_load_handle(link, None, std::ptr::null_mut(), None, None);
+        runtime.prime_connected_style_load_handle(
+            link,
+            None,
+            std::ptr::null_mut(),
+            None,
+            None,
+            None,
+        );
         let second = runtime
             .active_stylesheet_link_client_for_test(link)
             .expect("reprocessed style preload client");
