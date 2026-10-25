@@ -66,7 +66,25 @@ struct WorkerImportMetaDeclaration<'scope> {
 pub(super) struct WorkerModuleGraphFetchCompletion {
     fetch_id: WorkerModuleGraphFetchId,
     result: Result<WorkerModuleFetchedSource, String>,
-    csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
+}
+
+/// Events from one worker run's module fetches share a queue so a violation
+/// can dispatch before a response arrives, and before its import is settled.
+pub(super) enum WorkerModuleGraphFetchEvent {
+    CspViolation(Box<ContentSecurityPolicyUrlViolation>),
+    Complete(Box<WorkerModuleGraphFetchCompletion>),
+}
+
+impl WorkerModuleGraphFetchEvent {
+    pub(super) fn completed(
+        fetch_id: WorkerModuleGraphFetchId,
+        result: Result<WorkerModuleFetchedSource, String>,
+    ) -> Self {
+        Self::Complete(Box::new(WorkerModuleGraphFetchCompletion {
+            fetch_id,
+            result,
+        }))
+    }
 }
 
 pub(super) struct WorkerModuleFetchedSource {
@@ -211,31 +229,8 @@ impl From<Box<WorkerBootstrapError>> for WorkerDynamicModuleImportError {
 }
 
 impl WorkerModuleGraphFetchCompletion {
-    pub(super) fn new(
-        fetch_id: WorkerModuleGraphFetchId,
-        result: Result<WorkerModuleFetchedSource, String>,
-    ) -> Self {
-        Self {
-            fetch_id,
-            result,
-            csp_violations: Vec::new(),
-        }
-    }
-
-    pub(super) fn with_csp_violations(
-        mut self,
-        violations: Vec<ContentSecurityPolicyUrlViolation>,
-    ) -> Self {
-        self.csp_violations = violations;
-        self
-    }
-
     pub(super) fn fetch_id(&self) -> WorkerModuleGraphFetchId {
         self.fetch_id
-    }
-
-    pub(super) fn csp_violations(&self) -> &[ContentSecurityPolicyUrlViolation] {
-        &self.csp_violations
     }
 
     pub(super) fn result(&self) -> Result<&WorkerModuleFetchedSource, &str> {
