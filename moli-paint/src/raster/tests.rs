@@ -774,28 +774,44 @@ fn transparent_or_zero_width_text_stroke_paints_nothing() {
 }
 
 #[test]
-fn limitation_text_shadow_excludes_the_text_stroke() {
-    // Pins current behavior: the shadow fills the glyph outline only. Chromium
-    // also shadows the -webkit-text-stroke outline (x 56..60 here).
-    let mut snapshot = snapshot(100, 60, 1.0);
-    let run = ahem_run(
-        &mut snapshot,
-        Some(moli_layout::PaintTextStroke {
-            width: 8.0,
-            color: RED,
-            paint_first: false,
-        }),
-        0.0,
-    );
-    snapshot.push_fragment(PaintFragment::TextShadow(moli_layout::PaintTextShadow {
-        run: run.clone(),
-        color: PaintColor::new(0.0, 1.0, 0.0, 1.0),
-        offset: moli_layout::PaintPoint::new(40.0, 0.0),
-        blur_radius: 0.0,
-    }));
-    snapshot.push_fragment(PaintFragment::GlyphRun(run));
-    let image = raster_snapshot(&snapshot).expect("shadowed glyph should rasterize");
-    assert_eq!(pixel(&image, 75, 30), [0, 255, 0, 255]);
-    assert_eq!(pixel(&image, 58, 30), [255, 255, 255, 255]);
-    assert!(is_red(pixel(&image, 17, 30)));
+fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
+    // Chromium's GraphicsContext::DrawTextPasses clears the shadow looper on
+    // the stroke pass when fill mode is present, in either paint order:
+    // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/graphics/graphics_context.cc
+    // This contract is for ordinary HTML text; SVG has its own paint path.
+    let mut reference = None;
+    for stroke in [None, Some(false), Some(true)] {
+        let mut snapshot = snapshot(140, 60, 1.0);
+        let run = ahem_run(
+            &mut snapshot,
+            stroke.map(|paint_first| moli_layout::PaintTextStroke {
+                width: 8.0,
+                color: RED,
+                paint_first,
+            }),
+            0.0,
+        );
+        snapshot.push_fragment(PaintFragment::TextShadow(moli_layout::PaintTextShadow {
+            run: run.clone(),
+            color: PaintColor::new(0.0, 1.0, 0.0, 1.0),
+            offset: moli_layout::PaintPoint::new(80.0, 0.0),
+            blur_radius: 0.0,
+        }));
+        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+        let image = raster_snapshot(&snapshot).expect("shadowed glyph should rasterize");
+        assert_eq!(pixel(&image, 115, 30), [0, 255, 0, 255]);
+        assert_eq!(pixel(&image, 98, 30), [255, 255, 255, 255]);
+        let shadow_pixels: Vec<_> = (0..60)
+            .flat_map(|y| (80..140).map(move |x| (x, y)))
+            .map(|(x, y)| pixel(&image, x, y))
+            .collect();
+        if let Some(reference) = &reference {
+            assert_eq!(
+                &shadow_pixels, reference,
+                "shadow must match unstroked text, stroke_first={stroke:?}"
+            );
+        } else {
+            reference = Some(shadow_pixels);
+        }
+    }
 }
