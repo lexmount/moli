@@ -1,14 +1,12 @@
-use crate::content_security_policy::ContentSecurityPolicy;
-
 use super::{OwnerDispatchScope, PageScriptHost};
 use crate::network_host::controlled_resource::{ControlledXhrContext, XhrInterceptionRoute};
 use crate::types::SubresourceResourceType;
 use crate::{
     content_security_policy::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
-        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
-        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyStyleElementRequest,
-        TrustedTypesForScriptRequirements, current_script_violation_location,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyScriptElementRequest,
+        ContentSecurityPolicyStyleElementRequest, TrustedTypesForScriptRequirements,
+        current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -1238,6 +1236,15 @@ impl PageScriptHost {
         ) else {
             return DocumentCspOutcome::Allowed;
         };
+        self.queue_document_connect_csp_check_with_script_location(scope, owner, check)
+    }
+
+    pub(crate) fn queue_document_connect_csp_check_with_script_location<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: OwnerDispatchScope,
+        check: DocumentContentSecurityPolicyCheck,
+    ) -> DocumentCspOutcome {
         if check.has_no_violations() {
             return DocumentCspOutcome::Allowed;
         }
@@ -1297,38 +1304,8 @@ impl PageScriptHost {
         request_url: &url::Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyCheck> {
-        match owner {
-            OwnerDispatchScope::Top => {
-                // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
-                Some(
-                    unsafe { &*self.document_runtime }
-                        .document_connect_csp_check_with_redirect_status(
-                            request_url,
-                            redirect_status,
-                        ),
-                )
-            }
-            OwnerDispatchScope::Child(_) | OwnerDispatchScope::LightweightPopup(_) => {
-                let snapshot = self.owner_document_policy_snapshot(owner)?;
-                let document_origin = self
-                    .window_document_origin(owner)
-                    .and_then(|origin| url::Url::parse(&origin).ok());
-                // Keep the actual Document URL for reports. Only unbound local
-                // policies use the receiver origin as a fallback for 'self'.
-                // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
-                Some(
-                    unsafe { &*self.document_runtime }
-                        .document_connect_csp_check_for_document_with_redirect_status(
-                            snapshot.document_handle,
-                            document_url,
-                            document_origin.as_ref(),
-                            &snapshot.policy_container,
-                            request_url,
-                            redirect_status,
-                        ),
-                )
-            }
-        }
+        let policy = self.document_connect_policy_snapshot_for_owner(owner)?;
+        Some(policy.check_url(document_url, request_url, redirect_status))
     }
 
     #[cfg(feature = "devtools")]
@@ -1385,143 +1362,6 @@ impl PageScriptHost {
                 .content_security_reporting_endpoints,
             request_url,
         )
-    }
-
-    fn child_effective_enforced_content_security_policies(
-        &self,
-        child_handle: DomHandle,
-    ) -> Vec<ContentSecurityPolicy> {
-        let mut policies = Vec::new();
-        if self
-            .child_browsing_contexts
-            .get(&child_handle)
-            .is_some_and(|entry| entry.content_security_policy_inherited())
-        {
-            policies.extend(self.parent_effective_enforced_content_security_policies(child_handle));
-        }
-        policies.extend(
-            self.child_browsing_contexts
-                .get(&child_handle)
-                .map(|entry| entry.response_content_security_policies().to_vec())
-                .unwrap_or_default(),
-        );
-        policies
-    }
-
-    fn child_effective_response_content_security_report_only_policies(
-        &self,
-        child_handle: DomHandle,
-    ) -> Vec<ContentSecurityPolicy> {
-        let mut policies = Vec::new();
-        if self
-            .child_browsing_contexts
-            .get(&child_handle)
-            .is_some_and(|entry| entry.content_security_policy_inherited())
-        {
-            policies.extend(
-                self.parent_effective_response_content_security_report_only_policies(child_handle),
-            );
-        }
-        policies.extend(
-            self.child_browsing_contexts
-                .get(&child_handle)
-                .map(|entry| {
-                    entry
-                        .response_content_security_report_only_policies()
-                        .to_vec()
-                })
-                .unwrap_or_default(),
-        );
-        policies
-    }
-
-    fn parent_effective_enforced_content_security_policies(
-        &self,
-        child_handle: DomHandle,
-    ) -> Vec<ContentSecurityPolicy> {
-        let mut policies = match self.owner_dispatch_scope_for_node(child_handle) {
-            Some(OwnerDispatchScope::Child(parent)) => {
-                self.child_effective_enforced_content_security_policies(parent)
-            }
-            Some(OwnerDispatchScope::LightweightPopup(popup)) => self
-                .lightweight_popup_policy_container(popup)
-                .map(|policy| policy.response_content_security_policies.clone())
-                .unwrap_or_default(),
-            Some(OwnerDispatchScope::Top) => unsafe { &*self.document_runtime }
-                .response_content_security_policies()
-                .to_vec(),
-            None => Vec::new(),
-        };
-        if let Some(document) = self.dom_host().owner_document_handle(child_handle) {
-            policies.extend(
-                unsafe { &*self.document_runtime }
-                    .meta_content_security_policies_for_document(document),
-            );
-        }
-        policies
-    }
-
-    fn parent_effective_response_content_security_report_only_policies(
-        &self,
-        child_handle: DomHandle,
-    ) -> Vec<ContentSecurityPolicy> {
-        match self.owner_dispatch_scope_for_node(child_handle) {
-            Some(OwnerDispatchScope::Child(parent)) => {
-                self.child_effective_response_content_security_report_only_policies(parent)
-            }
-            Some(OwnerDispatchScope::LightweightPopup(popup)) => self
-                .lightweight_popup_policy_container(popup)
-                .map(|policy| {
-                    policy
-                        .response_content_security_report_only_policies
-                        .clone()
-                })
-                .unwrap_or_default(),
-            Some(OwnerDispatchScope::Top) => unsafe { &*self.document_runtime }
-                .response_content_security_report_only_policies()
-                .to_vec(),
-            None => Vec::new(),
-        }
-    }
-
-    fn child_effective_content_security_reporting_endpoints(
-        &self,
-        child_handle: DomHandle,
-    ) -> ContentSecurityPolicyReportingEndpoints {
-        let inherits_parent = self
-            .child_browsing_contexts
-            .get(&child_handle)
-            .is_some_and(|entry| entry.content_security_policy_inherited());
-        let has_own_response_policies = self
-            .child_browsing_contexts
-            .get(&child_handle)
-            .is_some_and(|entry| entry.has_response_content_security_policies());
-        if inherits_parent && !has_own_response_policies {
-            return self.parent_effective_content_security_reporting_endpoints(child_handle);
-        }
-        self.child_browsing_contexts
-            .get(&child_handle)
-            .map(|entry| entry.content_security_reporting_endpoints())
-            .unwrap_or_default()
-    }
-
-    fn parent_effective_content_security_reporting_endpoints(
-        &self,
-        child_handle: DomHandle,
-    ) -> ContentSecurityPolicyReportingEndpoints {
-        match self.owner_dispatch_scope_for_node(child_handle) {
-            Some(OwnerDispatchScope::Child(parent)) => {
-                self.child_effective_content_security_reporting_endpoints(parent)
-            }
-            Some(OwnerDispatchScope::LightweightPopup(popup)) => self
-                .lightweight_popup_policy_container(popup)
-                .map(|policy| policy.content_security_reporting_endpoints.clone())
-                .unwrap_or_default(),
-            Some(OwnerDispatchScope::Top) => unsafe { &*self.document_runtime }
-                .content_security_reporting_endpoints()
-                .clone(),
-            None => ContentSecurityPolicyReportingEndpoints::default(),
-        }
     }
 
     pub(crate) fn allows_eval_code_generation_by_csp<'s>(
