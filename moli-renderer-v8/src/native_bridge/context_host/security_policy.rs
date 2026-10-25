@@ -353,14 +353,8 @@ impl PageScriptHost {
                 })
             }
             OwnerDispatchScope::Child(handle) => {
-                let mut policy_container =
+                let policy_container =
                     self.child_browsing_context_policy_container_snapshot(handle)?;
-                policy_container.response_content_security_policies =
-                    self.child_effective_enforced_content_security_policies(handle);
-                policy_container.response_content_security_report_only_policies =
-                    self.child_effective_response_content_security_report_only_policies(handle);
-                policy_container.content_security_reporting_endpoints =
-                    self.child_effective_content_security_reporting_endpoints(handle);
                 Some(OwnerDocumentPolicySnapshot {
                     document_handle: self.child_browsing_context_document_handle(handle),
                     document_url: self.child_browsing_context_current_url(handle)?,
@@ -1142,7 +1136,7 @@ impl PageScriptHost {
                 violation.line_number = line;
                 violation.column_number = column;
             }
-            self.queue_inline_csp_violation_task(scope, owner, element, violation);
+            self.queue_content_security_policy_violation_task(scope, owner, element, violation);
         }
         enforced_violations.is_empty()
     }
@@ -1250,7 +1244,15 @@ impl PageScriptHost {
         }
         let location =
             crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
-        self.dispatch_document_connect_csp_check(scope, owner, check, Some(&location))
+        let (mut reports, mut enforced) = check.into_violations();
+        for violation in enforced.iter_mut().chain(&mut reports) {
+            location.apply_to(violation);
+            self.queue_content_security_policy_violation_task(scope, owner, None, violation);
+        }
+        match enforced.into_iter().next() {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
+        }
     }
 
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(
@@ -1269,7 +1271,7 @@ impl PageScriptHost {
         ) else {
             return DocumentCspOutcome::Allowed;
         };
-        self.dispatch_document_connect_csp_check(scope, owner, check, None)
+        self.dispatch_document_connect_csp_check(scope, owner, check)
     }
 
     fn dispatch_document_connect_csp_check<'s>(
@@ -1277,34 +1279,16 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         owner: OwnerDispatchScope,
         check: DocumentContentSecurityPolicyCheck,
-        source_location: Option<
-            &crate::content_security_policy::ContentSecurityPolicySourceLocation,
-        >,
     ) -> DocumentCspOutcome {
-        let (mut report_only_violation, mut enforced_violation) = check.into_violations();
-        if let Some(source_location) = source_location {
-            for violation in report_only_violation
-                .iter_mut()
-                .chain(&mut enforced_violation)
-            {
-                source_location.apply_to(violation);
-            }
+        let (reports, enforced) = check.into_violations();
+
+        for violation in reports.iter().chain(&enforced) {
+            self.queue_content_security_policy_violation_task(scope, owner, None, violation);
         }
-        let host_ptr: *mut PageScriptHost = self;
-        for violation in report_only_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+        match enforced.into_iter().next() {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
         }
-        let Some(first_violation) = enforced_violation.first().cloned() else {
-            return DocumentCspOutcome::Allowed;
-        };
-        for violation in enforced_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
-        }
-        DocumentCspOutcome::Blocked(first_violation)
     }
 
     fn document_connect_csp_check_for_owner_with_redirect_status(
