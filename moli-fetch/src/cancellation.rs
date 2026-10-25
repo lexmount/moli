@@ -230,6 +230,12 @@ impl FetchCancelHandle {
         }
     }
 
+    /// Waits for this consumer's cancellation, including an earlier cancel.
+    /// Multiple observers are woken without polling the transport.
+    pub async fn cancelled(&self) {
+        self.state.cancellation.cancelled().await;
+    }
+
     /// Returns whether the selected response's terminal transport result has
     /// committed. A committed result rejects later pending-only cancellation,
     /// but does not imply that unconditional cancellation has not occurred.
@@ -281,8 +287,42 @@ impl FetchCancelHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Wake, Waker},
+    };
+
     use super::FetchCancelHandle;
     use std::time::Instant;
+
+    #[tokio::test]
+    async fn cancellation_wakes_all_observers_and_remembers_earlier_cancel() {
+        #[derive(Default)]
+        struct WakeCount(AtomicUsize);
+        impl Wake for WakeCount {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let handle = FetchCancelHandle::new();
+        let first = handle.cancelled();
+        let second = handle.cancelled();
+        tokio::pin!(first, second);
+        let wakes = Arc::new(WakeCount::default());
+        let waker = Waker::from(wakes.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        assert!(second.as_mut().poll(&mut cx).is_pending());
+        handle.clone().cancel();
+        assert_eq!(wakes.0.load(Ordering::Relaxed), 2);
+        assert!(first.as_mut().poll(&mut cx).is_ready());
+        assert!(second.as_mut().poll(&mut cx).is_ready());
+        assert!(std::pin::pin!(handle.cancelled()).poll(&mut cx).is_ready());
+    }
 
     #[test]
     fn response_completion_commit_is_shared_and_resettable() {
@@ -301,6 +341,14 @@ mod tests {
         assert!(!observer.response_completion_is_committed());
         second.commit();
         assert!(observer.response_completion_is_committed());
+
+        handle.cancel();
+        assert!(observer.is_cancelled());
+        assert!(observer.response_completion_is_committed());
+
+        handle.begin_response_progress();
+        assert!(!observer.response_completion_is_committed());
+        assert!(observer.is_cancelled());
     }
 
     #[test]
