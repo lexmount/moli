@@ -56,13 +56,23 @@ pub(in crate::native_bridge::context_host) use parser_store::ChildDocumentParser
 fn configure_child_document_navigation_request(
     request: moli_fetch::Request,
     initiator_url: &Url,
+    source: Option<&crate::runtime::RendererNavigationInitiator>,
     browser_context: &moli_cookie_jar::BrowserCookieFacadeContext,
 ) -> moli_fetch::Request {
-    request
+    let request = request
         .with_browser_site_context(browser_context.clone())
         .with_subframe_navigation_cookie_context()
-        .with_initiator_url(initiator_url)
-        .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+        .with_initiator_url(initiator_url);
+    if let Some(source) = source {
+        // A srcdoc URL cannot recover its native origin or its referrer
+        // source. Both belong to the initiating Document's admission snapshot.
+        request
+            .with_request_origin(source.origin())
+            .with_fetch_referrer(source.url().as_str())
+            .expect("navigation initiator retains a parsed URL")
+    } else {
+        request.with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+    }
 }
 
 #[derive(Debug, Clone)]

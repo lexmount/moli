@@ -401,6 +401,10 @@ impl JsContextHost {
                 None,
                 ChildDocumentNavigationInitiator::FrameOwnerElement,
                 target_snapshot,
+            )
+            .with_request_initiator(
+                self.owner_dispatch_scope_for_node(handle)
+                    .and_then(|source| self.navigation_initiator_for_owner(source)),
             ),
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);

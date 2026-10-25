@@ -873,7 +873,9 @@ fn child_meta_refresh_callback<'s>(
     // Keep the Document's revision counter so a later identical declaration
     // cannot authorize a stale callback from an earlier schedule.
     task.timer_id = None;
-    let Some(initiator_url) = host.child_browsing_context_current_url(handle) else {
+    let Some(initiator) =
+        host.navigation_initiator_for_owner(super::OwnerDispatchScope::Child(handle))
+    else {
         return;
     };
     let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) else {
@@ -890,7 +892,7 @@ fn child_meta_refresh_callback<'s>(
         location,
         &navigation.url,
         navigation.delay_ms,
-        initiator_url,
+        initiator,
     );
 }
 
