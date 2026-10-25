@@ -1223,19 +1223,29 @@ impl DocumentRuntime {
         request: ContentSecurityPolicyScriptElementRequest<'_>,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let document_url = self.document_url();
+        let policy_url = self
+            .policy_container
+            .content_security_policy_self_url
+            .as_ref()
+            .unwrap_or(document_url);
         let policies = self.document_content_security_policies_for_optional_document(
             Some(self.document_handle()),
             &self.policy_container.response_content_security_policies,
             &self.policy_container.content_security_reporting_endpoints,
         );
-        document_script_element_url_policy_violation_from_document_policies(
+        let violation = document_script_element_url_policy_violation_from_document_policies(
             policies,
-            document_url,
+            policy_url,
             request_url,
             redirect_status,
             ContentSecurityPolicyDisposition::Enforce,
             request,
-        )
+        )?;
+        Some(DocumentContentSecurityPolicyViolation {
+            document_uri: crate::content_security_policy::csp_url_for_report(document_url),
+            source_file: crate::content_security_policy::csp_url_for_report(document_url),
+            ..violation
+        })
     }
 
     #[cfg(test)]
@@ -1276,17 +1286,27 @@ impl DocumentRuntime {
         request: ContentSecurityPolicyScriptElementRequest<'_>,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let document_url = self.document_url();
-        document_script_element_url_policy_violation(
+        let policy_url = self
+            .policy_container
+            .content_security_policy_self_url
+            .as_ref()
+            .unwrap_or(document_url);
+        let violation = document_script_element_url_policy_violation(
             &self
                 .policy_container
                 .response_content_security_report_only_policies,
             &self.policy_container.content_security_reporting_endpoints,
-            document_url,
+            policy_url,
             request_url,
             redirect_status,
             ContentSecurityPolicyDisposition::Report,
             request,
-        )
+        )?;
+        Some(DocumentContentSecurityPolicyViolation {
+            document_uri: crate::content_security_policy::csp_url_for_report(document_url),
+            source_file: crate::content_security_policy::csp_url_for_report(document_url),
+            ..violation
+        })
     }
 
     pub(crate) fn document_connect_csp_check_with_redirect_status(
@@ -3928,6 +3948,66 @@ mod tests {
                 .script_element_request_csp_violation(&allowed_url)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn script_requests_keep_inherited_self_separate_from_the_protected_document() {
+        let policy_url = Url::parse("https://example.test/parent").unwrap();
+        let policy_text = b"script-src 'self'; report-uri /report";
+        for document_url in [
+            "about:blank",
+            "about:srcdoc",
+            "data:text/html,local-document",
+        ] {
+            let document_url = Url::parse(document_url).unwrap();
+            let document = HtmlParser::SCRIPTING_ENABLED
+                .parse(document_url.clone(), "<!doctype html>".to_owned());
+            let mut runtime = DocumentRuntime::from_document(document);
+            runtime.set_initial_document_policy_container(
+                DocumentPolicyContainer::from_navigation_response_headers(
+                    &[
+                        ("Content-Security-Policy".to_owned(), policy_text.to_vec()),
+                        (
+                            "Content-Security-Policy-Report-Only".to_owned(),
+                            policy_text.to_vec(),
+                        ),
+                    ],
+                    &policy_url,
+                ),
+            );
+            for (request_url, blocked) in [
+                ("https://example.test/script.js", false),
+                ("https://other.test/script.js", true),
+            ] {
+                let request_url = Url::parse(request_url).unwrap();
+                let enforced = runtime.script_element_request_csp_violation(&request_url);
+                let reported =
+                    runtime.script_element_request_csp_report_only_violation(&request_url);
+                assert_eq!(enforced.is_some(), blocked);
+                assert_eq!(reported.is_some(), blocked);
+                for (violation, disposition) in enforced
+                    .iter()
+                    .map(|v| (v, ContentSecurityPolicyDisposition::Enforce))
+                    .chain(
+                        reported
+                            .iter()
+                            .map(|v| (v, ContentSecurityPolicyDisposition::Report)),
+                    )
+                {
+                    assert_eq!(violation.disposition, disposition);
+                    assert_eq!(
+                        violation.document_uri,
+                        crate::content_security_policy::csp_url_for_report(&document_url)
+                    );
+                    assert_eq!(violation.source_file, violation.document_uri);
+                    assert_eq!(
+                        violation.report_uri_endpoints,
+                        ["https://example.test/report"]
+                    );
+                }
+            }
+            assert_eq!(runtime.document_url(), &document_url);
+        }
     }
 
     #[test]
