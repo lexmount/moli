@@ -587,3 +587,44 @@ fn pdf_text_stroke_crosses_page_boundaries_without_duplicating_text() {
         "the second page must retain the outline crossing the page edge"
     );
 }
+
+#[test]
+fn filtered_hollow_text_keeps_one_searchable_semantic_copy() {
+    use moli_layout::{PaintBlendMode, PaintCompositeMode, PaintFilter};
+    for paint_first in [false, true] {
+        let mut snapshot = snapshot();
+        snapshot.push_fragment(PaintFragment::PushLayer {
+            opacity: 1.0,
+            blend_mode: PaintBlendMode::Normal,
+            composite: PaintCompositeMode::SrcOver,
+            clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 200.0, 100.0)),
+            transform: PaintTransform2D::IDENTITY,
+            filter: Some(PaintFilter::Blur(1.0)),
+        });
+        let mut run = text(&mut snapshot, "TEST", 50.0, false);
+        run.color = PaintColor::TRANSPARENT;
+        run.stroke = Some(moli_layout::PaintTextStroke {
+            width: 4.0,
+            color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            paint_first,
+        });
+        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+        snapshot.push_fragment(PaintFragment::PopLayer);
+        let doc = document(&snapshot, &options());
+        assert_eq!(
+            extracted(&doc, &[1, 2]),
+            "TEST",
+            "paint_first={paint_first}"
+        );
+        assert!(doc.objects.values().any(|object| {
+            object.as_stream().is_ok_and(|stream| {
+                stream
+                    .dict
+                    .get(b"Subtype")
+                    .and_then(|value| value.as_name())
+                    .ok()
+                    == Some(b"Image")
+            })
+        }));
+    }
+}

@@ -101,8 +101,9 @@ pub(super) fn draw(
     invisible: bool,
 ) -> Result<(), PdfError> {
     let text_stroke = run.stroke.filter(|stroke| {
-        !invisible && stroke.width.is_finite() && stroke.width > 0.0 && stroke.color.alpha > 0.0
+        stroke.width.is_finite() && stroke.width > 0.0 && stroke.color.alpha > 0.0
     });
+    let visible_stroke = text_stroke.filter(|_| !invisible);
     let has_fill = run.color.alpha > 0.0;
     if run.glyphs.is_empty()
         || !run.font_size.is_finite()
@@ -271,7 +272,7 @@ pub(super) fn draw(
         // the fill per `paint-order`. Only the first drawn pass carries the
         // searchable text; the other is emitted as outlines.
         let draw_stroke = |surface: &mut Surface<'_>, outlined: bool| {
-            if let Some(stroke) = text_stroke {
+            if let Some(stroke) = visible_stroke {
                 let paint = fill(stroke.color);
                 surface.set_fill(None);
                 surface.set_stroke(Some(Stroke {
@@ -290,11 +291,13 @@ pub(super) fn draw(
                 );
             }
         };
-        let stroke_first = text_stroke.is_some_and(|stroke| stroke.paint_first);
+        let stroke_first = visible_stroke.is_some_and(|stroke| stroke.paint_first);
         if stroke_first || !has_fill {
             draw_stroke(surface, outlined);
         }
-        if has_fill {
+        // Filtered hollow text still needs an invisible fill pass to retain
+        // its searchable text after the visible stroke was rasterized.
+        if has_fill || invisible {
             let mut paint = fill(run.color);
             if invisible {
                 paint.opacity = krilla::num::NormalizedF32::ZERO;
