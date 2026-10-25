@@ -120,7 +120,8 @@ impl ScriptVm {
         let (payload, binding) = admission.into_parts();
         let payload = match payload {
             crate::host::RuntimeScriptAdmissionPayload::Script(script)
-                if script.source_kind == crate::types::ScriptSourceKind::External =>
+                if script.source_kind == crate::types::ScriptSourceKind::External
+                    && !crate::script_vm::prepared_script_uses_external_module_graph(&script) =>
             {
                 let request = self.content_security_policy_script_element_request(&script);
                 if let Some(violation) = self
