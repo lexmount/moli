@@ -10,6 +10,9 @@ impl PageVm {
         task: RendererPageNetworkingTask,
     ) -> anyhow::Result<PageNetworkingTurnOutcome> {
         match task {
+            RendererPageNetworkingTask::WebTransport(task) => self
+                .apply_selected_page_webtransport_turn(task)
+                .map(|outcome| outcome.map_action(PageNetworkingTurnAction::WebTransport)),
             RendererPageNetworkingTask::WebRtc(task) => self
                 .apply_selected_page_webrtc_turn(task)
                 .map(|outcome| outcome.map_action(PageNetworkingTurnAction::WebRtc)),

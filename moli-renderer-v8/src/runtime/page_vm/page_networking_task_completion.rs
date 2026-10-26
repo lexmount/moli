@@ -18,6 +18,13 @@ impl PageVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         match action {
+            PageNetworkingTurnAction::WebTransport(action) => {
+                self.finish_selected_page_task_completion(
+                    action.into_page_task_completion(),
+                    loader,
+                )
+                .await?;
+            }
             PageNetworkingTurnAction::WebRtc(action) => {
                 self.finish_selected_page_task_completion(
                     action.into_page_task_completion(),

@@ -49,7 +49,10 @@ impl<'s> webidl::WebIdlConverter<'s> for Headers {
 }
 
 impl Headers {
-    pub(super) fn validate(self, scope: &mut v8::PinScope<'_, '_>) -> bool {
+    pub(super) fn into_entries(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<Vec<(String, String)>> {
         let pairs = match self {
             Self::Empty => Vec::new(),
             Self::Record(record) => record,
@@ -58,7 +61,7 @@ impl Headers {
                 for pair in sequence {
                     let Ok([key, value]) = <[_; 2]>::try_from(pair.0) else {
                         crate::util::throw_type_error(scope, "Header pairs must have length 2.");
-                        return false;
+                        return None;
                     };
                     pairs.push((key, value));
                 }
@@ -68,24 +71,24 @@ impl Headers {
         // Fill the complete Headers object before applying request-specific
         // restrictions; later invalid entries take precedence over these.
         let mut available_protocols = false;
+        let mut entries = Vec::with_capacity(pairs.len());
         for (name, value) in pairs {
-            let Some((name, _)) = crate::network_host::normalized_header_entry_or_throw(
+            let (name, value) = crate::network_host::normalized_header_entry_or_throw(
                 scope,
                 name.into(),
                 value.into(),
-            ) else {
-                return false;
-            };
+            )?;
             available_protocols |= name == "wt-available-protocols";
+            entries.push((name, value));
         }
         if available_protocols {
             crate::util::throw_type_error(
                 scope,
                 "WT-Available-Protocols is controlled by WebTransport.",
             );
-            return false;
+            return None;
         }
-        true
+        Some(entries)
     }
 }
 
@@ -93,9 +96,9 @@ impl Headers {
 #[webidl(prefix = "WebTransportHash")]
 pub(super) struct CertificateHash<'s> {
     #[webidl(required, converter = "raw", name = "algorithm")]
-    _algorithm: webidl::DomString16,
+    pub(super) algorithm: webidl::DomString16,
     #[webidl(required, converter = "raw", name = "value")]
-    _value: webidl::NonSharedBufferSource<'s>,
+    pub(super) value: webidl::NonSharedBufferSource<'s>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -108,7 +111,7 @@ pub(super) struct Options<'s> {
     #[webidl(nullable, converter = "enforce_range_unsigned_short")]
     pub(super) anticipated_concurrent_incoming_unidirectional_streams: Option<u16>,
     #[webidl(name = "congestionControl", converter = "enum", default = CongestionControl::Default)]
-    _congestion_control: CongestionControl,
+    pub(super) congestion_control: CongestionControl,
     #[webidl(converter = "enum")]
     pub(super) datagrams_readable_type: Option<ReadableType>,
     #[webidl(converter = "raw", default = Headers::default())]
@@ -132,18 +135,18 @@ pub(super) struct ConstructorArgs<'s> {
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "WebTransportCloseInfo")]
-struct CloseInfo {
+pub(super) struct CloseInfo {
     #[webidl(name = "closeCode", converter = "unsigned_long", default = 0)]
-    _close_code: u32,
+    pub(super) close_code: u32,
     #[webidl(name = "reason", converter = "usv_string", default = "")]
-    _reason: String,
+    pub(super) reason: String,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WebTransport.close")]
 pub(super) struct CloseArgs {
     #[webidl(name = "closeInfo", dictionary)]
-    _close_info: CloseInfo,
+    pub(super) close_info: CloseInfo,
 }
 
 #[derive(webidl::WebIdlDictionary)]

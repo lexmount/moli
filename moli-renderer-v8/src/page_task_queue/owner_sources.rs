@@ -1782,6 +1782,13 @@ impl RendererPageOwnedTaskSources {
 }
 
 impl RendererPageTaskProducerRoutes {
+    pub(crate) fn webtransport_sender(
+        &self,
+        root_document: crate::runtime::RendererDocumentToken,
+    ) -> super::RendererPageWebTransportSender {
+        super::RendererPageWebTransportSender::new(self.networking.clone(), root_document)
+    }
+
     pub(crate) fn webrtc_sender(
         &self,
         root_document: crate::runtime::RendererDocumentToken,

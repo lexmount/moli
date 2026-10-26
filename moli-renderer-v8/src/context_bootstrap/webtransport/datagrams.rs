@@ -17,6 +17,7 @@ const QUEUE: &str = "__moliWebTransportDatagramQueue";
 const WRITE_RESOLVER: &str = "__moliWebTransportDatagramWriteResolver";
 const WRITE_BYTES: &str = "__moliWebTransportDatagramWriteBytes";
 const WRITE_TIMESTAMP: &str = "__moliWebTransportDatagramWriteTimestamp";
+const WRITE_WRITABLE: &str = "__moliWebTransportDatagramWritable";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WebTransportDatagramDuplexStream, require_prototype)]
@@ -55,6 +56,10 @@ struct Writable<'s> {
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct Datagram<'s> {
+    #[webapi(slot = OWNER)]
+    owner: v8::Local<'s, v8::Object>,
+    #[webapi(slot = WRITE_WRITABLE)]
+    writable: v8::Local<'s, v8::Object>,
     #[webapi(slot = WRITE_RESOLVER)]
     resolver: v8::Local<'s, v8::Value>,
     #[webapi(slot = WRITE_BYTES)]
@@ -110,6 +115,7 @@ pub(super) fn install<'s>(
 pub(super) fn build<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
+    ready: v8::Local<'s, v8::Promise>,
     bytes: bool,
 ) -> v8::Local<'s, v8::Object> {
     super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
@@ -117,11 +123,7 @@ pub(super) fn build<'s>(
         "WebTransportDatagramDuplexStream",
     )
     .expect("datagram intrinsic");
-    let readable = if bytes {
-        super::super::stream_adapter::new_readable_byte_stream_object(scope)
-    } else {
-        super::super::stream_adapter::new_readable_stream_object(scope, None, 0.0, None)
-    };
+    let readable = streams::datagrams(scope, owner, ready, bytes);
     Duplex::new(owner, readable)
         .bind(scope)
         .expect("datagram duplex stream")
@@ -141,7 +143,7 @@ fn create_writable<'s>(
         throw_type_error(scope, "The send group belongs to another WebTransport.");
         return;
     }
-    if !connecting(scope, owner) {
+    if !connecting(scope, owner) && backend::connection(scope, owner).is_none() {
         invalid_state(scope);
         return;
     }
@@ -209,6 +211,10 @@ fn set_age<'s>(
         .map(|value| v8::Number::new(scope, value).into())
         .unwrap_or_else(|| v8::null(scope).into());
     set_private_value(scope, receiver, &key, value);
+    if key == INCOMING_AGE {
+        let owner = object(scope, receiver, OWNER);
+        backend::configure_incoming(scope, owner);
+    }
 }
 
 fn set_buffered<'s>(
@@ -223,6 +229,41 @@ fn set_buffered<'s>(
     let key = args.data().to_rust_string_lossy(scope);
     let value = v8::Integer::new_from_unsigned(scope, parsed.value.max(1));
     set_private_value(scope, receiver, &key, value.into());
+    if key == INCOMING_LIMIT {
+        let owner = object(scope, receiver, OWNER);
+        backend::configure_incoming(scope, owner);
+    }
+    if key == OUTGOING_LIMIT {
+        let writables = tasks::array(scope, receiver, WRITABLES);
+        let writables: Vec<_> = (0..writables.length())
+            .map(|index| {
+                v8::Local::<v8::Object>::try_from(
+                    writables
+                        .get_index(scope, index)
+                        .expect("datagram writable"),
+                )
+                .expect("writable object")
+            })
+            .collect();
+        for writable in writables {
+            relieve_backpressure(scope, receiver, writable);
+        }
+    }
+}
+
+pub(super) fn incoming_policy<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> (usize, Option<std::time::Duration>) {
+    let duplex = object(scope, owner, DATAGRAMS);
+    let maximum = get_private_value(scope, duplex, INCOMING_LIMIT)
+        .expect("incoming buffer limit")
+        .uint32_value(scope)
+        .expect("numeric limit") as usize;
+    let age = get_private_value(scope, duplex, INCOMING_AGE)
+        .and_then(|value| v8::Local::<v8::Number>::try_from(value).ok())
+        .and_then(|value| std::time::Duration::try_from_secs_f64(value.value() / 1000.0).ok());
+    (maximum, age)
 }
 
 fn set_group<'s>(
@@ -296,18 +337,181 @@ fn write_datagram<'s>(
     }
     let bytes = bytes.to_vec(scope);
     let bytes = crate::blob::array_buffer_from_bytes(scope, bytes).expect("datagram byte copy");
-    let datagram = Datagram::new(resolver.into(), bytes.into(), timestamp)
+    let datagram = Datagram::new(owner, writable, resolver.into(), bytes.into(), timestamp)
         .bind(scope)
         .expect("buffered datagram");
+    if !connecting(scope, owner) && backend::connection(scope, owner).is_none() {
+        reject(scope, resolver, "The WebTransport session is closed.");
+        return;
+    }
     let queue = tasks::array(scope, writable, QUEUE);
     tasks::push(scope, queue, datagram.into());
+    if backend::connection(scope, owner).is_some() {
+        send(scope, owner, datagram);
+    }
+    relieve_backpressure(scope, duplex, writable);
+}
+
+fn relieve_backpressure<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    duplex: v8::Local<'s, v8::Object>,
+    writable: v8::Local<'s, v8::Object>,
+) {
+    let queue = tasks::array(scope, writable, QUEUE);
     let limit = get_private_value(scope, duplex, OUTGOING_LIMIT)
-        .expect("datagram buffering limit")
+        .expect("outgoing buffer limit")
         .uint32_value(scope)
-        .unwrap();
-    if queue.length() < limit {
+        .expect("numeric limit");
+    if queue.length() >= limit {
+        return;
+    }
+    let writes: Vec<_> = (0..queue.length())
+        .map(|index| {
+            let datagram = v8::Local::<v8::Object>::try_from(
+                queue.get_index(scope, index).expect("buffered datagram"),
+            )
+            .expect("datagram object");
+            tasks::resolver(
+                get_private_value(scope, datagram, WRITE_RESOLVER).expect("write resolver"),
+            )
+        })
+        .collect();
+    for write in writes {
+        let undefined = v8::undefined(scope);
+        write.resolve(scope, undefined.into());
+    }
+}
+
+fn reject<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+    message: &str,
+) {
+    let error = super::super::build_web_transport_error(
+        scope,
+        &super::super::WebTransportErrorClonePayload {
+            message: message.encode_utf16().collect(),
+            source: super::super::WebTransportErrorSource::Session,
+            stream_error_code: None,
+        },
+    )
+    .expect("datagram error");
+    resolver.reject(scope, error.into());
+}
+
+fn send<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    datagram: v8::Local<'s, v8::Object>,
+) {
+    let resolver = tasks::resolver(
+        get_private_value(scope, datagram, WRITE_RESOLVER).expect("write resolver"),
+    );
+    let Some((session, runner)) = backend::connection(scope, owner) else {
+        reject(scope, resolver, "The WebTransport session is closed.");
+        return;
+    };
+    let Some(producer) = networking::register(scope, owner, datagram) else {
+        return;
+    };
+    let value = get_private_value(scope, datagram, WRITE_BYTES).expect("private datagram bytes");
+    let bytes = webidl::convert::<webidl::NonSharedBufferSource>(
+        scope,
+        value,
+        webidl::Context::member("WebTransport", "datagrams"),
+    )
+    .expect("private datagram buffer")
+    .to_vec(scope);
+    let duplex = object(scope, owner, DATAGRAMS);
+    let timestamp = get_private_value(scope, datagram, WRITE_TIMESTAMP)
+        .expect("datagram timestamp")
+        .number_value(scope)
+        .expect("numeric timestamp");
+    let age = get_private_value(scope, duplex, OUTGOING_AGE)
+        .and_then(|value| v8::Local::<v8::Number>::try_from(value).ok())
+        .map(|value| value.value());
+    let remaining_ms =
+        age.map(|age| age - (moli_time::monotonic_timestamp_seconds() * 1000.0 - timestamp));
+    let expired = remaining_ms.is_some_and(|age| age <= 0.0);
+    let deadline = remaining_ms
+        .filter(|age| age.is_finite() && *age > 0.0)
+        .and_then(|age| std::time::Duration::try_from_secs_f64(age / 1000.0).ok());
+    runner.spawn(async move {
+        let result = if expired || bytes.len() > session.max_datagram_size() {
+            Ok(())
+        } else if let Some(deadline) = deadline {
+            match tokio::time::timeout(deadline, session.send_datagram_wait(bytes.into())).await {
+                Ok(result) => result.map_err(|error| error.to_string()),
+                Err(_) => Ok(()), // Expired unreliable payload, not a session failure.
+            }
+        } else {
+            session
+                .send_datagram_wait(bytes.into())
+                .await
+                .map_err(|error| error.to_string())
+        };
+        producer.send(networking::Completion::Datagram(result));
+    });
+}
+
+pub(super) fn complete<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    datagram: v8::Local<'s, v8::Object>,
+    result: Result<(), String>,
+) {
+    let resolver = tasks::resolver(
+        get_private_value(scope, datagram, WRITE_RESOLVER).expect("write resolver"),
+    );
+    let writable = object(scope, datagram, WRITE_WRITABLE);
+    let previous = tasks::array(scope, writable, QUEUE);
+    let remaining = v8::Array::new(scope, 0);
+    for index in 0..previous.length() {
+        let value = previous.get_index(scope, index).expect("queued datagram");
+        if !value.strict_equals(datagram.into()) {
+            tasks::push(scope, remaining, value);
+        }
+    }
+    set_private_value(scope, writable, QUEUE, remaining.into());
+    if let Err(message) = result {
+        let error = tasks::fail(scope, owner, &message);
+        resolver.reject(scope, error.into());
+    } else {
         let undefined = v8::undefined(scope);
         resolver.resolve(scope, undefined.into());
+        let duplex = object(scope, owner, DATAGRAMS);
+        relieve_backpressure(scope, duplex, writable);
+    }
+}
+
+pub(super) fn connected<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    maximum_size: usize,
+) {
+    let duplex = object(scope, owner, DATAGRAMS);
+    let maximum_size = v8::Integer::new_from_unsigned(scope, maximum_size as u32);
+    set_private_value(scope, duplex, MAX_SIZE, maximum_size.into());
+    let writables = tasks::array(scope, duplex, WRITABLES);
+    let mut queued = Vec::new();
+    for index in 0..writables.length() {
+        let writable = v8::Local::<v8::Object>::try_from(
+            writables
+                .get_index(scope, index)
+                .expect("datagram writable"),
+        )
+        .expect("writable");
+        let queue = tasks::array(scope, writable, QUEUE);
+        for index in 0..queue.length() {
+            let data = v8::Local::<v8::Object>::try_from(
+                queue.get_index(scope, index).expect("datagram record"),
+            )
+            .expect("datagram record object");
+            queued.push(data);
+        }
+    }
+    for data in queued {
+        send(scope, owner, data);
     }
 }
 
@@ -360,4 +564,19 @@ pub(super) fn finish_failure<'s>(
         super::super::stream_adapter::error_writable_stream_with_value(scope, writable, error);
     }
     super::super::stream_adapter::error_stream(scope, failure.readable, error);
+}
+
+pub(super) fn finish_close<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    duplex: v8::Local<'s, v8::Object>,
+    error: v8::Local<'s, v8::Value>,
+) {
+    let failure = prepare_failure(scope, duplex);
+    for write in failure.writes {
+        write.reject(scope, error);
+    }
+    for writable in failure.writables {
+        super::super::stream_adapter::error_writable_stream_with_value(scope, writable, error);
+    }
+    super::super::stream_adapter::close_stream(scope, failure.readable);
 }

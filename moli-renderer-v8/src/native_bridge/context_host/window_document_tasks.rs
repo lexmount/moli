@@ -101,6 +101,10 @@ impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
         &self.pending[index]
     }
 
+    pub(super) fn retain(&mut self, keep: impl FnMut(&PendingWindowTask<I, K, P, T>) -> bool) {
+        self.pending.retain(keep);
+    }
+
     pub(super) fn remove_at(&mut self, index: usize) -> PendingWindowTask<I, K, P, T> {
         self.pending.remove(index)
     }
