@@ -1,4 +1,87 @@
-use std::{future::Future, sync::Arc};
+use std::{
+    cell::RefCell,
+    future::Future,
+    marker::PhantomData,
+    rc::Rc,
+    sync::{Arc, mpsc},
+    thread,
+};
+
+/// Browser-context-owned executor for native resource coordination.
+///
+/// The renderer and Worker executors may spend an entire turn running author
+/// JavaScript. Resource futures must continue submitting requests and consuming
+/// native responses during that turn. Only this thread-affine owner can stop
+/// and join the executor; request-side runners cannot extend its lifetime.
+#[derive(Debug)]
+pub(in crate::network) struct RendererResourceTaskOwner {
+    runner: RendererResourceTaskRunner,
+    shutdown: RefCell<Option<tokio::sync::oneshot::Sender<()>>>,
+    thread: Option<thread::JoinHandle<()>>,
+    _thread_affine: PhantomData<Rc<()>>,
+}
+
+impl RendererResourceTaskOwner {
+    pub(in crate::network) fn new() -> Self {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let thread = thread::Builder::new()
+            .name("lm-resource-io".to_owned())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .max_blocking_threads(
+                        crate::tokio_blocking_budget::tokio_blocking_thread_budget(),
+                    )
+                    .build()
+                    .expect("browser resource executor should initialize");
+                if ready_tx.send(runtime.handle().clone()).is_ok() {
+                    let _ = runtime.block_on(shutdown_rx);
+                }
+                // Dropping the runtime cancels pending futures and joins its
+                // blocking pool before the owner joins this thread.
+            })
+            .expect("browser resource executor thread should start");
+        let handle = match ready_rx.recv() {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = thread.join();
+                panic!("browser resource executor did not initialize: {error}");
+            }
+        };
+        Self {
+            runner: RendererResourceTaskRunner::from_tokio_handle(handle),
+            shutdown: RefCell::new(Some(shutdown_tx)),
+            thread: Some(thread),
+            _thread_affine: PhantomData,
+        }
+    }
+
+    pub(in crate::network) fn runner(&self) -> RendererResourceTaskRunner {
+        self.runner.clone()
+    }
+
+    pub(in crate::network) fn request_shutdown(&self) {
+        if let Some(shutdown) = self.shutdown.borrow_mut().take() {
+            let _ = shutdown.send(());
+        }
+    }
+
+    pub(in crate::network) fn join(&mut self) {
+        self.request_shutdown();
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::error!("browser resource executor panicked");
+        }
+    }
+}
+
+impl Drop for RendererResourceTaskOwner {
+    fn drop(&mut self) {
+        self.join();
+    }
+}
 
 /// Executor selected by a concrete resource-loading authority.
 ///
@@ -12,7 +95,9 @@ pub struct RendererResourceTaskRunner {
 }
 
 impl RendererResourceTaskRunner {
-    /// Captures the runtime that owns a production execution context.
+    /// Captures an explicitly supplied runtime, including test executors.
+    /// Browser contexts supply their independent resource executor instead of
+    /// capturing the renderer's JavaScript executor.
     pub fn from_current_tokio() -> anyhow::Result<Self> {
         let handle = tokio::runtime::Handle::try_current().map_err(|error| {
             anyhow::anyhow!("resource authority requires a Tokio runtime: {error}")
