@@ -2756,6 +2756,50 @@ async fn live_page_replacement_cannot_adopt_a_superseded_commit_reply() {
     page.close_async().await.unwrap();
 }
 
+#[tokio::test]
+async fn live_page_replacement_is_enqueued_before_the_owned_wait_is_polled() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/before-admission").unwrap(),
+        "<p>original</p>",
+    )
+    .await;
+    let body = completed_raw_body_for_replacement_test(b"<p>admitted</p>").await;
+    let prepared = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/admitted").unwrap(),
+        "text/html",
+        body,
+    )
+    .await;
+    let (entered, release) = runtime.install_owner_command_dispatch_gate_for_testing();
+    let permit = prepared.issue_commit_permit();
+    let pending = prepared.start_commit_page_replacement(permit).unwrap();
+    // No task has polled pending.wait(). A renderer-side signal proves the
+    // commit was already enqueued by synchronous protocol admission.
+    tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("renderer must receive the commit before its reply wait is polled");
+    release.send(()).unwrap();
+    page.adopt_document_replacement(pending.wait().await.unwrap())
+        .unwrap();
+    page.take_committed_document_post_response_continuation()
+        .unwrap()
+        .release();
+    assert!(
+        serialize_html_for_renderer_page(&page)
+            .await
+            .contains("admitted")
+    );
+    page.close_async().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn live_page_replacement_stage_reply_drains_large_body_and_finishes_scripts() {
     let runtime = JsRuntime::initialize();

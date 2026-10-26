@@ -230,6 +230,7 @@ pub(crate) type CdpBackgroundNavigationCompletionReceiver =
     mpsc::UnboundedReceiver<BackgroundNavigationCompletion>;
 pub(crate) type CdpRendererPublicationReceiver = moli_core::RendererOutputTransportReceiver;
 pub(crate) struct CdpSchedulerEventReceivers {
+    pub(crate) protocol_state_request_rx: moli_protocol::conn::ProtocolStateRequestReceiver,
     pub(crate) document_activity_completion_rx:
         mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     pub(crate) background_event_rx: CdpBackgroundEventReceiver,
@@ -248,6 +249,7 @@ pub(crate) struct CdpSchedulerEventReceivers {
 /// value in the caller makes ownership unambiguous: once dequeued, the input
 /// is completed before the command wait selects again.
 pub(crate) enum CdpSchedulerInterleavedInput {
+    ProtocolStateRequest(moli_protocol::conn::ProtocolStateRequest),
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
@@ -258,6 +260,9 @@ impl CdpSchedulerEventReceivers {
     pub(crate) async fn recv_interleaved_input(&mut self) -> Option<CdpSchedulerInterleavedInput> {
         tokio::select! {
             biased;
+            maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
+                maybe_request.map(CdpSchedulerInterleavedInput::ProtocolStateRequest)
+            }
             maybe_completion = self.document_activity_completion_rx.recv() => {
                 maybe_completion.map(CdpSchedulerInterleavedInput::DocumentActivityCompletion)
             }
@@ -796,6 +801,10 @@ impl CdpScheduler {
             }
         }
         scheduler.conn.enable_default_target_on_auto_attach();
+        let protocol_state_request_rx = scheduler
+            .conn
+            .take_protocol_state_requests()
+            .expect("scheduler takes its state request receiver once");
         let (background_event_tx, background_event_rx) = mpsc::unbounded_channel();
         scheduler
             .conn
@@ -818,6 +827,7 @@ impl CdpScheduler {
         (
             scheduler,
             CdpSchedulerEventReceivers {
+                protocol_state_request_rx,
                 document_activity_completion_rx,
                 background_event_rx,
                 background_navigation_completion_rx,
@@ -2054,6 +2064,10 @@ impl CdpScheduler {
         input: CdpSchedulerInterleavedInput,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         match input {
+            CdpSchedulerInterleavedInput::ProtocolStateRequest(request) => {
+                self.apply_protocol_state_request(request);
+                Ok(ProtocolOutputSequence::default())
+            }
             CdpSchedulerInterleavedInput::DocumentActivityCompletion(completion) => {
                 let outcome = self.conn.complete_document_activity_update(completion);
                 self.apply_renderer_owner_turn_outcome(receivers, outcome)
@@ -2072,6 +2086,13 @@ impl CdpScheduler {
                 Ok(self.ingest_renderer_publication_now(publication).await)
             }
         }
+    }
+
+    pub(crate) fn apply_protocol_state_request(
+        &mut self,
+        request: moli_protocol::conn::ProtocolStateRequest,
+    ) {
+        request.apply(&mut self.conn);
     }
 
     fn front_protocol_residence_is_main_document_load_action_for_context(

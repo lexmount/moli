@@ -1,7 +1,11 @@
-use std::{future::Future, marker::PhantomData, panic::AssertUnwindSafe};
+use std::future::Future;
 
-use futures_util::FutureExt;
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::sync::mpsc;
+
+pub(super) use moli_protocol::{
+    OwnedProtocolWaitFailure as CommandWaitFailure, OwnedProtocolWaitTask as CommandWaitTask,
+    spawn_owned_protocol_wait as spawn_owned_wait,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct CommandWaitIdentity {
@@ -9,70 +13,9 @@ pub(super) struct CommandWaitIdentity {
     pub turn: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CommandWaitFailure {
-    Panicked,
-    Cancelled,
-}
-
-impl CommandWaitFailure {
-    pub(super) fn message(self) -> &'static str {
-        match self {
-            Self::Panicked => "CommandWaitPanicked",
-            Self::Cancelled => "CommandWaitCancelled",
-        }
-    }
-}
-
 pub(super) struct CommandWaitCompletion<T> {
     pub identity: CommandWaitIdentity,
     pub result: Result<T, CommandWaitFailure>,
-}
-
-/// Owned by the existing in-flight entry. Dropping that entry revokes its
-/// external wait even when the actor itself is cancelled before normal exit.
-pub(super) struct CommandWaitTask(Option<JoinHandle<()>>);
-
-impl CommandWaitTask {
-    pub(super) fn abort(&self) {
-        if let Some(task) = &self.0 {
-            task.abort();
-        }
-    }
-
-    pub(super) async fn cancel_and_join(mut self) {
-        if let Some(task) = self.0.take() {
-            task.abort();
-            // This joins cancellation/destruction, not the original external
-            // operation: the wait is no longer polled for business progress.
-            let _ = task.await;
-        }
-    }
-}
-
-impl Drop for CommandWaitTask {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
-
-struct CompletionOnDrop<T, C: FnOnce(Result<T, CommandWaitFailure>)> {
-    complete: Option<C>,
-    result_type: PhantomData<fn(T)>,
-}
-
-impl<T, C: FnOnce(Result<T, CommandWaitFailure>)> CompletionOnDrop<T, C> {
-    fn finish(mut self, result: Result<T, CommandWaitFailure>) {
-        self.complete.take().expect("one wait completion authority")(result);
-    }
-}
-
-impl<T, C: FnOnce(Result<T, CommandWaitFailure>)> Drop for CompletionOnDrop<T, C> {
-    fn drop(&mut self) {
-        if let Some(complete) = self.complete.take() {
-            complete(Err(CommandWaitFailure::Cancelled));
-        }
-    }
 }
 
 pub(super) fn spawn_command_wait<F, T>(
@@ -90,27 +33,6 @@ where
         // entries. Dropping the undeliverable result releases its owned work.
         let _ = sender.send(CommandWaitCompletion { identity, result });
     })
-}
-
-pub(super) fn spawn_owned_wait<F, T, C>(wait: F, complete: C) -> CommandWaitTask
-where
-    F: Future<Output = T> + 'static,
-    T: 'static,
-    C: FnOnce(Result<T, CommandWaitFailure>) + 'static,
-{
-    // Construct the cancellation authority before spawning: abort-before-first-
-    // poll must notify the actor too, not only cancellation of a polled wait.
-    let completion = CompletionOnDrop {
-        complete: Some(complete),
-        result_type: PhantomData,
-    };
-    CommandWaitTask(Some(tokio::task::spawn_local(async move {
-        let result = AssertUnwindSafe(wait)
-            .catch_unwind()
-            .await
-            .map_err(|_| CommandWaitFailure::Panicked);
-        completion.finish(result);
-    })))
 }
 
 #[cfg(test)]

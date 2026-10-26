@@ -149,6 +149,7 @@ pub(crate) use navigation::emit_prepared_child_frame_tree_background_events;
 pub(crate) use navigation::navigation_cookie_access_report;
 pub(crate) use navigation::{
     MaterializedNavigationCompletion, complete_materialized_navigation_into_buffer_async,
+    complete_prepared_navigation_into_buffer_async,
     complete_superseded_intercepted_navigation_into_buffer_async,
     emit_prepared_child_frame_activity, push_superseded_navigation_result,
 };

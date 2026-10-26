@@ -650,6 +650,50 @@ impl TargetRuntimeSlot {
             .settle_background_navigation_completion(token)
     }
 
+    pub(crate) fn supervise_background_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+        task: crate::conn::OwnedProtocolWaitTask,
+    ) -> bool {
+        self.page_slot.supervise_background_navigation(token, task)
+    }
+
+    pub(crate) fn has_supervised_background_navigation(&self) -> bool {
+        self.page_slot.has_supervised_background_navigation()
+    }
+
+    pub(crate) fn register_renderer_document_commit(
+        &mut self,
+        token: &DocumentNavigationToken,
+        attachment: RendererAgentAttachmentId,
+        fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    ) -> bool {
+        self.page_slot
+            .register_renderer_document_commit(token, attachment, fact)
+    }
+
+    pub(crate) fn observe_prepared_renderer_document_commit(
+        &mut self,
+        fact: &moli_core::page::RendererMainDocumentCommit,
+    ) -> Option<bool> {
+        self.page_slot.observe_prepared_renderer_document_commit(
+            self.devtools_renderer_channel
+                .current()
+                .map(|attachment| attachment.id()),
+            fact,
+        )
+    }
+
+    pub(crate) fn frame_tree_document_loader_id(&self) -> Option<&str> {
+        self.page_slot.frame_tree_document_loader_id()
+    }
+
+    pub(crate) fn take_background_navigation_task(
+        &mut self,
+    ) -> Option<crate::conn::OwnedProtocolWaitTask> {
+        self.page_slot.take_background_navigation_task()
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.page_slot.has_inflight_background_navigation()
     }

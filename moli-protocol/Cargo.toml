@@ -10,6 +10,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0.100"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 base64 = "0.22"
 bytes = "1"
 indexmap = "2.14.2"

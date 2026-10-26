@@ -470,7 +470,7 @@ async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
     assert!(format!("{error:#}").contains("failed to read page body from stream"));
 }
 
-fn navigation_fixture() -> (
+pub(super) fn navigation_fixture() -> (
     TestContext,
     DocumentNavigationToken,
     NavigationDispatchState,

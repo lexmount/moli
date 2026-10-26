@@ -1405,6 +1405,10 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    request = receivers.protocol_state_request_rx.recv() => {
+                        let Some(request) = request else { break; };
+                        scheduler.apply_protocol_state_request(request);
+                    }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {
                             break;
@@ -1540,6 +1544,10 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                request = receivers.protocol_state_request_rx.recv() => {
+                    let Some(request) = request else { break; };
+                    scheduler.apply_protocol_state_request(request);
+                }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {
                         break;

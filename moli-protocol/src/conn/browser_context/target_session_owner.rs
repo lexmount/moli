@@ -642,7 +642,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
 
     pub(super) fn frame_tree_loader_id(&self) -> Option<String> {
         self.runtime_slot()
-            .committed_document_loader_id()
+            .frame_tree_document_loader_id()
             .map(str::to_owned)
             .or_else(|| {
                 self.target_owner_state()

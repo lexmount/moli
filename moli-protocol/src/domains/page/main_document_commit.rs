@@ -51,12 +51,17 @@ pub(in crate::domains) async fn project_main_document_commit_async(
         else {
             continue;
         };
-        let Some(current_loader_id) =
-            conn.target_session_owner_frame_tree_loader_id_for_owner(owner)
-        else {
-            continue;
-        };
-        if current_frame_id != commit.frame_id || current_loader_id != commit.loader_id {
+        let loader_is_current = conn
+            .target_session_owner_frame_tree_loader_id_for_owner(owner)
+            .as_deref()
+            == Some(commit.loader_id.as_str());
+        // A prepared transaction is the authority even when a test/client
+        // reuses a loader id. Never let the legacy loader check admit a fact
+        // which that transaction explicitly rejected.
+        let commit_is_current = conn
+            .observe_prepared_renderer_document_commit_for_owner(owner, &commit)
+            .unwrap_or(loader_is_current);
+        if current_frame_id != commit.frame_id || !commit_is_current {
             // Stream routing binds the publication to an exact Page
             // generation. This additional loader check prevents a queued
             // commit fact from being projected after replacement.

@@ -2,6 +2,60 @@ use super::*;
 use moli_fetch::FetchCancelHandle;
 
 #[test]
+fn native_commit_visibility_requires_the_admitted_fact_and_current_attachment() {
+    use moli_core::page::{RendererAgentAttachmentId, RendererMainDocumentCommit};
+    let mut slot = TargetPageSlot::default();
+    let token = slot.start_document_navigation("target".into(), "loader".into());
+    let attachment = RendererAgentAttachmentId::allocate();
+    let fact = std::sync::Arc::new(RendererMainDocumentCommit {
+        frame_id: token.target_id.clone(),
+        loader_id: token.loader_id.clone(),
+        url: "https://example.test/committed".into(),
+        unreachable_url: None,
+        security_origin: "https://example.test".into(),
+        secure_context_type: "Secure".into(),
+        document_referrer: None,
+        timestamp: 1.0,
+        session_history_position: None,
+        browsing_context_group: None,
+    });
+    assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+    assert_eq!(slot.frame_tree_document_loader_id(), None);
+    assert_eq!(
+        slot.observe_prepared_renderer_document_commit(
+            Some(RendererAgentAttachmentId::allocate()),
+            &fact,
+        ),
+        Some(false)
+    );
+    let mut different_fact = fact.as_ref().clone();
+    different_fact.timestamp += 1.0;
+    assert_eq!(
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &different_fact),
+        Some(false)
+    );
+    assert_eq!(slot.frame_tree_document_loader_id(), None);
+    assert_eq!(
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact),
+        Some(true)
+    );
+    assert_eq!(slot.frame_tree_document_loader_id(), Some("loader"));
+    assert!(
+        slot.accepts_pending_document_navigation_event(&token),
+        "native visibility must not finish the still-unadopted navigation"
+    );
+
+    let replacement = slot.start_document_navigation("target".into(), "loader".into());
+    assert!(!slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+    assert_eq!(
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact),
+        None
+    );
+    assert_eq!(slot.frame_tree_document_loader_id(), None);
+    assert!(slot.accepts_pending_document_navigation_event(&replacement));
+}
+
+#[test]
 fn background_phase_tracks_result_receipt_independently_of_document_commit() {
     for commit_first in [false, true] {
         let mut slot = TargetPageSlot::default();

@@ -195,6 +195,10 @@ async fn handle_bidi_session_socket_local(
         tokio::select! {
             biased;
             _ = control.shutdown_requested() => break,
+            maybe_request = receivers.protocol_state_request_rx.recv() => {
+                let Some(request) = maybe_request else { break; };
+                scheduler.apply_protocol_state_request(request);
+            }
             maybe_message = actor.socket.recv() => {
                 let Some(message) = maybe_message else {
                     break;
@@ -3173,11 +3177,11 @@ async fn drain_bidi_background_navigation_before_command(
 ) -> Result<BidiDevToolsEventSources, BidiRendererOutputTransportFailure> {
     let mut event_sources = drain_ready_bidi_background_navigation(scheduler, receivers).await?;
     while scheduler.has_inflight_background_navigation() {
-        let Some(completion) = receivers.background_navigation_completion_rx.recv().await else {
+        let Some(input) = receivers.recv_interleaved_input().await else {
             return Ok(event_sources);
         };
         match scheduler
-            .drain_background_navigation_completion_with_progress_barrier(completion, receivers)
+            .complete_interleaved_scheduler_input(receivers, input)
             .await
         {
             Ok(output) => event_sources.extend_protocol_output(output),

@@ -53,6 +53,7 @@ mod fetch_support;
 mod inspector_route;
 mod navigation_error;
 mod output;
+mod owned_wait_task;
 mod page_state;
 mod popup_activation_work;
 mod popup_navigation_work;
@@ -67,7 +68,11 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+mod state_access;
 pub(crate) use state::PendingPopupNavigation;
+pub use state_access::{
+    BackgroundPreparedNavigationCommit, ProtocolStateRequest, ProtocolStateRequestReceiver,
+};
 mod target;
 mod top_level_navigation_work;
 
@@ -126,6 +131,9 @@ pub use fetch_support::{
 pub use moli_protocol_cdp::{
     CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
+};
+pub use owned_wait_task::{
+    OwnedProtocolWaitFailure, OwnedProtocolWaitTask, spawn_owned_protocol_wait,
 };
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
@@ -1222,6 +1230,7 @@ pub struct CdpConnection {
     // renderer/browser owner into the outer CDP scheduler; they should not grow
     // into protocol routing state.
     scheduler_hooks: CdpSchedulerHooks,
+    state_mailbox: state_access::ProtocolStateMailbox,
     target_host_lifecycle_observer: Option<CdpTargetHostLifecycleObserver>,
 
     // Scheduler-visible queues that are still stored on the connection while
@@ -1525,6 +1534,7 @@ impl CdpConnection {
             tracing_state: crate::domains::tracing::TracingState::default(),
             download_registry: SharedDownloadRegistry::default(),
             scheduler_hooks: CdpSchedulerHooks::default(),
+            state_mailbox: state_access::ProtocolStateMailbox::default(),
             target_host_lifecycle_observer: None,
             scheduler_state: CdpConnectionSchedulerState::default(),
             standalone_navigation_engine,
@@ -1628,6 +1638,17 @@ impl CdpConnection {
     pub fn has_inflight_background_navigation(&self) -> bool {
         self.browser_contexts()
             .any(BrowserContext::has_inflight_background_navigation)
+    }
+
+    /// Removes the owned waits before the actor releases renderer and network
+    /// owners. Callers abort all of them before joining cancellation.
+    pub fn take_background_navigation_tasks(&mut self) -> Vec<OwnedProtocolWaitTask> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .flat_map(|context| context.page_targets.iter_mut())
+            .filter_map(|target| target.runtime_slot.take_background_navigation_task())
+            .collect()
     }
 
     pub fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
@@ -1816,6 +1837,28 @@ impl CdpConnection {
     ) -> Option<String> {
         self.runtime_session_owner_slot_for_owner(owner)
             .and_then(|slot| slot.current_document_loader_id().map(str::to_owned))
+    }
+
+    pub(crate) fn observe_prepared_renderer_document_commit_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        commit: &moli_core::page::RendererMainDocumentCommit,
+    ) -> Option<bool> {
+        let accepted = self
+            .runtime_session_owner_slot_mut_for_owner(owner)?
+            .observe_prepared_renderer_document_commit(commit)?;
+        if !accepted {
+            return Some(false);
+        }
+        let Ok(target_url) =
+            url::Url::parse(commit.unreachable_url.as_deref().unwrap_or(&commit.url))
+        else {
+            return Some(false);
+        };
+        Some(
+            self.commit_loaded_navigation_target_identity_for_owner(owner, commit, &target_url)
+                .is_some(),
+        )
     }
 
     #[cfg(test)]
@@ -2506,13 +2549,27 @@ impl CdpConnection {
     ) -> Vec<BackgroundProtocolEvent> {
         let completion = match completion {
             crate::domains::page::BackgroundNavigationCompletion::Lifecycle(completion) => {
-                if !self.settle_background_navigation_completion(completion.navigation_token()) {
-                    tracing::debug!(
-                        token = ?completion.navigation_token(),
-                        "background navigation completion did not match the target-owned request"
-                    );
-                }
                 completion
+            }
+            crate::domains::page::BackgroundNavigationCompletion::PreparedDocument(completion) => {
+                self.settle_background_navigation_completion(&completion.token);
+                let command_id = completion.state.navigate_id;
+                let session_id = completion.state.owner.session_id().map(str::to_owned);
+                let mut output = CommandOutputBuffer::default();
+                crate::domains::page::complete_prepared_navigation_into_buffer_async(
+                    self,
+                    &mut output,
+                    *completion,
+                    command_context,
+                )
+                .await;
+                Self::append_navigation_completion_output(
+                    output,
+                    command_id,
+                    session_id.as_deref(),
+                    command_context,
+                );
+                return Vec::new();
             }
             crate::domains::page::BackgroundNavigationCompletion::MainDocumentBody(completion) => {
                 completion.record_if_current(self);
@@ -2533,6 +2590,26 @@ impl CdpConnection {
         // command id. The target retains its NavigationEngine independently of
         // this completion, including when the completion is stale.
         let completion = completion.materialize(self);
+        let (token, state, navigation) = completion.into_parts();
+        let navigation = match navigation {
+            crate::domains::network::MaterializedNavigationLoadOutcome::ResponseCommitReady(
+                navigation,
+            ) if self.protocol_state_access().is_some()
+                && self.accepts_pending_document_navigation_for_owner(&state.owner, &token) =>
+            {
+                self.start_background_prepared_navigation_commit(token, state, *navigation);
+                return Vec::new();
+            }
+            navigation => navigation,
+        };
+        if !self.settle_background_navigation_completion(&token) {
+            tracing::debug!(
+                ?token,
+                "background completion did not match the target-owned request"
+            );
+        }
+        let completion =
+            crate::domains::page::MaterializedNavigationCompletion::new(token, state, navigation);
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -2743,6 +2820,21 @@ impl CdpConnection {
             command_context,
         )
         .await;
+        Self::append_navigation_completion_output(
+            output,
+            command_id,
+            command_session_id.as_deref(),
+            command_context,
+        );
+        Vec::new()
+    }
+
+    fn append_navigation_completion_output(
+        output: CommandOutputBuffer,
+        command_id: Option<u64>,
+        command_session_id: Option<&str>,
+        command_context: &mut CommandDispatchContext,
+    ) {
         let (
             before_renderer_output,
             renderer_output_boundary,
@@ -2752,7 +2844,7 @@ impl CdpConnection {
             .into_plan()
             .into_renderer_fenced_background_and_post_response_events(
                 command_id,
-                command_session_id.as_deref(),
+                command_session_id,
             );
         command_context.append_renderer_fenced_protocol_events(
             before_renderer_output,
@@ -2760,7 +2852,6 @@ impl CdpConnection {
             after_renderer_output,
         );
         command_context.extend_post_response_events(post_response_events);
-        Vec::new()
     }
 
     #[cfg(test)]

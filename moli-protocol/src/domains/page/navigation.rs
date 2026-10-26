@@ -521,6 +521,7 @@ impl BackgroundMainDocumentBodyCompletion {
 
 pub enum BackgroundNavigationCompletion {
     Lifecycle(Box<BackgroundNavigationLifecycleCompletion>),
+    PreparedDocument(Box<crate::conn::BackgroundPreparedNavigationCommit>),
     MainDocumentBody(Box<BackgroundMainDocumentBodyCompletion>),
 }
 
@@ -528,6 +529,7 @@ impl BackgroundNavigationCompletion {
     pub fn requested_url(&self) -> &str {
         match self {
             Self::Lifecycle(completion) => completion.state.requested_url.as_str(),
+            Self::PreparedDocument(completion) => completion.requested_url(),
             Self::MainDocumentBody(completion) => completion.state.requested_url.as_str(),
         }
     }
@@ -535,6 +537,7 @@ impl BackgroundNavigationCompletion {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Lifecycle(_) => "lifecycle",
+            Self::PreparedDocument(_) => "prepared_document",
             Self::MainDocumentBody(_) => "main_document_body",
         }
     }
@@ -559,10 +562,6 @@ impl BackgroundNavigationLifecycleCompletion {
             navigation,
             ready_at: std::time::Instant::now(),
         }
-    }
-
-    pub(crate) fn navigation_token(&self) -> &DocumentNavigationToken {
-        &self.token
     }
 
     pub(crate) fn requested_url(&self) -> &str {
@@ -3410,6 +3409,87 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
         command_context,
     )
     .await;
+}
+
+pub(crate) async fn complete_prepared_navigation_into_buffer_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    completion: crate::conn::BackgroundPreparedNavigationCommit,
+    command_context: &mut crate::conn::CommandDispatchContext,
+) {
+    let crate::conn::BackgroundPreparedNavigationCommit {
+        token,
+        state,
+        expected,
+        transaction,
+        navigation,
+    } = completion;
+    if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
+        // Retirement may race a successful native reply. Neither adoption nor
+        // cleanup of that old reply may mutate the replacement navigation.
+        push_superseded_navigation_result(out, &state);
+        finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, &token).await;
+        return;
+    }
+    let owner = state.owner.clone();
+    let loader_id = state.loader_id.clone();
+    match navigation {
+        Ok(navigation) => {
+            let navigation =
+                network::materialize_loaded_navigation_progress(conn, &state, navigation);
+            commit_loaded_navigation_async(
+                conn,
+                out,
+                Some(&token),
+                state,
+                navigation,
+                transaction,
+                command_context,
+            )
+            .await;
+        }
+        Err(error) => {
+            if error.disposition()
+                == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable
+            {
+                if let Some(expected) = expected.as_ref()
+                    && let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
+                        &owner,
+                        &token,
+                        Some(expected),
+                        &state.requested_url,
+                    )
+                {
+                    let _ = page.close_async().await;
+                }
+            } else if let Some(transaction) = transaction
+                && let Err(rollback_error) =
+                    conn.rollback_committed_renderer_agent_candidate_for_owner(&owner, transaction)
+            {
+                tracing::warn!(%rollback_error, "failed to roll back prepared navigation attachment");
+            }
+            let error_text = format!("{error:#}");
+            if let Some(invocation) = state.web_mcp_invocation.as_ref() {
+                out.extend_background_events_after_messages(
+                    super::super::web_mcp::navigation_failed(
+                        conn,
+                        &state.owner,
+                        invocation.invocation_id,
+                    ),
+                );
+            }
+            let progress_gate = network::failed_navigation_progress_gate(conn, &state, &error_text);
+            network::record_failed_main_document_response_body(conn, &state, error_text.clone());
+            activity::MainDocumentFailedNavigationActivity::new(
+                state,
+                progress_gate,
+                network::FailedNavigationResponseMode::ProtocolError,
+            )
+            .emit_navigation_error_into_buffer(out, &error_text);
+        }
+    }
+    finish_renderer_navigation_into_buffer_async(conn, out, &owner, &token).await;
+    conn.clear_pending_document_navigation_for_owner_if_loader_matches(&owner, &loader_id);
 }
 
 async fn complete_materialized_navigation_into_buffer_inner_async(

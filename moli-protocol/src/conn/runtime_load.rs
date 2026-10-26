@@ -437,6 +437,10 @@ impl ResponseCommitReady {
         &self.final_url
     }
 
+    pub(crate) fn main_document_commit(&self) -> Option<Arc<RendererMainDocumentCommit>> {
+        self.main_document_commit.clone()
+    }
+
     pub(crate) fn renderer_devtools_agent_token(
         &self,
     ) -> moli_core::page::RendererDevToolsAgentToken {
@@ -545,7 +549,47 @@ impl ResponseCommitReady {
         .map_err(RendererPageReplacementError::document_unavailable)
     }
 
-    async fn finish_committed_document<PageValue>(
+    pub(crate) fn start_page_replacement(
+        &mut self,
+        permit: PreparedDocumentPageCommitPermit,
+        page: &Page,
+    ) -> Result<moli_core::runtime::PendingDocumentPageReplacement, RendererPageReplacementError>
+    {
+        let target = self.stable_page_target.as_ref().ok_or_else(|| {
+            RendererPageReplacementError::document_preserved(anyhow::anyhow!(
+                "prepared Document has no existing Page target"
+            ))
+        })?;
+        if target.renderer_page != RendererPageResidenceIdentity::from_page(page) {
+            return Err(RendererPageReplacementError::document_preserved(
+                anyhow::anyhow!("prepared Document belongs to a different Page"),
+            ));
+        }
+        self.prepared_page
+            .take()
+            .expect("prepared response retains its Document")
+            .start_commit_page_replacement(permit, page)
+    }
+
+    pub(crate) fn start_new_document_commit(
+        &mut self,
+        permit: PreparedDocumentPageCommitPermit,
+    ) -> anyhow::Result<
+        impl std::future::Future<Output = anyhow::Result<moli_core::runtime::BuiltDocumentPage>>
+        + 'static
+        + use<>,
+    > {
+        anyhow::ensure!(
+            self.stable_page_target.is_none(),
+            "replacement requires an existing Page commit"
+        );
+        self.prepared_page
+            .take()
+            .expect("prepared response retains its Document")
+            .start_commit(permit)
+    }
+
+    pub(crate) async fn finish_committed_document<PageValue>(
         mut self,
         page: PageValue,
         pending_download: Option<RendererPendingDownloadActivation>,

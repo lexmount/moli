@@ -674,6 +674,37 @@ pub struct PreparedRendererDocument {
     renderer_devtools_agent_token: super::RendererDevToolsAgentToken,
 }
 
+/// One synchronously enqueued commit and its exact renderer reply. Dropping
+/// the wait cancels preparation; it cannot prove that commit never started.
+pub struct PendingRendererPageReplacement {
+    preparation: RendererDocumentPreparation,
+    reply_rx: tokio::sync::oneshot::Receiver<Result<RendererOwnerReply>>,
+}
+
+impl PendingRendererPageReplacement {
+    pub async fn wait(
+        mut self,
+    ) -> std::result::Result<
+        super::RendererPageReplacementCommit,
+        super::RendererPageReplacementError,
+    > {
+        use super::RendererPageReplacementError;
+        let reply = self
+            .reply_rx
+            .await
+            .map_err(|_| anyhow!("render runtime reply channel closed"))
+            .and_then(|reply| reply)
+            .map_err(RendererPageReplacementError::from_dispatch_error)?;
+        self.preparation.cancel_on_drop = false;
+        match reply {
+            RendererOwnerReply::PageReplacementCommitted(replacement) => Ok(*replacement),
+            _ => Err(RendererPageReplacementError::document_unavailable(anyhow!(
+                "renderer owner returned a non-replacement commit reply"
+            ))),
+        }
+    }
+}
+
 struct RendererDocumentPreparation {
     runtime: JsRuntime,
     token: RendererPageReservationToken,
@@ -721,8 +752,47 @@ impl PreparedRendererDocument {
         }
     }
 
-    pub async fn commit(
+    pub fn start_commit(
         mut self,
+        permit: RendererDocumentCommitPermit,
+    ) -> Result<
+        impl std::future::Future<
+            Output = Result<(
+                RendererPageHandle,
+                Arc<RendererPageState>,
+                RendererPageCreationDiagnostics,
+                RendererPageCreationArtifacts,
+                Option<RendererPendingDownloadActivation>,
+            )>,
+        > + 'static,
+    > {
+        anyhow::ensure!(
+            permit.prepared_document() == self.token(),
+            "renderer document commit permit does not belong to this prepared document"
+        );
+        let reply_rx = self
+            .preparation
+            .runtime
+            .inner
+            .renderer_owner
+            .enqueue_command_with_reply(RendererOwnerCommand::CommitPreparedRendererDocument {
+                permit,
+            })?;
+        Ok(async move {
+            let reply = reply_rx
+                .await
+                .map_err(|_| anyhow!("render runtime reply channel closed"))??;
+            self.preparation.cancel_on_drop = false;
+            self.preparation
+                .runtime
+                .inner
+                .renderer_owner
+                .materialize_page_created_reply_parts(reply)
+        })
+    }
+
+    pub async fn commit(
+        self,
         permit: RendererDocumentCommitPermit,
     ) -> Result<(
         RendererPageHandle,
@@ -731,34 +801,16 @@ impl PreparedRendererDocument {
         RendererPageCreationArtifacts,
         Option<RendererPendingDownloadActivation>,
     )> {
-        anyhow::ensure!(
-            permit.prepared_document() == self.token(),
-            "renderer document commit permit does not belong to this prepared document"
-        );
-        let reply = self
-            .preparation
-            .runtime
-            .inner
-            .renderer_owner
-            .dispatch_command(RendererOwnerCommand::CommitPreparedRendererDocument { permit })
-            .await?;
-        self.preparation.cancel_on_drop = false;
-        self.preparation
-            .runtime
-            .inner
-            .renderer_owner
-            .materialize_page_created_reply_parts(reply)
+        self.start_commit(permit)?.await
     }
 
     /// Commits a response into the Page that issued this replacement reservation.
     /// The reply must be adopted by that Page's existing handle.
-    pub async fn commit_page_replacement(
-        mut self,
+    pub fn start_commit_page_replacement(
+        self,
         permit: RendererDocumentCommitPermit,
-    ) -> std::result::Result<
-        super::RendererPageReplacementCommit,
-        super::RendererPageReplacementError,
-    > {
+    ) -> std::result::Result<PendingRendererPageReplacement, super::RendererPageReplacementError>
+    {
         use super::RendererPageReplacementError;
         if permit.prepared_document() != self.token() {
             return Err(RendererPageReplacementError::document_preserved(anyhow!(
@@ -770,21 +822,29 @@ impl PreparedRendererDocument {
                 "a fresh Page reservation cannot replace an existing Page"
             )));
         }
-        let reply = self
+        let reply_rx = self
             .preparation
             .runtime
             .inner
             .renderer_owner
-            .dispatch_command(RendererOwnerCommand::CommitPreparedPageReplacement { permit })
-            .await
+            .enqueue_command_with_reply(RendererOwnerCommand::CommitPreparedPageReplacement {
+                permit,
+            })
             .map_err(RendererPageReplacementError::from_dispatch_error)?;
-        self.preparation.cancel_on_drop = false;
-        match reply {
-            RendererOwnerReply::PageReplacementCommitted(replacement) => Ok(*replacement),
-            _ => Err(RendererPageReplacementError::document_unavailable(anyhow!(
-                "renderer owner returned a non-replacement commit reply"
-            ))),
-        }
+        Ok(PendingRendererPageReplacement {
+            preparation: self.preparation,
+            reply_rx,
+        })
+    }
+
+    pub async fn commit_page_replacement(
+        self,
+        permit: RendererDocumentCommitPermit,
+    ) -> std::result::Result<
+        super::RendererPageReplacementCommit,
+        super::RendererPageReplacementError,
+    > {
+        self.start_commit_page_replacement(permit)?.wait().await
     }
 
     pub async fn cancel(mut self) -> Result<()> {

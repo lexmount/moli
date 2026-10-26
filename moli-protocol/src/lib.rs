@@ -30,9 +30,10 @@ pub use conn::{
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentLifecycleWaitKey,
     DevToolsDocumentLifecycleWaitState, DevToolsDocumentNavigationState,
-    DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, ParsedCdpCommand,
-    PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
-    PendingRuntimeProtocolMessageDispatch,
+    DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, OwnedProtocolWaitFailure,
+    OwnedProtocolWaitTask, ParsedCdpCommand, PendingCdpCommandDispatch,
+    PendingDeferredMainDocumentLoadCompletion, PendingRuntimeProtocolMessageDispatch,
+    spawn_owned_protocol_wait,
 };
 pub use domains::activity::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,

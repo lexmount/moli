@@ -85,6 +85,7 @@ fn page_javascript_owner_is_blocked(
 }
 
 enum SchedulerInput {
+    ProtocolStateRequest(moli_protocol::conn::ProtocolStateRequest),
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
@@ -94,6 +95,7 @@ enum SchedulerInput {
 }
 
 struct SchedulerInputReceivers {
+    protocol_state_request_rx: moli_protocol::conn::ProtocolStateRequestReceiver,
     document_activity_completion_rx:
         mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     background_event_rx: CdpBackgroundEventReceiver,
@@ -106,6 +108,7 @@ struct SchedulerInputReceivers {
 impl SchedulerInputReceivers {
     fn new(receivers: CdpSchedulerEventReceivers) -> Self {
         Self {
+            protocol_state_request_rx: receivers.protocol_state_request_rx,
             document_activity_completion_rx: receivers.document_activity_completion_rx,
             background_event_rx: receivers.background_event_rx,
             background_navigation_completion_rx: receivers.background_navigation_completion_rx,
@@ -185,6 +188,9 @@ impl SchedulerInputReceivers {
         if has_pending_runtime_deferred_reply {
             tokio::select! {
                 biased;
+                maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
+                    maybe_request.map(SchedulerInput::ProtocolStateRequest)
+                }
                 maybe_response = deferred_runtime_response_rx.recv() => {
                     let response = maybe_response?;
                     self.queue_ready_background_inputs_before_runtime_response(response);
@@ -209,6 +215,9 @@ impl SchedulerInputReceivers {
         } else {
             tokio::select! {
                 biased;
+                maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
+                    maybe_request.map(SchedulerInput::ProtocolStateRequest)
+                }
                 maybe_completion = self.document_activity_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::DocumentActivityCompletion)
                 }
@@ -464,6 +473,7 @@ async fn run_cdp_scheduler_actor(
             .drain(..)
             .filter_map(|pending| pending.response_task),
     );
+    waits.extend(scheduler.conn.take_background_navigation_tasks());
     for task in &waits {
         task.abort();
     }
@@ -503,6 +513,10 @@ async fn handle_scheduler_input(
         );
     }
     let ok = match input {
+        SchedulerInput::ProtocolStateRequest(request) => {
+            scheduler.apply_protocol_state_request(request);
+            true
+        }
         SchedulerInput::DocumentActivityCompletion(completion) => {
             let outcome = scheduler.conn.complete_document_activity_update(completion);
             let (output, post_output, boundary, predecessor) =
@@ -2150,6 +2164,7 @@ fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
 
 fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
     match input {
+        SchedulerInput::ProtocolStateRequest(_) => "protocol_state_request",
         SchedulerInput::DocumentActivityCompletion(_) => "document_activity_completion",
         SchedulerInput::BackgroundNavigationCompletion(_) => "background_navigation_completion",
         SchedulerInput::BackgroundEvent(_) => "background_event",
@@ -2220,6 +2235,7 @@ mod tests {
             moli_core::renderer_output_transport_channel();
         let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
+            protocol_state_request_rx: mpsc::unbounded_channel().1,
             document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,
@@ -2472,6 +2488,7 @@ mod tests {
             moli_core::renderer_output_transport_channel();
         let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         let mut receivers = SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
+            protocol_state_request_rx: mpsc::unbounded_channel().1,
             document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,

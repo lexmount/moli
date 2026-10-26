@@ -98,6 +98,8 @@ pub(crate) struct PendingNavigationRequest {
     page_attachment_id: TargetPageAttachmentId,
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_work: BackgroundWorkState,
+    background_task: Option<crate::conn::OwnedProtocolWaitTask>,
+    renderer_commit: Option<PendingRendererDocumentCommit>,
     committed: bool,
 }
 
@@ -108,6 +110,8 @@ impl PendingNavigationRequest {
             page_attachment_id: TargetPageAttachmentId::allocate(),
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_work: BackgroundWorkState::NotStarted,
+            background_task: None,
+            renderer_commit: None,
             committed: false,
         }
     }
@@ -122,6 +126,7 @@ impl PendingNavigationRequest {
 
     fn settle_background_completion(&mut self) {
         self.background_work = BackgroundWorkState::ResultReceived;
+        self.background_task = None;
         self.cancellation_handles.clear();
     }
 
@@ -134,6 +139,13 @@ impl PendingNavigationRequest {
             cancellation.cancel();
         }
     }
+}
+
+#[derive(Debug)]
+struct PendingRendererDocumentCommit {
+    attachment: moli_core::page::RendererAgentAttachmentId,
+    fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    observed: bool,
 }
 
 impl Drop for PendingNavigationRequest {
@@ -754,10 +766,95 @@ impl TargetPageSlot {
         true
     }
 
+    pub(crate) fn supervise_background_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+        task: crate::conn::OwnedProtocolWaitTask,
+    ) -> bool {
+        let Some(request) = self.pending_navigation_request.as_mut().filter(|request| {
+            request.matches(token) && request.background_work == BackgroundWorkState::Running
+        }) else {
+            return false;
+        };
+        request.background_task = Some(task);
+        true
+    }
+
+    pub(crate) fn has_supervised_background_navigation(&self) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|request| request.background_task.is_some())
+    }
+
+    pub(crate) fn take_background_navigation_task(
+        &mut self,
+    ) -> Option<crate::conn::OwnedProtocolWaitTask> {
+        self.pending_navigation_request
+            .as_mut()?
+            .background_task
+            .take()
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
             .is_some_and(|request| request.background_work == BackgroundWorkState::Running)
+    }
+
+    pub(crate) fn register_renderer_document_commit(
+        &mut self,
+        token: &DocumentNavigationToken,
+        attachment: moli_core::page::RendererAgentAttachmentId,
+        fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    ) -> bool {
+        if fact.frame_id != token.target_id || fact.loader_id != token.loader_id {
+            return false;
+        }
+        let Some(request) = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(token) && !request.committed)
+        else {
+            return false;
+        };
+        request.renderer_commit = Some(PendingRendererDocumentCommit {
+            attachment,
+            fact,
+            observed: false,
+        });
+        true
+    }
+
+    pub(crate) fn observe_prepared_renderer_document_commit(
+        &mut self,
+        attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+        fact: &moli_core::page::RendererMainDocumentCommit,
+    ) -> Option<bool> {
+        let commit = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| !request.committed)
+            .and_then(|request| request.renderer_commit.as_mut())?;
+        if Some(commit.attachment) != attachment || commit.fact.as_ref() != fact {
+            return Some(false);
+        }
+        // Native commit visibility is distinct from Page-handle adoption and
+        // overall navigation completion. Document access remains suspended.
+        commit.observed = true;
+        Some(true)
+    }
+
+    pub(crate) fn frame_tree_document_loader_id(&self) -> Option<&str> {
+        self.pending_navigation_request
+            .as_ref()
+            .filter(|request| {
+                request
+                    .renderer_commit
+                    .as_ref()
+                    .is_some_and(|commit| commit.observed)
+            })
+            .map(|request| request.token.loader_id.as_str())
+            .or_else(|| self.committed_document_loader_id())
     }
 
     pub(crate) fn bind_pending_document_navigation_renderer_page(

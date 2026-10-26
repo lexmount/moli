@@ -314,7 +314,8 @@ pub use self::owner_local::{
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
-    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument, RendererDocumentOptions,
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PendingRendererPageReplacement,
+    PreparedRendererDocument, RendererDocumentOptions,
 };
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{

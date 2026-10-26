@@ -1014,6 +1014,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
     drop(renderer_tx);
     let (_activity_tx, document_activity_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut receivers = super::CdpSchedulerEventReceivers {
+        protocol_state_request_rx: tokio::sync::mpsc::unbounded_channel().1,
         document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,

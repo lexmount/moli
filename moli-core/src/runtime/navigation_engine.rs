@@ -193,6 +193,52 @@ pub struct CommittedDocumentPageReplacement {
     pub pending_download: Option<RendererPendingDownloadActivation>,
 }
 
+/// An admitted renderer commit. Its wait owns the prepared Document and never
+/// borrows the caller's live Page.
+pub struct PendingDocumentPageReplacement {
+    pending: moli_renderer_v8::PendingRendererPageReplacement,
+}
+
+/// The renderer's exact committed Document, awaiting adoption by its Page.
+pub struct CompletedDocumentPageReplacement {
+    replacement: moli_renderer_v8::RendererPageReplacementCommit,
+}
+
+impl PendingDocumentPageReplacement {
+    pub async fn wait(
+        self,
+    ) -> std::result::Result<
+        CompletedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        Ok(CompletedDocumentPageReplacement {
+            replacement: self.pending.wait().await?,
+        })
+    }
+}
+
+impl CompletedDocumentPageReplacement {
+    /// Checks the exact Page and live renderer Document before changing the
+    /// Page handle. A superseded commit reply cannot be adopted by a new VM.
+    pub fn adopt(
+        mut self,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        let pending_download = self.replacement.take_pending_download();
+        let (page_creation_diagnostics, page_creation_artifacts) = page
+            .adopt_renderer_document_replacement(self.replacement)
+            .map_err(moli_renderer_v8::RendererPageReplacementError::document_unavailable)?;
+        Ok(CommittedDocumentPageReplacement {
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        })
+    }
+}
+
 /// A renderer document whose isolate and DevTools agent are reserved, but
 /// whose parser and execution contexts have not started.
 pub struct PreparedDocumentPage {
@@ -288,39 +334,47 @@ impl PreparedDocumentPage {
         }
     }
 
+    pub fn start_commit(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+    ) -> Result<impl std::future::Future<Output = Result<BuiltDocumentPage>> + 'static> {
+        let pending = self.prepared.start_commit(permit.permit)?;
+        Ok(async move {
+            let (
+                handle,
+                page_state,
+                page_creation_diagnostics,
+                page_creation_artifacts,
+                pending_download,
+            ) = pending
+                .await
+                .context("failed to commit prepared streaming raw page")?;
+            Ok(BuiltDocumentPage {
+                page: Page::from_attached_handle(handle, page_state),
+                page_creation_diagnostics,
+                page_creation_artifacts,
+                pending_download,
+            })
+        })
+    }
+
     pub async fn commit(
         self,
         permit: PreparedDocumentPageCommitPermit,
     ) -> Result<BuiltDocumentPage> {
-        let (
-            handle,
-            page_state,
-            page_creation_diagnostics,
-            page_creation_artifacts,
-            pending_download,
-        ) = self
-            .prepared
-            .commit(permit.permit)
-            .await
-            .context("failed to commit prepared streaming raw page")?;
-        Ok(BuiltDocumentPage {
-            page: Page::from_attached_handle(handle, page_state),
-            page_creation_diagnostics,
-            page_creation_artifacts,
-            pending_download,
-        })
+        self.start_commit(permit)?.await
     }
 
     pub async fn cancel(self) -> Result<()> {
         self.prepared.cancel().await
     }
 
-    pub async fn commit_page_replacement(
+    pub fn start_commit_page_replacement(
         self,
         permit: PreparedDocumentPageCommitPermit,
-        page: &mut Page,
+        page: &Page,
     ) -> std::result::Result<
-        CommittedDocumentPageReplacement,
+        PendingDocumentPageReplacement,
         moli_renderer_v8::RendererPageReplacementError,
     > {
         use moli_renderer_v8::RendererPageReplacementError;
@@ -331,16 +385,23 @@ impl PreparedDocumentPage {
                 "prepared Document belongs to a different live Page"
             )));
         }
-        let mut replacement = self.prepared.commit_page_replacement(permit.permit).await?;
-        let pending_download = replacement.take_pending_download();
-        let (page_creation_diagnostics, page_creation_artifacts) = page
-            .adopt_renderer_document_replacement(replacement)
-            .map_err(RendererPageReplacementError::document_unavailable)?;
-        Ok(CommittedDocumentPageReplacement {
-            page_creation_diagnostics,
-            page_creation_artifacts,
-            pending_download,
+        Ok(PendingDocumentPageReplacement {
+            pending: self.prepared.start_commit_page_replacement(permit.permit)?,
         })
+    }
+
+    pub async fn commit_page_replacement(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        self.start_commit_page_replacement(permit, page)?
+            .wait()
+            .await?
+            .adopt(page)
     }
 }
 

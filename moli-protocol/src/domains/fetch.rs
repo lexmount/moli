@@ -77,30 +77,17 @@ pub(in crate::domains) async fn dispose_owner_async(
     };
 
     let mut renderer_cleanup_error = None;
-    if let Some(pending_page_command) = pending_page_command {
-        match pending_page_command.wait().await {
-            Ok(completion) => match conn.loaded_page_mut_for_protocol_access(session_id) {
-                Ok(page) => {
-                    if let Err(error) = page.finish_set_fetch_subresource_interception(completion) {
-                        renderer_cleanup_error = Some(error.context(
-                            "failed to finish Fetch interception disable while disposing session",
-                        ));
-                    }
-                }
-                Err(message) if message == "NoDocumentLoaded" => {}
-                Err(message) => {
-                    renderer_cleanup_error = Some(anyhow::anyhow!(
-                        "failed to find Page while disposing Fetch handler: {message}"
-                    ));
-                }
-            },
-            Err(error) => {
-                renderer_cleanup_error =
-                    Some(error.context(
-                        "renderer failed Fetch interception disable while disposing session",
-                    ));
-            }
-        }
+    if let Some(pending_page_command) = pending_page_command
+        && let Err(error) = pending_page_command.wait().await.and_then(|completion| {
+            // Disable already changed the browser-owned policy at admission.
+            // Decode the frozen acknowledgement without refreshing a Page
+            // which may now belong to another Document or navigation.
+            completion.into_unit_page_command_turn().map(drop)
+        })
+    {
+        renderer_cleanup_error = Some(
+            error.context("renderer failed Fetch interception disable while disposing session"),
+        );
     }
 
     let (
@@ -988,21 +975,15 @@ async fn complete_disable_command_async(
                 return;
             }
         };
-        match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-            Ok(page) => {
-                if let Err(error) = page.finish_set_fetch_subresource_interception(completion) {
-                    out.push_error(
-                        -32000,
-                        format!("failed to clear page fetch interception: {error}"),
-                    );
-                    return;
-                }
-            }
-            Err(message) if message == "NoDocumentLoaded" => {}
-            Err(message) => {
-                out.push_error(-32000, message);
-                return;
-            }
+        // The dispatcher already retained this turn's exact output fence.
+        // A unit acknowledgement does not need to borrow or refresh the live
+        // Page, especially while the navigation gate is still active.
+        if let Err(error) = completion.into_unit_page_command_turn() {
+            out.push_error(
+                -32000,
+                format!("failed to clear page fetch interception: {error}"),
+            );
+            return;
         }
     }
 
