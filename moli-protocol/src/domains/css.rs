@@ -202,7 +202,7 @@ fn start_pending_css_command(
     {
         return Err(PendingCssCommandStartError {
             code: -32000,
-            message,
+            message: format!("{message:#}"),
         });
     }
     match action {

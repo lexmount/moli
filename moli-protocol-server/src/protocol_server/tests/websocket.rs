@@ -2,6 +2,8 @@ use super::*;
 use std::path::Path;
 
 mod browser_close;
+mod captured_document_navigation;
+mod child_navigation_wait;
 mod navigation_debugger;
 
 fn assert_cdp_event_precedes_response(

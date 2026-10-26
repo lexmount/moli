@@ -5,7 +5,8 @@ use std::{future::Future, marker::PhantomData, panic::AssertUnwindSafe};
 use futures_util::FutureExt;
 use tokio::task::JoinHandle;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("{}", self.message())]
 pub enum OwnedProtocolWaitFailure {
     Panicked,
     Cancelled,

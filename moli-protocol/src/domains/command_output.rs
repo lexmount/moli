@@ -82,15 +82,15 @@ impl CommandOutputPlan {
         Self::from_devtools_result(AutomationResult::Empty)
     }
 
-    pub(crate) fn error(code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn error(code: i32, message: impl std::fmt::Display) -> Self {
         let mut plan = Self::default();
-        plan.push_error(code, message);
+        plan.push_error(code, format!("{message:#}"));
         plan
     }
 
-    pub(crate) fn error_without_session(code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn error_without_session(code: i32, message: impl std::fmt::Display) -> Self {
         let mut plan = Self::default();
-        plan.push_error_without_session(code, message);
+        plan.push_error_without_session(code, format!("{message:#}"));
         plan
     }
 

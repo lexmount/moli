@@ -1,11 +1,14 @@
+use anyhow::Result;
+
 use super::*;
+use anyhow::Context as _;
 
 impl CdpConnection {
     pub async fn evaluate_runtime_expression_with_await_async(
         &mut self,
         expression: &str,
         await_promise: bool,
-    ) -> Result<Value, String> {
+    ) -> Result<Value> {
         self.evaluate_runtime_expression_with_await_for_session_owner_async(
             None,
             expression,
@@ -19,7 +22,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         expression: &str,
-    ) -> Result<Value, String> {
+    ) -> Result<Value> {
         self.evaluate_runtime_expression_with_await_for_session_owner_async(
             session_id, expression, false,
         )
@@ -31,7 +34,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         expression: &str,
         await_promise: bool,
-    ) -> Result<Value, String> {
+    ) -> Result<Value> {
         self.evaluate_runtime_expression_for_session_owner_once_async(
             session_id,
             expression,
@@ -45,7 +48,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         expression: &str,
         await_promise: bool,
-    ) -> Result<Value, String> {
+    ) -> Result<Value> {
         let payload = {
             let page = self.loaded_page_mut_for_protocol_access(session_id)?;
             page.evaluate_runtime_expression_without_navigation_follow_with_await_async(
@@ -53,7 +56,7 @@ impl CdpConnection {
                 await_promise,
             )
             .await
-            .map_err(|error| format!("runtime evaluation failed: {error}"))?
+            .context("runtime evaluation failed")?
         };
         self.ingest_runtime_session_owner_output_updates(session_id);
         Ok(payload)
@@ -63,7 +66,7 @@ impl CdpConnection {
     pub async fn dispatch_runtime_protocol_message_async(
         &mut self,
         raw_json: &str,
-    ) -> Result<Vec<Value>, String> {
+    ) -> Result<Vec<Value>> {
         self.dispatch_runtime_protocol_message_for_session_owner_async(None, raw_json)
             .await
     }
@@ -71,16 +74,16 @@ impl CdpConnection {
     pub(crate) fn start_runtime_enable_events_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<PendingRuntimeEnableEventsDispatch, String> {
+    ) -> Result<PendingRuntimeEnableEventsDispatch> {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            .context(NoDocumentLoaded)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
         let pending = page
             .start_runtime_enable_events_for_inspector_session(inspector_session_id.as_deref())
-            .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
+            .context("runtime enable event replay failed")?;
         Ok(PendingRuntimeEnableEventsDispatch {
             owner: owner.clone(),
             route,
@@ -91,19 +94,18 @@ impl CdpConnection {
     pub(crate) fn complete_runtime_enable_events(
         &mut self,
         completed: CompletedRuntimeEnableEventsDispatch,
-    ) -> Result<RuntimeEnableEventsReplay, String> {
+    ) -> Result<RuntimeEnableEventsReplay> {
         let owner = completed.owner;
         let page = self.runtime_protocol_message_started_page_mut(&completed.route)?;
         let output = page
             .finish_runtime_enable_output(completed.completion)
-            .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
+            .context("runtime enable event replay failed")?;
         let attachment_id = output.renderer_agent_attachment_id();
         if attachment_id != Some(completed.route.renderer_agent_attachment_id) {
-            return Err(
-                "Runtime.enable completed from an unexpected renderer attachment".to_owned(),
-            );
+            anyhow::bail!("Runtime.enable completed from an unexpected renderer attachment");
         }
         self.prepare_runtime_subscription_events_for_owner(&owner, output)
+            .map_err(anyhow::Error::msg)
     }
 
     /// Project the frozen replay from either an internal completion or an
@@ -161,28 +163,25 @@ impl CdpConnection {
     pub(super) fn runtime_protocol_message_started_slot_mut(
         &mut self,
         route: &RuntimeProtocolMessagePageRoute,
-    ) -> Result<&mut TargetRuntimeSlot, String> {
+    ) -> Result<&mut TargetRuntimeSlot> {
         let browser_context = self
             .browser_context_by_id_mut(&route.browser_context_id)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            .context(NoDocumentLoaded)?;
         let slot = if browser_context.active_target_id() == route.target_id.as_deref() {
             &mut browser_context.active_page_target_mut().runtime_slot
         } else {
-            let target_id = route
-                .target_id
-                .as_deref()
-                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            let target_id = route.target_id.as_deref().context(NoDocumentLoaded)?;
             browser_context
                 .background_target_mut(target_id)
                 .map(|target| &mut target.runtime_slot)
-                .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+                .context(NoDocumentLoaded)?
         };
         if slot
             .current_renderer_attachment()
             .map(|attachment| attachment.id())
             != Some(route.renderer_agent_attachment_id)
         {
-            return Err("Renderer attachment changed".to_owned());
+            anyhow::bail!("Renderer attachment changed");
         }
         Ok(slot)
     }
@@ -190,10 +189,10 @@ impl CdpConnection {
     pub(super) fn runtime_protocol_message_started_page_mut(
         &mut self,
         route: &RuntimeProtocolMessagePageRoute,
-    ) -> Result<&mut Page, String> {
+    ) -> Result<&mut Page> {
         self.runtime_protocol_message_started_slot_mut(route)?
             .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
+            .context(NoDocumentLoaded)
     }
 
     pub(super) fn consume_runtime_protocol_message_completion(
@@ -470,7 +469,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         raw_json: &str,
         command_id: u64,
-    ) -> anyhow::Result<Vec<RendererRuntimeInspectorMessage>> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())
             .map_err(anyhow::Error::msg)?;
         let pending = self
@@ -482,38 +481,6 @@ impl CdpConnection {
         let response_rx = completed.take_deferred_response_receiver();
         let mut messages = self
             .complete_shared_worker_runtime_protocol_message_for_session(completed)
-            .map_err(anyhow::Error::msg)?;
-        if let Some(response_rx) = response_rx
-            && let Some(message) = self
-                .await_registered_runtime_inspector_response_for_session_owner_async(
-                    session_id,
-                    command_id,
-                    response_rx,
-                )
-                .await
-        {
-            messages.push(message);
-        }
-        Ok(messages)
-    }
-
-    pub(super) async fn dispatch_service_worker_runtime_helper_protocol_message_for_session_async(
-        &mut self,
-        session_id: Option<&str>,
-        raw_json: &str,
-        command_id: u64,
-    ) -> anyhow::Result<Vec<RendererRuntimeInspectorMessage>> {
-        let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())
-            .map_err(anyhow::Error::msg)?;
-        let pending = self
-            .start_service_worker_runtime_protocol_message_for_session_with_deferred_response(
-                session_id, descriptor, command_id,
-            )
-            .map_err(anyhow::Error::msg)?;
-        let mut completed = pending.wait().await.map_err(anyhow::Error::msg)?;
-        let response_rx = completed.take_deferred_response_receiver();
-        let mut messages = self
-            .complete_service_worker_runtime_protocol_message_for_session(completed)
             .map_err(anyhow::Error::msg)?;
         if let Some(response_rx) = response_rx
             && let Some(message) = self

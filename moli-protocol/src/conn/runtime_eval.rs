@@ -888,6 +888,11 @@ mod inspector_awaits;
 mod inspector_routing;
 mod protocol_dispatch;
 mod remote_objects;
+mod replay;
+mod worker_cleanup;
+pub(crate) use replay::{
+    CompletedRendererCallReplay, PendingRendererCallReplay, PreparedRendererNavigationFinish,
+};
 mod runtime_dispatch;
 
 fn send_renderer_replacement_error(
@@ -908,7 +913,7 @@ fn runtime_realm_info_to_execution_context_event(
     realm: RendererRuntimeRealmInfo,
     owner_frame_id: Option<&str>,
     target_id: Option<DevToolsTargetId>,
-) -> Result<RuntimeExecutionContextEvent, String> {
+) -> RuntimeExecutionContextEvent {
     let realm_frame_id = realm
         .frame_id
         .as_deref()
@@ -919,7 +924,7 @@ fn runtime_realm_info_to_execution_context_event(
         .filter(|realm_id| !realm_id.is_empty())
         .map(|realm_id| protocol_global_realm_id(realm_id, target_id.as_ref(), realm_frame_id))
         .map(DevToolsRealmId::from);
-    Ok(RuntimeExecutionContextEvent {
+    RuntimeExecutionContextEvent {
         target_id,
         context_id: Some(realm.context_id),
         realm_id,
@@ -929,7 +934,7 @@ fn runtime_realm_info_to_execution_context_event(
         is_default: Some(realm.is_default),
         context_type: Some(realm.context_type),
         grant_universal_access: None,
-    })
+    }
 }
 
 fn protocol_global_realm_id(

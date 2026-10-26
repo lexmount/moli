@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use chromiumoxide_cdp::cdp::browser_protocol::autofill::TriggerParams;
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererAutofillAddressField,
@@ -18,7 +20,7 @@ pub(crate) struct PendingAutofillCommandDispatch {
 pub(crate) struct CompletedAutofillCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 pub(crate) enum AutofillCommandTaskStep {
@@ -31,7 +33,7 @@ impl PendingAutofillCommandDispatch {
         CompletedAutofillCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -57,10 +59,7 @@ pub(crate) fn try_start_autofill_command_dispatch(
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
         .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_autofill_trigger(request)
-                .map_err(|error| error.to_string())
-        });
+        .and_then(|page| page.start_autofill_trigger(request));
     match pending {
         Ok(pending) => AutofillCommandTaskStep::Pending(PendingAutofillCommandDispatch {
             command_id: cmd.id,
@@ -79,19 +78,14 @@ pub(crate) fn complete_pending_autofill_command(
 ) -> CommandOutputPlan {
     let outcome = completed.completed.and_then(|completion| {
         conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-            .and_then(|page| {
-                page.finish_autofill_trigger(completion)
-                    .map_err(|error| error.to_string())
-            })
+            .and_then(|page| page.finish_autofill_trigger(completion))
     });
     project_outcome(outcome)
         .map(|()| CommandOutputPlan::success())
         .unwrap_or_else(|(code, message)| CommandOutputPlan::error(code, message))
 }
 
-fn project_outcome(
-    outcome: Result<RendererAutofillTriggerOutcome, String>,
-) -> Result<(), (i32, String)> {
+fn project_outcome(outcome: Result<RendererAutofillTriggerOutcome>) -> Result<(), (i32, String)> {
     match outcome {
         Ok(RendererAutofillTriggerOutcome::Applied { .. }) => Ok(()),
         Ok(RendererAutofillTriggerOutcome::FieldNotFound) => {
@@ -110,7 +104,7 @@ fn project_outcome(
         Ok(RendererAutofillTriggerOutcome::AddressNotSupported) => {
             Err((-32000, "Address autofill is not supported".to_owned()))
         }
-        Err(message) => Err((-32000, message)),
+        Err(error) => Err((-32000, format!("{error:#}"))),
     }
 }
 fn prepare_request(
@@ -181,7 +175,7 @@ pub(crate) fn try_start_native_command(
             super::native::start(conn, cmd, Command::TriggerAutofill(request), |reply| {
                 let outcome = match reply {
                     Ok(Reply::AutofillTriggerOutcome(outcome)) => Ok(outcome),
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => Err(error),
                     _ => unreachable!("Autofill trigger reply"),
                 };
                 project_outcome(outcome)

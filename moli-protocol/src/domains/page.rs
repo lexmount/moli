@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddPreloadScriptCommand,
     DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
@@ -50,6 +52,11 @@ use crate::domains::command_output::CommandOutputPlan;
 
 mod app_manifest;
 mod child_frame_activity;
+mod child_navigation;
+mod navigation_cleanup;
+pub(crate) use navigation_cleanup::{
+    PreparedNavigationFailureCleanup, prepare_failed_navigation_cleanup,
+};
 mod javascript_dialog;
 pub(in crate::domains) use javascript_dialog::emit_javascript_dialog_activity_background_events_async;
 use javascript_dialog::*;
@@ -79,7 +86,7 @@ mod tests;
 pub(in crate::domains) async fn dispose_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     conn.remove_document_start_scripts_for_detached_session_async(session_id)
         .await
 }
@@ -89,7 +96,7 @@ pub(in crate::domains) async fn dispose_session_async(
 pub(in crate::domains) async fn dispose_primary_session_target_state_async(
     conn: &mut CdpConnection,
     plan: &crate::conn::SessionDisposalPlan,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let session_id = plan.session_id();
     if let crate::conn::SessionDisposalTarget::PageTarget {
         browser_context_id,

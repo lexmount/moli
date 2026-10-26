@@ -1,4 +1,7 @@
+use anyhow::Result;
+
 use super::*;
+use anyhow::Context as _;
 
 impl CdpConnection {
     pub(crate) fn ingest_runtime_session_owner_output_updates(&mut self, session_id: Option<&str>) {
@@ -48,7 +51,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         raw_json: &str,
-    ) -> Result<Vec<Value>, String> {
+    ) -> Result<Vec<Value>> {
         // Direct raw protocol compatibility still accepts id-bearing messages.
         // Internal helpers should call the explicit helper variant so the
         // callback owner is visible at the call site.
@@ -72,7 +75,7 @@ impl CdpConnection {
                 raw_json,
             )
             .await
-            .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?
+            .context("runtime inspector dispatch failed")?
             .into_iter()
             .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
             .collect::<Vec<_>>()
@@ -102,15 +105,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         raw_json: &str,
         command_id: u64,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())?;
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
+        let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())
+            .map_err(anyhow::Error::msg)?;
         let owner = CommandOwnerScope::capture(self, session_id);
         let pending = self.start_runtime_protocol_message_for_owner_with_deferred_response(
             &owner, descriptor, command_id,
         )?;
-        let completed = pending.wait().await?;
+        let completed = pending.wait().await.map_err(anyhow::Error::msg)?;
         self.complete_runtime_helper_protocol_message_for_session_owner_async(completed, command_id)
             .await
+            .map_err(anyhow::Error::msg)
     }
 
     pub(crate) async fn await_registered_runtime_inspector_response_for_session_owner_async(
@@ -146,7 +151,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         raw_json: String,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         self.start_runtime_protocol_message_for_owner_with_access(
             owner,
             raw_json,
@@ -158,7 +163,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         raw_json: String,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         self.start_runtime_protocol_message_for_owner_with_access(
             owner,
             raw_json,
@@ -171,11 +176,13 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         raw_json: String,
         inspector_route: RendererInspectorCommandRoute,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
+            .context(NoDocumentLoaded)?;
+        let raw_json = self
+            .rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)
+            .map_err(anyhow::Error::msg)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = match inspector_route {
@@ -184,7 +191,7 @@ impl CdpConnection {
             }
             RendererInspectorCommandRoute::Io => self
                 .loaded_page_mut_for_owner(owner)
-                .ok_or_else(|| "NoDocumentLoaded".to_owned())?,
+                .context(NoDocumentLoaded)?,
         };
         let pending = match inspector_route {
             RendererInspectorCommandRoute::MainThread => page
@@ -197,7 +204,7 @@ impl CdpConnection {
                 .start_runtime_inspector_io_message_without_response(inspector_session_id, raw_json)
                 .map(PendingRuntimeProtocolMessageDispatchKind::Routable),
         }
-        .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
+        .context("runtime inspector dispatch failed")?;
         Ok(PendingRuntimeProtocolMessageDispatch {
             owner: owner.clone(),
             route,
@@ -211,7 +218,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         self.start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
             owner,
             descriptor,
@@ -225,7 +232,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         self.start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
             owner,
             descriptor,
@@ -240,17 +247,18 @@ impl CdpConnection {
         descriptor: RendererCommandDescriptor,
         command_id: u64,
         inspector_route: RendererInspectorCommandRoute,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            .context(NoDocumentLoaded)?;
         let (correlation, raw_json, response_sender, response_route) = self
             .prepare_renderer_call_for_owner(
                 owner,
                 descriptor,
                 command_id,
                 Some(route.renderer_agent_attachment_id),
-            )?;
+            )
+            .map_err(anyhow::Error::msg)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page_result = match inspector_route {
@@ -259,7 +267,7 @@ impl CdpConnection {
             }
             RendererInspectorCommandRoute::Io => self
                 .loaded_page_mut_for_owner(owner)
-                .ok_or_else(|| "NoDocumentLoaded".to_owned()),
+                .context(NoDocumentLoaded),
         };
         let page = match page_result {
             Ok(page) => page,
@@ -280,7 +288,7 @@ impl CdpConnection {
             Err(error) => {
                 let removed = self.take_renderer_call_for_frontend_for_owner(owner, command_id);
                 debug_assert_eq!(removed, Some(correlation));
-                return Err(format!("runtime inspector dispatch failed: {error}"));
+                return Err(error.context("runtime inspector dispatch failed"));
             }
         };
         Ok(PendingRuntimeProtocolMessageDispatch {
@@ -296,11 +304,13 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         action: &str,
         raw_json: String,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
+            .context(NoDocumentLoaded)?;
+        let raw_json = self
+            .rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)
+            .map_err(anyhow::Error::msg)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
@@ -310,7 +320,7 @@ impl CdpConnection {
                 action.to_owned(),
                 raw_json,
             )
-            .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
+            .context("runtime inspector dispatch failed")?;
         Ok(PendingRuntimeProtocolMessageDispatch {
             owner: owner.clone(),
             route,
@@ -325,17 +335,18 @@ impl CdpConnection {
         action: &str,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingRuntimeProtocolMessageDispatch> {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            .context(NoDocumentLoaded)?;
         let (correlation, raw_json, response_sender, response_route) = self
             .prepare_renderer_call_for_owner(
                 owner,
                 descriptor,
                 command_id,
                 Some(route.renderer_agent_attachment_id),
-            )?;
+            )
+            .map_err(anyhow::Error::msg)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = match self.loaded_page_mut_for_protocol_access_for_owner(owner) {
@@ -357,7 +368,7 @@ impl CdpConnection {
             Err(error) => {
                 let removed = self.take_renderer_call_for_frontend_for_owner(owner, command_id);
                 debug_assert_eq!(removed, Some(correlation));
-                return Err(format!("runtime inspector dispatch failed: {error}"));
+                return Err(error.context("runtime inspector dispatch failed"));
             }
         };
         Ok(PendingRuntimeProtocolMessageDispatch {
@@ -434,305 +445,6 @@ impl CdpConnection {
             );
         }
         Ok(Some(output))
-    }
-
-    pub(crate) async fn replay_prepared_renderer_calls_after_navigation_async(
-        &mut self,
-        replays: Vec<SessionRendererCallReplay>,
-        new_attachment_id: RendererAgentAttachmentId,
-    ) -> Result<Vec<BackgroundProtocolEvent>, String> {
-        let mut events = Vec::new();
-        for replay in replays {
-            let frontend_session_id = replay.frontend_session_id().map(str::to_owned);
-            let owner = CommandOwnerScope::capture(self, frontend_session_id.as_deref());
-            let renderer_inspector_session_id =
-                replay.renderer_inspector_session_id().map(str::to_owned);
-            let (correlation, replay, response_delivery, frontend_payload, response_sender) =
-                replay.into_replay().into_parts();
-            let route = match self.runtime_protocol_message_page_route_for_owner(&owner) {
-                Some(route) => route,
-                None => {
-                    self.settle_renderer_replacement_error(
-                        &mut events,
-                        frontend_session_id.as_deref(),
-                        response_delivery,
-                        &response_sender,
-                        correlation,
-                        "NoDocumentLoaded",
-                    );
-                    continue;
-                }
-            };
-            if route.renderer_agent_attachment_id != new_attachment_id {
-                self.settle_renderer_replacement_error(
-                    &mut events,
-                    frontend_session_id.as_deref(),
-                    response_delivery,
-                    &response_sender,
-                    correlation,
-                    "renderer replay attachment is no longer current",
-                );
-                continue;
-            }
-            let dispatch = match replay {
-                RendererCommandReplay::Inspector(dispatch) => dispatch,
-                RendererCommandReplay::PerformanceGetMetrics => {
-                    debug_assert_eq!(
-                        response_delivery,
-                        RendererInspectorResponseDelivery::SessionSink
-                    );
-                    let pending = self
-                        .loaded_page_mut_for_protocol_access(frontend_session_id.as_deref())
-                        .and_then(|page| {
-                            let result = crate::domains::performance::performance_metrics_result(
-                                &page.cached_performance_metric_snapshot(),
-                            );
-                            page.start_performance_get_metrics_from_io_with_response(
-                                renderer_inspector_session_id.clone(),
-                                result,
-                                response_sender.clone(),
-                            )
-                            .map_err(|error| error.to_string())
-                        });
-                    let completion = match pending {
-                        Ok(pending) => pending.wait().await.map_err(|error| error.to_string()),
-                        Err(error) => Err(error),
-                    };
-                    match completion {
-                        Ok(
-                            moli_core::page::CompletedDevToolsIoCommandDispatch::SessionResponse {
-                                ..
-                            },
-                        )
-                        | Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
-                        Err(error) => {
-                            self.settle_renderer_replacement_error(
-                                &mut events,
-                                frontend_session_id.as_deref(),
-                                response_delivery,
-                                &response_sender,
-                                correlation,
-                                &format!("Performance replay dispatch failed: {error}"),
-                            );
-                        }
-                    }
-                    continue;
-                }
-                RendererCommandReplay::SetScriptExecutionDisabled { disabled } => {
-                    debug_assert_eq!(
-                        response_delivery,
-                        RendererInspectorResponseDelivery::SessionSink
-                    );
-                    let pending = self
-                        .loaded_page_mut_for_protocol_access(frontend_session_id.as_deref())
-                        .and_then(|page| {
-                            page.start_set_script_execution_disabled_from_io_with_response(
-                                renderer_inspector_session_id.clone(),
-                                disabled,
-                                response_sender.clone(),
-                            )
-                            .map_err(|error| error.to_string())
-                        });
-                    let completion = match pending {
-                        Ok(pending) => pending.wait().await.map_err(|error| error.to_string()),
-                        Err(error) => Err(error),
-                    };
-                    match completion {
-                        Ok(
-                            moli_core::page::CompletedDevToolsIoCommandDispatch::SessionResponse {
-                                ..
-                            },
-                        )
-                        | Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
-                        Err(error) => {
-                            self.settle_renderer_replacement_error(
-                                &mut events,
-                                frontend_session_id.as_deref(),
-                                response_delivery,
-                                &response_sender,
-                                correlation,
-                                &format!("Emulation replay dispatch failed: {error}"),
-                            );
-                        }
-                    }
-                    continue;
-                }
-            };
-            let raw_json = match self.rewrite_runtime_inspector_command_for_session_owner(
-                frontend_session_id.as_deref(),
-                &frontend_payload,
-                Some((
-                    correlation.frontend_command_id(),
-                    correlation.renderer_call_id(),
-                )),
-            ) {
-                Ok(raw_json) => raw_json,
-                Err(error) => {
-                    self.settle_renderer_replacement_error(
-                        &mut events,
-                        frontend_session_id.as_deref(),
-                        response_delivery,
-                        &response_sender,
-                        correlation,
-                        &error,
-                    );
-                    continue;
-                }
-            };
-            let pending = {
-                let page = match self
-                    .loaded_page_mut_for_protocol_access(frontend_session_id.as_deref())
-                {
-                    Ok(page) => page,
-                    Err(error) => {
-                        self.settle_renderer_replacement_error(
-                            &mut events,
-                            frontend_session_id.as_deref(),
-                            response_delivery,
-                            &response_sender,
-                            correlation,
-                            &error,
-                        );
-                        continue;
-                    }
-                };
-                let dispatch_sender = response_sender.clone();
-                match response_delivery {
-                    RendererInspectorResponseDelivery::AdapterReply => match dispatch {
-                        CdpRendererCommandReplayDispatch::ResolveRuntimeContext => page
-                            .start_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
-                                renderer_inspector_session_id,
-                                "addBinding".to_owned(),
-                                raw_json,
-                                dispatch_sender,
-                            )
-                            .map(PendingRuntimeProtocolMessageDispatchKind::Page),
-                        CdpRendererCommandReplayDispatch::Direct => page
-                            .start_runtime_protocol_message_for_inspector_session_with_deferred_response(
-                                renderer_inspector_session_id,
-                                raw_json,
-                                dispatch_sender,
-                            )
-                            .map(PendingRuntimeProtocolMessageDispatchKind::Page),
-                    },
-                    RendererInspectorResponseDelivery::SessionSink => {
-                        debug_assert_eq!(
-                            dispatch,
-                            CdpRendererCommandReplayDispatch::Direct,
-                            "the migrated synchronous IO family must replay directly"
-                        );
-                        page.start_routable_runtime_protocol_message_for_inspector_session(
-                            renderer_inspector_session_id,
-                            RendererInspectorCommandRoute::Io,
-                            None,
-                            raw_json,
-                            dispatch_sender,
-                        )
-                        .map(PendingRuntimeProtocolMessageDispatchKind::Routable)
-                    }
-                }
-            };
-            let pending = match pending {
-                Ok(pending) => PendingRuntimeProtocolMessageDispatch {
-                    owner,
-                    route,
-                    pending,
-                    response_route:
-                        RuntimeProtocolResponseRoute::without_local_receiver_for_delivery(
-                            response_delivery,
-                        ),
-                },
-                Err(error) => {
-                    self.settle_renderer_replacement_error(
-                        &mut events,
-                        frontend_session_id.as_deref(),
-                        response_delivery,
-                        &response_sender,
-                        correlation,
-                        &format!("runtime inspector replay dispatch failed: {error}"),
-                    );
-                    continue;
-                }
-            };
-            let completed = match pending.wait().await {
-                Ok(completed) => completed,
-                Err(error) => {
-                    self.settle_renderer_replacement_error(
-                        &mut events,
-                        frontend_session_id.as_deref(),
-                        response_delivery,
-                        &response_sender,
-                        correlation,
-                        &error,
-                    );
-                    continue;
-                }
-            };
-            let completed_owner = completed.owner().clone();
-            let completion = match completed.completion {
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
-                    *completion
-                }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector => {
-                    continue;
-                }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
-                    ..
-                } => {
-                    continue;
-                }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
-                    _,
-                ) => {
-                    continue;
-                }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
-                    completion,
-                    ..
-                } => *completion,
-            };
-            let mut command_turn_output = match self
-                .consume_runtime_protocol_message_completion(&completed.route, completion)
-            {
-                Ok(output) => output,
-                Err(error) => {
-                    send_renderer_replacement_error(
-                        &response_sender,
-                        correlation,
-                        &format!("runtime inspector replay dispatch failed: {error}"),
-                    );
-                    continue;
-                }
-            };
-            command_turn_output.bind_renderer_agent_attachment(new_attachment_id);
-            self.ingest_runtime_protocol_message_started_route_output_updates(&completed.route);
-            let mut command = CommandDispatchContext::default();
-            let completion = command.consume_renderer_command_turn_output(command_turn_output);
-            events.extend(command.take_protocol_events());
-            events.extend(command.take_post_response_events());
-            let Some(output) = completion.into_runtime_inspector_output() else {
-                send_renderer_replacement_error(
-                    &response_sender,
-                    correlation,
-                    "runtime inspector replay completed with a non-Runtime renderer reply",
-                );
-                continue;
-            };
-            if output
-                .protocol_response(correlation.renderer_call_id().get())
-                .is_some()
-            {
-                let _ = response_sender.send_output(output);
-                continue;
-            }
-            let _ = self.route_renderer_runtime_command_output_for_owner_into(
-                output,
-                None,
-                &completed_owner,
-                &mut events,
-            );
-        }
-        Ok(events)
     }
 
     pub(super) fn settle_renderer_replacement_error(

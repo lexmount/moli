@@ -5469,6 +5469,65 @@ async fn fetch_with_cancel_aborts_inflight_streaming_transfer() -> Result<()> {
 }
 
 #[tokio::test]
+async fn captured_raw_cancellation_closes_streaming_and_digest_transports() -> Result<()> {
+    for digest in [false, true] {
+        for before_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let addr = listener.local_addr()?;
+            let (started, received) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await?;
+                read_http_request_head(&mut stream).await?;
+                if !before_headers {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\npartial").await?;
+                }
+                let _ = started.send(());
+                let mut byte = [0u8; 1];
+                let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+                    .await
+                    .context(
+                        "cancelled raw transport must close without completing its response",
+                    )??;
+                assert_eq!(read, 0);
+                anyhow::Ok(())
+            });
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            let cancel = FetchCancelHandle::new();
+            let mut request = Request::get(&format!("http://{addr}/held"))?;
+            if digest {
+                request = request.with_auth(RequestAuth {
+                    target: RequestAuthTarget::Server,
+                    scheme: RequestAuthScheme::Digest,
+                    username: "user".to_owned(),
+                    password: "pass".to_owned(),
+                });
+            }
+            let fetch = {
+                let client = client.clone();
+                let cancellation = cancel.clone();
+                tokio::spawn(async move {
+                    client
+                        .fetch_raw_with_cancel_and_network_metadata(request, cancellation)
+                        .await
+                })
+            };
+            tokio::time::timeout(Duration::from_secs(5), received).await??;
+            assert!(
+                !fetch.is_finished(),
+                "the fixture must keep the response incomplete"
+            );
+            cancel.cancel();
+            let _error = tokio::time::timeout(Duration::from_secs(5), fetch)
+                .await??
+                .unwrap_err();
+            server.await??;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn fetch_raw_stream_with_cancel_aborts_inflight_raw_transfer() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

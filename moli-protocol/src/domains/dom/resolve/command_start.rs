@@ -22,7 +22,7 @@ pub(super) fn start_pending_dom_command(
     {
         return Err(PendingDomCommandStartError {
             code: -32000,
-            message,
+            message: format!("{message:#}"),
         });
     }
     if action == DomAction::GetDocument {

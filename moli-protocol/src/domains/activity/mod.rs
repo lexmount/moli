@@ -41,10 +41,10 @@ pub(in crate::domains) use subresource::{
     prepare_subresource_continue_action_for_renderer_record,
 };
 pub(crate) use subresource::{
-    flush_post_subresource_auth_activity_background_events_async,
-    flush_post_subresource_auth_activity_for_owner_background_events_async,
-    flush_post_subresource_fetch_request_activity_background_events_async,
-    flush_post_subresource_fetch_request_activity_for_owner_background_events_async,
-    flush_post_subresource_response_activity_background_events_async,
-    flush_post_subresource_response_activity_for_owner_background_events_async,
+    flush_post_subresource_auth_activity_background_events,
+    flush_post_subresource_auth_activity_for_owner_background_events,
+    flush_post_subresource_fetch_request_activity_background_events,
+    flush_post_subresource_fetch_request_activity_for_owner_background_events,
+    flush_post_subresource_response_activity_background_events,
+    flush_post_subresource_response_activity_for_owner_background_events,
 };

@@ -231,7 +231,13 @@ async fn project_renderer_output_records_for_owner(
                     )
                     && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
                 {
-                    slot.observe_renderer_output_document_start(event.document);
+                    slot.observe_renderer_output_document_start(
+                        moli_core::RendererDocumentLifecycleIdentity {
+                            frame: event.frame,
+                            document: event.document,
+                            epoch: event.epoch,
+                        },
+                    );
                 }
                 let outputs = if let moli_core::RendererProtocolObservation::Network {
                     source_document,

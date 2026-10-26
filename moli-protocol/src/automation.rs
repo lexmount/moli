@@ -2055,10 +2055,10 @@ pub struct DevToolsError {
 }
 
 impl DevToolsError {
-    pub fn new(kind: DevToolsErrorKind, message: impl Into<String>) -> Self {
+    pub fn new(kind: DevToolsErrorKind, message: impl std::fmt::Display) -> Self {
         Self {
             kind,
-            message: message.into(),
+            message: format!("{message:#}"),
         }
     }
 }

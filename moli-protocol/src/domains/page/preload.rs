@@ -728,7 +728,7 @@ fn preload_missing_owner_error(conn: &CdpConnection) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::NoSuchTarget, message)
 }
 
-fn devtools_preload_internal_error(message: impl Into<String>) -> DevToolsError {
+fn devtools_preload_internal_error(message: impl std::fmt::Display) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, message)
 }
 

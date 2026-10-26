@@ -156,6 +156,17 @@ fn split_renderer_page_creation_lifecycle_at_load_boundary(
         .load
         .as_ref()
         .map(|stamp| stamp.sequence)
+        .or_else(|| {
+            artifacts.initial_lifecycle_events.iter().find_map(|event| {
+                matches!(
+                    event.kind,
+                    RendererDocumentLifecycleEventKind::Milestone(
+                        RendererDocumentLifecycleMilestone::Load
+                    )
+                )
+                .then_some(event.sequence)
+            })
+        })
     else {
         return (artifacts, Vec::new());
     };

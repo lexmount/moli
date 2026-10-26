@@ -298,15 +298,19 @@ pub(super) async fn devtools_realms_for_search_route_async(
     conn: &mut CdpConnection,
     route: CdpSessionRoute,
 ) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
-    match devtools_realms_for_route_async(conn, route).await {
+    if matches!(
+        route,
+        CdpSessionRoute::SharedWorkerTarget { .. }
+            | CdpSessionRoute::DedicatedWorkerTarget { .. }
+            | CdpSessionRoute::ServiceWorkerTarget { .. }
+    ) {
+        return devtools_realms_for_route_async(conn, route).await;
+    }
+    let owner = CommandOwnerScope::for_route(route);
+    match conn.runtime_realm_inventory_for_owner_async(&owner).await {
         Ok(realms) => Ok(realms),
-        Err(error)
-            if matches!(error.kind, DevToolsErrorKind::Internal)
-                && error.message == "NoDocumentLoaded" =>
-        {
-            Ok(Vec::new())
-        }
-        Err(error) => Err(error),
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => Ok(Vec::new()),
+        Err(error) => Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
     }
 }
 

@@ -1101,10 +1101,9 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
             inspector_json,
             cmd.terminal_response_delivery(),
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
+        CdpRendererCommandAccess::OwnerIndependent => Err(anyhow::anyhow!(
             "an owner-independent command cannot enter the Debugger Inspector dispatcher"
-                .to_owned(),
-        ),
+        )),
     };
     let pending = match pending {
         Ok(pending) => pending,

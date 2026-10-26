@@ -238,7 +238,7 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         if !conn.pending_subresource_fetch_request_residence_is_current(&pending) {
             continue;
         }
-        match conn
+        if let Ok(predecessor) = conn
             .fail_pending_subresource_fetch_for_owner_async(
                 owner,
                 pending.internal_id,
@@ -246,25 +246,17 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
             )
             .await
         {
-            Ok(predecessor) => {
-                merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-                activity::flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
-                    conn,
-                    out,
-                    owner,
-                    &pending,
-                )
-                .await;
-            }
-            Err(message) if message == "NoDocumentLoaded" => {}
-            Err(_) => {}
+            merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
+            activity::flush_post_subresource_fetch_request_activity_for_owner_background_events(
+                conn, out, owner, &pending,
+            );
         }
     }
     for (_, pending) in pending_subresource_auths {
         if !conn.target_page_residence_identity_is_current(&pending.page_owner) {
             continue;
         }
-        match conn
+        if let Ok(predecessor) = conn
             .fail_pending_subresource_auth_for_owner_async(
                 owner,
                 pending.internal_id,
@@ -272,22 +264,17 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
             )
             .await
         {
-            Ok(predecessor) => {
-                merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-                activity::flush_post_subresource_auth_activity_for_owner_background_events_async(
-                    conn, out, owner, &pending,
-                )
-                .await;
-            }
-            Err(message) if message == "NoDocumentLoaded" => {}
-            Err(_) => {}
+            merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
+            activity::flush_post_subresource_auth_activity_for_owner_background_events(
+                conn, out, owner, &pending,
+            );
         }
     }
     for (_, pending) in pending_subresource_responses {
         if !conn.target_page_residence_identity_is_current(&pending.page_owner) {
             continue;
         }
-        match conn
+        if let Ok(predecessor) = conn
             .fail_pending_subresource_response_for_owner_async(
                 owner,
                 pending.internal_id,
@@ -295,18 +282,10 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
             )
             .await
         {
-            Ok(predecessor) => {
-                merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-                activity::flush_post_subresource_response_activity_for_owner_background_events_async(
-                    conn,
-                    out,
-                    owner,
-                    &pending,
-                )
-                .await;
-            }
-            Err(message) if message == "NoDocumentLoaded" => {}
-            Err(_) => {}
+            merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
+            activity::flush_post_subresource_response_activity_for_owner_background_events(
+                conn, out, owner, &pending,
+            );
         }
     }
     renderer_output_predecessor

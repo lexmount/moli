@@ -88,7 +88,7 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
         cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
-        Err(message) if message == "NoDocumentLoaded" => {
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
         Err(message) => {

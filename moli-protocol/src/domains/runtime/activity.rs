@@ -517,7 +517,7 @@ fn push_runtime_inspector_messages_for_session(
     }
 }
 
-pub(in crate::domains) fn push_routed_renderer_runtime_inspector_message_batch_background_events(
+pub(crate) fn push_routed_renderer_runtime_inspector_message_batch_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     batches: Vec<RendererRuntimeInspectorMessageBatch>,

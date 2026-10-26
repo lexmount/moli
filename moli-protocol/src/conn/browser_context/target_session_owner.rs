@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::*;
 use crate::automation::{
     AutomationContext, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
@@ -842,6 +844,13 @@ impl<'a> TargetSessionOwnerMut<'a> {
     }
 
     pub(super) async fn mark_target_crashed_async(&mut self) -> Option<()> {
+        if let Some(page) = self.take_crashed_page() {
+            let _ = page.close_async().await;
+        }
+        Some(())
+    }
+
+    fn take_crashed_page(&mut self) -> Option<Page> {
         let target = self.target_mut();
         target.owner_state.target_crash_state.mark_crashed();
         target.owner_state.navigation_history_state.clear();
@@ -856,10 +865,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         target
             .runtime_slot
             .reset_all_target_scoped_network_artifacts();
-        if let Some(page) = previous {
-            let _ = page.close_async().await;
-        }
-        Some(())
+        previous
     }
 
     fn take_loaded_page_after_failed_navigation(&mut self, final_url: &Url) -> Option<Page> {
@@ -1141,7 +1147,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
-    ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
+    ) -> Option<Result<LoadedNavigationPageCommit>> {
         let browser_context_id = self.browser_context.id.clone();
         let group = self
             .browser_context
@@ -1287,7 +1293,7 @@ impl CdpConnection {
         page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
-    ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
+    ) -> Option<Result<LoadedNavigationPageCommit>> {
         self.target_session_owner_mut_for_owner(owner)?
             .commit_loaded_navigation_page_async(page, renderer_attachment_commit, history_url)
             .await
@@ -1299,7 +1305,7 @@ impl CdpConnection {
         expected: &crate::conn::StablePageNavigationCommitTarget,
         transaction: crate::conn::CommittedRendererAgentAttachment,
         history_url: &Url,
-    ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
+    ) -> Option<Result<LoadedNavigationPageCommit>> {
         if self
             .target_page_residence_identity_for_owner(owner)
             .as_ref()

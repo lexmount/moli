@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use moli_core::network::{
     BrowserResourceRuntime, BrowserResourceRuntimeOwner, ResourceRequestClient,
@@ -28,9 +30,7 @@ impl CdpConnection {
             .unwrap_or_else(|| self.initial_storage_partition.resource_storage_handles())
     }
 
-    pub(crate) fn ensure_resource_request_client(
-        &mut self,
-    ) -> anyhow::Result<ResourceRequestClient> {
+    pub(crate) fn ensure_resource_request_client(&mut self) -> Result<ResourceRequestClient> {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         let engine = self.active_navigation_engine_mut();
@@ -45,7 +45,7 @@ impl CdpConnection {
     pub(crate) fn ensure_resource_request_client_for_navigation_load_inputs(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
-    ) -> anyhow::Result<ResourceRequestClient> {
+    ) -> Result<ResourceRequestClient> {
         let storage = load_inputs.resource_storage_handles();
         let engine = self
             .configured_navigation_engine_for_load_inputs_mut(load_inputs)
@@ -269,17 +269,6 @@ impl CdpConnection {
         .map_err(|error| format!("failed to update page resource runtime: {error}"))
     }
 
-    pub(crate) fn finish_rebuild_resource_runtime_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        finish_resource_runtime_update_on_current_attachment(
-            self.resource_runtime_apply_page_for_session_owner(session_id),
-            completion,
-        )
-    }
-
     pub(crate) fn finish_rebuild_resource_runtime_for_owner(
         &mut self,
         owner: &super::CommandOwnerScope,
@@ -289,22 +278,6 @@ impl CdpConnection {
             self.resource_runtime_apply_page_for_owner(owner),
             completion,
         )
-    }
-
-    fn resource_runtime_apply_page_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<&mut moli_core::page::Page> {
-        if matches!(
-            self.session_route(session_id),
-            Some(super::CdpSessionRoute::Browser)
-        ) {
-            return self
-                .browser_context
-                .as_mut()
-                .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut());
-        }
-        self.loaded_page_mut_for_session_owner(session_id)
     }
 
     fn resource_runtime_apply_page_for_owner(

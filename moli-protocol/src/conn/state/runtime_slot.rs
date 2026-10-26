@@ -53,6 +53,15 @@ pub(in crate::conn::state) struct TargetNetworkRequestCounters {
     pub(in crate::conn::state) next_subresource_fetch_request_id: u32,
 }
 
+/// Native output has crossed the exact Document commit, while protocol Page
+/// adoption is still waiting. Its agent storage already belongs to this
+/// Document and must survive that later adoption without another rotation.
+#[derive(Debug)]
+struct PreparedDocumentOutput {
+    renderer_page: RendererPageResidenceIdentity,
+    binding: CommittedRendererDocumentBinding,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TargetRuntimeSlot {
     page_slot: TargetPageSlot,
@@ -61,8 +70,9 @@ pub(crate) struct TargetRuntimeSlot {
     pending_renderer_call_replacements: PreparedRendererCallReplacements,
     javascript_dialog_scope: TargetJavaScriptDialogScope,
     network_agent: TargetNetworkAgentState,
+    prepared_document_output: Option<PreparedDocumentOutput>,
     retiring_renderer_document_outputs: Vec<RetiringRendererDocumentOutput>,
-    last_started_output_document: Option<moli_core::page::RendererDocumentToken>,
+    last_started_output_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     log_output_queue: TargetLogOutputQueueState,
     observable_queue: TargetRuntimeObservableQueueState,
     request_counters: TargetNetworkRequestCounters,
@@ -234,25 +244,62 @@ impl TargetRuntimeSlot {
     }
 
     fn rotate_current_document_output_for_replacement(&mut self) {
+        if self
+            .prepared_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                output
+                    .binding
+                    .navigation
+                    .as_ref()
+                    .is_some_and(|navigation| {
+                        self.page_slot
+                            .accepts_pending_document_navigation_event(navigation)
+                    })
+                    && self.page_slot.accepts_prepared_parser_script_source(
+                        self.devtools_renderer_channel
+                            .current()
+                            .map(|attachment| attachment.id()),
+                        output.binding.renderer_document_identity(),
+                    ) == Some(true)
+            })
+        {
+            return;
+        }
+        self.rotate_native_document_output();
+    }
+
+    fn rotate_native_document_output(&mut self) {
         self.javascript_dialog_scope.retire();
         let retiring_document = self
-            .page_slot
-            .loaded_page()
-            .zip(self.page_slot.renderer_document_lifecycle_binding())
-            .map(|(loaded_page, binding)| {
+            .prepared_document_output
+            .take()
+            .map(|output| {
                 (
-                    RendererPageResidenceIdentity::from_page(loaded_page),
-                    binding.page_attachment_id,
-                    binding.clone(),
+                    output.renderer_page,
+                    output.binding.page_attachment_id,
+                    output.binding,
                 )
+            })
+            .or_else(|| {
+                self.page_slot
+                    .loaded_page()
+                    .zip(self.page_slot.renderer_document_lifecycle_binding())
+                    .map(|(loaded_page, binding)| {
+                        (
+                            RendererPageResidenceIdentity::from_page(loaded_page),
+                            binding.page_attachment_id,
+                            binding.clone(),
+                        )
+                    })
             });
         let retiring_document =
             retiring_document.map(|(renderer_page, page_attachment_id, binding)| {
                 RetiringRendererDocumentOutput {
                     predecessor_output_drained: self.last_started_output_document.is_some_and(
                         |document| {
-                            document.page_id == binding.renderer_document.page_id
-                                && document != binding.renderer_document
+                            document.document.page_id == binding.renderer_document.page_id
+                                && document.document != binding.renderer_document
                         },
                     ),
                     renderer_page,
@@ -275,6 +322,7 @@ impl TargetRuntimeSlot {
         reason: TargetPageAbsenceReason,
     ) -> Option<Page> {
         self.javascript_dialog_scope.retire();
+        self.prepared_document_output = None;
         let previous = self.page_slot.replace_loaded_page_with_reason(None, reason);
         self.transition_renderer_channel_for_page_absence(reason);
         self.reset_document_output_state();
@@ -580,7 +628,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn observe_renderer_output_document_start(
         &mut self,
-        document: moli_core::page::RendererDocumentToken,
+        document: moli_core::RendererDocumentLifecycleIdentity,
     ) {
         self.last_started_output_document = Some(document);
         // A replacement VM starts only after its predecessor has retired its
@@ -588,8 +636,8 @@ impl TargetRuntimeSlot {
         // Page stream orders that prefix before this Started record. Keepalive
         // requests retain their own entries until their later terminal facts.
         for entry in &mut self.retiring_renderer_document_outputs {
-            if entry.binding.renderer_document.page_id == document.page_id
-                && entry.binding.renderer_document != document
+            if entry.binding.renderer_document.page_id == document.document.page_id
+                && entry.binding.renderer_document != document.document
             {
                 entry.predecessor_output_drained = true;
             }
@@ -676,12 +724,90 @@ impl TargetRuntimeSlot {
         &mut self,
         fact: &moli_core::page::RendererMainDocumentCommit,
     ) -> Option<bool> {
-        self.page_slot.observe_prepared_renderer_document_commit(
+        let accepted = self.page_slot.observe_prepared_renderer_document_commit(
             self.devtools_renderer_channel
                 .current()
                 .map(|attachment| attachment.id()),
             fact,
-        )
+            self.last_started_output_document,
+        )?;
+        if accepted
+            && let Some((renderer_page, binding)) =
+                self.page_slot.prepared_document_output_binding()
+            && self
+                .prepared_document_output
+                .as_ref()
+                .is_none_or(|output| output.binding != binding)
+        {
+            self.rotate_native_document_output();
+            self.prepared_document_output = Some(PreparedDocumentOutput {
+                renderer_page,
+                binding,
+            });
+        }
+        Some(accepted)
+    }
+
+    pub(crate) fn complete_prepared_document_output_adoption(&mut self) {
+        if self
+            .prepared_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                self.page_slot
+                    .renderer_document_lifecycle_binding()
+                    .is_some_and(|binding| {
+                        binding.navigation == output.binding.navigation
+                            && binding.renderer_frame == output.binding.renderer_frame
+                            && binding.renderer_document == output.binding.renderer_document
+                            && binding.page_attachment_id == output.binding.page_attachment_id
+                    })
+                    && self.page_slot.loaded_page().is_some_and(|page| {
+                        RendererPageResidenceIdentity::from_page(page) == output.renderer_page
+                    })
+            })
+        {
+            self.prepared_document_output = None;
+        }
+    }
+
+    pub(crate) fn finish_loaded_document_network_adoption(&mut self) {
+        if self.prepared_document_output.is_none() {
+            self.network_agent.reset_subresource_cursor();
+            self.network_agent.clear_websocket_artifacts();
+        }
+        // Native admission already rotated a prepared Document's storage.
+        // Its parser may have published requests or WebSockets while the
+        // protocol Page reply was waiting; adoption must retain that prefix.
+    }
+
+    pub(crate) fn accepts_parser_script_fetch_source(
+        &self,
+        source: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> bool {
+        // Started and the frozen main Document commit are ordered on the same
+        // native FIFO. Their conjunction identifies the unadopted Document;
+        // it grants only its detached parser continuation progress.
+        self.page_slot
+            .accepts_prepared_parser_script_source(
+                self.devtools_renderer_channel
+                    .current()
+                    .map(|attachment| attachment.id()),
+                source,
+            )
+            .unwrap_or_else(|| {
+                self.page_slot
+                    .renderer_document_lifecycle_binding()
+                    .is_some_and(|binding| binding.renderer_document_identity() == source)
+            })
+    }
+
+    pub(crate) fn merge_prepared_document_lifecycle_events(
+        &mut self,
+        token: &DocumentNavigationToken,
+        artifacts: &mut moli_core::page::RendererPageCreationArtifacts,
+    ) {
+        self.page_slot
+            .merge_prepared_document_lifecycle_events(token, artifacts);
     }
 
     pub(crate) fn frame_tree_document_loader_id(&self) -> Option<&str> {
@@ -878,11 +1004,16 @@ impl TargetRuntimeSlot {
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
     ) -> Option<TargetNetworkBacklogPreparedDelivery> {
-        let current_renderer_page = self
-            .page_slot
-            .loaded_page()
-            .map(RendererPageResidenceIdentity::from_page);
-        if let Some(binding) = self.page_slot.renderer_document_lifecycle_binding()
+        let (current_renderer_page, binding) = match self.prepared_document_output.as_ref() {
+            Some(output) => (Some(output.renderer_page), Some(&output.binding)),
+            None => (
+                self.page_slot
+                    .loaded_page()
+                    .map(RendererPageResidenceIdentity::from_page),
+                self.page_slot.renderer_document_lifecycle_binding(),
+            ),
+        };
+        if let Some(binding) = binding
             && binding.renderer_document_identity() == source_document
             && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
         {
@@ -1553,9 +1684,11 @@ mod tests {
         );
         slot.finish_retiring_document_output_projection();
         assert_eq!(slot.retiring_renderer_document_outputs.len(), 1);
-        slot.observe_renderer_output_document_start(RendererDocumentToken::new_for_testing(
-            page_id, 2,
-        ));
+        slot.observe_renderer_output_document_start(moli_core::RendererDocumentLifecycleIdentity {
+            frame: RendererFrameToken { page_id },
+            document: RendererDocumentToken::new_for_testing(page_id, 2),
+            epoch: RendererLifecycleEpoch(2),
+        });
         slot.finish_retiring_document_output_projection();
         assert_eq!(
             slot.retiring_renderer_document_outputs.len(),

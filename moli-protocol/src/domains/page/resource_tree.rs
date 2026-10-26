@@ -371,7 +371,7 @@ pub(super) fn main_document_mime_type(page: &Page) -> String {
         .unwrap_or_else(default_document_mime_type)
 }
 
-pub(super) fn devtools_frame_tree_error(message: impl Into<String>) -> DevToolsError {
+pub(super) fn devtools_frame_tree_error(message: impl std::fmt::Display) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, message)
 }
 

@@ -59,7 +59,7 @@ pub(super) fn start_load_network_resource_command(
             params.options.disable_cache,
             params.options.include_credentials,
         ),
-        Err(message) if message == "NoDocumentLoaded" => {
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => {
             return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32602,
                 "Frame not found",
@@ -106,10 +106,9 @@ pub(super) fn complete_network_resource_preparation(
         .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
         .and_then(|page| {
             if page.renderer_agent_attachment_id() != completion.renderer_agent_attachment_id() {
-                return Err("Document changed while preparing the network resource load".to_owned());
+                anyhow::bail!("Document changed while preparing the network resource load");
             }
             page.finish_prepare_network_resource_load(completion)
-                .map_err(|error| error.to_string())
         }) {
         Ok(preparation) => preparation,
         Err(message) => {

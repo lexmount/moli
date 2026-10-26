@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use chromiumoxide_cdp::cdp::browser_protocol::page::GetAppManifestParams;
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererAppManifest, RendererAppManifestDisplayMode,
@@ -30,10 +32,10 @@ enum PendingGetAppManifestWork {
 }
 
 enum CompletedGetAppManifestWork {
-    Prepare(Result<CompletedPageCommand, String>),
+    Prepare(Result<CompletedPageCommand>),
     Fetch(Box<RendererAppManifestLoadOutcome>),
     Publish {
-        completion: Result<CompletedPageCommand, String>,
+        completion: Result<CompletedPageCommand>,
         result: Box<RendererAppManifestQueryResult>,
     },
 }
@@ -68,15 +70,15 @@ impl CompletedGetAppManifestCommand {
 impl PendingGetAppManifestCommand {
     pub(super) async fn wait(self) -> CompletedGetAppManifestCommand {
         let work = match self.work {
-            PendingGetAppManifestWork::Prepare(pending) => CompletedGetAppManifestWork::Prepare(
-                pending.wait().await.map_err(|error| error.to_string()),
-            ),
+            PendingGetAppManifestWork::Prepare(pending) => {
+                CompletedGetAppManifestWork::Prepare(pending.wait().await)
+            }
             PendingGetAppManifestWork::Fetch(pending) => {
                 CompletedGetAppManifestWork::Fetch(Box::new((*pending).execute().await))
             }
             PendingGetAppManifestWork::Publish { pending, result } => {
                 CompletedGetAppManifestWork::Publish {
-                    completion: pending.wait().await.map_err(|error| error.to_string()),
+                    completion: pending.wait().await,
                     result,
                 }
             }
@@ -141,10 +143,8 @@ pub(super) fn complete_get_app_manifest_command(
             };
             let preparation = match conn
                 .loaded_page_mut_for_protocol_access_for_owner(owner)
-                .and_then(|page| {
-                    page.finish_prepare_app_manifest_load(completion)
-                        .map_err(|error| error.to_string())
-                }) {
+                .and_then(|page| page.finish_prepare_app_manifest_load(completion))
+            {
                 Ok(preparation) => preparation,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -210,10 +210,8 @@ pub(super) fn complete_get_app_manifest_command(
             };
             let output = match conn
                 .loaded_page_mut_for_protocol_access_for_owner(owner)
-                .and_then(|page| {
-                    page.finish_publish_app_manifest_load(completion)
-                        .map_err(|error| error.to_string())
-                }) {
+                .and_then(|page| page.finish_publish_app_manifest_load(completion))
+            {
                 Ok(output) => output,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(

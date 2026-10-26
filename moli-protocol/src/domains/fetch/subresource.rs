@@ -86,7 +86,10 @@ pub(crate) async fn detached_parser_script_fetch_pause_prepared_outputs_for_rend
     info: moli_core::page::PendingSubresourceFetchInfo,
     continuation: DetachedParserScriptFetchContinuation,
 ) -> network::NetworkPreparedOutputs {
-    if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
+    if !conn
+        .runtime_session_owner_slot_for_owner(owner)
+        .is_some_and(|slot| slot.accepts_parser_script_fetch_source(source_document))
+    {
         return network::NetworkPreparedOutputs::default();
     }
     network::NetworkPreparedOutputs::from_subresource_fetch_pauses(

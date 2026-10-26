@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsDevicePixelRatioSetting, DevToolsError,
     DevToolsErrorKind, DevToolsGeolocationOverride, DevToolsGeolocationOverrideState,
@@ -2621,106 +2623,73 @@ fn pending_emulation_page_configuration_will_be_replayed(
 pub(crate) async fn dispose_page_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
-) -> anyhow::Result<()> {
-    let mut first_error = conn
-        .clear_devtools_emulation_session_policy_async(session_id)
+) -> Result<()> {
+    let owner = CommandOwnerScope::capture(conn, Some(session_id));
+    prepare_page_session_disposal(conn, session_id)
+        .wait()
         .await
-        .err();
+        .finish(conn.loaded_page_mut_for_owner(&owner))
+        .into_result()
+}
 
+pub(crate) fn prepare_page_session_disposal(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> crate::conn::SessionPageUpdates {
+    let mut updates = conn.start_clear_devtools_emulation_session_policy(session_id);
     let Some(delta) = conn.disable_emulation_session_handler_for_session_owner(session_id) else {
-        return first_error.map_or(Ok(()), Err);
+        return updates;
     };
     let owner = CommandOwnerScope::capture(conn, Some(session_id));
-    let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
-    if let Some(page) = conn.loaded_page_mut_for_session_owner(Some(session_id)) {
+    let inputs = conn.navigation_load_inputs_for_owner(&owner);
+    if let Some(page) = conn.loaded_page_mut_for_owner(&owner) {
         if delta.script_execution_disabled {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "script execution",
-                page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
-                    .await,
+            updates.push(
+                page,
+                "failed to clear detached session script execution",
+                page.start_set_script_execution_disabled(inputs.script_execution_disabled),
             );
         }
         if delta.emulated_media {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "emulated media",
-                page.set_emulated_media_async(&load_inputs.emulated_media)
-                    .await,
+            updates.push(
+                page,
+                "failed to clear detached session emulated media",
+                page.start_set_emulated_media(&inputs.emulated_media),
             );
         }
         if delta.scrollbars_hidden {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "scrollbar visibility",
-                page.set_scrollbars_hidden_async(load_inputs.scrollbars_hidden)
-                    .await,
+            updates.push(
+                page,
+                "failed to clear detached session scrollbar visibility",
+                page.start_set_scrollbars_hidden(inputs.scrollbars_hidden),
             );
         }
         if delta.network_conditions {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "network conditions",
-                page.set_network_offline_async(load_inputs.network_offline)
-                    .await,
+            updates.push(
+                page,
+                "failed to clear detached session network conditions",
+                page.start_set_network_offline(inputs.network_offline),
             );
         }
         if delta.emulated_device_metrics {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "device metrics viewport",
-                page.set_viewport_surface_async(load_inputs.viewport_surface)
-                    .await,
+            updates.push(
+                page,
+                "failed to clear detached session device metrics viewport",
+                page.start_set_viewport_surface(inputs.viewport_surface),
             );
         }
     }
-    if delta.surface_changed() {
-        record_emulation_disposal_result(
-            &mut first_error,
-            "page surfaces",
-            apply_session_surface_state_async(conn, session_id).await,
-        );
+    if delta.surface_changed()
+        && let Some(CdpSessionRoute::PageTarget {
+            browser_context_id,
+            target_id,
+            ..
+        }) = owner.resolve_route(conn)
+        && let Some(context) = conn.browser_context_by_id_mut(&browser_context_id)
+    {
+        context.start_session_surface_restoration(&target_id, &mut updates);
     }
-    first_error.map_or(Ok(()), Err)
-}
-
-async fn apply_session_surface_state_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) -> anyhow::Result<()> {
-    let Some(CdpSessionRoute::PageTarget {
-        browser_context_id,
-        target_id,
-        ..
-    }) = conn.session_route(Some(session_id))
-    else {
-        return Ok(());
-    };
-    let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) else {
-        return Ok(());
-    };
-    if browser_context.is_active_target(&target_id) {
-        browser_context
-            .apply_surface_overrides_to_loaded_page_async()
-            .await
-    } else {
-        browser_context
-            .apply_background_target_surface_overrides_async(&target_id)
-            .await
-            .map(|_applied| ())
-    }
-}
-
-fn record_emulation_disposal_result(
-    first_error: &mut Option<anyhow::Error>,
-    surface: &'static str,
-    result: anyhow::Result<()>,
-) {
-    if let Err(error) = result {
-        first_error.get_or_insert_with(|| {
-            anyhow::anyhow!("failed to clear detached session {surface}: {error}")
-        });
-    }
+    updates
 }
 
 fn single_pending_emulation_dispatch(

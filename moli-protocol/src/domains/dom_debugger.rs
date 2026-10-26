@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 pub(crate) mod native;
 
 use moli_core::page::{
@@ -22,7 +24,7 @@ pub(crate) struct PendingDomDebuggerCommandDispatch {
 pub(crate) struct CompletedDomDebuggerCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
     operation: CompletedDomDebuggerOperation,
 }
 
@@ -84,7 +86,7 @@ impl PendingDomDebuggerCommandDispatch {
         CompletedDomDebuggerCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
             operation: self.operation,
         }
     }
@@ -133,7 +135,6 @@ pub(crate) fn try_start_dom_debugger_command_dispatch(
                         params.pierce,
                     )
                     .map(|pending| (pending, CompletedDomDebuggerOperation::GetEventListeners))
-                    .map_err(|error| error.to_string())
                 })
         }
         DomDebuggerAction::SetEventListenerBreakpoint
@@ -169,7 +170,6 @@ pub(crate) fn try_start_dom_debugger_command_dispatch(
                             },
                         )
                     })
-                    .map_err(|error| error.to_string())
                 })
         }
         DomDebuggerAction::SetXHRBreakpoint | DomDebuggerAction::RemoveXHRBreakpoint => {
@@ -195,7 +195,6 @@ pub(crate) fn try_start_dom_debugger_command_dispatch(
                             },
                         )
                     })
-                    .map_err(|error| error.to_string())
                 })
         }
         DomDebuggerAction::SetDOMBreakpoint | DomDebuggerAction::RemoveDOMBreakpoint => {
@@ -218,7 +217,6 @@ pub(crate) fn try_start_dom_debugger_command_dispatch(
                             CompletedDomDebuggerOperation::ConfigureDomBreakpoint,
                         )
                     })
-                    .map_err(|error| error.to_string())
                 })
         }
     };
@@ -250,10 +248,7 @@ pub(crate) fn complete_pending_dom_debugger_command(
         CompletedDomDebuggerOperation::GetEventListeners => {
             let resolution = completed.completed.and_then(|completion| {
                 conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-                    .and_then(|page| {
-                        page.finish_dom_debugger_get_event_listeners(completion)
-                            .map_err(|error| error.to_string())
-                    })
+                    .and_then(|page| page.finish_dom_debugger_get_event_listeners(completion))
             });
             match resolution {
                 Ok(RendererDomDebuggerEventListenersResolution::Found(listeners)) => {
@@ -261,8 +256,10 @@ pub(crate) fn complete_pending_dom_debugger_command(
                         "listeners": listeners.into_iter().map(listener_payload).collect::<Vec<_>>()
                     }))
                 }
-                Ok(RendererDomDebuggerEventListenersResolution::InvalidRemoteObjectId(message))
-                | Err(message) => CommandOutputPlan::error(-32000, message),
+                Ok(RendererDomDebuggerEventListenersResolution::InvalidRemoteObjectId(message)) => {
+                    CommandOutputPlan::error(-32000, message)
+                }
+                Err(error) => CommandOutputPlan::error(-32000, error),
             }
         }
         CompletedDomDebuggerOperation::ConfigureEventListenerBreakpoint {
@@ -276,7 +273,6 @@ pub(crate) fn complete_pending_dom_debugger_command(
                             completion,
                             "DOMDebugger event listener breakpoint",
                         )
-                        .map_err(|error| error.to_string())
                     })
             });
             if let Err(message) = completion {
@@ -312,7 +308,6 @@ pub(crate) fn complete_pending_dom_debugger_command(
                             completion,
                             "DOMDebugger XHR breakpoint",
                         )
-                        .map_err(|error| error.to_string())
                     })
             });
             if let Err(message) = completion {
@@ -336,10 +331,7 @@ pub(crate) fn complete_pending_dom_debugger_command(
         CompletedDomDebuggerOperation::ConfigureDomBreakpoint => {
             let resolution = completed.completed.and_then(|completion| {
                 conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-                    .and_then(|page| {
-                        page.finish_dom_debugger_configure_dom_breakpoint(completion)
-                            .map_err(|error| error.to_string())
-                    })
+                    .and_then(|page| page.finish_dom_debugger_configure_dom_breakpoint(completion))
             });
             match resolution {
                 Ok(RendererDomDebuggerDomBreakpointResolution::Configured) => {

@@ -1,5 +1,7 @@
 //! Stable page-target registry behavior and foreground target selection.
 
+use anyhow::Result;
+
 use super::super::state::{
     EffectiveTargetPolicy, TargetPageAbsenceReason, TargetSessionStorageNamespace,
 };
@@ -397,13 +399,13 @@ impl BrowserContext {
             .is_some()
     }
 
-    pub(crate) async fn clear_devtools_network_session_policy_async(
+    pub(crate) fn start_clear_devtools_network_session_policy(
         &mut self,
         target_id: &str,
         session_key: &moli_page_types::DevToolsSessionKey,
-    ) -> anyhow::Result<()> {
+    ) -> super::super::SessionPageUpdates {
         let Some(target) = self.page_target_mut(target_id) else {
-            return Ok(());
+            return super::super::SessionPageUpdates::default();
         };
         let previous = target.effective_policy();
         let listener_session_id = session_key.wire_session_id().map(str::to_owned);
@@ -428,139 +430,138 @@ impl BrowserContext {
             target.runtime_slot.clear_websocket_request_ids();
         }
         target.clear_devtools_network_state(session_key);
-        self.apply_effective_devtools_policy_delta_async(target_id, previous)
-            .await?;
-        Ok(())
+        self.start_effective_devtools_policy_delta(target_id, previous)
+            .1
     }
 
-    pub(crate) async fn clear_devtools_emulation_session_policy_async(
+    pub(crate) fn start_clear_devtools_emulation_session_policy(
         &mut self,
         target_id: &str,
         session_key: &moli_page_types::DevToolsSessionKey,
-    ) -> anyhow::Result<bool> {
+    ) -> (bool, super::super::SessionPageUpdates) {
         let Some(target) = self.page_target_mut(target_id) else {
-            return Ok(false);
+            return (false, Default::default());
         };
         let previous = target.effective_policy();
         target.clear_devtools_emulation_policy_state(session_key);
-        self.apply_effective_devtools_policy_delta_async(target_id, previous)
-            .await
+        self.start_effective_devtools_policy_delta(target_id, previous)
     }
 
-    async fn apply_effective_devtools_policy_delta_async(
+    fn start_effective_devtools_policy_delta(
         &mut self,
         target_id: &str,
         previous: EffectiveTargetPolicy,
-    ) -> anyhow::Result<bool> {
+    ) -> (bool, super::super::SessionPageUpdates) {
+        let mut updates = super::super::SessionPageUpdates::default();
         let Some(target) = self.page_target(target_id) else {
-            return Ok(false);
+            return (false, updates);
         };
         let effective = target.effective_policy();
         let delta = previous.delta(&effective);
-        let browser_identity_changed = delta.browser_identity_changed();
-
+        let identity_changed = delta.browser_identity_changed();
         if delta.is_empty() {
-            return Ok(false);
+            return (false, updates);
         }
-
-        let effective_headers =
-            self.merged_extra_headers_for_target_policy(effective.extra_headers());
-        let page = self
-            .page_target_mut(target_id)
-            .and_then(|target| target.runtime_slot.loaded_page_mut());
-        let Some(page) = page else {
-            return Ok(browser_identity_changed);
-        };
-        if delta.network_request {
-            page.set_network_request_policy_async(
-                &effective_headers,
-                effective.bypass_service_worker(),
-                effective.cache_disabled(),
-                effective.blocked_url_patterns(),
-            )
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to restore detached session network request policy: {error}"
-                )
-            })?;
+        let headers = self.merged_extra_headers_for_target_policy(effective.extra_headers());
+        if delta.network_request
+            && let Some(page) = self
+                .page_target_mut(target_id)
+                .and_then(|target| target.runtime_slot.loaded_page_mut())
+        {
+            updates.push(
+                page,
+                "failed to restore detached session network request policy",
+                page.start_set_network_request_policy(
+                    &headers,
+                    effective.bypass_service_worker(),
+                    effective.cache_disabled(),
+                    effective.blocked_url_patterns(),
+                ),
+            );
         }
-        // Session disposal already released its process-wide ICU claims.
-        // Do not recreate them on the Page while restoring target-local policy.
-        Ok(browser_identity_changed)
+        // Process-wide ICU claims were released by the session contribution
+        // removal. Restoring target policy must not recreate those claims.
+        (identity_changed, updates)
     }
 
     pub(crate) async fn reset_primary_page_session_target_state_async(
         &mut self,
         target_id: &str,
         session_id: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
+        let (found, updates) =
+            self.start_reset_primary_page_session_target_state(target_id, session_id);
+        updates
+            .wait()
+            .await
+            .finish(
+                self.page_target_mut(target_id)
+                    .and_then(|target| target.runtime_slot.loaded_page_mut()),
+            )
+            .into_result()?;
+        Ok(found)
+    }
+
+    pub(crate) fn start_reset_primary_page_session_target_state(
+        &mut self,
+        target_id: &str,
+        session_id: &str,
+    ) -> (bool, super::super::SessionPageUpdates) {
+        let mut updates = super::super::SessionPageUpdates::default();
         let Some(target) = self.page_target_mut(target_id) else {
-            return Ok(false);
+            return (false, updates);
         };
         if !target.is_session(session_id) {
-            return Ok(false);
+            return (false, updates);
         }
         target.reset_primary_session_target_state_fields();
-        let navigator_overrides = self
+        let navigator = self
             .navigator_overrides_for_target(target_id)
             .expect("disposing target retains navigator state");
-
-        let effective_headers = self.effective_extra_headers_for_target(target_id);
-        let target = self
+        let headers = self.effective_extra_headers_for_target(target_id);
+        let effective = self
             .page_target(target_id)
-            .expect("disposing page target must remain registered");
-        let effective_policy = target.effective_policy();
-        let document_activity = self
+            .expect("disposing target remains registered")
+            .effective_policy();
+        let activity = self
             .document_activity_for_target(target_id)
-            .expect("disposing target retains document activity");
+            .expect("disposing target retains activity");
         if let Some(page) = self
             .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
         {
-            let mut first_error = None;
-            if let Err(error) = page
-                .set_network_request_policy_async(
-                    &effective_headers,
-                    effective_policy.bypass_service_worker(),
-                    effective_policy.cache_disabled(),
-                    effective_policy.blocked_url_patterns(),
-                )
-                .await
-            {
-                first_error = Some(anyhow::anyhow!(
-                    "failed to clear page network request policy: {error}"
-                ));
-            }
-            if let Err(error) = page.set_network_offline_async(false).await {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to clear page offline state: {error}")
-                });
-            }
-            if let Err(error) = page.set_script_execution_disabled_async(false).await {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to clear page script execution disabled state: {error}")
-                });
-            }
-            if let Err(error) = page
-                .set_navigator_overrides_async(&navigator_overrides)
-                .await
-            {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to restore native navigator state: {error}")
-                });
-            }
-            if let Err(error) = page.set_document_activity_async(document_activity).await {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to restore native document activity: {error}")
-                });
-            }
-            if let Some(error) = first_error {
-                return Err(error);
-            }
+            updates.push(
+                page,
+                "failed to clear page network request policy",
+                page.start_set_network_request_policy(
+                    &headers,
+                    effective.bypass_service_worker(),
+                    effective.cache_disabled(),
+                    effective.blocked_url_patterns(),
+                ),
+            );
+            updates.push(
+                page,
+                "failed to clear page offline state",
+                page.start_set_network_offline(false),
+            );
+            updates.push(
+                page,
+                "failed to clear page script execution disabled state",
+                page.start_set_script_execution_disabled(false),
+            );
+            updates.push(
+                page,
+                "failed to restore native navigator state",
+                page.start_set_navigator_overrides(&navigator),
+            );
+            updates.push(
+                page,
+                "failed to restore native document activity",
+                page.start_set_document_activity(activity),
+            );
         }
-
-        Ok(true)
+        (true, updates)
     }
 
     #[cfg(test)]
@@ -648,10 +649,7 @@ impl BrowserContext {
             .then_some(target_id)
     }
 
-    pub(crate) async fn select_page_target_async(
-        &mut self,
-        target_id: &str,
-    ) -> anyhow::Result<bool> {
+    pub(crate) async fn select_page_target_async(&mut self, target_id: &str) -> Result<bool> {
         if self.is_active_target(target_id) {
             return Ok(true);
         }

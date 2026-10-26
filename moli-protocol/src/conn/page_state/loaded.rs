@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::super::state::{
     CommittedRendererAgentAttachment, PreparedRendererAgentAttachment, TargetPageAbsenceReason,
     TargetPageAttachmentId,
@@ -134,7 +136,7 @@ impl PageTargetHost {
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+    ) -> Result<LoadedNavigationPageCommit> {
         let committed_document_post_response_continuation =
             page.take_committed_document_post_response_continuation();
         let previous_page_owner =
@@ -189,8 +191,7 @@ impl PageTargetHost {
         );
 
         let previous = self.replace_loaded_page(Some(page));
-        self.runtime_slot.reset_subresource_cursor();
-        self.runtime_slot.clear_websocket_artifacts();
+        self.runtime_slot.finish_loaded_document_network_adoption();
         let replaced_page_owner = previous.as_ref().and(previous_page_owner);
         if let Some(page) = previous {
             BrowserContext::close_page_best_effort(page).await;
@@ -235,7 +236,7 @@ impl PageTargetHost {
         transaction: CommittedRendererAgentAttachment,
         history_url: &Url,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+    ) -> Result<LoadedNavigationPageCommit> {
         anyhow::ensure!(
             self.runtime_slot.page_attachment_id()
                 == Some(expected.target_page.page_attachment_id())
@@ -277,8 +278,7 @@ impl PageTargetHost {
             browsing_context_group,
         );
         self.runtime_slot.finish_existing_page_document_commit();
-        self.runtime_slot.reset_subresource_cursor();
-        self.runtime_slot.clear_websocket_artifacts();
+        self.runtime_slot.finish_loaded_document_network_adoption();
         Ok(LoadedNavigationPageCommit {
             // Old Document producers were retired by the renderer commit.
             // Retiring all workers by this stable Page identity would also

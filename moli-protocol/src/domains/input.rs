@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsDispatchDragEventCommand,
     DevToolsDispatchKeyEventCommand, DevToolsDispatchMouseEventCommand,
@@ -606,7 +608,7 @@ fn start_pending_input_command(
     {
         return Err(PendingInputCommandStartError {
             code: -32000,
-            message,
+            message: format!("{message:#}"),
             kind: DevToolsErrorKind::Internal,
         });
     }
@@ -1034,7 +1036,7 @@ fn start_page_input_command(
     command_id: Option<u64>,
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
-    start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
+    start: impl FnOnce(&Page) -> Result<PendingPageCommand>,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     start_page_input_command_with_access(conn, command_id, command_owner, kind, false, start)
 }
@@ -1045,7 +1047,7 @@ fn start_page_input_command_with_access(
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
     targets_outgoing_document: bool,
-    start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
+    start: impl FnOnce(&Page) -> Result<PendingPageCommand>,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
@@ -1719,7 +1721,7 @@ async fn handle_input_dispatch_outcome_async(
     owner: &TargetPageResidenceIdentity,
     outcome: RendererInputDispatchOutcome,
     command_context: &mut CommandDispatchContext,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let action_owner = session_id
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| CommandOwnerScope::for_page_residence(owner));

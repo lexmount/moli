@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::*;
 
 pub(super) async fn start_protocol_neutral_runtime_command(
@@ -199,7 +201,7 @@ pub(super) async fn devtools_call_function_params_async(
     owner: &CommandOwnerScope,
     command: &DevToolsCallFunctionCommand,
     execution_context_id: Option<i64>,
-) -> Result<Value, String> {
+) -> Result<Value> {
     let deserialize_bidi_local_values =
         devtools_call_function_deserializes_bidi_local_values(command);
     let primary_argument_count = devtools_call_function_arguments(command).len();
@@ -242,7 +244,7 @@ pub(super) async fn devtools_call_function_params_async(
                 .runtime_default_or_initial_execution_context_id_for_owner_async(owner)
                 .await?
             else {
-                return Err("NoDefaultExecutionContext".to_owned());
+                anyhow::bail!("NoDefaultExecutionContext");
             };
             map.insert("executionContextId".to_owned(), json!(execution_context_id));
         }

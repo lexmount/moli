@@ -282,7 +282,7 @@ pub(super) fn start_pending_runtime_binding_inspector_phase(
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::BindingInspector { task, pending },
         })),
-        Err(message) if message == "NoDocumentLoaded" => {
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => {
             let mut task = task;
             task.command_response = Some(RuntimeBindingCommandResponse::empty_success());
             match start_pending_runtime_binding_page_phase(
@@ -836,6 +836,7 @@ pub(super) fn complete_pending_runtime_enable_command(
         .complete_runtime_enable_events(completed_enable)
         .and_then(|replay| {
             super::super::native::project_enable_replay(conn, &completed.owner_scope, replay)
+                .map_err(anyhow::Error::msg)
         });
     let mut plan = match replay {
         Ok(events) => {
@@ -1037,7 +1038,7 @@ pub(super) fn complete_pending_runtime_binding_page_command(
     match completed_page {
         Ok(completed_page) => {
             if let Err(message) = conn.complete_runtime_binding_page_command(completed_page)
-                && message != "NoDocumentLoaded"
+                && !message.is::<crate::conn::NoDocumentLoaded>()
             {
                 tracing::warn!(
                     binding = %task.name,
@@ -1172,13 +1173,13 @@ pub(super) fn runtime_binding_command_response_succeeded(task: &RuntimeBindingCo
 
 pub(super) fn runtime_inspector_error_plan(
     command_id: Option<u64>,
-    message: String,
+    message: impl std::fmt::Display,
 ) -> CommandOutputPlan {
+    let message = format!("{message:#}");
     if message == "Duplicate `id` in protocol request" {
         return CommandOutputPlan::error(-32600, message);
     }
     let error = match message.as_str() {
-        "NoDocumentLoaded" => DevToolsError::new(DevToolsErrorKind::Internal, "NoDocumentLoaded"),
         "InvalidParams" => DevToolsError::new(DevToolsErrorKind::InvalidArgument, "InvalidParams"),
         _ => {
             if command_id.is_some() {

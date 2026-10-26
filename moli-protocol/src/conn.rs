@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::{
     cell::OnceCell,
     collections::{HashMap, HashSet},
@@ -32,6 +34,10 @@ use moli_core::{
 pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
 pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 
+#[derive(Debug, thiserror::Error)]
+#[error("NoDocumentLoaded")]
+pub(crate) struct NoDocumentLoaded;
+
 mod activity_source;
 mod automation_command;
 mod bidi_channel_work;
@@ -61,6 +67,8 @@ mod protocol_output;
 mod renderer_command_turn;
 mod resource_runtime_support;
 mod runtime_eval;
+mod session_cleanup;
+pub(crate) use session_cleanup::SessionPageUpdates;
 mod runtime_load;
 mod scheduler_hooks;
 mod scheduler_state;
@@ -71,7 +79,11 @@ mod state;
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub use state_access::{
-    BackgroundPreparedNavigationCommit, ProtocolStateRequest, ProtocolStateRequestReceiver,
+    BackgroundPreparedNavigationCommit, ProtocolStateHandle, ProtocolStateOwner,
+    ProtocolStateRequest, ProtocolStateRequestReceiver, ProtocolWorkflowState,
+};
+pub(crate) use state_access::{
+    PreparedDocumentCommitState, ProtocolStateAccess, ProtocolWorkflowDriver,
 };
 mod target;
 mod top_level_navigation_work;
@@ -534,9 +546,10 @@ pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
 pub(crate) use runtime_eval::{
-    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, RuntimeBindingCallEvent,
-    RuntimeEnableEventsReplay, RuntimeEnableReplayEvent,
-    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
+    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner,
+    PreparedRendererNavigationFinish, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
+    RuntimeEnableReplayEvent, renderer_command_turn_frontend_protocol_response,
+    runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -554,7 +567,8 @@ pub(crate) use runtime_load::{
     BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
     CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    PreparedNavigationRequest, ResponseCommitReady, StablePageNavigationCommitTarget,
+    PreparedCapturedNavigationResponse, PreparedNavigationLoadError, PreparedNavigationRequest,
+    ResponseCommitReady, StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -1808,7 +1822,7 @@ impl CdpConnection {
     pub(crate) fn ensure_document_accessible_for_session_owner(
         &self,
         session_id: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.ensure_document_accessible_for_owner(&owner)
     }
@@ -1816,10 +1830,11 @@ impl CdpConnection {
     pub(crate) fn ensure_document_accessible_for_owner(
         &self,
         owner: &CommandOwnerScope,
-    ) -> Result<(), String> {
-        if self.has_pending_document_navigation_for_owner(owner) {
-            return Err("Navigation is changing the document".to_owned());
-        }
+    ) -> Result<()> {
+        anyhow::ensure!(
+            !self.has_pending_document_navigation_for_owner(owner),
+            "Navigation is changing the document"
+        );
         Ok(())
     }
 
@@ -1906,7 +1921,7 @@ impl CdpConnection {
     pub(crate) fn loaded_page_mut_for_protocol_access(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
+    ) -> Result<&mut Page> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.loaded_page_mut_for_protocol_access_for_owner(&owner)
     }
@@ -1914,10 +1929,12 @@ impl CdpConnection {
     pub(crate) fn loaded_page_mut_for_protocol_access_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
+    ) -> Result<&mut Page> {
+        use anyhow::Context as _;
+
         self.ensure_document_accessible_for_owner(owner)?;
         self.loaded_page_mut_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
+            .context(NoDocumentLoaded)
     }
 
     pub(crate) fn loaded_page_mut_for_session_owner(
@@ -1993,6 +2010,7 @@ impl CdpConnection {
             let events = slot
                 .page_slot_mut()
                 .bind_renderer_document_lifecycle(artifacts, navigation, frame_id, loader_id);
+            slot.complete_prepared_document_output_adoption();
             let binding = slot
                 .page_slot()
                 .renderer_document_lifecycle_binding()

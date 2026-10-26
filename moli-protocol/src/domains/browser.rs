@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use chromiumoxide_cdp::cdp::browser_protocol::browser::{
     CancelDownloadParams, SetWindowBoundsParams,
@@ -57,7 +59,7 @@ enum PendingBrowserCommandKind {
 
 enum CompletedBrowserCommandKind {
     OpenDownloadAsStream {
-        completed: anyhow::Result<Vec<u8>>,
+        completed: Result<Vec<u8>>,
     },
     ApplyPermissionOverrides {
         completed: Vec<CompletedBrowserPageCommand>,
@@ -71,7 +73,7 @@ struct PendingBrowserPageCommand {
 
 struct CompletedBrowserPageCommand {
     target: PendingBrowserPageTarget,
-    completed: anyhow::Result<CompletedPageCommand>,
+    completed: Result<CompletedPageCommand>,
 }
 
 #[derive(Clone)]
@@ -702,7 +704,7 @@ fn start_reset_permissions_command(
     start_apply_permission_overrides_command(conn, cmd)
 }
 
-fn browser_error_step(code: i32, message: impl Into<String>) -> BrowserCommandTaskStep {
+fn browser_error_step(code: i32, message: impl std::fmt::Display) -> BrowserCommandTaskStep {
     BrowserCommandTaskStep::Complete(CommandOutputPlan::error(code, message))
 }
 
@@ -730,7 +732,7 @@ fn start_apply_permission_overrides_command(
 
 fn start_loaded_page_permission_override_commands(
     conn: &mut CdpConnection,
-) -> anyhow::Result<Vec<PendingBrowserPageCommand>> {
+) -> Result<Vec<PendingBrowserPageCommand>> {
     let all_overrides = conn.permission_overrides.clone();
     let mut pending = Vec::new();
     for browser_context in conn
@@ -802,7 +804,7 @@ pub(crate) fn complete_pending_browser_command(
 fn finish_pending_permission_override_command(
     conn: &mut CdpConnection,
     command: CompletedBrowserPageCommand,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let target = command.target;
     let page = conn
         .browser_context_by_id_mut(&target.browser_context_id)

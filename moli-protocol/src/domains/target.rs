@@ -101,7 +101,10 @@ pub(crate) enum TargetCommandTaskStep {
     Complete(CommandOutputPlan),
 }
 
-pub(super) fn target_command_error(code: i32, message: impl Into<String>) -> TargetCommandTaskStep {
+pub(super) fn target_command_error(
+    code: i32,
+    message: impl std::fmt::Display,
+) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Complete(CommandOutputPlan::error(code, message))
 }
 
@@ -210,9 +213,7 @@ impl CdpConnection {
         {
             tracing::warn!(%error, "failed to dispose root Fetch handler");
         }
-        let _ = self
-            .detach_runtime_inspector_session_for_session_owner_async(None)
-            .await;
+        let _ = self.detach_runtime_inspector_session_for_session_owner(None);
         auto_attach::release_attached_sessions_for_root_frontend_async(
             self,
             &mut side_effects,

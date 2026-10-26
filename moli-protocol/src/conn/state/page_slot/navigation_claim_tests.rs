@@ -25,18 +25,19 @@ fn native_commit_visibility_requires_the_admitted_fact_and_current_attachment() 
         slot.observe_prepared_renderer_document_commit(
             Some(RendererAgentAttachmentId::allocate()),
             &fact,
+            None,
         ),
         Some(false)
     );
     let mut different_fact = fact.as_ref().clone();
     different_fact.timestamp += 1.0;
     assert_eq!(
-        slot.observe_prepared_renderer_document_commit(Some(attachment), &different_fact),
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &different_fact, None),
         Some(false)
     );
     assert_eq!(slot.frame_tree_document_loader_id(), None);
     assert_eq!(
-        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact),
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, None),
         Some(true)
     );
     assert_eq!(slot.frame_tree_document_loader_id(), Some("loader"));
@@ -45,13 +46,59 @@ fn native_commit_visibility_requires_the_admitted_fact_and_current_attachment() 
         "native visibility must not finish the still-unadopted navigation"
     );
 
+    let page_id = moli_core::PageId::new_for_testing(1);
+    let native_document = moli_core::RendererDocumentLifecycleIdentity {
+        frame: moli_core::page::RendererFrameToken { page_id },
+        document: moli_core::page::RendererDocumentToken::new_for_testing(page_id, 2),
+        epoch: moli_core::page::RendererLifecycleEpoch(3),
+    };
+    assert_eq!(
+        slot.accepts_prepared_parser_script_source(Some(attachment), native_document),
+        Some(false)
+    );
+    assert_eq!(
+        slot.observe_prepared_renderer_document_commit(
+            Some(attachment),
+            &fact,
+            Some(native_document)
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        slot.accepts_prepared_parser_script_source(Some(attachment), native_document),
+        Some(true)
+    );
+    assert_eq!(
+        slot.accepts_prepared_parser_script_source(
+            Some(RendererAgentAttachmentId::allocate()),
+            native_document
+        ),
+        Some(false)
+    );
+    let stale_epoch = moli_core::RendererDocumentLifecycleIdentity {
+        epoch: moli_core::page::RendererLifecycleEpoch(2),
+        ..native_document
+    };
+    assert_eq!(
+        slot.accepts_prepared_parser_script_source(Some(attachment), stale_epoch),
+        Some(false)
+    );
+    assert_eq!(
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, Some(stale_epoch)),
+        Some(false)
+    );
+
     let replacement = slot.start_document_navigation("target".into(), "loader".into());
     assert!(!slot.register_renderer_document_commit(&token, attachment, fact.clone()));
     assert_eq!(
-        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact),
+        slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, None),
         None
     );
     assert_eq!(slot.frame_tree_document_loader_id(), None);
+    assert_eq!(
+        slot.accepts_prepared_parser_script_source(Some(attachment), native_document),
+        None
+    );
     assert!(slot.accepts_pending_document_navigation_event(&replacement));
 }
 

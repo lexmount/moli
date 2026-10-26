@@ -50,6 +50,42 @@ mod resource_runtime;
 mod site_data;
 
 #[test]
+fn protocol_page_access_reports_a_typed_missing_document() {
+    use crate::conn::{CommandOwnerScope, NoDocumentLoaded};
+
+    let mut conn = CdpConnection::default();
+    let owner = CommandOwnerScope::capture(&conn, None);
+    let error = conn
+        .loaded_page_mut_for_protocol_access_for_owner(&owner)
+        .expect_err("an empty connection has no document");
+    assert!(error.downcast_ref::<NoDocumentLoaded>().is_some());
+    assert_eq!(error.to_string(), "NoDocumentLoaded");
+
+    let error = conn
+        .loaded_page_mut_for_protocol_access(None)
+        .expect_err("session access preserves the missing-document type");
+    assert!(error.downcast_ref::<NoDocumentLoaded>().is_some());
+}
+
+#[test]
+fn missing_document_context_preserves_its_source_and_rejects_text_matches() {
+    use anyhow::Context as _;
+
+    use crate::conn::NoDocumentLoaded;
+
+    let error = Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+        .context(NoDocumentLoaded)
+        .context("runtime realm lookup failed")
+        .unwrap_err();
+    assert!(error.downcast_ref::<NoDocumentLoaded>().is_some());
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert!(!anyhow::anyhow!("NoDocumentLoaded").is::<NoDocumentLoaded>());
+}
+
+#[test]
 fn published_default_target_defers_navigation_runtime_until_materialization() {
     let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
         crate::CdpInitialStoragePartition::memory(),

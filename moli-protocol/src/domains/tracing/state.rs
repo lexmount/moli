@@ -787,12 +787,19 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
-        let owner = self.tracing_owner_scope(session_id);
-        let Some(pending) = self.tracing_state.cancel(&owner) else {
+        let Some(pending) = self.start_cancel_tracing_for_session_owner(session_id) else {
             return false;
         };
         pending.wait().await;
         true
+    }
+
+    pub(crate) fn start_cancel_tracing_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> Option<PendingTraceCancel> {
+        let owner = self.tracing_owner_scope(session_id);
+        self.tracing_state.cancel(&owner)
     }
 }
 

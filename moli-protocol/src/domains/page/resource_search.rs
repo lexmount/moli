@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::sync::Arc;
 
 use moli_core::page::{
@@ -54,7 +56,7 @@ impl PendingSearchInResourceCommand {
 }
 
 impl RendererResourceContentBody for CapturedBody {
-    fn read_bytes(&self, materialize_limit: usize) -> anyhow::Result<Vec<u8>> {
+    fn read_bytes(&self, materialize_limit: usize) -> Result<Vec<u8>> {
         self.materialize_bytes_limited(materialize_limit)
     }
 }
@@ -162,6 +164,6 @@ pub(super) fn complete_search_in_resource_command(
     }
 }
 
-fn complete_error(message: impl Into<String>) -> PageCommandTaskStep {
+fn complete_error(message: impl std::fmt::Display) -> PageCommandTaskStep {
     PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message))
 }

@@ -9,6 +9,60 @@ use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, Subreso
 const OFFLINE_ERROR_TEXT: &str = "net::ERR_INTERNET_DISCONNECTED";
 
 #[tokio::test]
+async fn stale_navigation_failure_cleanup_cannot_clear_a_successor_with_the_same_loader() {
+    let (mut ctx, initial, state) = navigation_fixture();
+    ctx.conn
+        .finish_renderer_document_navigation_for_owner(&state.owner, &initial)
+        .unwrap();
+    ctx.conn
+        .clear_pending_document_navigation_for_owner_if_loader_matches(
+            &state.owner,
+            &initial.loader_id,
+        );
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let old = ctx
+        .conn
+        .start_document_navigation_for_owner(&state.owner, state.loader_id.clone())
+        .unwrap();
+    let successor = ctx
+        .conn
+        .start_document_navigation_for_owner(&state.owner, state.loader_id.clone())
+        .unwrap();
+    let current_page = ctx
+        .conn
+        .renderer_page_residence_identity_for_owner(&state.owner);
+    let failure =
+        crate::domains::network::materialize_navigation_failure_preserving_committed_document(
+            &mut ctx.conn,
+            &state,
+            "old failure".to_owned(),
+        );
+    let crate::domains::network::MaterializedNavigationLoadOutcome::Failed(failure) = failure
+    else {
+        unreachable!()
+    };
+    let owner = state.owner.clone();
+    let mut output = crate::domains::command_output::CommandOutputBuffer::default();
+    let cleanup = crate::domains::page::prepare_failed_navigation_cleanup(
+        &mut ctx.conn,
+        &mut output,
+        old,
+        state,
+        failure,
+    );
+    cleanup.wait_inline(&mut ctx.conn).await;
+    assert!(
+        ctx.conn
+            .accepts_pending_document_navigation_for_owner(&owner, &successor)
+    );
+    assert_eq!(
+        ctx.conn.renderer_page_residence_identity_for_owner(&owner),
+        current_page
+    );
+}
+
+#[tokio::test]
 async fn failed_navigation_cleanup_requires_current_request_and_exact_page() {
     let (mut ctx, initial, navigation) = navigation_fixture();
     ctx.conn

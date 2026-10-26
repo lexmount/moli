@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
@@ -63,7 +65,7 @@ impl SessionFetchBodyStreamOwner<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let handle = target_scoped_stream_handle(
             &self.owner_key,
             self.runtime_slot.allocate_io_stream_handle(),
@@ -602,7 +604,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         completed: crate::conn::CompletedDocumentBodyRead<T>,
-    ) -> Option<anyhow::Result<T>> {
+    ) -> Option<Result<T>> {
         self.target_session_owner_mut_for_owner(owner)?
             .pending_fetch_owner_mut()?
             .finish_pending_fetch_response_body_read(completed)
@@ -637,7 +639,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let Some(mut owner) = self.target_session_owner_mut(session_id) else {
             return Ok(None);
         };
@@ -1156,13 +1158,10 @@ impl CdpConnection {
     pub(crate) fn start_disable_fetch_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Option<Result<moli_core::page::PendingPageCommand>>,
+    )> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_disable_fetch_for_owner(&owner)
     }
@@ -1170,33 +1169,25 @@ impl CdpConnection {
     pub(crate) fn start_disable_fetch_for_owner(
         &mut self,
         command_owner: &CommandOwnerScope,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
-        let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Ok(None);
-        };
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Option<Result<moli_core::page::PendingPageCommand>>,
+    )> {
+        let mut owner = self.target_session_owner_mut_for_owner(command_owner)?;
         let (pending, (subresource_enabled, subresource_resource_type), page_update_required) =
             owner
                 .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
         let page_command = if page_update_required
             && let Some(page) = owner.runtime_slot_mut().loaded_page_mut()
         {
-            Some(
-                page.start_set_fetch_subresource_interception(
-                    subresource_enabled,
-                    subresource_resource_type,
-                )
-                .map_err(|error| error.to_string())?,
-            )
+            Some(page.start_set_fetch_subresource_interception(
+                subresource_enabled,
+                subresource_resource_type,
+            ))
         } else {
             None
         };
-        Ok(Some((pending, page_command)))
+        Some((pending, page_command))
     }
 
     pub(crate) fn take_pending_fetch_state_for_owner(
@@ -1581,7 +1572,7 @@ impl TargetSessionOwnerMut<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let Some(mut owner) = self.fetch_body_stream_owner_mut() else {
             return Ok(None);
         };

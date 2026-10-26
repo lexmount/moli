@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope,
     SessionDisposalPlan, SessionDisposalTarget, TargetEventPlan, TargetSessionDetachCleanupPlan,
@@ -6,7 +8,7 @@ use crate::conn::{
 fn prepare_session_disposal(
     conn: &CdpConnection,
     detachment: TargetSessionDetachCleanupPlan,
-) -> anyhow::Result<(SessionDisposalPlan, TargetSessionDetachCleanupPlan)> {
+) -> Result<(SessionDisposalPlan, TargetSessionDetachCleanupPlan)> {
     let session_id = detachment.session_id();
     let route = conn
         .session_route(Some(session_id))
@@ -23,7 +25,7 @@ fn prepare_session_disposal(
 fn prepare_browser_session_disposal(
     conn: &CdpConnection,
     session_id: &str,
-) -> anyhow::Result<SessionDisposalPlan> {
+) -> Result<SessionDisposalPlan> {
     let route = conn
         .session_route(Some(session_id))
         .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
@@ -57,7 +59,7 @@ async fn dispose_live_session_domains_async(
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
-) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
+) -> Result<Option<moli_core::RendererOutputFence>> {
     let disposal = crate::domains::session::dispose_live_handlers_async(
         conn,
         background_events,
@@ -73,7 +75,7 @@ async fn dispose_live_session_domains_async(
             return Err(anyhow::anyhow!("{error:#}"));
         }
     }
-    crate::domains::runtime::detach_session_inspector_async(conn, plan).await?;
+    crate::domains::runtime::detach_session_inspector(conn, plan)?;
     Ok(disposal.into_renderer_output_predecessor())
 }
 
@@ -82,7 +84,7 @@ async fn recover_failed_page_session_disposal_async(
     background_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
     cleanup_error: &anyhow::Error,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let SessionDisposalTarget::PageTarget {
         browser_context_id,
         target_id,
@@ -148,7 +150,7 @@ async fn recover_failed_page_session_disposal_async(
 pub(super) async fn dispose_browser_session_without_event_async(
     conn: &mut CdpConnection,
     session_id: &str,
-) -> anyhow::Result<TargetEventPlan> {
+) -> Result<TargetEventPlan> {
     let plan = prepare_browser_session_disposal(conn, session_id)?;
     let mut discarded_background_events = Vec::new();
     let mut discarded_protocol_events = Vec::new();
@@ -165,7 +167,7 @@ pub(super) async fn dispose_browser_session_without_event_async(
 pub(super) async fn dispose_browser_session_event_plan_async(
     conn: &mut CdpConnection,
     session_id: &str,
-) -> anyhow::Result<TargetEventPlan> {
+) -> Result<TargetEventPlan> {
     let plan = prepare_browser_session_disposal(conn, session_id)?;
     let mut discarded_background_events = Vec::new();
     let mut discarded_protocol_events = Vec::new();
@@ -195,7 +197,7 @@ pub(crate) async fn dispose_closed_session_domains_async(
 pub(crate) async fn dispose_uncommitted_session_async(
     conn: &mut CdpConnection,
     plan: &SessionDisposalPlan,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let mut discarded_background_events = Vec::new();
     let mut discarded_protocol_events = Vec::new();
     dispose_live_session_domains_async(
@@ -213,7 +215,7 @@ pub(super) async fn dispose_target_session_async(
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     cleanup_plan: TargetSessionDetachCleanupPlan,
-) -> anyhow::Result<TargetSessionDisposalOutcome> {
+) -> Result<TargetSessionDisposalOutcome> {
     let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
     let renderer_output_predecessor =
         dispose_live_session_domains_async(conn, background_events, protocol_events, &plan).await?;
@@ -231,7 +233,7 @@ pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     session_id: &str,
-) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
+) -> Result<Option<moli_core::RendererOutputFence>> {
     let route = conn
         .session_route(Some(session_id))
         .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
@@ -260,7 +262,7 @@ pub(super) async fn dispose_dedicated_worker_session_after_prepared_state_delta_
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     cleanup_plan: TargetSessionDetachCleanupPlan,
-) -> anyhow::Result<TargetSessionDisposalOutcome> {
+) -> Result<TargetSessionDisposalOutcome> {
     let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
     if !matches!(
         plan.target(),
@@ -286,7 +288,7 @@ pub(super) async fn dispose_dedicated_worker_session_after_prepared_state_delta_
 pub(super) async fn dispose_removed_worker_session_async(
     conn: &mut CdpConnection,
     cleanup_plan: TargetSessionDetachCleanupPlan,
-) -> anyhow::Result<TargetEventPlan> {
+) -> Result<TargetEventPlan> {
     let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
     if !matches!(
         plan.target(),

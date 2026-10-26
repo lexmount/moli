@@ -78,6 +78,101 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
 }
 
 #[tokio::test]
+async fn prepared_document_lifecycle_arriving_before_protocol_binding_is_replayed() {
+    use moli_core::page::{
+        RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+        RendererDocumentLifecycleMilestone,
+    };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let CommitFixture {
+                mut ctx,
+                token,
+                navigation,
+                prepared,
+                mut requests,
+                mut completions,
+            } = commit_fixture(true).await;
+            ctx.process_async(json!({"id": 60, "sessionId": "SID-1", "method": "Page.enable"}))
+                .await;
+            ctx.expect_result(60, json!({}), Some("SID-1"));
+            ctx.conn.start_background_prepared_navigation_commit(
+                token,
+                navigation.clone(),
+                prepared,
+            );
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            let mut completion = completions.recv().await.unwrap();
+            let BackgroundNavigationCompletion::PreparedDocument(result) = &mut completion else {
+                panic!("prepared commit expected")
+            };
+            let artifacts = &mut result.navigation.as_mut().unwrap().page_creation_artifacts;
+            let snapshot = artifacts.lifecycle_snapshot;
+            let dcl = snapshot
+                .dom_content_loaded
+                .expect("buffered fixture reaches DCL");
+            let milestones =
+                std::iter::once((dcl, RendererDocumentLifecycleMilestone::DomContentLoaded)).chain(
+                    snapshot
+                        .load
+                        .map(|stamp| (stamp, RendererDocumentLifecycleMilestone::Load)),
+                );
+            let events = milestones
+                .map(|(stamp, milestone)| RendererDocumentLifecycleEvent {
+                    frame: snapshot.frame,
+                    document: snapshot.document,
+                    epoch: snapshot.epoch,
+                    sequence: stamp.sequence,
+                    timestamp_micros: stamp.timestamp_micros,
+                    kind: RendererDocumentLifecycleEventKind::Milestone(milestone),
+                })
+                .collect::<Vec<_>>();
+            // Model the production DocumentCommit reply boundary: the frozen
+            // prefix predates DCL/load, whose exact native facts arrive while
+            // the actor has not yet installed the protocol lifecycle binding.
+            artifacts.initial_lifecycle_events.retain(|event| {
+                !matches!(event.kind, RendererDocumentLifecycleEventKind::Milestone(_))
+            });
+            artifacts.lifecycle_snapshot.dom_content_loaded = None;
+            artifacts.lifecycle_snapshot.load = None;
+            let predecessor = result
+                .navigation
+                .as_ref()
+                .unwrap()
+                .renderer_output_predecessor
+                .clone()
+                .unwrap();
+            // Consume the concrete prefix now as well. Leaving a duplicate
+            // native fact queued until after binding would conceal the loss.
+            ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
+                .await;
+            let (_, visible) = ctx
+                .conn
+                .ingest_renderer_document_lifecycle_events_for_owner(&navigation.owner, events);
+            assert!(visible.is_empty(), "unbound facts must not publish early");
+            let outcome = ctx
+                .conn
+                .drain_background_navigation_completion_turn_async(completion)
+                .await;
+            let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+            let methods = std::iter::once("Page.domContentEventFired")
+                .chain(snapshot.load.map(|_| "Page.loadEventFired"));
+            for method in methods {
+                assert_eq!(
+                    messages
+                        .iter()
+                        .filter(|message| message["method"] == method)
+                        .count(),
+                    1,
+                    "{method} must survive binding: {messages:#?}"
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn queued_commit_captures_preload_changes_at_native_admission() {
     tokio::task::LocalSet::new()
         .run_until(async {

@@ -304,6 +304,98 @@ fn register_devtools_session_response_for_test(
     correlation
 }
 
+#[tokio::test]
+async fn a_late_replay_admission_error_cannot_settle_a_successor_response_lease() {
+    for delivery in [
+        RendererInspectorResponseDelivery::AdapterReply,
+        RendererInspectorResponseDelivery::SessionSink,
+    ] {
+        let mut conn = connection_with_bidi_page_session();
+        let initial = RendererAgentAttachmentId::allocate();
+        let first = RendererAgentAttachmentId::allocate();
+        let second = RendererAgentAttachmentId::allocate();
+        let command = ParsedCdpCommand::parse_str(
+            r#"{"id":73,"method":"Debugger.getScriptSource","params":{"scriptId":"1"}}"#,
+        )
+        .unwrap();
+        let registered = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-active"),
+                73,
+                Some(initial),
+                RendererCommandDescriptor::from_frontend_policy(
+                    command.json().to_owned(),
+                    command.renderer_policy(),
+                    delivery,
+                ),
+            )
+            .unwrap();
+        let (_, old_sender, mut receiver) = registered.into_parts();
+        let prepare = |conn: &mut CdpConnection, old, new| {
+            let replacements = conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions
+                .prepare_renderer_call_replacements(Some("SID-active"), old, new)
+                .unwrap();
+            let (_, terminations, mut replays) = replacements.into_parts();
+            assert!(terminations.is_empty());
+            assert_eq!(replays.len(), 1);
+            replays.pop().unwrap()
+        };
+        let first_replay = prepare(&mut conn, initial, first);
+        drop(old_sender);
+        let pending = conn.start_renderer_call_replay(first_replay, first);
+        // Admission has captured NoDocumentLoaded, but its owned result has
+        // not returned to protocol state. A successor rotates the same call.
+        let second_replay = prepare(&mut conn, first, second);
+        let successor = conn
+            .renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73)
+            .unwrap();
+        assert_eq!(successor.dispatched_attachment_id(), Some(second));
+        let completed = pending.wait().await;
+        assert!(conn.finish_renderer_call_replay(completed).is_empty());
+        assert_eq!(
+            conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73),
+            Some(successor)
+        );
+        if let Some(receiver) = receiver.as_mut() {
+            assert!(
+                matches!(
+                    receiver.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ),
+                "the retired adapter lease must not answer for its successor"
+            );
+        }
+        let pending = conn.start_renderer_call_replay(second_replay, second);
+        let completed = pending.wait().await;
+        let events = conn.finish_renderer_call_replay(completed);
+        if let Some(receiver) = receiver {
+            let completion = receiver.await.unwrap();
+            let messages = completion.output;
+            assert!(
+                messages
+                    .protocol_response(successor.renderer_call_id().get())
+                    .is_some()
+            );
+            assert!(events.is_empty());
+        } else {
+            assert_eq!(events.len(), 1);
+            let response = events[0].protocol_message().unwrap();
+            assert_eq!(response["id"], 73);
+            assert_eq!(response["sessionId"], "SID-active");
+            assert_eq!(response["error"]["message"], "NoDocumentLoaded");
+            assert!(
+                conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73)
+                    .is_none()
+            );
+        }
+    }
+}
+
 #[test]
 fn navigation_termination_consumes_a_devtools_session_frontend_call() {
     let mut conn = CdpConnection::default();
@@ -1085,8 +1177,7 @@ fn runtime_realm_inventory_conversion_keeps_context_without_native_realm_id() {
         },
         Some("FRAME-owner"),
         None,
-    )
-    .expect("Script.getRealms must not fail when DevTools attaches after context creation");
+    );
     assert_eq!(event.context_id, Some(7));
     assert_eq!(
         event.frame_id.as_ref().map(|frame_id| frame_id.as_str()),
@@ -1095,6 +1186,21 @@ fn runtime_realm_inventory_conversion_keeps_context_without_native_realm_id() {
     assert_eq!(
         event.realm_id, None,
         "protocol should not synthesize a realm id when renderer did not capture V8 uniqueId"
+    );
+}
+
+#[tokio::test]
+async fn runtime_realm_inventory_preserves_typed_missing_document() {
+    let mut conn = CdpConnection::default();
+    let owner = CommandOwnerScope::capture(&conn, None);
+    let error = conn
+        .runtime_realm_inventory_for_owner_async(&owner)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<crate::conn::NoDocumentLoaded>()
+            .is_some()
     );
 }
 
@@ -1113,8 +1219,7 @@ fn runtime_realm_inventory_conversion_uses_owner_frame_when_renderer_frame_is_mi
         },
         Some("FRAME-owner"),
         Some(DevToolsTargetId::from("TARGET-1")),
-    )
-    .expect("native renderer realm ids should convert");
+    );
     assert_eq!(
         event.realm_id.as_ref().map(|realm_id| realm_id.as_str()),
         Some("TARGET-1:native-realm-9"),

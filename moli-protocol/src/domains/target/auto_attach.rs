@@ -687,7 +687,7 @@ async fn set_auto_attach_inner_async(
                         route.clone(),
                     ))
                     .await
-                    && message != "NoDocumentLoaded"
+                    && !message.is::<crate::conn::NoDocumentLoaded>()
                 {
                     tracing::warn!(
                         %message,
@@ -944,7 +944,7 @@ async fn auto_attach_child_page_for_tab_session_async(
     if let Err(message) = conn
         .apply_runtime_binding_state_for_owner_async(&CommandOwnerScope::for_route(route.clone()))
         .await
-        && message != "NoDocumentLoaded"
+        && !message.is::<crate::conn::NoDocumentLoaded>()
     {
         tracing::warn!(
             %message,

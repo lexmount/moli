@@ -2419,7 +2419,7 @@ mod tests {
     #[tokio::test]
     async fn revoked_fetch_handler_rejects_a_success_already_queued_before_reenable() {
         tokio::task::LocalSet::new().run_until(async {
-            let (mut scheduler, receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+            let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
                 moli_protocol::CdpInitialStoragePartition::memory(),
                 moli_core::runtime::NavigationRuntimeConfig::default(),
             );
@@ -2442,12 +2442,27 @@ mod tests {
             let paused: Vec<_> = paused.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let request_id = paused.iter().find(|message| message["method"] == "Fetch.requestPaused").unwrap()["params"]["requestId"].clone();
             let command = ParsedCdpCommand::parse_str(json!({
-                "id": 4, "sessionId": session_id, "method": "Fetch.continueRequest", "params": {"requestId": request_id},
+                "id": 4, "sessionId": session_id, "method": "Fetch.fulfillRequest", "params": {
+                    "requestId": request_id, "responseCode": 200,
+                    "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
+                    "body": "PGh0bWw+PHRpdGxlPnF1ZXVlZDwvdGl0bGU+PC9odG1sPg==",
+                },
             }).to_string()).unwrap();
             let (step, output_release_permit, command_context) = scheduler.start_command_dispatch(&command);
             let CommandTaskStep::Pending(pending) = step else { panic!("continuation must own a wait"); };
             let lifetime = pending.wait_lifetime().expect("Fetch handler lifetime");
-            let completed = pending.wait().await;
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                let wait = pending.wait();
+                tokio::pin!(wait);
+                loop {
+                    tokio::select! {
+                        completed = &mut wait => break completed,
+                        request = receivers.protocol_state_request_rx.recv() => {
+                            scheduler.apply_protocol_state_request(request.expect("the protocol owner is live"));
+                        }
+                    }
+                }
+            }).await.expect("the owned fulfillment completes while state requests are driven");
             // The wait already succeeded. Abort cannot remove this queued
             // completion, and the same wire session will immediately re-enable.
             let _ = scheduler.conn.process_message_with_turn_outcome_async(&json!({

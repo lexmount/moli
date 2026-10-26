@@ -1,10 +1,17 @@
-//! Temporary actor-owned state access for workflows whose legacy neighbours
-//! still borrow the connection across awaits. The actor executes each request
-//! synchronously. Remove this mailbox when those entry points have migrated.
+//! Finite protocol-state access. `direct` provides synchronous access through
+//! weak handles. The actor mailbox below is a migration adapter for legacy
+//! entry points which still borrow the connection across awaits; remove it
+//! when those entry points have migrated.
 
+use anyhow::Result;
+
+use anyhow::Context as _;
 use tokio::sync::{mpsc, oneshot};
 
-use super::CdpConnection;
+use super::{CdpCommandTaskStep, CdpConnection, CommandDispatchContext, ParsedCdpCommand};
+
+mod direct;
+pub use direct::{ProtocolStateHandle, ProtocolStateOwner};
 
 type StateOperation = Box<dyn FnOnce(&mut CdpConnection)>;
 
@@ -25,8 +32,107 @@ pub(crate) struct ProtocolStateAccess {
     sender: mpsc::WeakUnboundedSender<ProtocolStateRequest>,
 }
 
-pub(crate) struct ProtocolWorkflowState<'a> {
+/// Finite protocol operations. The connection and its mutable borrow remain
+/// private, and operations return owned work for execution outside this scope.
+pub struct ProtocolWorkflowState<'a> {
     connection: &'a mut CdpConnection,
+}
+
+/// The inline driver is only for entry points which have not yet handed their
+/// task to the actor. Owned workflows always use the revocable mailbox arm.
+/// Remove the inline arm and mailbox together at the direct-sync cutover.
+pub(crate) struct ProtocolWorkflowDriver<'a> {
+    access: ProtocolWorkflowAccess<'a>,
+}
+
+enum ProtocolWorkflowAccess<'a> {
+    Inline(&'a mut CdpConnection),
+    Owned(ProtocolStateAccess),
+}
+
+impl<'a> ProtocolWorkflowDriver<'a> {
+    pub(crate) fn inline(connection: &'a mut CdpConnection) -> Self {
+        Self {
+            access: ProtocolWorkflowAccess::Inline(connection),
+        }
+    }
+
+    pub(crate) fn owned(access: ProtocolStateAccess) -> ProtocolWorkflowDriver<'static> {
+        ProtocolWorkflowDriver {
+            access: ProtocolWorkflowAccess::Owned(access),
+        }
+    }
+    pub(crate) async fn with_state<T: 'static>(
+        &mut self,
+        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
+    ) -> Result<T> {
+        match &mut self.access {
+            ProtocolWorkflowAccess::Inline(connection) => {
+                Ok(operation(ProtocolWorkflowState { connection }))
+            }
+            ProtocolWorkflowAccess::Owned(access) => access.with_state(operation).await,
+        }
+    }
+}
+
+impl ProtocolWorkflowState<'_> {
+    pub fn start_parsed_command_dispatch_with_context(
+        self,
+        command: &ParsedCdpCommand,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        self.connection
+            .start_parsed_command_dispatch_with_context(command, context)
+    }
+
+    pub(crate) fn finish_fetch_cleanup_subresource(
+        self,
+        completed: crate::domains::fetch::CompletedSubresourceFailure,
+    ) -> Option<crate::domains::command_output::CommandOutputPlan> {
+        completed.finish(self.connection)
+    }
+
+    pub(crate) fn start_navigation_renderer_replay(
+        self,
+        replay: super::state::SessionRendererCallReplay,
+        attachment: moli_core::page::RendererAgentAttachmentId,
+    ) -> super::runtime_eval::PendingRendererCallReplay {
+        self.connection
+            .start_renderer_call_replay(replay, attachment)
+    }
+
+    pub(crate) fn finish_navigation_renderer_replay(
+        self,
+        completed: super::runtime_eval::CompletedRendererCallReplay,
+    ) -> Vec<super::BackgroundProtocolEvent> {
+        self.connection.finish_renderer_call_replay(completed)
+    }
+
+    pub(crate) fn prepare_fetch_navigation_error(
+        self,
+        token: super::DocumentNavigationToken,
+        navigation: super::NavigationDispatchState,
+        error: anyhow::Error,
+    ) -> Result<super::PreparedNavigationLoadError> {
+        self.connection
+            .prepare_navigation_load_error(Some(&token), &navigation, error)
+    }
+
+    pub(crate) fn accept_fetch_navigation_response(
+        self,
+        pending: super::PendingFetchNavigation,
+        response: Result<crate::domains::fetch::FetchNavigationResponse>,
+        handle_auth: bool,
+        prior_journal: Option<moli_fetch::NetworkObservationJournal>,
+    ) -> crate::domains::fetch::PreparedFetchNavigationResponse {
+        crate::domains::fetch::accept_navigation_response(
+            self.connection,
+            pending,
+            response,
+            handle_auth,
+            prior_journal,
+        )
+    }
 }
 
 pub(super) struct ProtocolStateMailbox {
@@ -48,11 +154,8 @@ impl ProtocolStateAccess {
     pub(crate) async fn with_state<T: 'static>(
         &self,
         operation: impl for<'a> FnOnce(ProtocolWorkflowState<'a>) -> T + 'static,
-    ) -> anyhow::Result<T> {
-        let sender = self
-            .sender
-            .upgrade()
-            .ok_or_else(|| anyhow::anyhow!("protocol owner closed"))?;
+    ) -> Result<T> {
+        let sender = self.sender.upgrade().context("protocol owner closed")?;
         let (reply, receive) = oneshot::channel();
         let owner = sender.downgrade();
         sender
@@ -70,9 +173,7 @@ impl ProtocolStateAccess {
             })))
             .map_err(|_| anyhow::anyhow!("protocol owner closed"))?;
         drop(sender);
-        receive
-            .await
-            .map_err(|_| anyhow::anyhow!("protocol owner closed"))
+        receive.await.context("protocol owner closed")
     }
 }
 
@@ -93,8 +194,10 @@ impl CdpConnection {
     }
 }
 
+mod child_navigation;
 mod navigation_commit;
 pub use navigation_commit::BackgroundPreparedNavigationCommit;
+pub(crate) use navigation_commit::PreparedDocumentCommitState;
 
 #[cfg(test)]
 mod tests {

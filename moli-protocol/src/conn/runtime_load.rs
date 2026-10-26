@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use data_url::DataUrl;
 use moli_core::{
@@ -31,6 +33,11 @@ use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
     CompletedMainDocumentNetworkEvents, MainDocumentBodyNetworkProgress,
     MainDocumentBodyProgressSource,
+};
+
+mod captured_response;
+pub(crate) use captured_response::{
+    PreparedCapturedNavigationResponse, PreparedNavigationLoadError,
 };
 
 const HTTP_RESPONSE_CODE_FAILURE_ERROR_TEXT: &str = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
@@ -139,7 +146,7 @@ async fn prepare_browser_owned_error_page_navigation_with_engine_async(
     error_text: String,
     body: CapturedBody,
     reply_boundary: RendererReplyBoundary,
-) -> anyhow::Result<ResponseCommitReady> {
+) -> Result<ResponseCommitReady> {
     let error_page_url = Url::parse(NETWORK_ERROR_PAGE_URL)
         .expect("the browser-owned network error page URL must be valid");
     let error_page = NetworkErrorPageNavigation::new(error_text, unreachable_url.clone());
@@ -186,7 +193,7 @@ async fn prepare_network_error_page_navigation_with_engine_async(
     request_headers: moli_fetch::RequestHeaders,
     error_text: String,
     reply_boundary: RendererReplyBoundary,
-) -> anyhow::Result<NavigationLoadOutcome> {
+) -> Result<NavigationLoadOutcome> {
     let body = CapturedBody::from_string(network_error_page_html(&unreachable_url, &error_text));
     prepare_browser_owned_error_page_navigation_with_engine_async(
         engine,
@@ -386,7 +393,7 @@ pub struct ResponseCommitReady {
 }
 
 struct ResponseCommitBodyCapture {
-    task: tokio::task::JoinHandle<anyhow::Result<CapturedBody>>,
+    task: tokio::task::JoinHandle<Result<CapturedBody>>,
     // Replaying an already captured response may block on the bounded parser
     // channel. Its bytes are already available to the browser; waiting for
     // that replay before releasing the commit reply would deadlock the parser.
@@ -398,7 +405,7 @@ impl ResponseCommitBodyCapture {
         self.task.abort();
     }
 
-    async fn resolve(self) -> anyhow::Result<CapturedBody> {
+    async fn resolve(self) -> Result<CapturedBody> {
         if let Some(body) = self.captured_body {
             // The renderer owns the receiving channel and completion signal.
             // Keep feeding it after this browser-side capture has resolved.
@@ -472,7 +479,7 @@ impl ResponseCommitReady {
         mut self,
         permit: PreparedDocumentPageCommitPermit,
         configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         anyhow::ensure!(
             self.stable_page_target.is_none(),
             "replacement requires an existing Page commit"
@@ -569,8 +576,8 @@ impl ResponseCommitReady {
         &mut self,
         permit: PreparedDocumentPageCommitPermit,
         configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> anyhow::Result<
-        impl std::future::Future<Output = anyhow::Result<moli_core::runtime::BuiltDocumentPage>>
+    ) -> Result<
+        impl std::future::Future<Output = Result<moli_core::runtime::BuiltDocumentPage>>
         + 'static
         + use<>,
     > {
@@ -590,7 +597,7 @@ impl ResponseCommitReady {
         pending_download: Option<RendererPendingDownloadActivation>,
         diagnostics: RendererPageCreationDiagnostics,
         page_creation_artifacts: RendererPageCreationArtifacts,
-    ) -> anyhow::Result<LoadedNavigation<PageValue>> {
+    ) -> Result<LoadedNavigation<PageValue>> {
         let body_capture = self
             .body_capture
             .take()
@@ -713,7 +720,7 @@ fn complete_auxiliary_download_response(
 
 async fn first_nonempty_response_body_chunk(
     response: &mut StreamingRawResponse,
-) -> anyhow::Result<Option<Vec<u8>>> {
+) -> Result<Option<Vec<u8>>> {
     loop {
         match response.next_chunk().await {
             Some(chunk) if chunk.is_empty() => continue,
@@ -733,8 +740,8 @@ fn spawn_streaming_body_capture(
     mut response: StreamingRawResponse,
     initial_chunk: Option<Vec<u8>>,
     body_tx: mpsc::Sender<Vec<u8>>,
-    completion_tx: oneshot::Sender<anyhow::Result<()>>,
-) -> tokio::task::JoinHandle<anyhow::Result<CapturedBody>> {
+    completion_tx: oneshot::Sender<Result<()>>,
+) -> tokio::task::JoinHandle<Result<CapturedBody>> {
     tokio::spawn(async move {
         // Publish completion before closing the parser's body channel, as the
         // transport-backed capture did before sharing errors with both owners.
@@ -771,8 +778,8 @@ fn spawn_streaming_body_capture(
 fn spawn_captured_body_replay(
     body: CapturedBody,
     body_tx: mpsc::Sender<Vec<u8>>,
-    completion_tx: oneshot::Sender<anyhow::Result<()>>,
-) -> tokio::task::JoinHandle<anyhow::Result<CapturedBody>> {
+    completion_tx: oneshot::Sender<Result<()>>,
+) -> tokio::task::JoinHandle<Result<CapturedBody>> {
     tokio::spawn(async move {
         let replay_result = async {
             let mut reader = body
@@ -814,9 +821,9 @@ impl std::error::Error for SharedBodyCaptureError {
 }
 
 fn complete_body_capture(
-    result: anyhow::Result<CapturedBody>,
-    completion_tx: oneshot::Sender<anyhow::Result<()>>,
-) -> anyhow::Result<CapturedBody> {
+    result: Result<CapturedBody>,
+    completion_tx: oneshot::Sender<Result<()>>,
+) -> Result<CapturedBody> {
     match result {
         Ok(body) => {
             let _ = completion_tx.send(Ok(()));
@@ -845,18 +852,19 @@ pub(crate) struct PreparedNavigationRequest {
     cancellation: FetchCancelHandle,
 }
 
-impl PreparedNavigationRequest {
-    pub(crate) async fn wait(self) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        struct CancelOnDrop(Option<FetchCancelHandle>);
-        impl Drop for CancelOnDrop {
-            fn drop(&mut self) {
-                if let Some(cancellation) = self.0.take() {
-                    cancellation.cancel();
-                }
-            }
-        }
+struct CancelNavigationRequestOnDrop(Option<FetchCancelHandle>);
 
-        let mut cancellation = CancelOnDrop(Some(self.cancellation.clone()));
+impl Drop for CancelNavigationRequestOnDrop {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.0.take() {
+            cancellation.cancel();
+        }
+    }
+}
+
+impl PreparedNavigationRequest {
+    pub(crate) async fn wait(self) -> Result<NetworkFetchResult<StreamingRawResponse>> {
+        let mut cancellation = CancelNavigationRequestOnDrop(Some(self.cancellation.clone()));
         let url = self.request.url.clone();
         let response = self
             .client
@@ -868,6 +876,17 @@ impl PreparedNavigationRequest {
             cancellation.0.take();
         }
         response
+    }
+
+    pub(crate) async fn wait_buffered(self) -> Result<NetworkFetchResult<RawResponse>> {
+        let _cancellation = CancelNavigationRequestOnDrop(Some(self.cancellation.clone()));
+        let url = self.request.url.clone();
+        // libcurl owns Digest's intermediate challenges. The exact navigation
+        // cancellation reaches that transport as well as this waiting future.
+        self.client
+            .fetch_raw_with_cancel_and_network_metadata(self.request, self.cancellation)
+            .await
+            .with_context(|| format!("failed to fetch page `{url}`"))
     }
 }
 
@@ -936,7 +955,7 @@ impl BackgroundNavigationBodyCompletionSink {
 
     fn send(
         self,
-        body: anyhow::Result<CapturedBody>,
+        body: Result<CapturedBody>,
         body_progress_source: MainDocumentBodyProgressSource,
         final_url: Url,
         response_headers: Vec<(String, Vec<u8>)>,
@@ -987,7 +1006,7 @@ impl BackgroundNavigationEarlyResult {
 impl BackgroundNavigationLoadJob {
     fn emit_early_result_for_successful_document(
         early_result: &mut Option<BackgroundNavigationEarlyResult>,
-        navigation: &anyhow::Result<NavigationLoadOutcome>,
+        navigation: &Result<NavigationLoadOutcome>,
     ) -> bool {
         let is_successful_document = match navigation {
             Ok(NavigationLoadOutcome::ResponseCommitReady(navigation)) => {
@@ -1009,7 +1028,7 @@ impl BackgroundNavigationLoadJob {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> (anyhow::Result<NavigationLoadOutcome>, bool) {
+    ) -> (Result<NavigationLoadOutcome>, bool) {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         let timing_url = self.raw_url.clone();
         let mut engine = self.engine;
@@ -1202,7 +1221,7 @@ impl BackgroundStreamingResponseNavigationLoadJob {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let mut engine = self.engine;
         if let Some(resource_runtime) = self.shared_resource_runtime.take()
             && let Err(error) = engine.adopt_registered_resource_runtime(resource_runtime)
@@ -1231,7 +1250,7 @@ impl BackgroundStreamingResponseNavigationLoadJob {
 }
 
 #[cfg(test)]
-pub(crate) fn decode_data_url_body(raw_url: &str) -> Option<anyhow::Result<Vec<u8>>> {
+pub(crate) fn decode_data_url_body(raw_url: &str) -> Option<Result<Vec<u8>>> {
     decode_data_url_response(raw_url).map(|result| result.map(|response| response.body))
 }
 
@@ -1251,9 +1270,7 @@ struct InlineHtmlNavigationSource {
     response_headers: Vec<(String, Vec<u8>)>,
 }
 
-pub(crate) fn decode_data_url_response(
-    raw_url: &str,
-) -> Option<anyhow::Result<DecodedDataUrlResponse>> {
+pub(crate) fn decode_data_url_response(raw_url: &str) -> Option<Result<DecodedDataUrlResponse>> {
     let data_url = DataUrl::process(raw_url).ok()?;
     let content_type = data_url.mime_type().to_string();
     Some(
@@ -1266,7 +1283,7 @@ pub(crate) fn decode_data_url_response(
 
 fn decoded_data_url_navigation_response(
     raw_url: &str,
-) -> Option<anyhow::Result<DecodedDataUrlNavigationResponse>> {
+) -> Option<Result<DecodedDataUrlNavigationResponse>> {
     let decoded = decode_data_url_response(raw_url)?;
     Some(decoded.and_then(|decoded| {
         let requested_url = Url::parse(raw_url).context("failed to parse data url")?;
@@ -1296,7 +1313,7 @@ fn decoded_data_url_navigation_response(
     }))
 }
 
-pub(crate) fn decode_text_html_data_url(raw_url: &str) -> Option<anyhow::Result<String>> {
+pub(crate) fn decode_text_html_data_url(raw_url: &str) -> Option<Result<String>> {
     if let Some(payload) = raw_url.strip_prefix("data:text/html,")
         && payload.contains('#')
     {
@@ -1319,9 +1336,7 @@ pub(crate) fn decode_text_html_data_url(raw_url: &str) -> Option<anyhow::Result<
     )
 }
 
-fn inline_html_navigation_source(
-    raw_url: &str,
-) -> Option<anyhow::Result<InlineHtmlNavigationSource>> {
+fn inline_html_navigation_source(raw_url: &str) -> Option<Result<InlineHtmlNavigationSource>> {
     if Url::parse(raw_url).is_ok_and(|url| moli_url::is_about_blank(&url)) {
         return Some(
             Url::parse(raw_url)
@@ -1362,7 +1377,7 @@ async fn load_inline_html_navigation_with_engine_async(
     raw_url: &str,
     request_headers: moli_fetch::RequestHeaders,
     reply_boundary: RendererReplyBoundary,
-) -> Option<anyhow::Result<NavigationLoadOutcome>> {
+) -> Option<Result<NavigationLoadOutcome>> {
     let source = inline_html_navigation_source(raw_url)?;
     Some(
         async {
@@ -1413,7 +1428,7 @@ async fn load_data_url_navigation_with_engine_async(
     raw_url: &str,
     request_headers: moli_fetch::RequestHeaders,
     reply_boundary: RendererReplyBoundary,
-) -> Option<anyhow::Result<NavigationLoadOutcome>> {
+) -> Option<Result<NavigationLoadOutcome>> {
     let source = decoded_data_url_navigation_response(raw_url)?;
     Some(
         async {
@@ -1461,7 +1476,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     reserved_service_worker_client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
     resource_source: CommittedDocumentResourceSource,
     reply_boundary: RendererReplyBoundary,
-) -> anyhow::Result<NavigationLoadOutcome> {
+) -> Result<NavigationLoadOutcome> {
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let timing_started = std::time::Instant::now();
     let network_extra_info_available = !network_observation_journal.is_empty();
@@ -1770,7 +1785,7 @@ impl CdpConnection {
         &self,
         token: Option<&DocumentNavigationToken>,
         navigation: &NavigationDispatchState,
-    ) -> anyhow::Result<TargetNavigationLoadInputs> {
+    ) -> Result<TargetNavigationLoadInputs> {
         let token = token
             .filter(|token| {
                 token.target_id == navigation.frame_id
@@ -1832,7 +1847,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         final_url: &Url,
-    ) -> anyhow::Result<PreparedDocumentPageCommitConfiguration> {
+    ) -> Result<PreparedDocumentPageCommitConfiguration> {
         let idle_override = self.idle_override_for_navigation(owner, final_url);
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let debugger_enabled = self
@@ -2319,7 +2334,7 @@ impl CdpConnection {
     pub async fn load_navigation_via_runtime_async(
         &mut self,
         raw_url: &str,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, None);
         let load_inputs = self.navigation_load_inputs_for_owner(&owner);
         self.load_navigation_via_runtime_with_load_inputs_async(&owner, raw_url, load_inputs)
@@ -2338,7 +2353,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         raw_url: &str,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_fixture_load_inputs_for_session_owner(session_id)?;
         self.load_navigation_via_runtime_with_load_inputs_async(&owner, raw_url, load_inputs)
@@ -2350,7 +2365,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         raw_url: &str,
         load_inputs: TargetNavigationLoadInputs,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let request_headers = load_inputs.extra_http_headers.clone();
         let navigation = Box::pin(
             self.load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
@@ -2372,7 +2387,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         navigation: NavigationLoadOutcome,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         match navigation {
             NavigationLoadOutcome::ResponseCommitReady(navigation) => {
                 let navigation = *navigation;
@@ -2402,7 +2417,7 @@ impl CdpConnection {
         raw_url: &str,
         body: Option<String>,
         request_headers: moli_fetch::RequestHeaders,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_async(
             None,
             method,
@@ -2424,7 +2439,7 @@ impl CdpConnection {
         request_headers: moli_fetch::RequestHeaders,
         body_progress_source: MainDocumentBodyProgressSource,
         request_load_policy: NavigationRequestLoadPolicy,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(&owner),
@@ -2447,7 +2462,7 @@ impl CdpConnection {
         token: Option<&DocumentNavigationToken>,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
             &navigation.owner,
             self.navigation_load_inputs_for_navigation(token, navigation)?,
@@ -2466,27 +2481,10 @@ impl CdpConnection {
         token: Option<&DocumentNavigationToken>,
         navigation: &NavigationDispatchState,
         error: anyhow::Error,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
-        let Some(network_error) = error.downcast_ref::<NavigationNetworkError>() else {
-            return Err(error);
-        };
-
-        let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
-        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
-        let page_reservation =
-            self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
-        prepare_network_error_page_navigation_with_engine_async(
-            &mut engine,
-            page_reservation,
-            &load_inputs,
-            network_error.unreachable_url.clone(),
-            network_error.request_method.clone(),
-            network_error.request_headers.clone(),
-            network_error.kind.error_text().to_owned(),
-            RendererReplyBoundary::Stage,
-        )
-        .await
-        .context("failed to prepare network error document")
+    ) -> Result<NavigationLoadOutcome> {
+        self.prepare_navigation_load_error(token, navigation, error)?
+            .run()
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2499,7 +2497,7 @@ impl CdpConnection {
         body: Option<bytes::Bytes>,
         request_headers: moli_fetch::RequestHeaders,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         if load_inputs.browser_context_id.is_none() {
             let page_reservation = self
                 .standalone_navigation_engine
@@ -2856,7 +2854,7 @@ impl CdpConnection {
         fetch_config
     }
 
-    pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> anyhow::Result<Page> {
+    pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> Result<Page> {
         let navigation = self.load_navigation_via_runtime_async(raw_url).await?;
         Ok(navigation.page)
     }
@@ -2868,7 +2866,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         request_headers: moli_fetch::RequestHeaders,
-    ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
+    ) -> Option<Result<NavigationLoadOutcome>> {
         load_inline_html_navigation_with_engine_async(
             self.standalone_navigation_engine.ensure_mut(),
             page_reservation,
@@ -2890,7 +2888,7 @@ impl CdpConnection {
         raw_url: &str,
         request_headers: moli_fetch::RequestHeaders,
         reply_boundary: RendererReplyBoundary,
-    ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
+    ) -> Option<Result<NavigationLoadOutcome>> {
         load_inline_html_navigation_with_engine_async(
             engine,
             page_reservation,
@@ -2917,7 +2915,7 @@ impl CdpConnection {
         response_status: u16,
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         let initial_request_cookie_report =
             load_inputs.request_cookie_report_for_navigation(&requested_url, &request_method, true);
@@ -2945,7 +2943,7 @@ impl CdpConnection {
         response_status: u16,
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_fixture_load_inputs_for_session_owner(session_id)?;
         let initial_request_cookie_report =
@@ -2974,7 +2972,7 @@ impl CdpConnection {
     fn navigation_fixture_load_inputs_for_session_owner(
         &self,
         session_id: Option<&str>,
-    ) -> anyhow::Result<TargetNavigationLoadInputs> {
+    ) -> Result<TargetNavigationLoadInputs> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
         let frame_id = load_inputs
             .root_frame_id
@@ -3006,7 +3004,7 @@ impl CdpConnection {
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         self.build_loaded_navigation_from_buffered_response_with_request_cookie_report_async(
             &load_inputs,
@@ -3033,7 +3031,7 @@ impl CdpConnection {
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         self.build_navigation_from_buffered_body_source_with_load_inputs_async(
             &navigation.owner,
@@ -3067,7 +3065,7 @@ impl CdpConnection {
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let response_cookie_reports =
             load_inputs.store_response_cookie_reports(&final_url, &response_headers);
         let head = ResponseHead {
@@ -3107,7 +3105,7 @@ impl CdpConnection {
         response_body: String,
         captured_response_body: Option<CapturedBody>,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let response_cookie_reports =
             load_inputs.store_response_cookie_reports(&requested_url, &response_headers);
         let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
@@ -3206,7 +3204,7 @@ impl CdpConnection {
         body: Option<String>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<NavigationResponse>> {
+    ) -> Result<NetworkFetchResult<NavigationResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
         let resource_storage = load_inputs.resource_storage_handles();
@@ -3237,7 +3235,7 @@ impl CdpConnection {
         &mut self,
         navigation: &NavigationDispatchState,
         auth: SubresourceAuthCredentials,
-    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let load_inputs = self.navigation_request_load_inputs(navigation);
         let raw_url = navigation.requested_url.as_str();
         let request = build_navigation_network_request(
@@ -3265,7 +3263,7 @@ impl CdpConnection {
         body: Option<String>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
+    ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         self.fetch_navigation_streaming_raw_response_with_load_inputs_async(
             &load_inputs,
@@ -3283,7 +3281,7 @@ impl CdpConnection {
         token: &DocumentNavigationToken,
         navigation: &NavigationDispatchState,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<PreparedNavigationRequest> {
+    ) -> Result<PreparedNavigationRequest> {
         let load_inputs = self.navigation_load_inputs_for_navigation(Some(token), navigation)?;
         let cancellation = self
             .runtime_session_owner_slot_for_owner(&navigation.owner)
@@ -3312,7 +3310,7 @@ impl CdpConnection {
         &mut self,
         navigation: &NavigationDispatchState,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
+    ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = self.navigation_request_load_inputs(navigation);
         self.fetch_navigation_streaming_raw_response_with_load_inputs_async(
             &load_inputs,
@@ -3333,7 +3331,7 @@ impl CdpConnection {
         body: Option<bytes::Bytes>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
+    ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         let request = build_navigation_network_request(
             load_inputs,
             method,
@@ -3358,7 +3356,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<NavigationResponse>,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         self.build_navigation_from_network_response_for_session_owner_async(
             None,
             requested_url,
@@ -3376,7 +3374,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<NavigationResponse>,
-    ) -> anyhow::Result<LoadedNavigation> {
+    ) -> Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
@@ -3487,7 +3485,7 @@ impl CdpConnection {
         token: Option<&DocumentNavigationToken>,
         navigation: &NavigationDispatchState,
         response: NetworkFetchResult<RawResponse>,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         self.build_navigation_from_buffered_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3508,13 +3506,13 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<RawResponse>,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         if super::downloads::response_headers_indicate_download(&response.headers) {
             complete_auxiliary_download_response(load_inputs, response.head());
             return Ok(NavigationLoadOutcome::download(
-                self.build_download_from_raw_response(
+                Self::build_download_from_raw_response(
                     request_method,
                     request_headers,
                     response,
@@ -3547,7 +3545,7 @@ impl CdpConnection {
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         self.build_navigation_from_captured_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3575,75 +3573,20 @@ impl CdpConnection {
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
-        if super::downloads::response_headers_indicate_download(&head.headers) {
-            complete_auxiliary_download_response(load_inputs, head.clone());
-            let body_bytes = body
-                .materialize_bytes()
-                .context("failed to materialize captured download body")?;
-            return Ok(NavigationLoadOutcome::download(
-                self.build_download_from_raw_response(
-                    request_method,
-                    request_headers,
-                    RawResponse::from_head_and_body(head, body_bytes),
-                    network_observation_journal,
-                ),
-            ));
-        }
-
-        if response_status_has_no_content(head.status) {
-            return Ok(no_content_navigation_from_response(
-                head,
-                request_method,
-                request_headers,
-                network_observation_journal,
-                &body_progress_source,
-            ));
-        }
-
-        if load_inputs.browser_context_id.is_none() {
-            let page_reservation = self
-                .standalone_navigation_engine
-                .ensure()
-                .reserve_page_for_creation();
-            return prepare_navigation_from_captured_raw_response_with_engine_async(
-                self.standalone_navigation_engine.ensure_mut(),
-                page_reservation.into(),
-                load_inputs,
-                requested_url,
-                request_method,
-                request_headers,
-                head,
-                body,
-                body_progress_source,
-                network_observation_journal,
-                None,
-                false,
-                RendererReplyBoundary::Stage,
-            )
-            .await
-            .map(NavigationLoadOutcome::response_commit_ready);
-        }
-
-        let mut engine = self.navigation_engine_handle_for_load_inputs(load_inputs);
-        let page_reservation = self.reserve_renderer_page_for_owner(owner, load_inputs, &engine);
-        let navigation = prepare_navigation_from_captured_raw_response_with_engine_async(
-            &mut engine,
-            page_reservation,
-            load_inputs,
+    ) -> Result<NavigationLoadOutcome> {
+        self.prepare_captured_navigation_response_with_load_inputs(
+            owner,
+            load_inputs.clone(),
             requested_url,
             request_method,
             request_headers,
             head,
             body,
-            body_progress_source,
             network_observation_journal,
-            None,
-            false,
-            RendererReplyBoundary::Stage,
+            body_progress_source,
         )
-        .await?;
-        Ok(NavigationLoadOutcome::response_commit_ready(navigation))
+        .run()
+        .await
     }
 
     pub(crate) async fn build_navigation_from_streaming_raw_response_for_navigation_async(
@@ -3652,7 +3595,7 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         response: NetworkFetchResult<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3676,7 +3619,7 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3704,7 +3647,7 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         if load_inputs.browser_context_id.is_none() {
@@ -3758,7 +3701,7 @@ impl CdpConnection {
     pub(crate) async fn collect_navigation_streaming_raw_response_async(
         &mut self,
         response: NetworkFetchResult<StreamingRawResponse>,
-    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         let response = response
@@ -3772,7 +3715,6 @@ impl CdpConnection {
     }
 
     fn build_download_from_raw_response(
-        &self,
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response: RawResponse,
@@ -3835,7 +3777,7 @@ async fn prepare_navigation_from_captured_raw_response_with_engine_async(
     network_error_page: Option<NetworkErrorPageNavigation>,
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
-) -> anyhow::Result<ResponseCommitReady> {
+) -> Result<ResponseCommitReady> {
     let network_extra_info_available = !network_observation_journal.is_empty();
     if network_error_page.is_none()
         && response_status_may_use_http_error_page(head.status)
@@ -3904,7 +3846,7 @@ async fn prepare_captured_document_response_with_engine_async(
     network_error_page: Option<NetworkErrorPageNavigation>,
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
-) -> anyhow::Result<ResponseCommitReady> {
+) -> Result<ResponseCommitReady> {
     let auxiliary_document_response = load_inputs
         .auxiliary_document_response
         .as_ref()
@@ -4011,7 +3953,7 @@ fn build_navigation_network_request(
     body: Option<bytes::Bytes>,
     request_headers: moli_fetch::RequestHeaders,
     auth: Option<SubresourceAuthCredentials>,
-) -> anyhow::Result<Request> {
+) -> Result<Request> {
     validate_navigation_network_request(load_inputs, method, raw_url, &request_headers)?;
     let mut request = Request::new_browser_bytes(
         method,
@@ -4052,7 +3994,7 @@ fn validate_navigation_network_request(
     method: &str,
     raw_url: &str,
     request_headers: &moli_fetch::RequestHeaders,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
     if load_inputs.network_offline {
         let requested_url = Url::parse(raw_url)
@@ -4071,7 +4013,7 @@ fn validate_navigation_network_request(
 fn ensure_url_not_blocked_for_load_inputs(
     load_inputs: &TargetNavigationLoadInputs,
     raw_url: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if load_inputs
         .blocked_url_patterns
         .iter()
@@ -4093,7 +4035,7 @@ async fn apply_navigation_load_input_overrides_async(
     page: &mut moli_core::page::Page,
     load_inputs: &TargetNavigationLoadInputs,
     mode: NavigationLoadInputOverrideMode,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if !load_inputs.permission_overrides.is_empty()
         || mode == NavigationLoadInputOverrideMode::ExistingPage
     {
@@ -4126,6 +4068,8 @@ async fn apply_navigation_load_input_overrides_async(
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::{
         BackgroundNavigationEarlyResult, decode_data_url_body, decode_data_url_response,
         decode_text_html_data_url, decoded_data_url_navigation_response,
@@ -4219,7 +4163,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_body_capture_retains_join_error() {
-        let task = tokio::spawn(std::future::pending::<anyhow::Result<super::CapturedBody>>());
+        let task = tokio::spawn(std::future::pending::<Result<super::CapturedBody>>());
         task.abort();
         let error = super::ResponseCommitBodyCapture {
             task,

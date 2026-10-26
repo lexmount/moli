@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use serde::Deserialize;
 use serde_json::json;
 
@@ -14,7 +16,7 @@ struct AttachParams {
 
 fn target_command_error_without_session(
     code: i32,
-    message: impl Into<String>,
+    message: impl std::fmt::Display,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Complete(CommandOutputPlan::error_without_session(code, message))
 }
@@ -67,9 +69,10 @@ impl TargetCommandOutput {
         self.plan.push_success();
     }
 
-    fn push_error(&mut self, code: i32, message: impl Into<String>) {
+    fn push_error(&mut self, code: i32, message: impl std::fmt::Display) {
         self.flush_side_effects();
-        self.plan.push_error_without_session(code, message);
+        self.plan
+            .push_error_without_session(code, format!("{message:#}"));
     }
 
     fn insert_renderer_output_boundary(&mut self, cursor: moli_core::RendererOutputFence) {
@@ -317,7 +320,7 @@ pub(super) async fn complete_attach_to_target_command_async(
             prepared_session.route().clone(),
         ))
         .await
-        && message != "NoDocumentLoaded"
+        && !message.is::<crate::conn::NoDocumentLoaded>()
     {
         tracing::warn!(
             %message,
@@ -720,7 +723,7 @@ async fn dispose_target_sessions_async(
     command_context: &mut crate::conn::CommandDispatchContext,
     target_id: &str,
     session_ids: Vec<String>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     for session_id in session_ids {
         let outcome = super::session_disposal::dispose_target_session_async(
             conn,

@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::automation::{
     AutomationCommand, AutomationEvent, AutomationResult, DevToolsError, DevToolsErrorKind,
     DevToolsFrameId, DevToolsGetNavigationHistoryCommand, DevToolsGetNavigationHistoryResult,
@@ -60,7 +62,7 @@ pub(super) struct CompletedNavigateLoadCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    navigation: anyhow::Result<NavigationLoadOutcome>,
+    navigation: Result<NavigationLoadOutcome>,
 }
 
 pub(super) struct PendingChildFrameNavigateCommand {
@@ -70,6 +72,8 @@ pub(super) struct PendingChildFrameNavigateCommand {
     url: String,
     wait: DevToolsNavigationWait,
     result_payload: Value,
+    owner: CommandOwnerScope,
+    access: Option<crate::conn::ProtocolStateAccess>,
 }
 
 pub(super) struct PendingSameDocumentNavigateCommand {
@@ -77,13 +81,29 @@ pub(super) struct PendingSameDocumentNavigateCommand {
     result_payload: Value,
 }
 
-pub(super) struct CompletedChildFrameNavigateCommand {
-    prefix_events: Vec<BackgroundProtocolEvent>,
-    completed: Result<CompletedPageCommand, String>,
-    activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
-    url: String,
-    wait: DevToolsNavigationWait,
-    result_payload: Value,
+pub(super) struct ChildFrameNavigationInput {
+    pub(super) prefix_events: Vec<BackgroundProtocolEvent>,
+    pub(super) activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
+    pub(super) url: String,
+    pub(super) wait: DevToolsNavigationWait,
+    pub(super) result_payload: Value,
+}
+
+pub(super) enum CompletedChildFrameNavigateCommand {
+    Owned {
+        url: String,
+        plan: CommandOutputPlan,
+        predecessor: Option<moli_core::RendererOutputFence>,
+        outputs: Vec<moli_core::page::RendererCommandTurnOutput>,
+    },
+    // The inline driver does not pump state operations. Remove this adapter
+    // when every entry point has the final synchronous state boundary.
+    Inline(Box<InlineChildFrameNavigationCompletion>),
+}
+
+pub(super) struct InlineChildFrameNavigationCompletion {
+    input: ChildFrameNavigationInput,
+    completed: Result<CompletedPageCommand>,
 }
 
 pub(super) struct CompletedSameDocumentNavigateCommand {
@@ -122,10 +142,14 @@ pub(super) struct CompletedSameDocumentHistoryTraversalCommand {
 
 impl CompletedChildFrameNavigateCommand {
     pub(super) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
-        self.completed
-            .as_ref()
-            .ok()
-            .and_then(CompletedPageCommand::renderer_output_predecessor)
+        match self {
+            Self::Owned { predecessor, .. } => predecessor.clone(),
+            Self::Inline(completed) => completed
+                .completed
+                .as_ref()
+                .ok()
+                .and_then(CompletedPageCommand::renderer_output_predecessor),
+        }
     }
 }
 
@@ -161,13 +185,22 @@ impl PendingNavigateLoadCommand {
 
 impl PendingChildFrameNavigateCommand {
     pub(super) async fn wait(self) -> CompletedChildFrameNavigateCommand {
-        CompletedChildFrameNavigateCommand {
+        let completed = self.pending.wait().await;
+        let input = ChildFrameNavigationInput {
             prefix_events: self.prefix_events,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
             activity_binding: self.activity_binding,
             url: self.url,
             wait: self.wait,
             result_payload: self.result_payload,
+        };
+        match self.access {
+            Some(access) => {
+                super::child_navigation::finish_navigation(access, self.owner, completed, input)
+                    .await
+            }
+            None => CompletedChildFrameNavigateCommand::Inline(Box::new(
+                InlineChildFrameNavigationCompletion { input, completed },
+            )),
         }
     }
 }
@@ -208,7 +241,7 @@ pub(super) enum NavigateCommandStart {
     PendingContinueWithoutRequestPause(Box<PendingContinueNavigationWithoutRequestPauseCommand>),
 }
 
-const CHILD_FRAME_NAVIGATION_LOAD_GATE_TIMEOUT: std::time::Duration =
+pub(super) const CHILD_FRAME_NAVIGATION_LOAD_GATE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
@@ -444,7 +477,7 @@ impl MaterializedNavigationCompletion {
 pub struct BackgroundMainDocumentBodyCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    body: anyhow::Result<CapturedBody>,
+    body: Result<CapturedBody>,
     synthetic: bool,
     body_progress_source: network::MainDocumentBodyProgressSource,
     final_url: Url,
@@ -456,7 +489,7 @@ impl BackgroundMainDocumentBodyCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        body: anyhow::Result<CapturedBody>,
+        body: Result<CapturedBody>,
         synthetic: bool,
         body_progress_source: network::MainDocumentBodyProgressSource,
         final_url: Url,
@@ -546,7 +579,7 @@ impl BackgroundNavigationCompletion {
 pub struct BackgroundNavigationLifecycleCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    navigation: anyhow::Result<NavigationLoadOutcome>,
+    navigation: Result<NavigationLoadOutcome>,
     ready_at: std::time::Instant,
 }
 
@@ -554,7 +587,7 @@ impl BackgroundNavigationLifecycleCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        navigation: anyhow::Result<NavigationLoadOutcome>,
+        navigation: Result<NavigationLoadOutcome>,
     ) -> Self {
         Self {
             token,
@@ -588,7 +621,7 @@ impl BackgroundNavigationCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        navigation: anyhow::Result<NavigationLoadOutcome>,
+        navigation: Result<NavigationLoadOutcome>,
     ) -> Self {
         Self::Lifecycle(Box::new(BackgroundNavigationLifecycleCompletion::new(
             token, state, navigation,
@@ -598,7 +631,7 @@ impl BackgroundNavigationCompletion {
     pub(crate) fn main_document_body(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        body: anyhow::Result<CapturedBody>,
+        body: Result<CapturedBody>,
         synthetic: bool,
         body_progress_source: network::MainDocumentBodyProgressSource,
         final_url: Url,
@@ -1279,13 +1312,24 @@ fn direct_navigation_result_from_completed_child_frame(
     completed: &CompletedChildFrameNavigateCommand,
     result: &mut DirectNavigationResult,
 ) -> Result<(), DevToolsError> {
-    if let Err(message) = &completed.completed {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::Internal,
-            message.clone(),
-        ));
-    }
-    result.set_url(completed.url.clone());
+    let url = match completed {
+        CompletedChildFrameNavigateCommand::Owned { plan, url, .. } => {
+            if let Some(Err(error)) = plan.command_status() {
+                return Err(error);
+            }
+            url
+        }
+        CompletedChildFrameNavigateCommand::Inline(completed) => {
+            if let Err(message) = &completed.completed {
+                return Err(DevToolsError::new(
+                    DevToolsErrorKind::Internal,
+                    message.to_string(),
+                ));
+            }
+            &completed.input.url
+        }
+    };
+    result.set_url(url.clone());
     Ok(())
 }
 
@@ -1551,6 +1595,8 @@ fn start_child_frame_navigate_command(
                 url: url.to_owned(),
                 wait,
                 result_payload,
+                owner: owner.clone(),
+                access: conn.protocol_state_access(),
             }))
         }
         Err(error) => {
@@ -3236,21 +3282,34 @@ pub(super) async fn complete_pending_child_frame_navigate_command(
     completed: CompletedChildFrameNavigateCommand,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
-    let CompletedChildFrameNavigateCommand {
+    let (input, completed) = match completed {
+        CompletedChildFrameNavigateCommand::Owned { plan, outputs, .. } => {
+            for output in outputs {
+                command_context.consume_renderer_command_turn_output(output);
+            }
+            return PageCommandTaskStep::Complete(plan);
+        }
+        CompletedChildFrameNavigateCommand::Inline(completed) => {
+            (completed.input, completed.completed)
+        }
+    };
+    let ChildFrameNavigationInput {
         prefix_events,
-        completed,
         activity_binding,
         url,
         wait,
         mut result_payload,
-    } = completed;
+    } = input;
     if !conn.target_root_document_protocol_attachment_identity_is_current(&activity_binding) {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "NoSuchTarget"));
     }
     let completion = match completed {
         Ok(completion) => completion,
         Err(message) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                format!("{message:#}"),
+            ));
         }
     };
     let (navigated, renderer_output) = {
@@ -3279,13 +3338,19 @@ pub(super) async fn complete_pending_child_frame_navigate_command(
         ) {
             Ok(pending) => pending,
             Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    format!("{message:#}"),
+                ));
             }
         };
         let child_gate = match child_gate.wait().await {
             Ok(completed) => completed,
             Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    format!("{message:#}"),
+                ));
             }
         };
         let (completed, renderer_output) = match conn
@@ -3293,7 +3358,10 @@ pub(super) async fn complete_pending_child_frame_navigate_command(
         {
             Ok(completed) => completed,
             Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    format!("{message:#}"),
+                ));
             }
         };
         command_context.consume_renderer_command_turn_output(renderer_output);
@@ -3434,7 +3502,13 @@ pub(crate) async fn complete_prepared_navigation_into_buffer_async(
     let owner = state.owner.clone();
     let loader_id = state.loader_id.clone();
     match navigation {
-        Ok(navigation) => {
+        Ok(mut navigation) => {
+            if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&owner) {
+                slot.merge_prepared_document_lifecycle_events(
+                    &token,
+                    &mut navigation.page_creation_artifacts,
+                );
+            }
             let navigation =
                 network::materialize_loaded_navigation_progress(conn, &state, navigation);
             commit_loaded_navigation_async(
@@ -3620,43 +3694,10 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
-            if let Some(id) = state.web_mcp_invocation.as_ref() {
-                out.extend_background_events_after_messages(
-                    super::super::web_mcp::navigation_failed(conn, &state.owner, id.invocation_id),
-                );
-            }
-            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
-            let network::MaterializedFailedDocumentProgress {
-                error_text,
-                document_policy,
-                response_mode,
-                progress_gate,
-            } = navigation;
-            if document_policy.invalidates_committed_document() {
-                let expected = conn
-                    .target_page_residence_identity_for_owner(&state.owner)
-                    .zip(conn.renderer_page_residence_identity_for_owner(&state.owner))
-                    .map(|(target_page, renderer_page)| {
-                        crate::conn::StablePageNavigationCommitTarget {
-                            target_page,
-                            renderer_page,
-                        }
-                    });
-                if let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
-                    &state.owner,
-                    &token,
-                    expected.as_ref(),
-                    &state.requested_url,
-                ) {
-                    let _ = page.close_async().await;
-                }
-            }
-            activity::MainDocumentFailedNavigationActivity::new(
-                state,
-                progress_gate,
-                response_mode,
-            )
-            .emit_navigation_error_into_buffer(out, &error_text);
+            let cleanup =
+                super::prepare_failed_navigation_cleanup(conn, out, token, state, navigation);
+            out.extend_background_events_after_messages(cleanup.wait_inline(conn).await);
+            return;
         }
     }
     finish_renderer_navigation_into_buffer_async(conn, out, &navigation_owner, &token).await;
@@ -3672,43 +3713,8 @@ async fn finish_renderer_navigation_into_buffer_async(
     owner: &CommandOwnerScope,
     token: &DocumentNavigationToken,
 ) {
-    let navigation_session_id = owner.session_id().map(str::to_owned);
-    let primary_protocol_session_id = conn
-        .runtime_session_owner_primary_session_id_for_owner(owner)
-        .or_else(|| navigation_session_id.clone());
-    let (routed_renderer_output, renderer_call_replacements) = conn
-        .finish_renderer_document_navigation_for_owner(owner, token)
-        .map(|finish| (finish.released_output, finish.renderer_call_replacements))
-        .unwrap_or_default();
-    if !routed_renderer_output.is_empty() {
-        let mut background_events = Vec::new();
-        crate::domains::runtime::push_routed_renderer_runtime_inspector_message_batch_background_events(
-            conn,
-            &mut background_events,
-            routed_renderer_output,
-            primary_protocol_session_id.as_deref(),
-        );
-        out.extend_background_events_after_messages(background_events);
-    }
-    if let Some(renderer_call_replacements) = renderer_call_replacements {
-        let (new_attachment_id, terminations, replays) = renderer_call_replacements.into_parts();
-        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
-            terminations,
-            "Execution context was destroyed.",
-        );
-        out.extend_background_events_after_messages(termination_events);
-        match conn
-            .replay_prepared_renderer_calls_after_navigation_async(replays, new_attachment_id)
-            .await
-        {
-            Ok(events) => out.extend_background_events_after_messages(events),
-            Err(error) => tracing::warn!(
-                %error,
-                session_id = navigation_session_id.as_deref(),
-                "failed to replay renderer Inspector commands after navigation"
-            ),
-        }
-    }
+    let cleanup = conn.prepare_renderer_navigation_finish(owner, token);
+    out.extend_background_events_after_messages(cleanup.wait_inline(conn).await);
 }
 
 fn push_navigation_commit_error(

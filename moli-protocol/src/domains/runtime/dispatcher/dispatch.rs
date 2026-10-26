@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::*;
 
 pub(super) fn command_response_succeeded(
@@ -594,7 +596,7 @@ pub(super) fn start_pending_runtime_enable_events_phase(
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::Enable(pending),
         })),
-        Err(message) if message == "NoDocumentLoaded" => {
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => {
             RuntimeCommandTaskStep::Complete(CommandOutputPlan::success())
         }
         Err(message) => RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
@@ -764,7 +766,7 @@ pub(super) fn start_pending_runtime_routable_inspector_dispatch(
     owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     match cmd.renderer_policy().access() {
         CdpRendererCommandAccess::MainThread => {
             start_pending_runtime_inspector_dispatch_with_delivery(
@@ -782,9 +784,9 @@ pub(super) fn start_pending_runtime_routable_inspector_dispatch(
             inspector_json,
             response_delivery,
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
-            "an owner-independent command cannot enter the Runtime Inspector dispatcher".to_owned(),
-        ),
+        CdpRendererCommandAccess::OwnerIndependent => Err(anyhow::anyhow!(
+            "an owner-independent command cannot enter the Runtime Inspector dispatcher"
+        )),
     }
 }
 
@@ -794,7 +796,7 @@ pub(super) fn start_pending_runtime_io_inspector_dispatch(
     owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -816,7 +818,7 @@ pub(super) fn start_pending_runtime_context_resolved_inspector_dispatch_with_del
     action: &'static str,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -844,7 +846,7 @@ pub(super) fn start_pending_runtime_inspector_dispatch_with_delivery(
     owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,

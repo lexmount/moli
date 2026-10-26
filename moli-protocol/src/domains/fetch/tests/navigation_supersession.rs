@@ -1,5 +1,185 @@
 use super::*;
 
+#[tokio::test]
+async fn disable_cleanup_reports_policy_failure_after_settling_its_navigation() {
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable"}))
+        .await;
+    start_request_pause(&mut ctx, 2, "SID-1", "http://example.test/paused").await;
+    let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
+    ctx.conn.set_background_navigation_completion_sender(sender);
+    let (pending, policy) = ctx
+        .conn
+        .start_disable_fetch_for_session_owner(Some("SID-1"))
+        .unwrap();
+    drop(policy);
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    // The handler and its requests have already been removed. A failed native
+    // policy update must still drain the original source obligation.
+    let cleanup = crate::domains::fetch::cleanup::PreparedFetchCleanup::new(
+        &mut ctx.conn,
+        &owner,
+        pending,
+        Some(Err(
+            std::io::Error::other("controlled policy rejection").into()
+        )),
+        "Fetch interception disabled",
+        false,
+    );
+    let plan = cleanup.wait_inline(&mut ctx.conn).await.into_command_plan();
+    let messages = plan
+        .into_background_events(Some(3), Some("SID-1"))
+        .into_iter()
+        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages.iter().filter(|message| message["id"] == 2).count(),
+        1
+    );
+    assert_eq!(
+        messages.iter().find(|message| message["id"] == 2).unwrap()["error"]["message"],
+        "Fetch interception disabled"
+    );
+    assert!(
+        messages.iter().find(|message| message["id"] == 3).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("controlled policy rejection")
+    );
+    assert!(
+        completions.try_recv().is_err(),
+        "consumed cleanup must disarm its cancellation reply"
+    );
+}
+
+#[tokio::test]
+async fn cancelled_disable_cleanup_settles_once_without_touching_a_successor_page() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for before_wait in [false, true] {
+                let mut ctx = TestContext::new();
+                ctx.conn
+                    .install_browser_context_fixture_for_test(attached_browser_context());
+                ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+                    .await;
+                ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable"}))
+                    .await;
+                start_request_pause(&mut ctx, 2, "SID-1", "http://example.test/paused").await;
+                let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
+                ctx.conn.set_background_navigation_completion_sender(sender);
+                let _requests = ctx.conn.take_protocol_state_requests().unwrap();
+                let (pending, policy) = ctx
+                    .conn
+                    .start_disable_fetch_for_session_owner(Some("SID-1"))
+                    .unwrap();
+                let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+                let cleanup = crate::domains::fetch::cleanup::PreparedFetchCleanup::new(
+                    &mut ctx.conn,
+                    &owner,
+                    pending,
+                    policy,
+                    "Fetch interception disabled",
+                    false,
+                );
+                if before_wait {
+                    drop(cleanup);
+                } else {
+                    let completed = cleanup.wait().await;
+                    assert!(matches!(
+                        completed,
+                        crate::domains::fetch::cleanup::CompletedFetchCleanup::Owned(_)
+                    ));
+                    drop(completed);
+                }
+                let completion =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), completions.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+                    .await;
+                let successor = ctx
+                    .conn
+                    .renderer_page_residence_identity_for_owner(&owner)
+                    .unwrap();
+                let outcome = ctx
+                    .conn
+                    .drain_background_navigation_completion_turn_async(completion)
+                    .await;
+                let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                assert_eq!(
+                    messages.iter().filter(|message| message["id"] == 2).count(),
+                    1
+                );
+                assert_eq!(
+                    ctx.conn.renderer_page_residence_identity_for_owner(&owner),
+                    Some(successor)
+                );
+                assert!(
+                    completions.try_recv().is_err(),
+                    "late cleanup must not emit a second source result"
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn dropping_a_completed_response_handoff_does_not_cancel_its_registered_pause() {
+    use crate::domains::fetch::{FetchCommandTaskStep, try_start_fetch_command_dispatch};
+
+    tokio::task::LocalSet::new().run_until(async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new()
+                .route("/auth", get(|| async {
+                    (StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, "Basic realm=\"handoff\"")], "original challenge")
+                }))
+                .route("/response", get(|| async { "original response" })))
+                .await.unwrap();
+        });
+        for response_stage in [false, true] {
+            let mut ctx = TestContext::new();
+            ctx.conn.install_browser_context_fixture_for_test(attached_browser_context());
+            let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
+            ctx.conn.set_background_navigation_completion_sender(sender);
+            ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable",
+                "params": {"handleAuthRequests": true, "patterns": [{"urlPattern": "*", "requestStage": "Request"}]}})).await;
+            let path = if response_stage { "response" } else { "auth" };
+            let request_id = start_request_pause(&mut ctx, 2, "SID-1", &format!("http://{addr}/{path}")).await;
+            let mut requests = ctx.conn.take_protocol_state_requests().unwrap();
+            let command = moli_protocol_cdp::ParsedCdpCommand::from_serializable(json!({
+                "id": 3, "sessionId": "SID-1", "method": "Fetch.continueRequest",
+                "params": {"requestId": request_id, "interceptResponse": response_stage},
+            })).unwrap();
+            let cmd = crate::conn::Cmd::from_parsed(&command).unwrap();
+            let Some(FetchCommandTaskStep::Pending(pending)) = try_start_fetch_command_dispatch(&mut ctx.conn, &cmd)
+            else { panic!("the request must leave protocol state while waiting for headers"); };
+            let wait = tokio::task::spawn_local(pending.wait());
+            let handoff = tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+                .await.unwrap().unwrap();
+            handoff.apply(&mut ctx.conn);
+            // This is the cancellation window between finite response admission
+            // and the actor consuming a ready command result. The pause already
+            // owns the original navigation's response obligation.
+            drop(wait.await.unwrap());
+            assert!(completions.try_recv().is_err(), "handoff drop must not synthesize a second source result");
+            let host = ctx.conn.browser_context.as_ref().unwrap().active_page_target();
+            assert!(host.fetch_owner.has_pending_fetch_request_id_for_test(&request_id));
+            ctx.process_async(json!({"id": 4, "sessionId": "SID-1", "method": "Fetch.disable"})).await;
+            let responses = ctx.sent.iter().filter(|message| message["id"] == 2).count();
+            assert_eq!(responses, 1, "the registered pause must retain the sole navigation result");
+            assert!(completions.try_recv().is_err());
+        }
+        server.abort();
+    }).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_success_queued_before_supersession_cannot_restore_the_old_request() {
     use crate::domains::fetch::{
@@ -86,7 +266,7 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
             .await;
         }
         let FetchCommandTaskStep::Complete(plan) =
-            complete_pending_fetch_command(&mut ctx.conn, completed).await
+            complete_pending_fetch_command(&mut ctx.conn, completed, &mut Default::default()).await
         else {
             panic!("body read completion must terminate");
         };

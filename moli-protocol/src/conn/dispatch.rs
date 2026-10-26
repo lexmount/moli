@@ -1213,7 +1213,9 @@ impl CdpConnection {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
                 let step = Box::pin(crate::domains::fetch::complete_pending_fetch_command(
-                    self, completed,
+                    self,
+                    completed,
+                    command_context,
                 ))
                 .await;
                 match step {

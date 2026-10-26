@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 pub(crate) mod native;
 
 use crate::automation::DevToolsDomNodeReference;
@@ -134,10 +136,10 @@ impl PendingAccessibilityCommandStartError {
         }
     }
 
-    fn document_access_error(message: impl Into<String>) -> Self {
+    fn document_access_error(message: impl std::fmt::Display) -> Self {
         Self {
             code: -32000,
-            message: message.into(),
+            message: format!("{message:#}"),
         }
     }
 
@@ -447,7 +449,7 @@ fn start_accessibility_object_page_command(
     inspector_session_id: Option<String>,
     object_id: &str,
     operation: &AccessibilityNodeOperation,
-) -> anyhow::Result<PendingPageCommand> {
+) -> Result<PendingPageCommand> {
     match operation {
         AccessibilityNodeOperation::Children => Err(anyhow::anyhow!(
             "children accessibility operation requires an AXNodeId"
@@ -512,7 +514,7 @@ fn start_accessibility_node_page_command(
     page: &mut moli_core::page::Page,
     reference: RendererDomNodeReference,
     operation: &AccessibilityNodeOperation,
-) -> anyhow::Result<PendingPageCommand> {
+) -> Result<PendingPageCommand> {
     match operation {
         AccessibilityNodeOperation::Children => {
             page.start_accessibility_child_node_payloads_for_node(reference)
@@ -532,7 +534,7 @@ fn start_accessibility_node_page_command(
 fn start_top_frame_accessibility_page_command(
     page: &mut moli_core::page::Page,
     kind: &PendingAccessibilityCommandKind,
-) -> anyhow::Result<PendingPageCommand> {
+) -> Result<PendingPageCommand> {
     match kind {
         PendingAccessibilityCommandKind::TopFrameFullTree { max_depth } => {
             page.start_accessibility_tree_payloads_for_document(*max_depth)
@@ -589,7 +591,7 @@ fn start_child_frame_accessibility_page_command(
     page: &mut moli_core::page::Page,
     frame_id: &str,
     kind: &PendingAccessibilityCommandKind,
-) -> anyhow::Result<PendingPageCommand> {
+) -> Result<PendingPageCommand> {
     match kind {
         PendingAccessibilityCommandKind::ChildFrameFullTree { max_depth } => {
             page.start_child_frame_accessibility_tree_payloads(frame_id, *max_depth)

@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
 
 use moli_core::{
@@ -7,7 +9,7 @@ use moli_core::{
     },
 };
 
-use super::{ProtocolStateAccess, ProtocolWorkflowState};
+use super::{ProtocolStateAccess, ProtocolWorkflowDriver, ProtocolWorkflowState};
 use crate::conn::{
     CdpConnection, CommandOwnerScope, CommittedNavigationPage, CommittedRendererAgentAttachment,
     DocumentNavigationToken, LoadedNavigation, NavigationDispatchState, ResponseCommitReady,
@@ -15,10 +17,103 @@ use crate::conn::{
 };
 use crate::domains::page::BackgroundNavigationCompletion;
 
-type AttachmentTransaction = Rc<RefCell<Option<CommittedRendererAgentAttachment>>>;
+#[derive(Default)]
+struct NavigationAttachmentTransaction {
+    expected: Option<StablePageNavigationCommitTarget>,
+    attachment: Option<CommittedRendererAgentAttachment>,
+}
+
+type AttachmentTransaction = Rc<RefCell<NavigationAttachmentTransaction>>;
+
+/// Rollback authority stays with the original command even after its wait has
+/// returned but before the actor consumes the result. It owns no connection.
+#[derive(Clone)]
+pub(crate) struct PreparedDocumentCommitState {
+    transaction: AttachmentTransaction,
+}
+
+impl PreparedDocumentCommitState {
+    pub(crate) fn new() -> Self {
+        Self {
+            transaction: Rc::default(),
+        }
+    }
+
+    pub(crate) async fn commit(
+        &self,
+        access: ProtocolStateAccess,
+        token: DocumentNavigationToken,
+        state: &NavigationDispatchState,
+        navigation: ResponseCommitReady,
+    ) -> Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError> {
+        self.commit_using(
+            &mut ProtocolWorkflowDriver::owned(access),
+            token,
+            state,
+            navigation,
+        )
+        .await
+    }
+
+    pub(crate) async fn commit_using(
+        &self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        token: DocumentNavigationToken,
+        state: &NavigationDispatchState,
+        navigation: ResponseCommitReady,
+    ) -> Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError> {
+        commit_prepared_document(
+            driver,
+            state.owner.clone(),
+            token,
+            navigation,
+            state.web_mcp_invocation.clone(),
+            self.transaction.clone(),
+        )
+        .await
+    }
+
+    pub(crate) fn complete(
+        &self,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        navigation: Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError>,
+    ) -> BackgroundPreparedNavigationCommit {
+        let mut transaction = self.transaction.borrow_mut();
+        BackgroundPreparedNavigationCommit {
+            token,
+            state,
+            expected: transaction.expected.clone(),
+            transaction: transaction.attachment.take(),
+            navigation,
+        }
+    }
+
+    pub(crate) fn cancel(
+        &self,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+    ) -> BackgroundPreparedNavigationCommit {
+        self.fail(token, state, anyhow::Error::new(moli_fetch::FetchCancelled))
+    }
+
+    fn fail(
+        &self,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        error: anyhow::Error,
+    ) -> BackgroundPreparedNavigationCommit {
+        let error = if self.transaction.borrow().attachment.is_some() {
+            RendererPageReplacementError::document_unavailable(error)
+        } else {
+            RendererPageReplacementError::document_preserved(error)
+        };
+        self.complete(token, state, Err(error))
+    }
+}
 
 enum NativeDocumentCommit {
-    New(Pin<Box<dyn Future<Output = anyhow::Result<BuiltDocumentPage>>>>),
+    New(Pin<Box<dyn Future<Output = Result<BuiltDocumentPage>>>>),
     Replacement(PendingDocumentPageReplacement),
 }
 
@@ -85,7 +180,10 @@ impl ProtocolWorkflowState<'_> {
         let attachment = transaction.current().id();
         // Register the transaction before returning even an immediately-ready
         // native reply. The supervisor owns rollback if delivery is cancelled.
-        *transaction_slot.borrow_mut() = Some(transaction);
+        *transaction_slot.borrow_mut() = NavigationAttachmentTransaction {
+            expected: expected.clone(),
+            attachment: Some(transaction),
+        };
         let fact = navigation.main_document_commit().ok_or_else(|| {
             RendererPageReplacementError::document_preserved(anyhow::anyhow!(
                 "prepared Document is missing its frozen main Document commit identity"
@@ -135,7 +233,7 @@ impl ProtocolWorkflowState<'_> {
     {
         let conn = self.connection;
         let transaction = transaction_slot.borrow();
-        let transaction = transaction.as_ref().ok_or_else(|| {
+        let transaction = transaction.attachment.as_ref().ok_or_else(|| {
             RendererPageReplacementError::document_unavailable(anyhow::anyhow!(
                 "navigation commit lost its attachment transaction"
             ))
@@ -164,7 +262,7 @@ impl ProtocolWorkflowState<'_> {
 }
 
 async fn commit_prepared_document(
-    access: ProtocolStateAccess,
+    driver: &mut ProtocolWorkflowDriver<'_>,
     owner: CommandOwnerScope,
     token: DocumentNavigationToken,
     navigation: ResponseCommitReady,
@@ -174,7 +272,7 @@ async fn commit_prepared_document(
     let admission_owner = owner.clone();
     let admission_token = token.clone();
     let admission_transaction = transaction.clone();
-    let (navigation, native) = access
+    let (navigation, native) = driver
         .with_state(move |state| {
             state.start_prepared_document_commit(
                 &admission_owner,
@@ -208,7 +306,7 @@ async fn commit_prepared_document(
                 .expect("replacement commit retains its exact Page")
                 .clone();
             let adoption_target = expected.clone();
-            let committed = access
+            let committed = driver
                 .with_state(move |state| {
                     state.adopt_prepared_document_commit(
                         &owner,
@@ -254,44 +352,25 @@ impl CdpConnection {
         let sender = self
             .background_navigation_completion_sender_for_owner(&state.owner)
             .expect("background navigation retains its completion channel");
-        let web_mcp_invocation = state.web_mcp_invocation.clone();
-        let expected = navigation.stable_page_target().cloned();
-        let transaction = AttachmentTransaction::default();
-        let wait_transaction = transaction.clone();
-        let wait_owner = state.owner.clone();
+        let commit = PreparedDocumentCommitState::new();
+        let wait_commit = commit.clone();
+        let wait_state = state.clone();
         let wait_token = token.clone();
         let task_token = token.clone();
         let task_owner = state.owner.clone();
         let task = spawn_owned_protocol_wait(
             async move {
-                commit_prepared_document(
-                    access,
-                    wait_owner,
-                    wait_token,
-                    navigation,
-                    web_mcp_invocation,
-                    wait_transaction,
-                )
-                .await
+                wait_commit
+                    .commit(access, wait_token, &wait_state, navigation)
+                    .await
             },
             move |result| {
-                let transaction = transaction.borrow_mut().take();
-                let navigation = result.unwrap_or_else(|failure| {
-                    let error = anyhow::anyhow!(failure.message());
-                    Err(if transaction.is_some() {
-                        RendererPageReplacementError::document_unavailable(error)
-                    } else {
-                        RendererPageReplacementError::document_preserved(error)
-                    })
-                });
+                let completion = match result {
+                    Ok(navigation) => commit.complete(token, state, navigation),
+                    Err(failure) => commit.fail(token, state, anyhow::Error::new(failure)),
+                };
                 let _ = sender.send(BackgroundNavigationCompletion::PreparedDocument(Box::new(
-                    BackgroundPreparedNavigationCommit {
-                        token,
-                        state,
-                        expected,
-                        transaction,
-                        navigation,
-                    },
+                    completion,
                 )));
             },
         );

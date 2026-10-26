@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 mod activity;
 mod bidi_nodes;
 mod bindings;
@@ -33,14 +35,11 @@ pub(in crate::domains) fn fail_pending_session_calls(
 
 /// Detaches the Page's renderer Inspector endpoint after Page-owned cleanup
 /// commands have completed.
-pub(in crate::domains) async fn detach_page_session_inspector_async(
+pub(in crate::domains) fn detach_page_session_inspector(
     conn: &mut CdpConnection,
     session_id: &str,
 ) {
-    if let Err(error) = conn
-        .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
-        .await
-    {
+    if let Err(error) = conn.detach_runtime_inspector_session_for_session_owner(Some(session_id)) {
         tracing::debug!(
             session_id,
             %error,
@@ -57,7 +56,7 @@ pub(in crate::domains) async fn dispose_session_handler_async(
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let session_id = plan.session_id();
     match plan.target() {
         SessionDisposalTarget::PageTarget { .. }
@@ -79,14 +78,14 @@ pub(in crate::domains) async fn dispose_session_handler_async(
 
 /// Detaches the renderer-side Inspector endpoint after every browser-side
 /// domain handler has disabled itself.
-pub(in crate::domains) async fn detach_session_inspector_async(
+pub(in crate::domains) fn detach_session_inspector(
     conn: &mut CdpConnection,
     plan: &SessionDisposalPlan,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let session_id = plan.session_id();
     match plan.target() {
         SessionDisposalTarget::PageTarget { .. } => {
-            detach_page_session_inspector_async(conn, session_id).await;
+            detach_page_session_inspector(conn, session_id);
         }
         SessionDisposalTarget::SharedWorkerTarget {
             browser_context_id,
@@ -162,11 +161,11 @@ pub(in crate::domains) async fn detach_session_inspector_async(
     Ok(())
 }
 
+pub(crate) use activity::push_routed_renderer_runtime_inspector_message_batch_background_events;
 pub(in crate::domains) use activity::{
     RuntimePreparedOutputSlot, RuntimePreparedOutputs, project_runtime_binding_calls_async,
     project_runtime_inspector_messages_async,
     project_runtime_inspector_post_response_messages_async,
-    push_routed_renderer_runtime_inspector_message_batch_background_events,
 };
 pub(in crate::domains) use dispatcher::replay_shared_worker_runtime_bindings_for_session_async;
 pub(crate) use dispatcher::{

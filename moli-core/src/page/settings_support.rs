@@ -260,6 +260,13 @@ impl Page {
         .await
     }
 
+    pub fn start_set_script_execution_disabled(
+        &self,
+        disabled: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetScriptExecutionDisabled(disabled))
+    }
+
     /// Admits the DevTools IO-agent setting through the target's shared IO
     /// task FIFO without entering the renderer owner's Main command queue.
     pub fn start_set_script_execution_disabled_from_io(

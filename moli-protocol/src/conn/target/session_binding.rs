@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::automation::DevToolsTargetInfo;
 #[cfg(test)]
 use crate::conn::BrowserContext;
@@ -123,60 +125,81 @@ impl CdpConnection {
     pub(crate) async fn clear_devtools_network_session_policy_async(
         &mut self,
         session_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
+        let owner = super::super::CommandOwnerScope::capture(self, Some(session_id));
+        self.start_clear_devtools_network_session_policy(session_id)
+            .wait()
+            .await
+            .finish(self.loaded_page_mut_for_owner(&owner))
+            .into_result()
+    }
+
+    pub(crate) fn start_clear_devtools_network_session_policy(
+        &mut self,
+        session_id: &str,
+    ) -> super::super::SessionPageUpdates {
         let Some(CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
             session_key,
         }) = self.session_route(Some(session_id))
         else {
-            return Ok(());
+            return Default::default();
         };
-
-        let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
-            return Ok(());
-        };
-        browser_context
-            .clear_devtools_network_session_policy_async(&target_id, &session_key)
-            .await
+        self.browser_context_by_id_mut(&browser_context_id)
+            .map(|context| {
+                context.start_clear_devtools_network_session_policy(&target_id, &session_key)
+            })
+            .unwrap_or_default()
     }
 
+    #[cfg(test)]
     pub(crate) async fn clear_devtools_emulation_session_policy_async(
         &mut self,
         session_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
+        let owner = super::super::CommandOwnerScope::capture(self, Some(session_id));
+        self.start_clear_devtools_emulation_session_policy(session_id)
+            .wait()
+            .await
+            .finish(self.loaded_page_mut_for_owner(&owner))
+            .into_result()
+    }
+
+    pub(crate) fn start_clear_devtools_emulation_session_policy(
+        &mut self,
+        session_id: &str,
+    ) -> super::super::SessionPageUpdates {
         let Some(CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
             session_key,
         }) = self.session_route(Some(session_id))
         else {
-            return Ok(());
+            return Default::default();
         };
-
-        let browser_identity_changed = match self.browser_context_by_id_mut(&browser_context_id) {
-            Some(browser_context) => {
-                browser_context
-                    .clear_devtools_emulation_session_policy_async(&target_id, &session_key)
-                    .await?
+        let (identity_changed, mut updates) = self
+            .browser_context_by_id_mut(&browser_context_id)
+            .map(|context| {
+                context.start_clear_devtools_emulation_session_policy(&target_id, &session_key)
+            })
+            .unwrap_or_default();
+        if identity_changed {
+            match self.start_rebuild_resource_runtime_for_session_owner(Some(session_id)) {
+                Ok(Some(pending)) => {
+                    if let Some(page) = self.loaded_page_mut_for_session_owner(Some(session_id)) {
+                        updates.push(
+                            page,
+                            "failed to restore detached session user agent",
+                            Ok(pending),
+                        );
+                    }
+                }
+                Err(error) => updates.record_error(anyhow::Error::msg(error)),
+                Ok(None) => {}
             }
-            None => false,
-        };
-        if !browser_identity_changed {
-            return Ok(());
         }
-
-        let Some(pending) = self
-            .start_rebuild_resource_runtime_for_session_owner(Some(session_id))
-            .map_err(anyhow::Error::msg)?
-        else {
-            return Ok(());
-        };
-        let completion = pending.wait().await.map_err(|error| {
-            anyhow::anyhow!("failed to restore detached session user agent: {error}")
-        })?;
-        self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
-            .map_err(anyhow::Error::msg)
+        updates
     }
 
     pub(crate) fn is_browser_session_id(&self, session_id: Option<&str>) -> bool {
@@ -201,7 +224,7 @@ impl CdpConnection {
     pub(crate) fn commit_browser_session_disposal_without_event(
         &mut self,
         plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<TargetEventPlan> {
+    ) -> Result<TargetEventPlan> {
         anyhow::ensure!(
             matches!(plan.target(), SessionDisposalTarget::Browser)
                 && self.is_browser_session_id(Some(plan.session_id())),
@@ -213,7 +236,7 @@ impl CdpConnection {
     pub(crate) fn commit_browser_session_disposal_event_plan(
         &mut self,
         plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<TargetEventPlan> {
+    ) -> Result<TargetEventPlan> {
         anyhow::ensure!(
             matches!(plan.target(), SessionDisposalTarget::Browser)
                 && self.is_browser_session_id(Some(plan.session_id())),
@@ -920,7 +943,7 @@ impl CdpConnection {
     pub(crate) fn commit_session_disposal(
         &mut self,
         cleanup_plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         match cleanup_plan.target() {
             SessionDisposalTarget::Browser => anyhow::bail!("InvalidSessionId"),
             SessionDisposalTarget::PageTarget {

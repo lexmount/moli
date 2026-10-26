@@ -146,6 +146,8 @@ struct PendingRendererDocumentCommit {
     attachment: moli_core::page::RendererAgentAttachmentId,
     fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
     observed: bool,
+    native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+    early_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
 }
 
 impl Drop for PendingNavigationRequest {
@@ -821,27 +823,112 @@ impl TargetPageSlot {
             attachment,
             fact,
             observed: false,
+            native_document: None,
+            early_lifecycle_events: Vec::new(),
         });
         true
+    }
+
+    pub(crate) fn merge_prepared_document_lifecycle_events(
+        &mut self,
+        token: &DocumentNavigationToken,
+        artifacts: &mut RendererPageCreationArtifacts,
+    ) {
+        let Some(commit) = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(token) && !request.committed)
+            .and_then(|request| request.renderer_commit.as_mut())
+        else {
+            return;
+        };
+        // The admitted request may have observed late facts from an old VM
+        // on the same Page. Only the reply's exact Document can inherit them.
+        artifacts.initial_lifecycle_events.extend(
+            std::mem::take(&mut commit.early_lifecycle_events)
+                .into_iter()
+                .filter(|event| {
+                    event.frame == artifacts.lifecycle_snapshot.frame
+                        && event.document == artifacts.active_document
+                }),
+        );
+        artifacts
+            .initial_lifecycle_events
+            .sort_by_key(|event| event.sequence);
+        artifacts
+            .initial_lifecycle_events
+            .dedup_by_key(|event| event.sequence);
     }
 
     pub(crate) fn observe_prepared_renderer_document_commit(
         &mut self,
         attachment: Option<moli_core::page::RendererAgentAttachmentId>,
         fact: &moli_core::page::RendererMainDocumentCommit,
+        native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     ) -> Option<bool> {
         let commit = self
             .pending_navigation_request
             .as_mut()
             .filter(|request| !request.committed)
             .and_then(|request| request.renderer_commit.as_mut())?;
-        if Some(commit.attachment) != attachment || commit.fact.as_ref() != fact {
+        if Some(commit.attachment) != attachment
+            || commit.fact.as_ref() != fact
+            || commit
+                .native_document
+                .is_some_and(|document| Some(document) != native_document)
+        {
             return Some(false);
         }
         // Native commit visibility is distinct from Page-handle adoption and
         // overall navigation completion. Document access remains suspended.
         commit.observed = true;
+        commit.native_document = native_document;
         Some(true)
+    }
+
+    pub(crate) fn accepts_prepared_parser_script_source(
+        &self,
+        attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+        source: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Option<bool> {
+        let commit = self
+            .pending_navigation_request
+            .as_ref()
+            .filter(|request| !request.committed)
+            .and_then(|request| request.renderer_commit.as_ref())?;
+        Some(Some(commit.attachment) == attachment && commit.native_document == Some(source))
+    }
+
+    pub(crate) fn prepared_document_output_binding(
+        &self,
+    ) -> Option<(
+        RendererPageResidenceIdentity,
+        CommittedRendererDocumentBinding,
+    )> {
+        let request = self
+            .pending_navigation_request
+            .as_ref()
+            .filter(|request| !request.committed)?;
+        let document = request.renderer_commit.as_ref()?.native_document?;
+        let pending = self.pending_renderer_page.as_ref()?;
+        if pending.page_attachment_id() != request.page_attachment_id
+            || pending.renderer_page().page_id() != document.frame.page_id
+        {
+            return None;
+        }
+        Some((
+            pending.renderer_page(),
+            CommittedRendererDocumentBinding {
+                renderer_frame: document.frame,
+                renderer_document: document.document,
+                renderer_epoch: document.epoch,
+                navigation: Some(request.token.clone()),
+                frame_id: request.token.target_id.clone(),
+                loader_id: request.token.loader_id.clone(),
+                page_attachment_id: request.page_attachment_id,
+                document_open_replacement_epoch: None,
+            },
+        ))
     }
 
     pub(crate) fn frame_tree_document_loader_id(&self) -> Option<&str> {
@@ -1229,7 +1316,7 @@ impl TargetPageSlot {
 
     pub(crate) fn ingest_renderer_document_lifecycle_events(
         &mut self,
-        events: Vec<RendererDocumentLifecycleEvent>,
+        mut events: Vec<RendererDocumentLifecycleEvent>,
     ) -> Vec<RendererDocumentLifecycleEvent> {
         let binding_is_current = self
             .renderer_document_lifecycle
@@ -1241,6 +1328,29 @@ impl TargetPageSlot {
                         self.committed_document_navigation.as_ref() == Some(navigation)
                     })
             });
+        if let Some(commit) = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| !request.committed)
+            .and_then(|request| request.renderer_commit.as_mut())
+        {
+            let binding = self.renderer_document_lifecycle.binding.as_ref();
+            events.retain(|event| {
+                if binding_is_current
+                    && binding.is_some_and(|binding| {
+                        binding.renderer_frame == event.frame
+                            && binding.renderer_document == event.document
+                    })
+                {
+                    return true;
+                }
+                // Native parsing can progress while the owned commit reply
+                // or adoption is waiting. Hold its facts in that exact
+                // navigation owner until the protocol binding is installed.
+                commit.early_lifecycle_events.push(*event);
+                false
+            });
+        }
         if !binding_is_current {
             if !events.is_empty() {
                 tracing::debug!(

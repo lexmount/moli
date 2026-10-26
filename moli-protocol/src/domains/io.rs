@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::io::{CloseParams, ReadParams, ResolveBlobParams};
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
@@ -41,9 +43,9 @@ enum PendingIoCommandKind {
 
 enum CompletedIoCommandKind {
     FetchResponseBodyRead(Box<CompletedFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(Result<CompletedPageCommand, String>),
+    ResolveBlob(Result<CompletedPageCommand>),
     ReadBlob {
-        completed: Result<CompletedPageCommand, String>,
+        completed: Result<CompletedPageCommand>,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -61,16 +63,16 @@ impl PendingIoCommandDispatch {
             PendingIoCommandKind::FetchResponseBodyRead(pending) => {
                 CompletedIoCommandKind::FetchResponseBodyRead(Box::new(pending.wait().await))
             }
-            PendingIoCommandKind::ResolveBlob(pending) => CompletedIoCommandKind::ResolveBlob(
-                pending.wait().await.map_err(|error| error.to_string()),
-            ),
+            PendingIoCommandKind::ResolveBlob(pending) => {
+                CompletedIoCommandKind::ResolveBlob(pending.wait().await)
+            }
             PendingIoCommandKind::ReadBlob {
                 pending,
                 handle,
                 offset,
                 size,
             } => CompletedIoCommandKind::ReadBlob {
-                completed: pending.wait().await.map_err(|error| error.to_string()),
+                completed: pending.wait().await,
                 handle,
                 offset,
                 size,
@@ -188,7 +190,6 @@ fn start_resolve_blob_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> IoComm
                 inspector_session_id,
                 params.object_id.as_ref().to_owned(),
             )
-            .map_err(|error| error.to_string())
         });
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
@@ -209,10 +210,7 @@ fn start_read_blob_command(
 ) -> IoCommandTaskStep {
     let pending = conn
         .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_blob_bytes_for_uuid(uuid.to_owned())
-                .map_err(|error| error.to_string())
-        });
+        .and_then(|page| page.start_blob_bytes_for_uuid(uuid.to_owned()));
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
             command_id: cmd.id,
@@ -231,14 +229,11 @@ fn start_read_blob_command(
 fn complete_resolve_blob_command(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 ) -> CommandOutputPlan {
     let uuid = completed.and_then(|completed| {
         conn.loaded_page_mut_for_protocol_access(session_id)
-            .and_then(|page| {
-                page.finish_resolve_blob_object(completed)
-                    .map_err(|error| error.to_string())
-            })
+            .and_then(|page| page.finish_resolve_blob_object(completed))
     });
     match uuid {
         Ok(uuid) => CommandOutputPlan::result(json!({ "uuid": uuid })),
@@ -249,7 +244,7 @@ fn complete_resolve_blob_command(
 fn complete_read_blob_command(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
     handle: String,
     offset: Option<usize>,
     size: Option<usize>,
@@ -257,10 +252,7 @@ fn complete_read_blob_command(
     let bytes = completed
         .and_then(|completed| {
             conn.loaded_page_mut_for_protocol_access(session_id)
-                .and_then(|page| {
-                    page.finish_blob_bytes_for_uuid(completed)
-                        .map_err(|error| error.to_string())
-                })
+                .and_then(|page| page.finish_blob_bytes_for_uuid(completed))
         })
         .ok()
         .flatten();

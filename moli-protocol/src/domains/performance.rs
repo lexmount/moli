@@ -1,3 +1,7 @@
+use anyhow::Result;
+
+use anyhow::Context as _;
+
 use crate::conn::{
     CdpConnection, CdpRendererCommandAccess, Cmd, CommandOwnerScope, PerformanceTimeDomain,
     RendererCommandCorrelation, RendererCommandDescriptor, monotonic_timestamp_seconds,
@@ -115,17 +119,17 @@ fn loaded_page_mut_for_renderer_access<'a>(
     conn: &'a mut CdpConnection,
     renderer_access: CdpRendererCommandAccess,
     owner: &CommandOwnerScope,
-) -> Result<&'a mut Page, String> {
+) -> Result<&'a mut Page> {
     match renderer_access {
         CdpRendererCommandAccess::MainThread => {
             conn.loaded_page_mut_for_protocol_access_for_owner(owner)
         }
         CdpRendererCommandAccess::Io => conn
             .loaded_page_mut_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned()),
-        CdpRendererCommandAccess::OwnerIndependent => {
-            Err("Performance.getMetrics requires a renderer Page".to_owned())
-        }
+            .context(crate::conn::NoDocumentLoaded),
+        CdpRendererCommandAccess::OwnerIndependent => Err(anyhow::anyhow!(
+            "Performance.getMetrics requires a renderer Page"
+        )),
     }
 }
 

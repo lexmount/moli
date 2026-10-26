@@ -33,7 +33,7 @@ pub use conn::{
     DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, OwnedProtocolWaitFailure,
     OwnedProtocolWaitTask, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingRuntimeProtocolMessageDispatch,
-    spawn_owned_protocol_wait,
+    ProtocolStateHandle, ProtocolStateOwner, ProtocolWorkflowState, spawn_owned_protocol_wait,
 };
 pub use domains::activity::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,

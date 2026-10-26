@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -369,12 +371,12 @@ pub(crate) struct CompletedDocumentBodyRead<T> {
     request_id: String,
     id: u64,
     body: PausedDocumentBody,
-    result: anyhow::Result<T>,
+    result: Result<T>,
 }
 
 #[cfg(test)]
 impl<T> CompletedDocumentBodyRead<T> {
-    pub(crate) fn result(&self) -> &anyhow::Result<T> {
+    pub(crate) fn result(&self) -> &Result<T> {
         &self.result
     }
 }
@@ -554,7 +556,7 @@ impl PausedDocumentTransfers {
     pub(crate) fn finish_body_read<T>(
         &mut self,
         completed: CompletedDocumentBodyRead<T>,
-    ) -> Option<anyhow::Result<T>> {
+    ) -> Option<Result<T>> {
         let CompletedDocumentBodyRead {
             request_id,
             id,
@@ -732,6 +734,127 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
 impl PausedDocumentTransfer {
     pub(crate) fn navigation_token(&self) -> Option<&DocumentNavigationToken> {
         self.document_navigation_token.as_ref()
+    }
+
+    pub(crate) fn navigation(&self) -> &NavigationDispatchState {
+        &self.navigation
+    }
+
+    // A streaming continuation retains its existing ACK-before-EOF path.
+    // Only a captured body can enter the command-owned preparation workflow.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn prepare_captured_response(
+        self,
+        conn: &mut CdpConnection,
+        response_code: Option<u16>,
+        response_headers: Vec<(String, Vec<u8>)>,
+    ) -> Result<Result<super::PreparedCapturedNavigationResponse>, Self> {
+        if !matches!(
+            &self.state,
+            PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body))
+                if !matches!(body.as_ref(), DocumentBodySource::StreamingRaw { .. })
+        ) {
+            return Err(self);
+        }
+        let PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) = self.state
+        else {
+            unreachable!("captured body checked before ownership transfer")
+        };
+        let (head, body, journal, progress) = match *body {
+            DocumentBodySource::BufferedRaw {
+                response,
+                network_observation_journal,
+                ..
+            } => {
+                let (head, body) = response.into_body();
+                let body = body.try_into_materialized_bytes().expect(
+                    "RawResponse body must remain materialized at the continuation boundary",
+                );
+                (
+                    head,
+                    CapturedBody::from_bytes(body),
+                    network_observation_journal,
+                    MainDocumentBodyProgressSource::default(),
+                )
+            }
+            DocumentBodySource::CapturedRaw {
+                head,
+                body,
+                network_observation_journal,
+                body_progress_source,
+                ..
+            } => (
+                head,
+                body,
+                network_observation_journal,
+                body_progress_source,
+            ),
+            DocumentBodySource::StreamingRaw { .. } => unreachable!("captured body checked above"),
+        };
+        Ok(if response_code.is_some() || !response_headers.is_empty() {
+            conn.prepare_synthetic_navigation_response(
+                self.document_navigation_token.as_ref(),
+                &self.navigation,
+                head.final_url,
+                response_code.unwrap_or(head.status),
+                if response_headers.is_empty() {
+                    head.headers
+                } else {
+                    response_headers
+                },
+                body,
+                head.request_cookie_report,
+                journal,
+                progress,
+            )
+        } else {
+            conn.prepare_captured_navigation_response(
+                self.document_navigation_token.as_ref(),
+                &self.navigation,
+                head,
+                body,
+                journal,
+                progress,
+            )
+        })
+    }
+
+    pub(crate) fn prepare_synthetic_response(
+        &self,
+        conn: &mut CdpConnection,
+        response_code: u16,
+        response_headers: Vec<(String, Vec<u8>)>,
+        synthetic_body: CapturedBody,
+    ) -> Result<super::PreparedCapturedNavigationResponse> {
+        let (url, request_cookie_report, body_progress_source) = match &self.state {
+            PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) => (
+                self.navigation.requested_url.clone(),
+                body.request_cookie_report().cloned(),
+                body.body_progress_source(),
+            ),
+            PausedDocumentTransferState::Available(PausedDocumentBody::ActiveBodyStream {
+                stream,
+                ..
+            }) => (
+                stream.response.final_url.clone(),
+                stream.response.request_cookie_report.clone(),
+                stream.body_progress_source.clone(),
+            ),
+            PausedDocumentTransferState::Reading(_) => {
+                anyhow::bail!("ResponseBodyReadInProgress");
+            }
+        };
+        conn.prepare_synthetic_navigation_response(
+            self.document_navigation_token.as_ref(),
+            &self.navigation,
+            url,
+            response_code,
+            response_headers,
+            synthetic_body,
+            request_cookie_report,
+            NetworkObservationJournal::default(),
+            body_progress_source,
+        )
     }
 
     pub(crate) fn into_navigation(
@@ -916,7 +1039,7 @@ impl PausedDocumentTransfer {
         (
             Option<DocumentNavigationToken>,
             NavigationDispatchState,
-            anyhow::Result<NavigationLoadOutcome>,
+            Result<NavigationLoadOutcome>,
         ),
         Self,
     > {
@@ -956,7 +1079,7 @@ impl PausedDocumentTransfer {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        anyhow::Result<NavigationLoadOutcome>,
+        Result<NavigationLoadOutcome>,
     ) {
         let (url, request_cookie_report, body_progress_source) = match &self.state {
             PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) => (
@@ -998,7 +1121,7 @@ impl PausedDocumentTransfer {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        anyhow::Result<NavigationLoadOutcome>,
+        Result<NavigationLoadOutcome>,
     ) {
         let (token, navigation) = self.into_navigation();
         (token, navigation, Err(error))
@@ -1006,7 +1129,7 @@ impl PausedDocumentTransfer {
 }
 
 impl ActiveDocumentBodyStreamState {
-    async fn read_async(&mut self, size: Option<usize>) -> anyhow::Result<(Vec<u8>, bool)> {
+    async fn read_async(&mut self, size: Option<usize>) -> Result<(Vec<u8>, bool)> {
         read_active_body_stream_async(
             &mut self.response,
             &mut self.captured_body,
@@ -1018,7 +1141,7 @@ impl ActiveDocumentBodyStreamState {
         .await
     }
 
-    fn finish_pending_body_source(&mut self) -> anyhow::Result<DocumentBodySource> {
+    fn finish_pending_body_source(&mut self) -> Result<DocumentBodySource> {
         let head = self.response.head();
         let body = self
             .captured_body
@@ -1071,7 +1194,7 @@ async fn read_active_body_stream_async(
     offset: &mut usize,
     finished: &mut bool,
     size: Option<usize>,
-) -> anyhow::Result<(Vec<u8>, bool)> {
+) -> Result<(Vec<u8>, bool)> {
     let mut bytes = Vec::new();
     match size {
         Some(limit) => {
@@ -1128,7 +1251,7 @@ async fn read_next_active_body_stream_chunk_async(
     captured_body: &mut CapturedBodyWriter,
     unread_body: &mut Vec<u8>,
     finished: &mut bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if *finished {
         return Ok(());
     }
@@ -1185,7 +1308,7 @@ impl DocumentBodySource {
         navigation: &NavigationDispatchState,
         response_code: Option<u16>,
         response_headers: Vec<(String, Vec<u8>)>,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
+    ) -> Result<NavigationLoadOutcome> {
         let has_response_override = response_code.is_some() || !response_headers.is_empty();
         match self {
             Self::BufferedRaw {
@@ -1406,7 +1529,7 @@ impl DocumentBodySource {
 
 async fn capture_streaming_raw_response(
     mut response: StreamingRawResponse,
-) -> anyhow::Result<(ResponseHead, CapturedBody)> {
+) -> Result<(ResponseHead, CapturedBody)> {
     let head = response.head();
     let mut body = CapturedBodyWriter::default();
     while let Some(chunk) = response.next_chunk().await {

@@ -789,6 +789,13 @@ impl Page {
         &mut self,
         inspector_session_id: Option<&str>,
     ) -> Result<bool> {
+        self.detach_runtime_inspector_session(inspector_session_id)
+    }
+
+    pub fn detach_runtime_inspector_session(
+        &mut self,
+        inspector_session_id: Option<&str>,
+    ) -> Result<bool> {
         self.handle
             .detach_runtime_inspector_session(inspector_session_id.map(str::to_owned))?;
         if self.renderer_devtools_command_session_id.as_deref() == inspector_session_id {

@@ -398,7 +398,7 @@ pub(super) fn layout_metrics_result_from_renderer(
     }
 }
 
-pub(super) fn devtools_layout_metrics_error(message: impl Into<String>) -> DevToolsError {
+pub(super) fn devtools_layout_metrics_error(message: impl std::fmt::Display) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, message)
 }
 
@@ -470,10 +470,10 @@ pub(super) async fn execute_devtools_capture_screenshot_command(
         let request =
             renderer_screenshot_request(&command, conn.default_background_color_for_owner(&owner))?;
         let capture_error =
-            |message| DevToolsError::new(DevToolsErrorKind::UnableToCaptureScreen, message);
+            |message: String| DevToolsError::new(DevToolsErrorKind::UnableToCaptureScreen, message);
         let page = conn
             .loaded_page_mut_for_protocol_access_for_owner(&owner)
-            .map_err(capture_error)?;
+            .map_err(|error| capture_error(format!("{error:#}")))?;
         let pending = page
             .start_capture_screenshot_with_request(request)
             .map_err(|error| capture_error(error.to_string()))?;
@@ -484,7 +484,7 @@ pub(super) async fn execute_devtools_capture_screenshot_command(
         predecessor = completion.renderer_output_predecessor();
         let page = conn
             .loaded_page_mut_for_protocol_access_for_owner(&owner)
-            .map_err(capture_error)?;
+            .map_err(|error| capture_error(format!("{error:#}")))?;
         let reply = page
             .finish_capture_screenshot(completion)
             .map_err(|error| capture_error(error.to_string()))?;
