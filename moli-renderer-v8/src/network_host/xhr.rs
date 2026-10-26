@@ -4,6 +4,7 @@ mod encoding;
 mod events;
 mod header_surface;
 mod instance_state;
+mod lifecycle;
 mod request_state;
 mod response_type;
 mod send;
@@ -77,6 +78,9 @@ use self::instance_state::{
     XHR_RESPONSE_SLOT, XHR_RESPONSE_TEXT_SLOT, XHR_RESPONSE_TYPE_SLOT,
     configure_xml_http_request_instance_template, initialize_xml_http_request_instance,
     xhr_state_value, xhr_upload_object,
+};
+pub(crate) use self::lifecycle::{
+    WindowXhrLifecycleObserver, retire_window_xhrs_in_current_context,
 };
 pub(crate) use self::request_state::begin_xhr_send;
 use self::request_state::{

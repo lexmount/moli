@@ -972,6 +972,8 @@ pub(crate) struct JsContextHost {
     next_window_message_task_id: crate::page_task_queue::RendererPageWindowMessageTaskId,
     indexed_db_context_tasks: IndexedDbContextState,
     window_execution_contexts: HashMap<WindowExecutionContextOwner, WindowExecutionContextBinding>,
+    window_xhr_lifecycle_observers:
+        HashMap<RuntimeObservableContextToken, crate::network_host::WindowXhrLifecycleObserver>,
     history_update_limits: history_updates::HistoryUpdateLimits,
     current_window_message_source: Option<PendingWindowMessageEndpoint>,
     pending_active_child_window_restore: Option<Option<DomHandle>>,
