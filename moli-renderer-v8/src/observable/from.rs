@@ -22,6 +22,7 @@ const NEXT_METHOD: &str = "__moliObservableIteratorNext";
 const ASYNCHRONOUS: &str = "__moliObservableIteratorAsync";
 const SYNC_FALLBACK: &str = "__moliObservableIteratorSyncFallback";
 const ITERATOR_ABORT: &str = "__moliObservableIteratorAbort";
+const ITERATOR_RUNNER: &str = "__moliSubscriberIteratorRunner";
 
 const SYNC: i32 = 0;
 const ASYNC: i32 = 1;
@@ -103,6 +104,9 @@ pub(super) fn subscribe<'s>(
             open_iterator(scope, input, subscriber, kind == ASYNC)
         }) {
             Ok(Some(runner)) if active(scope, subscriber) && is_current(scope, subscriber) => {
+                // A pending next() Promise can itself be unreachable. The live
+                // subscription must retain its iterator's cancellation state.
+                set_private_value(scope, subscriber, ITERATOR_RUNNER, runner.into());
                 let algorithm = v8::Function::builder(abort_iterator)
                     .data(runner.into())
                     .build(scope)
@@ -197,12 +201,20 @@ fn flag<'s>(
 }
 
 fn clear_abort<'s>(scope: &mut v8::PinScope<'s, '_>, runner: v8::Local<'s, v8::Object>) {
+    let subscriber = slot(scope, runner, SUBSCRIBER);
     if let Some(algorithm) = object_slot(scope, runner, ITERATOR_ABORT)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     {
-        let subscriber = slot(scope, runner, SUBSCRIBER);
         signal(scope, subscriber).unregister_algorithm(scope, algorithm);
         set_private_value(scope, runner, ITERATOR_ABORT, v8::undefined(scope).into());
+    }
+    if object_slot(scope, subscriber, ITERATOR_RUNNER) == Some(runner) {
+        set_private_value(
+            scope,
+            subscriber,
+            ITERATOR_RUNNER,
+            v8::undefined(scope).into(),
+        );
     }
 }
 
