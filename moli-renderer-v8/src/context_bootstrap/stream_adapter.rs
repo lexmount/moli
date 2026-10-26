@@ -89,8 +89,8 @@ pub(crate) use readable::{
 };
 pub(crate) use readable_byte::enqueue_byte_chunk;
 pub(in crate::context_bootstrap) use readable_byte::{
-    enqueue_auto_allocate_pull_into, finish_byte_stream_tee_branch_close,
-    finish_readable_byte_stream_close, initialize_readable_byte_stream_state,
+    enqueue_auto_allocate_pull_into, finish_readable_byte_stream_close,
+    finish_readable_byte_stream_source_close, initialize_readable_byte_stream_state,
     perform_read_into_byte_stream, prepare_readable_byte_stream_close,
     read_into_byte_stream_as_promise, readable_byte_stream_byob_request,
     readable_byte_stream_pending_byob_view, readable_stream_byob_request_respond_callback,
