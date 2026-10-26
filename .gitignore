@@ -20,6 +20,10 @@
 !/vendor/urlpattern-0.6.0/**
 !/vendor/quinn-0.11.12/
 !/vendor/quinn-0.11.12/**
+!/vendor/web-transport-proto-0.6.3/
+!/vendor/web-transport-proto-0.6.3/**
+!/vendor/web-transport-quinn-0.13.5/
+!/vendor/web-transport-quinn-0.13.5/**
 /.moli
 __pycache__
 *.pyc
