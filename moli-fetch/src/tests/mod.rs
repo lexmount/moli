@@ -5487,8 +5487,14 @@ async fn captured_raw_cancellation_closes_streaming_and_digest_transports() -> R
                     .await
                     .context(
                         "cancelled raw transport must close without completing its response",
-                    )??;
-                assert_eq!(read, 0);
+                    )?;
+                // Cancellation may close an unread socket with either FIN or
+                // RST. Both prove that the held response cannot continue.
+                assert!(
+                    matches!(read, Ok(0))
+                        || read.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset),
+                    "cancelled raw transport remained open: {read:?}"
+                );
                 anyhow::Ok(())
             });
             let client =
@@ -5518,9 +5524,10 @@ async fn captured_raw_cancellation_closes_streaming_and_digest_transports() -> R
                 "the fixture must keep the response incomplete"
             );
             cancel.cancel();
-            let _error = tokio::time::timeout(Duration::from_secs(5), fetch)
+            let error = tokio::time::timeout(Duration::from_secs(5), fetch)
                 .await??
                 .unwrap_err();
+            assert!(crate::is_fetch_cancelled(&error), "{error:#}");
             server.await??;
         }
     }

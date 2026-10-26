@@ -129,6 +129,7 @@ pub use emulation::{
     EmulatedMediaOverrides,
 };
 pub use page_target_host::PageTargetHost;
+pub(crate) use page_target_host::PageTargetHostIdentity;
 pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, PendingPopupNavigation,
     TargetInitialEmptyDocumentCreator, TargetOwnerState, TargetWindowSurfaceState,

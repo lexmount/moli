@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) async fn complete_pending_dom_command_output_plan(
+pub(crate) fn complete_pending_dom_command_output_plan(
     conn: &mut CdpConnection,
     completed: CompletedDomCommandDispatch,
 ) -> (DomCommandTaskStep, CommandOutputPlan) {
@@ -31,7 +31,7 @@ pub(super) fn complete_pending_dom_command_result(
         Err(error) => {
             return devtools_dom_command_task_complete(Err(DevToolsError::new(
                 DevToolsErrorKind::Internal,
-                error,
+                format!("{error:#}"),
             )));
         }
     };

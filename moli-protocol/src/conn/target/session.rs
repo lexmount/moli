@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use tokio::sync::watch;
 
 use crate::conn::CdpSessionRoute;
 
@@ -156,6 +158,41 @@ struct AttachedTargetSession {
     route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
+    closing: bool,
+    closed: SessionClosed,
+}
+
+#[derive(Clone, Debug)]
+struct SessionClosed(Rc<watch::Sender<bool>>);
+
+impl Default for SessionClosed {
+    fn default() -> Self {
+        Self(Rc::new(watch::channel(false).0))
+    }
+}
+
+impl PartialEq for SessionClosed {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for SessionClosed {}
+
+#[derive(Clone)]
+pub(crate) struct SessionDisposalWait(watch::Receiver<bool>);
+
+impl SessionDisposalWait {
+    pub(crate) fn is_closed(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    pub(crate) async fn wait(mut self) {
+        while !*self.0.borrow_and_update() {
+            if self.0.changed().await.is_err() {
+                break;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -169,6 +206,31 @@ pub(crate) struct TargetSessionRegistry {
 }
 
 impl TargetSessionRegistry {
+    pub(crate) fn close_session_waiters(&self) {
+        for session in self.attached_sessions.values() {
+            session.closed.0.send_replace(true);
+        }
+    }
+
+    pub(crate) fn mark_session_closing(&mut self, session_id: &str) {
+        if let Some(session) = self.attached_sessions.get_mut(session_id) {
+            session.closing = true;
+        }
+    }
+
+    pub(crate) fn session_is_closing(&self, session_id: &str) -> bool {
+        self.attached_sessions
+            .get(session_id)
+            .is_some_and(|session| session.closing)
+    }
+
+    pub(crate) fn session_disposal_wait(&self, session_id: &str) -> Option<SessionDisposalWait> {
+        let session = self.attached_sessions.get(session_id)?;
+        session
+            .closing
+            .then(|| SessionDisposalWait(session.closed.0.subscribe()))
+    }
+
     pub(crate) fn commit_attached_session(
         &mut self,
         prepared: PreparedAttachSession,
@@ -189,6 +251,8 @@ impl TargetSessionRegistry {
                 route: route.clone(),
                 auto_attached,
                 waiting_for_debugger,
+                closing: false,
+                closed: SessionClosed::default(),
             },
         );
         self.attached_sessions_by_target
@@ -266,6 +330,7 @@ impl TargetSessionRegistry {
         session_id: &str,
     ) -> Option<DetachedTargetSession> {
         let session = self.attached_sessions.remove(session_id)?;
+        session.closed.0.send_replace(true);
         remove_indexed_session(
             &mut self.attached_sessions_by_target,
             &session.target_id,

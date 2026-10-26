@@ -4344,34 +4344,53 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
 
 #[test]
 fn cli_meta_refresh_shutdown_exits_without_renderer_abort() -> Result<()> {
-    let output = Command::new(env!("CARGO_BIN_EXE_moli"))
-        .args([
-            "fetch",
-            "--log-level",
-            "error",
-            "--wait-until",
-            "load",
-            "--dump",
-            "html",
-            "data:text/html,<meta http-equiv='refresh' content='0;url=about:blank'>",
-        ])
-        .output()?;
-    let stdout = clean_output(&output.stdout);
-    let stderr = clean_output(&output.stderr);
+    let target = format!(
+        "data:text/html;base64,{}",
+        BASE64_STANDARD.encode(r#"<main id="meta-refresh-target">refreshed document</main>"#)
+    );
+    // Load does not freeze the Page. Wait for the successor explicitly so the
+    // DOM assertion cannot race a zero-delay refresh against the dump command.
+    for (destination, ready, expected_html) in [
+        ("about:blank", "location.href === 'about:blank'", ""),
+        (
+            target.as_str(),
+            "Boolean(document.getElementById('meta-refresh-target'))",
+            r#"<html><head></head><body><main id="meta-refresh-target">refreshed document</main></body></html>"#,
+        ),
+    ] {
+        let source =
+            format!("data:text/html,<meta http-equiv='refresh' content='0;url={destination}'>");
+        let output = Command::new(env!("CARGO_BIN_EXE_moli"))
+            .args([
+                "fetch",
+                "--log-level",
+                "error",
+                "--wait-until",
+                "load",
+                "--wait-script",
+                ready,
+                "--dump",
+                "html",
+                &source,
+            ])
+            .output()?;
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "meta refresh shutdown must not abort the CLI: stdout={stdout}\nstderr={stderr}"
-    );
-    assert!(
-        stdout.contains("http-equiv=\"refresh\""),
-        "the source document should still be emitted: stdout={stdout}"
-    );
-    assert!(
-        !stderr.contains("PageVm must retain a live ScriptVm until drop"),
-        "renderer teardown invariant leaked to the CLI: stderr={stderr}"
-    );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "meta refresh shutdown must not abort the CLI: destination={destination} stdout={stdout}\nstderr={stderr}"
+        );
+        assert_eq!(
+            stdout, expected_html,
+            "the refresh successor must be emitted: destination={destination} stderr={stderr}"
+        );
+        assert!(
+            !stderr.contains("PageVm must retain a live ScriptVm until drop"),
+            "renderer teardown invariant leaked to the CLI: destination={destination} stderr={stderr}"
+        );
+    }
     Ok(())
 }
 

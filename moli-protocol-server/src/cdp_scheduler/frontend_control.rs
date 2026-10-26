@@ -1,8 +1,11 @@
+use std::{cell::Cell, rc::Rc};
+
 use moli_cookie_jar::StoredCookie;
 use tokio::sync::mpsc;
 
 use crate::{
-    BrowserInstanceControl, cdp_frontend::CdpFrontendControlRequest,
+    BrowserInstanceControl,
+    cdp_frontend::{CdpControlResource, CdpFrontendControlRequest},
     cdp_frontend_router::CdpFrontendRouter,
 };
 
@@ -33,199 +36,141 @@ pub(crate) struct CdpOwnerActorLifecycle {
     pub(crate) instance_control: BrowserInstanceControl,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct CdpFrontendControlState {
-    next_frontend_id: u64,
+    next_frontend_id: Rc<Cell<u64>>,
     target_control: CdpFrontendTargetControl,
 }
 
 impl CdpFrontendControlState {
+    pub(super) fn new(owner: mpsc::WeakUnboundedSender<CdpFrontendControlRequest>) -> Self {
+        Self {
+            target_control: CdpFrontendTargetControl::new(owner),
+            ..Self::default()
+        }
+    }
+
     pub(super) async fn handle_request(
-        &mut self,
+        self,
         request: CdpFrontendControlRequest,
-        frontend_router: &CdpFrontendRouter,
-        scheduler: &mut CdpScheduler,
-        owner_lifecycle: Option<&CdpOwnerActorLifecycle>,
-    ) -> bool {
+        frontend_router: CdpFrontendRouter,
+    ) {
         match request {
+            CdpFrontendControlRequest::DisposeOrphanedResource(resource) => {
+                match resource {
+                    CdpControlResource::BrowserFrontend {
+                        session_id,
+                        frontend_id,
+                    } => {
+                        frontend_router.unregister_browser_frontend(frontend_id);
+                        self.target_control
+                            .detach_frontend_session(&session_id)
+                            .await;
+                    }
+                    CdpControlResource::TargetFrontend {
+                        session_id,
+                        frontend_id,
+                    } => {
+                        frontend_router.unregister_target_frontend(frontend_id);
+                        self.target_control
+                            .detach_frontend_session(&session_id)
+                            .await;
+                    }
+                    CdpControlResource::Session(session) => {
+                        self.target_control.detach_frontend_session(&session).await
+                    }
+                    CdpControlResource::Target(target) => {
+                        if let Err(error) = self.target_control.close_target(&target).await {
+                            tracing::debug!(target_id = target, %error, "failed to close unclaimed frontend target");
+                        }
+                    }
+                }
+                self.target_control.checkpoint();
+            }
             CdpFrontendControlRequest::AttachBrowser {
                 sink,
                 completion_tx,
             } => {
-                let result = match self
+                let frontend_id = self.allocate_frontend_id();
+                let result = self
                     .target_control
-                    .attach_browser(scheduler, frontend_router)
-                    .await
-                {
-                    Ok(session_id) => {
-                        let frontend_id = self.allocate_frontend_id();
-                        match frontend_router.register_browser_frontend(
-                            frontend_id,
-                            session_id.clone(),
-                            sink,
-                        ) {
-                            Ok(()) => Ok(frontend_id),
-                            Err(error) => {
-                                self.target_control
-                                    .detach_frontend_session(
-                                        scheduler,
-                                        frontend_router,
-                                        &session_id,
-                                    )
-                                    .await;
-                                Err(error)
-                            }
-                        }
-                    }
-                    Err(error) => Err(error),
-                };
-                match completion_tx.send(result) {
-                    Ok(()) => {}
-                    Err(Ok(frontend_id)) => {
-                        if let Some(session_id) =
-                            frontend_router.unregister_browser_frontend(frontend_id)
-                        {
-                            self.target_control
-                                .detach_frontend_session(scheduler, frontend_router, &session_id)
-                                .await;
-                        }
-                        send_cookie_checkpoint(scheduler, owner_lifecycle);
-                    }
-                    Err(Err(_)) => {}
-                }
-                true
+                    .attach_browser_frontend(frontend_id, sink)
+                    .await;
+                let _ = completion_tx.send(result);
             }
             CdpFrontendControlRequest::AttachTarget {
                 target_id,
                 sink,
                 completion_tx,
             } => {
-                let result = match self
+                let frontend_id = self.allocate_frontend_id();
+                let result = self
                     .target_control
-                    .attach_target(scheduler, frontend_router, &target_id)
-                    .await
-                {
-                    Ok(session_id) => {
-                        let frontend_id = self.allocate_frontend_id();
-                        match frontend_router.register_target_frontend(
-                            frontend_id,
-                            target_id,
-                            session_id.clone(),
-                            sink,
-                        ) {
-                            Ok(()) => Ok(frontend_id),
-                            Err(error) => {
-                                self.target_control
-                                    .detach_frontend_session(
-                                        scheduler,
-                                        frontend_router,
-                                        &session_id,
-                                    )
-                                    .await;
-                                Err(error)
-                            }
-                        }
-                    }
-                    Err(error) => Err(error),
-                };
-                match completion_tx.send(result) {
-                    Ok(()) => {}
-                    Err(Ok(frontend_id)) => {
-                        if let Some(session_id) =
-                            frontend_router.unregister_target_frontend(frontend_id)
-                        {
-                            self.target_control
-                                .detach_frontend_session(scheduler, frontend_router, &session_id)
-                                .await;
-                        }
-                        send_cookie_checkpoint(scheduler, owner_lifecycle);
-                    }
-                    Err(Err(_)) => {}
-                }
-                true
+                    .attach_target(&target_id, frontend_id, sink)
+                    .await;
+                let _ = completion_tx.send(result);
             }
             CdpFrontendControlRequest::DetachBrowser { frontend_id } => {
                 if let Some(session_id) = frontend_router.unregister_browser_frontend(frontend_id) {
                     self.target_control
-                        .detach_frontend_session(scheduler, frontend_router, &session_id)
+                        .detach_frontend_session(&session_id)
                         .await;
-                    send_cookie_checkpoint(scheduler, owner_lifecycle);
+                    self.target_control.checkpoint();
                 }
-                true
             }
             CdpFrontendControlRequest::DetachTarget { frontend_id } => {
                 if let Some(session_id) = frontend_router.unregister_target_frontend(frontend_id) {
                     self.target_control
-                        .detach_frontend_session(scheduler, frontend_router, &session_id)
+                        .detach_frontend_session(&session_id)
                         .await;
-                    send_cookie_checkpoint(scheduler, owner_lifecycle);
+                    self.target_control.checkpoint();
                 }
-                true
-            }
-            CdpFrontendControlRequest::TargetDestroyed { target_id } => {
-                frontend_router.unregister_frontends_for_target(&target_id);
-                true
             }
             CdpFrontendControlRequest::ActivateTarget {
                 target_id,
                 completion_tx,
             } => {
-                let result = self
-                    .target_control
-                    .activate_target(scheduler, frontend_router, &target_id)
-                    .await;
+                let result = self.target_control.activate_target(&target_id).await;
                 let _ = completion_tx.send(result);
-                true
             }
             CdpFrontendControlRequest::CloseTarget {
                 target_id,
                 completion_tx,
             } => {
-                let result = self
-                    .target_control
-                    .close_target(scheduler, frontend_router, &target_id)
-                    .await;
+                let result = self.target_control.close_target(&target_id).await;
                 let _ = completion_tx.send(result);
-                send_cookie_checkpoint(scheduler, owner_lifecycle);
-                true
+                self.target_control.checkpoint();
             }
             CdpFrontendControlRequest::CreateManagedTarget {
                 target_url,
                 completion_tx,
             } => {
-                let result = self
-                    .target_control
-                    .create_managed_target(scheduler, frontend_router, &target_url)
-                    .await;
-                if let Err(Ok(target)) = completion_tx.send(result) {
-                    let _ = self
-                        .target_control
-                        .close_target(scheduler, frontend_router, &target.page_target_id)
-                        .await;
-                }
-                send_cookie_checkpoint(scheduler, owner_lifecycle);
-                true
+                let result = self.target_control.create_managed_target(&target_url).await;
+                let _ = completion_tx.send(result);
+                self.target_control.checkpoint();
             }
-            CdpFrontendControlRequest::EnsureDefaultTargetPublished { completion_tx } => {
-                self.target_control
-                    .ensure_default_target_is_published(scheduler);
-                let _ = completion_tx.send(Ok(()));
-                true
+            CdpFrontendControlRequest::TargetDestroyed { .. }
+            | CdpFrontendControlRequest::EnsureDefaultTargetPublished { .. }
+            | CdpFrontendControlRequest::ExecuteInternalCommand { .. }
+            | CdpFrontendControlRequest::Checkpoint
+            | CdpFrontendControlRequest::Shutdown => {
+                unreachable!("finite control requests run in the actor")
             }
-            CdpFrontendControlRequest::Shutdown => false,
         }
     }
 
-    fn allocate_frontend_id(&mut self) -> u64 {
-        self.next_frontend_id = self
+    fn allocate_frontend_id(&self) -> u64 {
+        let next = self
             .next_frontend_id
+            .get()
             .checked_add(1)
             .expect("CDP frontend id space exhausted");
-        self.next_frontend_id
+        self.next_frontend_id.set(next);
+        next
     }
 }
 
-fn send_cookie_checkpoint(
+pub(super) fn send_cookie_checkpoint(
     scheduler: &mut CdpScheduler,
     owner_lifecycle: Option<&CdpOwnerActorLifecycle>,
 ) {
@@ -239,13 +184,13 @@ fn send_cookie_checkpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::CdpFrontendControlState;
+    use super::{CdpFrontendControlState, Cell, Rc};
 
     #[test]
     #[should_panic(expected = "CDP frontend id space exhausted")]
     fn frontend_ids_never_wrap() {
-        let mut state = CdpFrontendControlState {
-            next_frontend_id: u64::MAX,
+        let state = CdpFrontendControlState {
+            next_frontend_id: Rc::new(Cell::new(u64::MAX)),
             ..CdpFrontendControlState::default()
         };
 

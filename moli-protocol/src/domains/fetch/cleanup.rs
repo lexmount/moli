@@ -13,7 +13,7 @@ use crate::domains::{
 };
 use moli_core::page::PendingPageCommand;
 
-pub(in crate::domains) struct PreparedFetchCleanup {
+pub(crate) struct PreparedFetchCleanup {
     access: Option<ProtocolStateAccess>,
     policy: Option<Result<PendingPageCommand>>,
     navigations: Vec<NavigationCleanup>,
@@ -58,20 +58,30 @@ impl FetchCleanupOutput {
     }
 
     pub(in crate::domains) fn into_disposal_result(
-        mut self,
+        self,
         events: &mut Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Result<Option<moli_core::RendererOutputFence>> {
+        let output = self.into_disposal_output(events);
+        match output.first_error {
+            Some(error) => Err(error),
+            None => Ok(output.predecessor),
+        }
+    }
+
+    pub(in crate::domains) fn into_disposal_output(
+        mut self,
+        events: &mut Vec<crate::conn::BackgroundProtocolEvent>,
+    ) -> crate::conn::SessionPageUpdateResult {
         for termination in &mut self.terminations {
             termination.disarm();
         }
         let predecessor = self.plan.take_renderer_output_predecessor();
         events.extend(self.plan.into_background_events(None, None));
-        match self.error {
-            Some(error) => {
-                Err(error
-                    .context("renderer failed Fetch interception disable while disposing session"))
-            }
-            None => Ok(predecessor),
+        crate::conn::SessionPageUpdateResult {
+            first_error: self.error.map(|error| {
+                error.context("renderer failed Fetch interception disable while disposing session")
+            }),
+            predecessor,
         }
     }
 }
@@ -183,6 +193,17 @@ impl PreparedFetchCleanup {
                 .err();
         }
         output
+    }
+
+    pub(in crate::domains) async fn run_for_target_close(
+        mut self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+    ) -> FetchCleanupOutput {
+        let mut output = self.wait_policy().await;
+        // A policy ACK may carry a historical cursor from another Page.
+        // Only the failures/replays below precede this target's retirement.
+        output.plan.take_renderer_output_predecessor();
+        self.finish_using(driver, output).await
     }
 
     pub(super) async fn wait(mut self) -> CompletedFetchCleanup {

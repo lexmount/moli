@@ -1728,6 +1728,10 @@ async fn browser_document_navigation_keeps_page_residence_and_replaces_document_
         assert!(take_response_by_id(&mut ctx, id)["error"].is_null());
     }
     let owner = crate::conn::CommandOwnerScope::for_session(session);
+    let host = ctx
+        .conn
+        .page_target_host_identity_for_owner(&owner)
+        .unwrap();
     let page = ctx
         .conn
         .renderer_page_residence_identity_for_owner(&owner)
@@ -1789,6 +1793,14 @@ async fn browser_document_navigation_keeps_page_residence_and_replaces_document_
         assert_eq!(
             ctx.conn.renderer_page_residence_identity_for_owner(&owner),
             Some(page)
+        );
+        assert!(
+            host.matches(
+                &ctx.conn
+                    .page_target_host_identity_for_owner(&owner)
+                    .unwrap()
+            ),
+            "new Documents retain their logical target host"
         );
         assert_eq!(
             ctx.conn.target_page_residence_identity_for_owner(&owner),

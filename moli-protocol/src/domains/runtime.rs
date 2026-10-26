@@ -19,7 +19,7 @@ use crate::conn::{
 
 /// Settles protocol work that still belongs to a session before another
 /// domain starts tearing down renderer-owned resources.
-pub(in crate::domains) fn fail_pending_session_calls(
+pub(crate) fn fail_pending_session_calls(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
@@ -48,37 +48,9 @@ pub(in crate::domains) fn detach_page_session_inspector(
     }
 }
 
-/// Disables Runtime state owned by one DevTools session. Renderer Inspector
-/// detachment is a separate lifecycle phase and runs after every browser-side
-/// domain handler has disabled itself.
-pub(in crate::domains) async fn dispose_session_handler_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    protocol_events: &mut Vec<BackgroundProtocolEvent>,
-    plan: &SessionDisposalPlan,
-) -> Result<()> {
-    let session_id = plan.session_id();
-    match plan.target() {
-        SessionDisposalTarget::PageTarget { .. }
-        | SessionDisposalTarget::SharedWorkerTarget { .. }
-        | SessionDisposalTarget::DedicatedWorkerTarget { .. }
-        | SessionDisposalTarget::ServiceWorkerTarget { .. } => {
-            if !matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }) {
-                conn.release_worker_runtime_remote_objects_for_session_best_effort_async(
-                    session_id,
-                )
-                .await;
-            }
-            fail_pending_session_calls(conn, background_events, protocol_events, session_id);
-        }
-        SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {}
-    }
-    Ok(())
-}
-
 /// Detaches the renderer-side Inspector endpoint after every browser-side
 /// domain handler has disabled itself.
-pub(in crate::domains) fn detach_session_inspector(
+pub(crate) fn detach_session_inspector(
     conn: &mut CdpConnection,
     plan: &SessionDisposalPlan,
 ) -> Result<()> {

@@ -1,13 +1,16 @@
+use anyhow::Result;
+
 use moli_core::page::{
-    RendererDocumentLifecycleIdentity, RendererDomBidiNodeSharedIdResolution,
-    RendererPendingFileChooserActivation,
+    CompletedPageCommand, PendingPageCommand, RendererDocumentLifecycleIdentity,
+    RendererDomBidiNodeSharedIdResolution, RendererPendingFileChooserActivation,
 };
 
 use crate::automation::{
     DevToolsRemoteHandleId, webdriver_bidi_node_shared_id_for_backend_node_id,
 };
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, TargetPageResidenceIdentity,
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, NoDocumentLoaded,
+    ProtocolWorkflowDriver, TargetPageResidenceIdentity,
 };
 
 /// A renderer file-chooser activation bound to the exact Page residence from
@@ -19,8 +22,8 @@ use crate::conn::{
 /// Apply may survive `document.open()` within the same Page, but a replacement
 /// Page attachment replacement retires the prepared activation before a
 /// colliding backend id can be observed.
-#[derive(Debug, Eq, PartialEq)]
-pub(super) struct PreparedFileChooserActivation {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedFileChooserActivation {
     page_owner: TargetPageResidenceIdentity,
     source_document: RendererDocumentLifecycleIdentity,
     source_frame_id: String,
@@ -29,13 +32,18 @@ pub(super) struct PreparedFileChooserActivation {
 }
 
 impl PreparedFileChooserActivation {
-    pub(super) fn capture(
+    pub(crate) fn capture(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
         activation: RendererPendingFileChooserActivation,
     ) -> Option<Self> {
-        if !conn.target_page_residence_identity_is_current(&page_owner) {
+        if !conn.target_page_residence_identity_is_current(&page_owner)
+            || conn
+                .target_page_residence_identity_for_owner(owner)
+                .as_ref()
+                != Some(&page_owner)
+        {
             return None;
         }
         let source_document = activation.source_document();
@@ -103,37 +111,218 @@ pub(super) async fn emit_prepared_activation_async(
     owner: &CommandOwnerScope,
     activation: PreparedFileChooserActivation,
 ) {
-    let session_id = owner.session_id();
-    if !activation_is_current(conn, &activation) {
-        trace_stale_activation(session_id, &activation);
-        return;
-    }
-    let event_enabled = conn
-        .target_page_session_state_for_owner(owner)
-        .is_some_and(|state| {
-            state.page_intercept_file_chooser_dialog_enabled
-                || state.page_file_chooser_opened_event_enabled
-        });
-    if !event_enabled {
-        return;
-    }
-    let mode = if activation.allow_multiple {
-        "selectMultiple"
-    } else {
-        "selectSingle"
+    emit_prepared_activation(
+        &mut ProtocolWorkflowDriver::inline(conn),
+        out,
+        owner,
+        activation,
+    )
+    .await;
+}
+
+pub(super) async fn emit_prepared_activation(
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    owner: &CommandOwnerScope,
+    activation: PreparedFileChooserActivation,
+) {
+    let query_activation = activation.clone();
+    let query_owner = owner.clone();
+    let pending = match driver
+        .with_state(move |state| {
+            state.start_input_file_chooser_query(&query_owner, &query_activation)
+        })
+        .await
+    {
+        Ok(Some(pending)) => pending,
+        Ok(None) | Err(_) => return,
     };
-    let element_shared_id = element_shared_id_async(conn, owner, activation.backend_node_id).await;
-    if !activation_is_current(conn, &activation) {
-        trace_stale_activation(session_id, &activation);
-        return;
+    let resolution = match pending {
+        Ok(pending) => match pending.wait().await {
+            Ok(completed) => {
+                let query_activation = activation.clone();
+                driver
+                    .with_state(move |state| {
+                        state.finish_input_file_chooser_query(&query_activation, completed)
+                    })
+                    .await
+                    .and_then(std::convert::identity)
+            }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    let element_shared_id = match resolution {
+        Ok(RendererDomBidiNodeSharedIdResolution::SharedId(shared_id)) => shared_id.into(),
+        resolution => {
+            if let Err(error) = resolution {
+                tracing::debug!(%error, backend_node_id = activation.backend_node_id,
+                    "failed to resolve renderer BiDi shared id for file chooser");
+            }
+            let shared_id =
+                webdriver_bidi_node_shared_id_for_backend_node_id(activation.backend_node_id);
+            let registration_activation = activation.clone();
+            let registration_owner = owner.clone();
+            let binding = shared_id.as_str().to_owned();
+            let pending = driver
+                .with_state(move |state| {
+                    state.start_input_file_chooser_binding(
+                        &registration_owner,
+                        &registration_activation,
+                        binding,
+                    )
+                })
+                .await
+                .and_then(std::convert::identity);
+            let registered = match pending {
+                Ok(pending) => match pending.wait().await {
+                    Ok(completed) => {
+                        let registration_activation = activation.clone();
+                        driver
+                            .with_state(move |state| {
+                                state.finish_input_file_chooser_binding(
+                                    &registration_activation,
+                                    completed,
+                                )
+                            })
+                            .await
+                            .and_then(std::convert::identity)
+                    }
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
+            if let Err(error) = registered {
+                tracing::debug!(%error, shared_id = shared_id.as_str(), backend_node_id = activation.backend_node_id,
+                    "failed to register renderer BiDi shared id for file chooser; preserving event identity");
+            }
+            shared_id
+        }
+    };
+    let session_id = owner.session_id().map(str::to_owned);
+    if let Ok(Some(event)) = driver
+        .with_state(move |state| {
+            state.finish_input_file_chooser_activation(
+                session_id.as_deref(),
+                activation,
+                element_shared_id,
+            )
+        })
+        .await
+    {
+        out.push(event);
     }
-    out.push(BackgroundProtocolEvent::page_file_chooser_opened(
-        session_id,
-        &activation.source_frame_id,
-        mode,
-        activation.backend_node_id,
-        Some(element_shared_id),
-    ));
+}
+
+impl PreparedFileChooserActivation {
+    pub(crate) fn start_query(
+        &self,
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+    ) -> Option<Result<PendingPageCommand>> {
+        if !activation_is_current(conn, self)
+            || conn
+                .target_page_residence_identity_for_owner(owner)
+                .as_ref()
+                != Some(&self.page_owner)
+        {
+            trace_stale_activation(owner.session_id(), self);
+            return None;
+        }
+        if !conn
+            .target_page_session_state_for_owner(owner)
+            .is_some_and(|state| {
+                state.page_intercept_file_chooser_dialog_enabled
+                    || state.page_file_chooser_opened_event_enabled
+            })
+        {
+            return None;
+        }
+        let inspector = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        Some(self.page(conn).and_then(|page| {
+            page.start_document_bidi_node_shared_id_for_backend_node_id(
+                inspector,
+                self.backend_node_id,
+            )
+        }))
+    }
+
+    pub(crate) fn finish_query(
+        &self,
+        conn: &mut CdpConnection,
+        completed: CompletedPageCommand,
+    ) -> Result<RendererDomBidiNodeSharedIdResolution> {
+        self.page(conn)?
+            .finish_document_bidi_node_shared_id_for_backend_node_id(completed)
+    }
+
+    pub(crate) fn start_binding(
+        &self,
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        shared_id: String,
+    ) -> Result<PendingPageCommand> {
+        if conn
+            .target_page_residence_identity_for_owner(owner)
+            .as_ref()
+            != Some(&self.page_owner)
+        {
+            return Err(anyhow::Error::new(NoDocumentLoaded));
+        }
+        let inspector = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        self.page(conn)?.start_register_document_bidi_node_binding(
+            inspector,
+            shared_id,
+            self.backend_node_id,
+        )
+    }
+
+    pub(crate) fn finish_binding(
+        &self,
+        conn: &mut CdpConnection,
+        completed: CompletedPageCommand,
+    ) -> Result<()> {
+        self.page(conn)?
+            .finish_register_document_bidi_node_binding(completed)
+    }
+
+    fn page<'a>(&self, conn: &'a mut CdpConnection) -> Result<&'a mut moli_core::page::Page> {
+        if !activation_is_current(conn, self) {
+            return Err(anyhow::Error::new(NoDocumentLoaded));
+        }
+        conn.loaded_page_mut_for_protocol_access_for_owner(&CommandOwnerScope::for_page_residence(
+            &self.page_owner,
+        ))
+    }
+
+    pub(crate) fn finish_event(
+        self,
+        conn: &CdpConnection,
+        session_id: Option<&str>,
+        shared_id: DevToolsRemoteHandleId,
+    ) -> Option<BackgroundProtocolEvent> {
+        if !activation_is_current(conn, &self)
+            || session_id.is_some_and(|session_id| {
+                conn.target_page_residence_identity_for_session(Some(session_id))
+                    .as_ref()
+                    != Some(&self.page_owner)
+            })
+        {
+            trace_stale_activation(session_id, &self);
+            return None;
+        }
+        Some(BackgroundProtocolEvent::page_file_chooser_opened(
+            session_id,
+            &self.source_frame_id,
+            if self.allow_multiple {
+                "selectMultiple"
+            } else {
+                "selectSingle"
+            },
+            self.backend_node_id,
+            Some(shared_id),
+        ))
+    }
 }
 
 fn activation_is_current(conn: &CdpConnection, activation: &PreparedFileChooserActivation) -> bool {
@@ -151,50 +340,4 @@ fn trace_stale_activation(session_id: Option<&str>, activation: &PreparedFileCho
         page_attachment_id = activation.page_owner.page_attachment_id().get(),
         "dropping file chooser produced by a stale Page residence"
     );
-}
-
-async fn element_shared_id_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    backend_node_id: u32,
-) -> DevToolsRemoteHandleId {
-    // The event identity belongs to the frozen activation, while the DOM-agent
-    // binding belongs to whichever Document is live when protocol consumes the
-    // owner action. A synchronous document.open() may retire that binding
-    // before or during this async handoff; it must not erase the element from
-    // the already-accepted file-chooser event.
-    match conn
-        .document_bidi_node_shared_id_for_backend_node_id_for_owner_async(owner, backend_node_id)
-        .await
-    {
-        Ok(RendererDomBidiNodeSharedIdResolution::SharedId(shared_id)) => {
-            return shared_id.into();
-        }
-        Ok(RendererDomBidiNodeSharedIdResolution::NotFound) => {}
-        Err(error) => {
-            tracing::debug!(
-                %error,
-                backend_node_id,
-                "failed to resolve renderer BiDi shared id for file chooser"
-            );
-        }
-    }
-
-    let shared_id = webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
-    if let Err(error) = conn
-        .register_document_bidi_node_binding_for_owner_async(
-            owner,
-            shared_id.as_str(),
-            backend_node_id,
-        )
-        .await
-    {
-        tracing::debug!(
-            %error,
-            shared_id = shared_id.as_str(),
-            backend_node_id,
-            "failed to register renderer BiDi shared id for file chooser; preserving event identity"
-        );
-    }
-    shared_id
 }

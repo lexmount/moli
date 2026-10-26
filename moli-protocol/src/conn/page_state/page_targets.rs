@@ -316,6 +316,9 @@ impl BrowserContext {
         let Some(target) = self.page_target_mut(target_id) else {
             return false;
         };
+        if target.closing {
+            return false;
+        }
         target.attach_session(session_id);
         true
     }
@@ -328,6 +331,9 @@ impl BrowserContext {
         let Some(target) = self.page_target_mut(target_id) else {
             return false;
         };
+        if target.closing {
+            return false;
+        }
         if target.has_session() {
             target.devtools_sessions.ensure_attached(&session_id);
         } else {
@@ -344,6 +350,9 @@ impl BrowserContext {
         let Some(target) = self.page_target_mut(target_id) else {
             return false;
         };
+        if target.closing {
+            return false;
+        }
         target.devtools_sessions.ensure_attached(&session_id);
         true
     }
@@ -482,24 +491,6 @@ impl BrowserContext {
         // Process-wide ICU claims were released by the session contribution
         // removal. Restoring target policy must not recreate those claims.
         (identity_changed, updates)
-    }
-
-    pub(crate) async fn reset_primary_page_session_target_state_async(
-        &mut self,
-        target_id: &str,
-        session_id: &str,
-    ) -> Result<bool> {
-        let (found, updates) =
-            self.start_reset_primary_page_session_target_state(target_id, session_id);
-        updates
-            .wait()
-            .await
-            .finish(
-                self.page_target_mut(target_id)
-                    .and_then(|target| target.runtime_slot.loaded_page_mut()),
-            )
-            .into_result()?;
-        Ok(found)
     }
 
     pub(crate) fn start_reset_primary_page_session_target_state(
@@ -650,12 +641,33 @@ impl BrowserContext {
     }
 
     pub(crate) async fn select_page_target_async(&mut self, target_id: &str) -> Result<bool> {
-        if self.is_active_target(target_id) {
-            return Ok(true);
-        }
-        if self.background_target(target_id).is_none() {
+        let Some(updates) = self.start_select_page_target(target_id) else {
             return Ok(false);
+        };
+        for update in updates {
+            let completed = update.updates.wait().await;
+            let page = self
+                .page_target_mut(&update.target_id)
+                .and_then(|target| target.runtime_slot.loaded_page_mut());
+            if let Some(error) = completed.finish(page).first_error {
+                if update.required {
+                    return Err(error);
+                }
+                tracing::warn!(target_id = update.target_id, %error,
+                    "failed to update background document activity");
+            }
         }
+        Ok(true)
+    }
+
+    pub(crate) fn start_select_page_target(
+        &mut self,
+        target_id: &str,
+    ) -> Option<Vec<crate::conn::TargetSurfaceUpdate>> {
+        if self.is_active_target(target_id) {
+            return Some(Vec::new());
+        }
+        self.background_target(target_id)?;
         let synchronize_loaded_page = self
             .page_targets
             .active()
@@ -666,8 +678,16 @@ impl BrowserContext {
         let previous_active_target_id = self.active_target_id_owned();
         let selected = self.page_targets.select(target_id);
         debug_assert!(selected, "existing page target must be selectable");
+        let mut updates = Vec::new();
         if synchronize_loaded_page {
-            self.apply_surface_overrides_to_loaded_page_async().await?;
+            let mut selected = crate::conn::SessionPageUpdates::default();
+            self.start_session_surface_restoration(target_id, &mut selected);
+            updates.push(crate::conn::TargetSurfaceUpdate {
+                browser_context_id: self.id.clone(),
+                target_id: target_id.to_owned(),
+                updates: selected,
+                required: true,
+            });
         }
         if synchronize_loaded_page
             && let Some(previous_active_target_id) = previous_active_target_id
@@ -678,12 +698,22 @@ impl BrowserContext {
             if let Some(page) = self
                 .page_target_mut(&previous_active_target_id)
                 .and_then(|host| host.runtime_slot.loaded_page_mut())
-                && let Err(error) = page.set_document_activity_async(activity).await
             {
-                tracing::warn!(target_id = previous_active_target_id, %error, "failed to update background document activity");
+                let mut previous = crate::conn::SessionPageUpdates::default();
+                previous.push(
+                    page,
+                    "failed to update background document activity",
+                    page.start_set_document_activity(activity),
+                );
+                updates.push(crate::conn::TargetSurfaceUpdate {
+                    browser_context_id: self.id.clone(),
+                    target_id: previous_active_target_id,
+                    updates: previous,
+                    required: false,
+                });
             }
         }
-        Ok(true)
+        Some(updates)
     }
 
     pub(crate) fn begin_active_target_initial_empty_document(&mut self, initial_url: String) {

@@ -475,16 +475,6 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) async fn apply_surface_overrides_to_loaded_page_async(&mut self) -> Result<()> {
-        let overrides = self.active_navigator_overrides();
-        let activity = self.active_document_activity();
-        let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() else {
-            return Ok(());
-        };
-        page.set_navigator_overrides_async(&overrides).await?;
-        page.set_document_activity_async(activity).await
-    }
-
     #[cfg(test)]
     pub(crate) async fn apply_cookie_manager_policy_overrides_async(
         &mut self,
@@ -544,6 +534,7 @@ impl BrowserContext {
 }
 
 impl CdpConnection {
+    #[cfg(test)]
     pub(crate) async fn remove_document_start_scripts_for_detached_session_async(
         &mut self,
         session_id: &str,

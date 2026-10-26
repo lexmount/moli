@@ -10,12 +10,13 @@ use crate::automation::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
-    TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceToken,
+    ProtocolWorkflowDriver, TargetPageResidenceIdentity, TargetPageResidenceObservation,
+    TargetPageResidenceToken,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
-    CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererCommandTurnCompletion,
-    RendererDragData, RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
+    CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererDragData,
+    RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
     RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
     RendererPointerEventProperties, RendererTouchPoint, decode_element_click_dispatch_completion,
     decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
@@ -41,7 +42,7 @@ use chromiumoxide_cdp::cdp::browser_protocol::input::{
 };
 
 mod drag;
-mod file_chooser;
+pub(crate) mod file_chooser;
 mod key;
 mod mouse;
 #[cfg(test)]
@@ -142,7 +143,7 @@ enum PendingInputOperation {
 }
 
 enum CompletedInputOperation {
-    Page(Box<Result<CompletedPageCommand, String>>),
+    Page(Box<Result<CompletedPageCommand>>),
     PageResidenceSuperseded,
     PageResidenceUnavailable,
 }
@@ -179,9 +180,9 @@ impl PendingInputCommandDispatch {
                 )
                 .await
                 {
-                    RendererInputWaitOutcome::Completed(result) => CompletedInputOperation::Page(
-                        Box::new(result.map_err(|error| error.to_string())),
-                    ),
+                    RendererInputWaitOutcome::Completed(result) => {
+                        CompletedInputOperation::Page(Box::new(result))
+                    }
                     RendererInputWaitOutcome::PageResidence(
                         TargetPageResidenceObservation::Superseded,
                     ) => CompletedInputOperation::PageResidenceSuperseded,
@@ -1358,216 +1359,128 @@ async fn complete_pending_input_command(
     completed: CompletedInputCommandDispatch,
     command_context: &mut CommandDispatchContext,
 ) -> CompletedInputCommandResult {
-    let session_id = completed.session_id.as_deref();
-    let owner = completed.owner;
-    let completed_operation = match completed.completed {
-        CompletedInputOperation::Page(completed) => completed,
-        CompletedInputOperation::PageResidenceSuperseded => {
-            // Match InputInjector::Cleanup(): replacement of the widget/Page
-            // retires an outstanding mouse/key ACK as protocol success even
-            // when the old renderer never publishes its normal completion.
-            return CompletedInputCommandResult {
-                result: Ok(AutomationResult::Empty),
-                protocol_events: Vec::new(),
-            };
-        }
-        CompletedInputOperation::PageResidenceUnavailable => {
-            return CompletedInputCommandResult {
-                result: Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "input command Page residence became unavailable",
-                )),
-                protocol_events: Vec::new(),
-            };
-        }
-    };
+    complete_input_workflow(
+        &mut ProtocolWorkflowDriver::inline(conn),
+        completed,
+        command_context,
+    )
+    .await
+}
+
+async fn complete_input_workflow(
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    completed: CompletedInputCommandDispatch,
+    command_context: &mut CommandDispatchContext,
+) -> CompletedInputCommandResult {
     let mut side_effects = InputCommandSideEffects::default();
-
-    let result = match completed.kind {
-        kind @ (PendingInputCommandKind::PrepareElementClick
-        | PendingInputCommandKind::DispatchElementClick) => {
-            match completed_page_command_result(completed_operation) {
-                Err(error) => Err(error),
-                Ok(result) => {
-                    let completion =
-                        settle_completed_input_page_command(conn, &owner, result, command_context);
-                    if matches!(kind, PendingInputCommandKind::PrepareElementClick) {
-                        decode_element_click_preparation_completion(completion)
-                            .map(AutomationResult::ElementClickPreparation)
-                            .map_err(|error| {
-                                DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
-                            })
-                    } else {
-                        match decode_element_click_dispatch_completion(completion) {
-                            Err(error) => Err(DevToolsError::new(
-                                DevToolsErrorKind::Internal,
-                                error.to_string(),
-                            )),
-                            Ok(Err(error)) => {
-                                Ok(AutomationResult::ElementClickDispatch(Err(error)))
-                            }
-                            Ok(Ok(outcome)) => handle_input_dispatch_outcome_async(
-                                conn,
-                                &mut side_effects,
-                                session_id,
-                                &owner,
-                                outcome,
-                                command_context,
-                            )
-                            .await
-                            .map(|()| AutomationResult::ElementClickDispatch(Ok(())))
-                            .map_err(|error| {
-                                DevToolsError::new(
-                                    DevToolsErrorKind::Internal,
-                                    format!("{error:#}"),
-                                )
-                            }),
-                        }
-                    }
-                }
-            }
-        }
-        kind @ (PendingInputCommandKind::DispatchMouseEvent
-        | PendingInputCommandKind::DispatchTouchEvent
-        | PendingInputCommandKind::DispatchDragEvent
-        | PendingInputCommandKind::SynthesizeTapGesture) => {
-            let result = match completed_page_command_result(completed_operation) {
-                Ok(result) => result,
-                Err(error) => {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(error),
-                        protocol_events,
-                    };
-                }
-            };
-            let completion =
-                settle_completed_input_page_command(conn, &owner, result, command_context);
-            let operation = match kind {
-                PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
-                PendingInputCommandKind::DispatchTouchEvent
-                | PendingInputCommandKind::SynthesizeTapGesture => "touch event page command",
-                PendingInputCommandKind::DispatchDragEvent => "drag event page command",
-                PendingInputCommandKind::DispatchKeyEvent
-                | PendingInputCommandKind::InsertText
-                | PendingInputCommandKind::PrepareElementClick
-                | PendingInputCommandKind::DispatchElementClick => {
-                    unreachable!()
-                }
-            };
-            let outcome = decode_input_dispatch_outcome_completion(completion, operation);
-            match outcome {
-                Ok(outcome) => {
-                    if let Err(error) = handle_input_dispatch_outcome_async(
-                        conn,
-                        &mut side_effects,
-                        session_id,
-                        &owner,
-                        outcome,
-                        command_context,
-                    )
-                    .await
-                    {
-                        let protocol_events = side_effects.into_events();
-                        return CompletedInputCommandResult {
-                            result: Err(DevToolsError::new(
-                                DevToolsErrorKind::Internal,
-                                format!("{error:#}"),
-                            )),
-                            protocol_events,
-                        };
-                    }
-                    Ok(AutomationResult::Empty)
-                }
-                Err(error) => Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    error.to_string(),
-                )),
-            }
-        }
-        PendingInputCommandKind::DispatchKeyEvent => {
-            let result = match completed_page_command_result(completed_operation) {
-                Ok(result) => result,
-                Err(error) => {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(error),
-                        protocol_events,
-                    };
-                }
-            };
-            let completion =
-                settle_completed_input_page_command(conn, &owner, result, command_context);
-            let outcome =
-                decode_input_dispatch_outcome_completion(completion, "key event page command");
-            match outcome {
-                Ok(outcome) => {
-                    if let Err(error) = handle_input_dispatch_outcome_async(
-                        conn,
-                        &mut side_effects,
-                        session_id,
-                        &owner,
-                        outcome,
-                        command_context,
-                    )
-                    .await
-                    {
-                        let protocol_events = side_effects.into_events();
-                        return CompletedInputCommandResult {
-                            result: Err(DevToolsError::new(
-                                DevToolsErrorKind::Internal,
-                                format!("{error:#}"),
-                            )),
-                            protocol_events,
-                        };
-                    }
-                    Ok(AutomationResult::Empty)
-                }
-                Err(error) => Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    error.to_string(),
-                )),
-            }
-        }
-        PendingInputCommandKind::InsertText => {
-            let result = match completed_page_command_result(completed_operation) {
-                Ok(result) => result,
-                Err(error) => {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(error),
-                        protocol_events,
-                    };
-                }
-            };
-            let completion =
-                settle_completed_input_page_command(conn, &owner, result, command_context);
-            let result = decode_insert_text_completion(completion);
-            match result {
-                Ok(_) => Ok(AutomationResult::Empty),
-                Err(error) => Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    error.to_string(),
-                )),
-            }
-        }
-    };
-
-    let protocol_events = side_effects.into_events();
+    let result =
+        complete_input_operation(driver, completed, command_context, &mut side_effects).await;
+    let mut protocol_events = command_context.take_deferred_command_events();
+    protocol_events.extend(side_effects.into_events());
     CompletedInputCommandResult {
         result,
         protocol_events,
     }
 }
 
-fn settle_completed_input_page_command(
-    conn: &mut CdpConnection,
-    owner: &TargetPageResidenceIdentity,
-    completion: CompletedPageCommand,
+async fn complete_input_operation(
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    completed: CompletedInputCommandDispatch,
     command_context: &mut CommandDispatchContext,
-) -> RendererCommandTurnCompletion {
-    let output = conn.settle_page_command_turn_for_owner(owner, completion);
-    command_context.consume_renderer_command_turn_output(output)
+    side_effects: &mut InputCommandSideEffects,
+) -> Result<AutomationResult, DevToolsError> {
+    let command = match completed.completed {
+        CompletedInputOperation::Page(command) => completed_page_command_result(command)?,
+        CompletedInputOperation::PageResidenceSuperseded => return Ok(AutomationResult::Empty),
+        CompletedInputOperation::PageResidenceUnavailable => {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::Internal,
+                "input command Page residence became unavailable",
+            ));
+        }
+    };
+    let owner = completed.owner;
+    let settle_owner = owner.clone();
+    let output = driver
+        .with_state(move |state| state.settle_input_page_command(&settle_owner, command))
+        .await
+        .map_err(input_workflow_error)?;
+    let completion = command_context.consume_renderer_command_turn_output(output);
+    let (outcome, result) = match completed.kind {
+        PendingInputCommandKind::PrepareElementClick => {
+            return decode_element_click_preparation_completion(completion)
+                .map(AutomationResult::ElementClickPreparation)
+                .map_err(input_workflow_error);
+        }
+        PendingInputCommandKind::DispatchElementClick => {
+            match decode_element_click_dispatch_completion(completion)
+                .map_err(input_workflow_error)?
+            {
+                Err(error) => return Ok(AutomationResult::ElementClickDispatch(Err(error))),
+                Ok(outcome) => (outcome, AutomationResult::ElementClickDispatch(Ok(()))),
+            }
+        }
+        PendingInputCommandKind::InsertText => {
+            return decode_insert_text_completion(completion)
+                .map(|_| AutomationResult::Empty)
+                .map_err(input_workflow_error);
+        }
+        kind => {
+            let operation = match kind {
+                PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
+                PendingInputCommandKind::DispatchTouchEvent
+                | PendingInputCommandKind::SynthesizeTapGesture => "touch event page command",
+                PendingInputCommandKind::DispatchDragEvent => "drag event page command",
+                PendingInputCommandKind::DispatchKeyEvent => "key event page command",
+                _ => unreachable!(),
+            };
+            (
+                decode_input_dispatch_outcome_completion(completion, operation)
+                    .map_err(input_workflow_error)?,
+                AutomationResult::Empty,
+            )
+        }
+    };
+    handle_input_dispatch_outcome(
+        driver,
+        side_effects,
+        completed.session_id.as_deref(),
+        &owner,
+        outcome,
+        command_context,
+    )
+    .await
+    .map_err(input_workflow_error)?;
+    Ok(result)
+}
+
+fn input_workflow_error(error: anyhow::Error) -> DevToolsError {
+    DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
+}
+
+pub(crate) async fn complete_owned_input_command(
+    access: crate::conn::ProtocolStateAccess,
+    completed: CompletedInputCommandDispatch,
+    command_context: &mut CommandDispatchContext,
+) -> CommandOutputPlan {
+    let completed = complete_input_workflow(
+        &mut ProtocolWorkflowDriver::owned(access),
+        completed,
+        command_context,
+    )
+    .await;
+    input_command_output_plan(completed)
+}
+
+fn input_command_output_plan(completed: CompletedInputCommandResult) -> CommandOutputPlan {
+    let mut plan = match completed.result {
+        Ok(result) => CommandOutputPlan::from_devtools_result(result),
+        Err(error) => CommandOutputPlan::from_devtools_error(error),
+    };
+    for event in completed.protocol_events {
+        plan.push_background_event(event);
+    }
+    plan
 }
 
 pub(crate) async fn complete_pending_input_command_output_plan(
@@ -1576,22 +1489,18 @@ pub(crate) async fn complete_pending_input_command_output_plan(
     command_context: &mut CommandDispatchContext,
 ) -> (InputCommandTaskStep, CommandOutputPlan) {
     let completed = complete_pending_input_command(conn, completed, command_context).await;
-    let mut plan = match completed.result {
-        Ok(result) => CommandOutputPlan::from_devtools_result(result),
-        Err(error) => CommandOutputPlan::from_devtools_error(error),
-    };
-    for event in completed.protocol_events {
-        plan.push_background_event(event);
-    }
-    (InputCommandTaskStep::Complete, plan)
+    (
+        InputCommandTaskStep::Complete,
+        input_command_output_plan(completed),
+    )
 }
 
 fn completed_page_command_result(
-    completed: Box<Result<CompletedPageCommand, String>>,
+    completed: Box<Result<CompletedPageCommand>>,
 ) -> Result<CompletedPageCommand, DevToolsError> {
     match *completed {
         Ok(completion) => Ok(completion),
-        Err(error) => Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
+        Err(error) => Err(input_workflow_error(error)),
     }
 }
 
@@ -1714,8 +1623,8 @@ impl InputPreparedOutputSlot {
     }
 }
 
-async fn handle_input_dispatch_outcome_async(
-    conn: &mut CdpConnection,
+async fn handle_input_dispatch_outcome(
+    driver: &mut ProtocolWorkflowDriver<'_>,
     out: &mut InputCommandSideEffects,
     session_id: Option<&str>,
     owner: &TargetPageResidenceIdentity,
@@ -1726,31 +1635,39 @@ async fn handle_input_dispatch_outcome_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| CommandOwnerScope::for_page_residence(owner));
     if let Some(download) = outcome.pending_download {
+        let download_owner = action_owner.clone();
+        let page_owner = owner.clone();
+        let prepared = driver
+            .with_state(move |state| {
+                state.prepare_input_download(&download_owner, &page_owner, download)
+            })
+            .await??;
         let mut events = Vec::new();
-        conn.handle_pending_download_activation_background_events_async(
-            &mut events,
-            &action_owner,
-            download,
-            command_context,
-        )
-        .await?;
+        if let Some(prepared) = prepared {
+            prepared.run(&mut events, command_context).await;
+        }
         out.extend_protocol_events(command_context, events);
+        // Keep accepted side effects with the command while a later renderer
+        // query waits, so cancellation cannot discard their typed sidecars.
+        command_context.defer_command_events(std::mem::take(out.events_mut()));
     }
-    if let Some(file_chooser) = outcome.pending_file_chooser
-        && let Some(file_chooser) = file_chooser::PreparedFileChooserActivation::capture(
-            conn,
-            &action_owner,
-            owner.clone(),
-            file_chooser,
-        )
-    {
-        file_chooser::emit_prepared_activation_async(
-            conn,
-            out.events_mut(),
-            &action_owner,
-            file_chooser,
-        )
-        .await;
+    if let Some(file_chooser) = outcome.pending_file_chooser {
+        let page_owner = owner.clone();
+        let chooser_owner = action_owner.clone();
+        let prepared = driver
+            .with_state(move |state| {
+                state.capture_input_file_chooser(&chooser_owner, page_owner, file_chooser)
+            })
+            .await?;
+        if let Some(prepared) = prepared {
+            file_chooser::emit_prepared_activation(
+                driver,
+                out.events_mut(),
+                &action_owner,
+                prepared,
+            )
+            .await;
+        }
     }
     // A navigation triggered by input is frozen by the renderer command turn
     // into a concrete owner-action record. Protocol ingress schedules that
@@ -2296,8 +2213,13 @@ mod producer_tests {
             renderer_file_chooser_for_test(source_document, Some("FRAME-typed"), 77, false),
         )
         .expect("current file chooser should prepare");
-        super::file_chooser::emit_prepared_activation_async(
-            &mut conn,
+        drop(conn.take_protocol_state_requests());
+        let state_owner = crate::conn::ProtocolStateOwner::new(conn);
+        let mut driver = crate::conn::ProtocolWorkflowDriver::owned(
+            crate::conn::ProtocolStateAccess::Direct(state_owner.handle()),
+        );
+        super::file_chooser::emit_prepared_activation(
+            &mut driver,
             &mut out,
             &CommandOwnerScope::for_session("SID-typed"),
             prepared,

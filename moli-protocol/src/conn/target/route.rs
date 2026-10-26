@@ -80,7 +80,6 @@ impl CdpSessionRoute {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn target_id(&self) -> Option<&str> {
         match self {
             Self::TabTarget { tab_target_id, .. } => Some(tab_target_id),

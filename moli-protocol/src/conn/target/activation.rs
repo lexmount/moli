@@ -1,4 +1,28 @@
 use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope};
+use anyhow::Result;
+
+/// Native work for one concrete target, admitted before state access ends.
+pub(crate) struct TargetSurfaceUpdate {
+    pub(crate) browser_context_id: String,
+    pub(crate) target_id: String,
+    pub(crate) updates: crate::conn::SessionPageUpdates,
+    pub(crate) required: bool,
+}
+
+impl TargetSurfaceUpdate {
+    pub(crate) fn finish(
+        conn: &mut CdpConnection,
+        browser_context_id: &str,
+        target_id: &str,
+        completed: crate::conn::CompletedSessionPageUpdates,
+    ) -> Result<()> {
+        let page = conn
+            .browser_context_by_id_mut(browser_context_id)
+            .and_then(|context| context.page_target_mut(target_id))
+            .and_then(|target| target.runtime_slot.loaded_page_mut());
+        completed.finish(page).first_error.map_or(Ok(()), Err)
+    }
+}
 
 /// The stable Target identities on both sides of one foreground selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,7 +80,7 @@ impl CompletedTargetActivation {
 }
 
 impl CdpConnection {
-    fn target_document_is_visible(&self, target_id: &str) -> bool {
+    pub(crate) fn target_document_is_visible(&self, target_id: &str) -> bool {
         self.browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
@@ -79,11 +103,27 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) async fn apply_browser_document_activity_async(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn apply_browser_document_activity_async(&mut self) -> Result<()> {
+        for update in self.start_browser_document_activity_updates()? {
+            let completed = update.updates.wait().await;
+            TargetSurfaceUpdate::finish(
+                self,
+                &update.browser_context_id,
+                &update.target_id,
+                completed,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn start_browser_document_activity_updates(
+        &mut self,
+    ) -> Result<Vec<TargetSurfaceUpdate>> {
         let completion_sender = self
             .scheduler_hooks
             .document_activity_completion_sender
             .clone();
+        let mut updates = Vec::new();
         for context in self
             .browser_context
             .iter_mut()
@@ -122,17 +162,44 @@ impl CdpConnection {
                             });
                         });
                     } else {
-                        // Protocol-only fixtures have no external completion
-                        // driver and consume their owner turn inline.
-                        page.set_document_activity_async(activity).await?;
+                        let mut pending = crate::conn::SessionPageUpdates::default();
+                        pending.push(
+                            page,
+                            "failed to update browser document activity",
+                            page.start_set_document_activity(activity),
+                        );
+                        updates.push(TargetSurfaceUpdate {
+                            browser_context_id: context.id.clone(),
+                            target_id,
+                            updates: pending,
+                            required: true,
+                        });
                     }
                 }
             }
         }
-        Ok(())
+        Ok(updates)
     }
 
     pub(crate) async fn restore_browser_focus_after_removal_async(&mut self) {
+        let result = match self.start_restore_browser_focus_after_removal() {
+            Ok(updates) => {
+                crate::domains::target::activation::wait_for_surface_updates(
+                    &mut super::super::ProtocolWorkflowDriver::inline(self),
+                    updates,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "failed to update document activity after target removal");
+        }
+    }
+
+    pub(crate) fn start_restore_browser_focus_after_removal(
+        &mut self,
+    ) -> Result<Vec<TargetSurfaceUpdate>> {
         if !self
             .browser_context
             .iter()
@@ -146,9 +213,7 @@ impl CdpConnection {
         {
             self.select_browser_focus_for_target(&target_id);
         }
-        if let Err(error) = self.apply_browser_document_activity_async().await {
-            tracing::warn!(%error, "failed to update document activity after target removal");
-        }
+        self.start_browser_document_activity_updates()
     }
 
     /// Completes the renderer-surface half of a foreground transition that was

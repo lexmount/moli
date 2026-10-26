@@ -1,9 +1,12 @@
+use anyhow::Result;
+
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, SessionDisposalPlan, SessionDisposalTarget,
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, ProtocolWorkflowDriver,
+    SessionDisposalPlan, SessionDisposalTarget,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DevToolsSessionDomainHandler {
+pub(crate) enum DevToolsSessionDomainHandler {
     Tracing,
     Browser,
     Target,
@@ -71,65 +74,215 @@ pub(crate) struct DevToolsSessionHandlerDisposal {
 }
 
 impl DevToolsSessionHandlerDisposal {
-    pub(crate) fn first_error(&self) -> Option<&anyhow::Error> {
-        self.first_error.as_ref()
-    }
-
-    pub(crate) fn into_renderer_output_predecessor(self) -> Option<moli_core::RendererOutputFence> {
-        self.renderer_output_predecessor
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Option<anyhow::Error>,
+        Option<moli_core::RendererOutputFence>,
+    ) {
+        (self.first_error, self.renderer_output_predecessor)
     }
 }
 
 /// Invokes every installed browser-side handler while the session route is
 /// still authoritative. One failure never prevents the remaining handlers
 /// from receiving their disposal callback.
-pub(crate) async fn dispose_live_handlers_async(
-    conn: &mut CdpConnection,
+pub(crate) struct PreparedSessionHandlers {
+    handlers: Vec<(DevToolsSessionDomainHandler, PreparedSessionHandlerDisposal)>,
+}
+
+impl PreparedSessionHandlers {
+    pub(crate) fn prepare(conn: &mut CdpConnection, plan: &SessionDisposalPlan) -> Self {
+        let handlers = DevToolsSessionHandlers::for_target(plan.target())
+            .handlers
+            .iter()
+            .map(|&handler| {
+                (
+                    handler,
+                    PreparedSessionHandlerDisposal::prepare(conn, handler, plan),
+                )
+            })
+            .collect();
+        Self { handlers }
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        background_events: &mut Vec<BackgroundProtocolEvent>,
+        protocol_events: &mut Vec<BackgroundProtocolEvent>,
+        plan: &SessionDisposalPlan,
+    ) -> DevToolsSessionHandlerDisposal {
+        let mut disposal = DevToolsSessionHandlerDisposal {
+            first_error: None,
+            renderer_output_predecessor: None,
+        };
+        for (handler, prepared) in self.handlers {
+            let result = prepared
+                .run(driver, background_events, protocol_events, plan)
+                .await;
+            match result {
+                Ok(update) => {
+                    // Policy/script ACKs may refer to an earlier observation from
+                    // another Document; they do not publish a command response.
+                    // Fetch cleanup owns concrete replay/failure output, so keep
+                    // its dependency at the original disposal publication boundary.
+                    if handler == DevToolsSessionDomainHandler::Fetch
+                        && let Some(predecessor) = update.predecessor
+                    {
+                        predecessor
+                            .merge_into_same_stream_tail(&mut disposal.renderer_output_predecessor);
+                    }
+                    if let Some(error) = update.first_error {
+                        disposal.record_error(handler, plan, error);
+                    }
+                }
+                Err(error) => disposal.record_error(handler, plan, error),
+            }
+        }
+        disposal
+    }
+}
+
+#[cfg(test)]
+async fn dispose_live_handlers_using(
+    driver: &mut ProtocolWorkflowDriver<'_>,
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
 ) -> DevToolsSessionHandlerDisposal {
-    let mut disposal = DevToolsSessionHandlerDisposal {
-        first_error: None,
-        renderer_output_predecessor: None,
-    };
-    for handler in DevToolsSessionHandlers::for_target(plan.target()).handlers {
-        let result = handler
-            .dispose_async(conn, background_events, protocol_events, plan)
-            .await;
-        match result {
-            Ok(Some(predecessor)) => {
-                disposal.renderer_output_predecessor = Some(predecessor);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(
-                    session_id = plan.session_id(),
-                    domain = handler.name(),
-                    %error,
-                    "failed to dispose DevTools session domain"
-                );
-                disposal.first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to dispose {} domain: {error:#}", handler.name())
-                });
-            }
-        }
+    let preparation_plan = plan.clone();
+    driver
+        .with_state(move |state| state.prepare_session_handlers(&preparation_plan))
+        .await
+        .unwrap()
+        .run(driver, background_events, protocol_events, plan)
+        .await
+}
+
+impl DevToolsSessionHandlerDisposal {
+    fn record_error(
+        &mut self,
+        handler: DevToolsSessionDomainHandler,
+        plan: &SessionDisposalPlan,
+        error: anyhow::Error,
+    ) {
+        tracing::warn!(
+            session_id = plan.session_id(),
+            domain = handler.name(),
+            %error,
+            "failed to dispose DevTools session domain"
+        );
+        self.first_error.get_or_insert_with(|| {
+            error.context(format!("failed to dispose {} domain", handler.name()))
+        });
     }
-    disposal
 }
 
 /// Runs the handlers whose state survives target destruction. Renderer-owned
 /// and target-owned handlers have already disappeared with the closed target.
 pub(crate) async fn dispose_closed_handlers_async(conn: &mut CdpConnection, session_id: &str) {
-    super::tracing::dispose_session_handler_async(conn, session_id).await;
+    if let Some(pending) = prepare_closed_handlers(conn, session_id) {
+        pending.wait().await;
+    }
+    conn.cancel_tracing_for_session_owner(Some(session_id));
+}
+
+pub(crate) fn prepare_closed_handlers(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> Option<super::tracing::PendingTraceCancel> {
+    let pending = conn.start_cancel_tracing_for_session_owner(Some(session_id));
     super::browser::dispose_session_handler(conn, session_id);
     super::target::dispose_session_handler(conn, session_id);
+    pending
 }
 
 pub(crate) fn dispose_closed_handlers_sync(conn: &mut CdpConnection, session_id: &str) {
     conn.cancel_tracing_for_session_owner(Some(session_id));
     super::browser::dispose_session_handler(conn, session_id);
     super::target::dispose_session_handler(conn, session_id);
+}
+
+pub(crate) struct PreparedClosedTargetSessions {
+    tracing: Vec<super::tracing::PendingTraceCancel>,
+    completion: CompletedClosedTargetSessions,
+}
+
+#[derive(Clone)]
+pub(crate) struct CompletedClosedTargetSessions {
+    plan: crate::conn::TargetClosureCleanupPlan,
+    bindings: Vec<(String, Option<crate::conn::SessionDisposalWait>)>,
+    parent_session_id: Option<String>,
+}
+
+impl PreparedClosedTargetSessions {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        plan: crate::conn::TargetClosureCleanupPlan,
+        parent_session_id: Option<String>,
+    ) -> Self {
+        let mut tracing = Vec::new();
+        let mut bindings = Vec::new();
+        for session_id in plan.session_ids() {
+            let binding = conn.session_route(Some(session_id)).and_then(|route| {
+                let disposal = SessionDisposalPlan::for_session_route(session_id, &route)?;
+                conn.mark_session_closing(&disposal);
+                tracing.extend(prepare_closed_handlers(conn, session_id));
+                conn.session_disposal_wait(session_id)
+            });
+            // Legacy automation may own target-side session metadata without
+            // a registered CDP binding. Keep its typed detach publication;
+            // completion still must not claim a subsequently registered SID.
+            bindings.push((session_id.to_owned(), binding));
+        }
+        Self {
+            tracing,
+            completion: CompletedClosedTargetSessions {
+                plan,
+                bindings,
+                parent_session_id,
+            },
+        }
+    }
+
+    pub(crate) async fn wait(self) -> CompletedClosedTargetSessions {
+        for pending in self.tracing {
+            pending.wait().await;
+        }
+        self.completion
+    }
+}
+
+impl CompletedClosedTargetSessions {
+    pub(crate) fn open_session_ids<'a>(
+        &'a self,
+        conn: &'a CdpConnection,
+    ) -> impl Iterator<Item = &'a str> {
+        self.bindings
+            .iter()
+            .filter(move |(session, binding)| match binding {
+                Some(binding) => !binding.is_closed(),
+                None => !conn.has_attached_devtools_session(session),
+            })
+            .map(|(session, _)| session.as_str())
+    }
+
+    pub(crate) fn finish(self, conn: &mut CdpConnection) -> crate::conn::TargetEventPlan {
+        // Another admitted detachment may finish while native close waits.
+        // The original binding's watch remains closed even if its wire id is
+        // reused; a late completion must neither detach that successor nor
+        // publish the old detachment twice.
+        let plan = crate::conn::TargetClosureCleanupPlan::new(
+            self.plan.target_id(),
+            self.plan.reason(),
+            self.open_session_ids(conn).map(str::to_owned),
+        );
+        conn.commit_target_closure_session_detachment_events(
+            plan,
+            self.parent_session_id.as_deref(),
+        )
+    }
 }
 
 impl DevToolsSessionDomainHandler {
@@ -146,61 +299,135 @@ impl DevToolsSessionDomainHandler {
             Self::PrimaryPageTargetState => "primary Page target",
         }
     }
+}
 
-    async fn dispose_async(
-        self,
+/// A handler's admitted native work. There is one ordinary await sequence per
+/// handler; native completion values never carry a connection borrow.
+pub(crate) enum PreparedSessionHandlerDisposal {
+    Complete,
+    Tracing(Option<super::tracing::PendingTraceCancel>),
+    Fetch(Option<Box<super::fetch::PreparedFetchCleanup>>),
+    Runtime(Option<crate::conn::SessionWorkerCleanup>),
+    Scripts(crate::conn::SessionScriptCleanup),
+    PageUpdates {
+        owner: CommandOwnerScope,
+        updates: crate::conn::SessionPageUpdates,
+    },
+}
+
+impl PreparedSessionHandlerDisposal {
+    pub(crate) fn prepare(
         conn: &mut CdpConnection,
+        handler: DevToolsSessionDomainHandler,
+        plan: &SessionDisposalPlan,
+    ) -> Self {
+        let session_id = plan.session_id();
+        match handler {
+            DevToolsSessionDomainHandler::Tracing => {
+                Self::Tracing(conn.start_cancel_tracing_for_session_owner(Some(session_id)))
+            }
+            DevToolsSessionDomainHandler::Browser => {
+                super::browser::dispose_session_handler(conn, session_id);
+                Self::Complete
+            }
+            DevToolsSessionDomainHandler::Target => {
+                super::target::dispose_session_handler(conn, session_id);
+                Self::Complete
+            }
+            DevToolsSessionDomainHandler::Fetch => Self::Fetch(
+                super::fetch::prepare_owner_disposal(conn, Some(session_id)).map(Box::new),
+            ),
+            DevToolsSessionDomainHandler::Runtime => Self::Runtime(
+                (!matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }))
+                    .then(|| conn.prepare_session_worker_cleanup(session_id)),
+            ),
+            DevToolsSessionDomainHandler::Page => {
+                Self::Scripts(conn.prepare_session_script_cleanup(session_id))
+            }
+            DevToolsSessionDomainHandler::Emulation => Self::PageUpdates {
+                owner: CommandOwnerScope::capture(conn, Some(session_id)),
+                updates: super::emulation::prepare_page_session_disposal(conn, session_id),
+            },
+            DevToolsSessionDomainHandler::Network => Self::PageUpdates {
+                owner: CommandOwnerScope::capture(conn, Some(session_id)),
+                updates: conn.start_clear_devtools_network_session_policy(session_id),
+            },
+            DevToolsSessionDomainHandler::PrimaryPageTargetState => {
+                let owner = CommandOwnerScope::capture(conn, Some(session_id));
+                let mut updates = crate::conn::SessionPageUpdates::default();
+                if let SessionDisposalTarget::PageTarget {
+                    browser_context_id,
+                    target_id,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                } = plan.target()
+                {
+                    let found = if let Some(context) =
+                        conn.browser_context_by_id_mut(browser_context_id)
+                    {
+                        let (found, prepared) = context
+                            .start_reset_primary_page_session_target_state(target_id, session_id);
+                        updates = prepared;
+                        found
+                    } else {
+                        false
+                    };
+                    if !found {
+                        updates.record_error(anyhow::anyhow!(
+                            "primary Page target disappeared during session disposal"
+                        ));
+                    }
+                }
+                Self::PageUpdates { owner, updates }
+            }
+        }
+    }
+
+    async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
         plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
-        let session_id = plan.session_id();
+    ) -> Result<crate::conn::SessionPageUpdateResult> {
         match self {
-            Self::Tracing => {
-                super::tracing::dispose_session_handler_async(conn, session_id).await;
-                Ok(None)
+            Self::Complete => Ok(Default::default()),
+            Self::Tracing(pending) => {
+                if let Some(pending) = pending {
+                    pending.wait().await;
+                }
+                Ok(Default::default())
             }
-            Self::Browser => {
-                super::browser::dispose_session_handler(conn, session_id);
-                Ok(None)
+            Self::Fetch(pending) => match pending {
+                Some(pending) => Ok(pending
+                    .run_using(driver)
+                    .await
+                    .into_disposal_output(background_events)),
+                None => Ok(Default::default()),
+            },
+            Self::Runtime(pending) => {
+                let completed = match pending {
+                    Some(pending) => Some(pending.wait().await),
+                    None => None,
+                };
+                let plan = plan.clone();
+                let (background, protocol) = driver
+                    .with_state(move |state| state.finish_session_runtime_cleanup(&plan, completed))
+                    .await?;
+                background_events.extend(background);
+                protocol_events.extend(protocol);
+                Ok(Default::default())
             }
-            Self::Target => {
-                super::target::dispose_session_handler(conn, session_id);
-                Ok(None)
+            Self::Scripts(pending) => {
+                let completed = pending.wait().await;
+                driver
+                    .with_state(move |state| state.finish_session_script_cleanup(completed))
+                    .await
             }
-            Self::Fetch => {
-                Box::pin(super::fetch::dispose_session_async(
-                    conn,
-                    background_events,
-                    session_id,
-                ))
-                .await
-            }
-            Self::Runtime => {
-                super::runtime::dispose_session_handler_async(
-                    conn,
-                    background_events,
-                    protocol_events,
-                    plan,
-                )
-                .await?;
-                Ok(None)
-            }
-            Self::Page => {
-                super::page::dispose_session_async(conn, session_id).await?;
-                Ok(None)
-            }
-            Self::Emulation => {
-                super::emulation::dispose_page_session_async(conn, session_id).await?;
-                Ok(None)
-            }
-            Self::Network => {
-                super::network::dispose_session_policy_async(conn, session_id).await?;
-                Ok(None)
-            }
-            Self::PrimaryPageTargetState => {
-                super::page::dispose_primary_session_target_state_async(conn, plan).await?;
-                Ok(None)
+            Self::PageUpdates { owner, updates } => {
+                let completed = updates.wait().await;
+                driver
+                    .with_state(move |state| state.finish_session_page_updates(&owner, completed))
+                    .await
             }
         }
     }
@@ -209,7 +436,190 @@ impl DevToolsSessionDomainHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conn::{BrowserContext, CommandDispatchContext, ParsedCdpCommand};
+    use crate::testing::TestContext;
     use moli_page_types::DevToolsSessionKey;
+    use serde_json::json;
+
+    async fn fixture() -> (TestContext, SessionDisposalPlan) {
+        let mut context = TestContext::new();
+        let mut browser = BrowserContext::new("BID-handler-disposal".into());
+        browser.set_active_target_id("TID-handler-disposal");
+        browser.attach_active_session("SID-handler-disposal");
+        context
+            .conn
+            .install_browser_context_fixture_for_test(browser);
+        context
+            .install_navigation_fixture_for_session_owner(
+                "about:blank",
+                Some("SID-handler-disposal"),
+            )
+            .await;
+        for (id, method, params) in [
+            (
+                1,
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({"source": "globalThis.sessionPreload = true;"}),
+            ),
+            (2, "Network.enable", json!({})),
+            (
+                3,
+                "Emulation.setScriptExecutionDisabled",
+                json!({"value": true}),
+            ),
+        ] {
+            context.process_async(json!({
+                "id": id, "sessionId": "SID-handler-disposal", "method": method, "params": params,
+            })).await;
+            assert!(
+                context
+                    .sent
+                    .iter()
+                    .any(|message| message["id"] == id && message.get("result").is_some())
+            );
+        }
+        let plan = SessionDisposalPlan::for_session_route(
+            "SID-handler-disposal",
+            &context
+                .conn
+                .session_route(Some("SID-handler-disposal"))
+                .unwrap(),
+        )
+        .unwrap();
+        (context, plan)
+    }
+
+    #[tokio::test]
+    async fn owned_handler_chain_releases_state_at_every_wait_and_keeps_the_binding() {
+        let (mut context, plan) = fixture().await;
+        let mut requests = context.conn.take_protocol_state_requests().unwrap();
+        let access = context.conn.protocol_state_access().unwrap();
+        let workflow = async move {
+            let mut background = Vec::new();
+            let mut protocol = Vec::new();
+            let result = dispose_live_handlers_using(
+                &mut ProtocolWorkflowDriver::owned(access),
+                &mut background,
+                &mut protocol,
+                &plan,
+            )
+            .await;
+            (result, background, protocol)
+        };
+        tokio::pin!(workflow);
+        let mut observed_waits = 0;
+        let (result, _, _) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                tokio::select! {
+                    request = requests.recv() => {
+                        let request = request.unwrap();
+                        // Keep this real state request unserviced while an
+                        // independent command completes through the same owner.
+                        let command = ParsedCdpCommand::parse_str(
+                            json!({"id": 1000, "method": "Browser.getVersion"}).to_string(),
+                        ).unwrap();
+                        let crate::conn::CdpCommandTaskStep::Complete(outcome) = context.conn
+                            .start_parsed_command_dispatch_with_context(
+                                &command, &mut CommandDispatchContext::default(),
+                            ) else { panic!("independent command must complete during cleanup"); };
+                        assert!(outcome.into_parts().0.iter().any(|message| {
+                            message["id"] == 1000 && message.get("result").is_some()
+                        }));
+                        observed_waits += 1;
+                        request.apply(&mut context.conn);
+                    }
+                    result = &mut workflow => break result,
+                }
+            }
+        })
+        .await
+        .expect("all admitted handler cleanup must terminate");
+        assert!(observed_waits > 0);
+        let (error, _) = result.into_parts();
+        assert!(error.is_none(), "{error:#?}");
+        assert!(
+            context
+                .conn
+                .has_attached_devtools_session("SID-handler-disposal")
+        );
+        let state = context
+            .conn
+            .target_owner_state_for_session(Some("SID-handler-disposal"))
+            .unwrap();
+        assert!(state.document_start_scripts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn renderer_cleanup_failure_keeps_script_authority_and_still_clears_later_domains() {
+        let (mut context, plan) = fixture().await;
+        let owner = CommandOwnerScope::capture(&context.conn, Some("SID-handler-disposal"));
+        context
+            .conn
+            .loaded_page_mut_for_owner(&owner)
+            .unwrap()
+            .crash_devtools_target_from_io();
+        let mut background = Vec::new();
+        let mut protocol = Vec::new();
+        let result = dispose_live_handlers_using(
+            &mut ProtocolWorkflowDriver::inline(&mut context.conn),
+            &mut background,
+            &mut protocol,
+            &plan,
+        )
+        .await;
+        let (error, _) = result.into_parts();
+        let error = error.expect("the dead renderer must reject script removal");
+        assert!(
+            error.chain().count() > 1,
+            "the handler context must retain the native cause"
+        );
+        assert!(
+            context
+                .conn
+                .has_attached_devtools_session("SID-handler-disposal")
+        );
+        assert!(
+            !context
+                .conn
+                .target_owner_state_for_session(Some("SID-handler-disposal"))
+                .unwrap()
+                .document_start_scripts
+                .is_empty()
+        );
+        context
+            .conn
+            .with_target_devtools_session_state_for_owner_mut(&owner, |state| {
+                assert!(!state.network_session_state.network_enabled);
+                assert_eq!(state.emulation_session_state, Default::default());
+            })
+            .expect("every handler ran before the binding was removed");
+    }
+
+    #[test]
+    fn handler_error_context_retains_the_first_typed_cause() {
+        let plan =
+            SessionDisposalPlan::for_session_route("SID", &crate::conn::CdpSessionRoute::Browser)
+                .unwrap();
+        let mut result = DevToolsSessionHandlerDisposal {
+            first_error: None,
+            renderer_output_predecessor: None,
+        };
+        result.record_error(
+            DevToolsSessionDomainHandler::Page,
+            &plan,
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+        );
+        result.record_error(
+            DevToolsSessionDomainHandler::Network,
+            &plan,
+            std::io::Error::from(std::io::ErrorKind::ConnectionReset).into(),
+        );
+        let error = result.into_parts().0.unwrap();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
 
     #[test]
     fn handler_sets_are_owned_by_session_target_kind() {

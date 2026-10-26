@@ -8,7 +8,10 @@ use anyhow::Result;
 use anyhow::Context as _;
 use tokio::sync::{mpsc, oneshot};
 
-use super::{CdpCommandTaskStep, CdpConnection, CommandDispatchContext, ParsedCdpCommand};
+use super::{
+    CdpCommandTaskStep, CdpConnection, CommandDispatchContext, CompletedCdpCommandDispatch,
+    ParsedCdpCommand,
+};
 
 mod direct;
 pub use direct::{ProtocolStateHandle, ProtocolStateOwner};
@@ -28,8 +31,9 @@ pub type ProtocolStateRequestReceiver = mpsc::UnboundedReceiver<ProtocolStateReq
 /// Revocable access to finite protocol operations. It neither owns a
 /// connection nor lends a connection, reference, guard or future to callers.
 #[derive(Clone)]
-pub(crate) struct ProtocolStateAccess {
-    sender: mpsc::WeakUnboundedSender<ProtocolStateRequest>,
+pub(crate) enum ProtocolStateAccess {
+    Direct(ProtocolStateHandle),
+    Mailbox(mpsc::WeakUnboundedSender<ProtocolStateRequest>),
 }
 
 /// Finite protocol operations. The connection and its mutable borrow remain
@@ -39,8 +43,9 @@ pub struct ProtocolWorkflowState<'a> {
 }
 
 /// The inline driver is only for entry points which have not yet handed their
-/// task to the actor. Owned workflows always use the revocable mailbox arm.
-/// Remove the inline arm and mailbox together at the direct-sync cutover.
+/// task to the actor. Owned workflows use their owner's revocable access:
+/// synchronous for ProtocolStateOwner, or the legacy actor mailbox.
+/// Remove the inline arm and mailbox at the actor's direct-sync cutover.
 pub(crate) struct ProtocolWorkflowDriver<'a> {
     access: ProtocolWorkflowAccess<'a>,
 }
@@ -62,6 +67,13 @@ impl<'a> ProtocolWorkflowDriver<'a> {
             access: ProtocolWorkflowAccess::Owned(access),
         }
     }
+
+    pub(crate) fn owned_access(&self) -> Option<ProtocolStateAccess> {
+        match &self.access {
+            ProtocolWorkflowAccess::Inline(_) => None,
+            ProtocolWorkflowAccess::Owned(access) => Some(access.clone()),
+        }
+    }
     pub(crate) async fn with_state<T: 'static>(
         &mut self,
         operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
@@ -76,6 +88,47 @@ impl<'a> ProtocolWorkflowDriver<'a> {
 }
 
 impl ProtocolWorkflowState<'_> {
+    pub fn try_start_owned_protocol_scheduler_work(
+        self,
+        work: crate::domains::activity::ProtocolSchedulerWork,
+    ) -> Result<
+        Option<super::PendingProtocolSchedulerWork>,
+        Box<crate::domains::activity::ProtocolSchedulerWork>,
+    > {
+        self.connection
+            .try_start_owned_protocol_scheduler_work(work)
+    }
+
+    pub fn complete_owned_protocol_scheduler_work(
+        self,
+        completed: super::CompletedProtocolSchedulerWork,
+    ) -> super::CdpTurnOutcome {
+        self.connection
+            .complete_owned_protocol_scheduler_work(completed)
+    }
+
+    pub fn complete_failed_command_wait_with_context(
+        self,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        message: &str,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        self.connection
+            .complete_failed_command_wait_with_context(command_id, session_id, message, context)
+    }
+
+    /// Finishes a migrated command without borrowing state across a wait.
+    /// Legacy completions are returned intact for their existing driver.
+    pub fn try_complete_ready_command_dispatch_with_context(
+        self,
+        completed: CompletedCdpCommandDispatch,
+        context: &mut CommandDispatchContext,
+    ) -> Result<CdpCommandTaskStep, CompletedCdpCommandDispatch> {
+        self.connection
+            .try_complete_ready_command_dispatch_with_context(completed, context)
+    }
+
     pub fn start_parsed_command_dispatch_with_context(
         self,
         command: &ParsedCdpCommand,
@@ -136,6 +189,7 @@ impl ProtocolWorkflowState<'_> {
 }
 
 pub(super) struct ProtocolStateMailbox {
+    direct: Option<ProtocolStateHandle>,
     sender: mpsc::UnboundedSender<ProtocolStateRequest>,
     receiver: Option<ProtocolStateRequestReceiver>,
 }
@@ -144,6 +198,7 @@ impl Default for ProtocolStateMailbox {
     fn default() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
         Self {
+            direct: None,
             sender,
             receiver: Some(receiver),
         }
@@ -155,7 +210,10 @@ impl ProtocolStateAccess {
         &self,
         operation: impl for<'a> FnOnce(ProtocolWorkflowState<'a>) -> T + 'static,
     ) -> Result<T> {
-        let sender = self.sender.upgrade().context("protocol owner closed")?;
+        let sender = match self {
+            Self::Direct(handle) => return handle.with_state(operation),
+            Self::Mailbox(sender) => sender.upgrade().context("protocol owner closed")?,
+        };
         let (reply, receive) = oneshot::channel();
         let owner = sender.downgrade();
         sender
@@ -183,19 +241,23 @@ impl CdpConnection {
     }
 
     pub(crate) fn protocol_state_access(&self) -> Option<ProtocolStateAccess> {
+        if let Some(handle) = &self.state_mailbox.direct {
+            return Some(ProtocolStateAccess::Direct(handle.clone()));
+        }
         // The inline compatibility driver must retain its old behaviour until
         // its caller takes responsibility for pumping state requests.
         self.state_mailbox
             .receiver
             .is_none()
-            .then(|| ProtocolStateAccess {
-                sender: self.state_mailbox.sender.downgrade(),
-            })
+            .then(|| ProtocolStateAccess::Mailbox(self.state_mailbox.sender.downgrade()))
     }
 }
 
+mod activation;
 mod child_navigation;
+mod input;
 mod navigation_commit;
+mod session_disposal;
 pub use navigation_commit::BackgroundPreparedNavigationCommit;
 pub(crate) use navigation_commit::PreparedDocumentCommitState;
 

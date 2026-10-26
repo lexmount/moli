@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use indexmap::IndexMap;
 use moli_core::network::SharedWebStorageStore;
@@ -13,6 +14,16 @@ use super::{
 };
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
+/// Identifies a target host across Document replacements without retaining it.
+#[derive(Clone, Debug)]
+pub(crate) struct PageTargetHostIdentity(Weak<()>);
+
+impl PageTargetHostIdentity {
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
 /// The stable owner of all state that belongs to one page target.
 ///
 /// Selecting another page never replaces or reconstructs this object. The
@@ -21,6 +32,8 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 #[derive(Debug)]
 pub struct PageTargetHost {
     target_id: String,
+    lifetime: Arc<()>,
+    pub(crate) closing: bool,
     pub(crate) window_id: u32,
     navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
@@ -46,6 +59,8 @@ impl PageTargetHost {
     pub(crate) fn empty(target_id: String) -> Self {
         Self {
             target_id,
+            lifetime: Arc::new(()),
+            closing: false,
             window_id: 0,
             navigation_engine: None,
             target_identity: TargetIdentityState::about_blank(),
@@ -112,6 +127,10 @@ impl PageTargetHost {
 
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
+    }
+
+    pub(crate) fn host_identity(&self) -> PageTargetHostIdentity {
+        PageTargetHostIdentity(Arc::downgrade(&self.lifetime))
     }
 
     fn replace_target_id(&mut self, target_id: String) {

@@ -1190,6 +1190,25 @@ impl CdpConnection {
         Some((pending, page_command))
     }
 
+    pub(crate) fn start_disable_target_fetch_for_owner(
+        &mut self,
+        command_owner: &CommandOwnerScope,
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Option<Result<moli_core::page::PendingPageCommand>>,
+    )> {
+        let mut owner = self.target_session_owner_mut_for_owner(command_owner)?;
+        let (pending, (enabled, resource_type), update_required) =
+            owner.disable_target_fetch_and_drain_pending_state();
+        let policy =
+            if update_required && let Some(page) = owner.runtime_slot_mut().loaded_page_mut() {
+                Some(page.start_set_fetch_subresource_interception(enabled, resource_type))
+            } else {
+                None
+            };
+        Some((pending, policy))
+    }
+
     pub(crate) fn take_pending_fetch_state_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1197,6 +1216,20 @@ impl CdpConnection {
         Some(
             self.target_session_owner_mut_for_owner(owner)?
                 .drain_fetch_pending_state(),
+        )
+    }
+
+    pub(crate) fn target_fetch_pending_state_is_empty_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<bool> {
+        let (context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
+        Some(
+            self.browser_context_by_id(&context_id)?
+                .page_target(target_id.as_deref()?)?
+                .fetch_owner
+                .pending_state()
+                .is_empty(),
         )
     }
 

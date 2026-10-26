@@ -2620,6 +2620,7 @@ fn pending_emulation_page_configuration_will_be_replayed(
     current_attachment_id != Some(dispatched_attachment_id)
 }
 
+#[cfg(test)]
 pub(crate) async fn dispose_page_session_async(
     conn: &mut CdpConnection,
     session_id: &str,

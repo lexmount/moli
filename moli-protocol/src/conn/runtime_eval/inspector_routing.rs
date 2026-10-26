@@ -892,30 +892,6 @@ impl CdpConnection {
             .context("resolve BiDi node binding failed")
     }
 
-    pub(crate) async fn document_bidi_node_shared_id_for_backend_node_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        backend_node_id: u32,
-    ) -> Result<RendererDomBidiNodeSharedIdResolution> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-            page.start_document_bidi_node_shared_id_for_backend_node_id(
-                inspector_session_id,
-                backend_node_id,
-            )
-            .context("resolve BiDi node shared id failed")?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .context("resolve BiDi node shared id failed")?;
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        page.finish_document_bidi_node_shared_id_for_backend_node_id(completion)
-            .context("resolve BiDi node shared id failed")
-    }
-
     pub(crate) async fn runtime_remote_object_for_backend_node_id_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,

@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 pub(super) mod native;
 
 use serde::Deserialize;
@@ -137,7 +139,7 @@ pub(crate) struct CompletedDomCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingDomCommandKind,
-    completed: Result<Box<CompletedPageCommand>, String>,
+    completed: Result<Box<CompletedPageCommand>>,
 }
 
 impl CompletedDomCommandDispatch {
@@ -357,10 +359,7 @@ pub(super) enum PendingSetChildNodesAfter {
 
 impl PendingDomCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedDomCommandDispatch {
-        let completed = Box::pin(self.pending.wait())
-            .await
-            .map(Box::new)
-            .map_err(|error| error.to_string());
+        let completed = Box::pin(self.pending.wait()).await.map(Box::new);
         CompletedDomCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,

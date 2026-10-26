@@ -3471,12 +3471,17 @@ async fn generated_surface_refresh_does_not_freeze_match_media_override() {
     .await;
     ctx.expect_result(187, json!({}), Some("SID-1"));
 
+    let mut refresh = crate::conn::SessionPageUpdates::default();
     ctx.conn
         .browser_context
         .as_mut()
         .expect("browser context")
-        .apply_surface_overrides_to_loaded_page_async()
+        .start_session_surface_restoration("TID-1", &mut refresh);
+    refresh
+        .wait()
         .await
+        .finish(ctx.conn.loaded_page_mut_for_session_owner(Some("SID-1")))
+        .into_result()
         .expect("surface refresh should succeed");
 
     ctx.process_async(json!({

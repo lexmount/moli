@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::Deserialize;
 
 use crate::automation::{
@@ -14,8 +15,9 @@ use crate::domains::command_output::CommandOutputPlan;
 
 use super::page;
 
-mod activation;
+pub(crate) mod activation;
 mod attachment;
+pub(crate) use attachment::TargetDetachmentFailureCleanup;
 mod auto_attach;
 mod browser_context;
 mod browser_context_disposal;
@@ -26,13 +28,16 @@ mod info;
 mod popup;
 #[cfg(test)]
 mod protocol_neutral_tests;
-mod session_disposal;
-pub(crate) use session_disposal::{
-    dispose_closed_session_domains_async, dispose_uncommitted_session_async,
-};
+pub(crate) mod session_disposal;
+pub(crate) use session_disposal::dispose_uncommitted_session_async;
 #[cfg(test)]
 mod tests;
 mod worker_target;
+
+pub(crate) enum TargetCommandFailureCleanup {
+    Detachment(TargetDetachmentFailureCleanup),
+    PageClose(closing::PreparedPageTargetCloseCommand),
+}
 
 pub(in crate::domains) use browser_context::devtools_client_window_info_for_target;
 pub(crate) use popup::{
@@ -93,7 +98,7 @@ pub(crate) struct PendingTargetCommandDispatch {
 pub(crate) struct CompletedTargetCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
-    kind: CompletedTargetCommandKind,
+    kind: Box<CompletedTargetCommandKind>,
 }
 
 pub(crate) enum TargetCommandTaskStep {
@@ -238,11 +243,13 @@ enum PendingTargetCommandKind {
         initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
     },
     ActivateTarget {
-        command: DevToolsActivateTargetCommand,
+        activation: activation::PreparedTargetActivation,
+        access: Option<crate::conn::ProtocolStateAccess>,
     },
     SetAutoAttach {
         auto_attach: bool,
         owner_session_id: Option<String>,
+        initial_document: Option<crate::conn::InitialDocumentPageBuildWaiter>,
     },
     CreateTarget {
         response_plan: CommandOutputPlan,
@@ -250,11 +257,17 @@ enum PendingTargetCommandKind {
         initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
     },
     DetachFromTarget {
-        target_id: Option<String>,
-        detach_session_id: Option<String>,
+        detachment: attachment::TargetDetachment,
+        access: Option<crate::conn::ProtocolStateAccess>,
     },
+    RecoverDetachment(attachment::TargetDetachmentRecovery),
     CloseTarget {
         command: DevToolsCloseTargetCommand,
+    },
+    ClosePageTarget {
+        closing: closing::PreparedPageTargetCloseCommand,
+        response: CommandOutputPlan,
+        access: Option<crate::conn::ProtocolStateAccess>,
     },
     DisposeBrowserContext {
         browser_context_id: String,
@@ -276,9 +289,8 @@ enum CompletedTargetCommandKind {
             >,
         >,
     },
-    ActivateTarget {
-        command: DevToolsActivateTargetCommand,
-    },
+    ActivateTarget(Result<activation::TargetActivationOutput>),
+    InlineActivateTarget(activation::PreparedTargetActivation),
     SetAutoAttach {
         auto_attach: bool,
         owner_session_id: Option<String>,
@@ -293,12 +305,20 @@ enum CompletedTargetCommandKind {
             >,
         >,
     },
-    DetachFromTarget {
-        target_id: Option<String>,
-        detach_session_id: Option<String>,
-    },
+    DetachFromTarget(attachment::TargetDetachmentOutput),
+    InlineDetachFromTarget(attachment::TargetDetachment),
+    RecoveredDetachment(attachment::TargetDetachmentRecovery),
     CloseTarget {
         command: DevToolsCloseTargetCommand,
+    },
+    ClosePageTarget {
+        closing: closing::PreparedPageTargetCloseCommand,
+        completed: Option<Box<crate::domains::page::CompletedTargetTermination>>,
+        response: CommandOutputPlan,
+    },
+    InlineClosePageTarget {
+        closing: closing::PreparedPageTargetCloseCommand,
+        response: CommandOutputPlan,
     },
     DisposeBrowserContext {
         browser_context_id: String,
@@ -310,8 +330,41 @@ enum CompletedTargetCommandKind {
 }
 
 impl PendingTargetCommandDispatch {
+    pub(crate) fn owns_session_disposal(&self) -> bool {
+        matches!(
+            *self.kind,
+            PendingTargetCommandKind::DetachFromTarget { .. }
+                | PendingTargetCommandKind::RecoverDetachment(_)
+                | PendingTargetCommandKind::ClosePageTarget { .. }
+        )
+    }
+
+    pub(crate) fn failure_cleanup(&self) -> Option<TargetCommandFailureCleanup> {
+        match self.kind.as_ref() {
+            PendingTargetCommandKind::DetachFromTarget { detachment, .. } => Some(
+                TargetCommandFailureCleanup::Detachment(detachment.failure_cleanup()),
+            ),
+            PendingTargetCommandKind::ClosePageTarget { closing, .. } => {
+                Some(TargetCommandFailureCleanup::PageClose(closing.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn take_start_protocol_events(&self) -> Vec<BackgroundProtocolEvent> {
+        match self.kind.as_ref() {
+            PendingTargetCommandKind::ClosePageTarget { closing, .. } => {
+                closing.take_protocol_events()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub(crate) async fn wait(self) -> CompletedTargetCommandDispatch {
         let kind = match *self.kind {
+            PendingTargetCommandKind::RecoverDetachment(recovery) => {
+                CompletedTargetCommandKind::RecoveredDetachment(recovery.wait().await)
+            }
             PendingTargetCommandKind::AttachToTarget {
                 prepared_session,
                 target_info,
@@ -324,16 +377,32 @@ impl PendingTargetCommandDispatch {
                     None => None,
                 },
             },
-            PendingTargetCommandKind::ActivateTarget { command } => {
-                CompletedTargetCommandKind::ActivateTarget { command }
-            }
+            PendingTargetCommandKind::ActivateTarget { activation, access } => match access {
+                Some(access) => CompletedTargetCommandKind::ActivateTarget(
+                    activation
+                        .run(&mut crate::conn::ProtocolWorkflowDriver::owned(access))
+                        .await,
+                ),
+                None => CompletedTargetCommandKind::InlineActivateTarget(activation),
+            },
             PendingTargetCommandKind::SetAutoAttach {
                 auto_attach,
                 owner_session_id,
-            } => CompletedTargetCommandKind::SetAutoAttach {
-                auto_attach,
-                owner_session_id,
-            },
+                initial_document,
+            } => {
+                // The Page's original attach owns installation. Joining it
+                // inside actor completion would prevent that attach's ready
+                // result from ever being consumed by the same actor.
+                if let Some(initial_document) = initial_document
+                    && let Err(error) = initial_document.wait().await
+                {
+                    tracing::debug!(%error, "auto-attach initial Page dependency retired");
+                }
+                CompletedTargetCommandKind::SetAutoAttach {
+                    auto_attach,
+                    owner_session_id,
+                }
+            }
             PendingTargetCommandKind::CreateTarget {
                 response_plan,
                 creation_commit,
@@ -346,16 +415,34 @@ impl PendingTargetCommandDispatch {
                     None => None,
                 },
             },
-            PendingTargetCommandKind::DetachFromTarget {
-                target_id,
-                detach_session_id,
-            } => CompletedTargetCommandKind::DetachFromTarget {
-                target_id,
-                detach_session_id,
+            PendingTargetCommandKind::DetachFromTarget { detachment, access } => match access {
+                Some(access) => CompletedTargetCommandKind::DetachFromTarget(
+                    detachment
+                        .run(&mut crate::conn::ProtocolWorkflowDriver::owned(access))
+                        .await,
+                ),
+                None => CompletedTargetCommandKind::InlineDetachFromTarget(detachment),
             },
             PendingTargetCommandKind::CloseTarget { command } => {
                 CompletedTargetCommandKind::CloseTarget { command }
             }
+            PendingTargetCommandKind::ClosePageTarget {
+                closing,
+                response,
+                access,
+            } => match access {
+                Some(access) => {
+                    let completed = closing
+                        .wait(&mut crate::conn::ProtocolWorkflowDriver::owned(access))
+                        .await;
+                    CompletedTargetCommandKind::ClosePageTarget {
+                        closing,
+                        completed,
+                        response,
+                    }
+                }
+                None => CompletedTargetCommandKind::InlineClosePageTarget { closing, response },
+            },
             PendingTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
                 CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id }
             }
@@ -370,12 +457,50 @@ impl PendingTargetCommandDispatch {
         CompletedTargetCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
-            kind,
+            kind: Box::new(kind),
         }
     }
 }
 
 impl CompletedTargetCommandDispatch {
+    pub(crate) fn try_finish_ready(
+        self,
+        conn: &mut CdpConnection,
+        context: &mut crate::conn::CommandDispatchContext,
+    ) -> Result<CommandOutputPlan, Self> {
+        if !matches!(
+            self.kind.as_ref(),
+            CompletedTargetCommandKind::DetachFromTarget(_)
+                | CompletedTargetCommandKind::RecoveredDetachment(_)
+                | CompletedTargetCommandKind::ActivateTarget(_)
+                | CompletedTargetCommandKind::ClosePageTarget { .. }
+        ) {
+            return Err(self);
+        }
+        match *self.kind {
+            CompletedTargetCommandKind::ClosePageTarget {
+                closing,
+                completed,
+                response,
+            } => {
+                context.take_command_failure_cleanup();
+                Ok(closing.finish(conn, context, completed, response))
+            }
+            CompletedTargetCommandKind::ActivateTarget(output) => {
+                Ok(activation::activation_result_plan(conn, output))
+            }
+            CompletedTargetCommandKind::DetachFromTarget(output) => {
+                context.take_command_failure_cleanup();
+                Ok(output.finish(conn, context))
+            }
+            CompletedTargetCommandKind::RecoveredDetachment(recovery) => Ok(recovery.finish(conn)),
+            kind => Err(Self {
+                kind: Box::new(kind),
+                ..self
+            }),
+        }
+    }
+
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -428,7 +553,7 @@ pub(crate) fn try_start_target_command_dispatch(
             auto_attach::auto_attach_related(conn, cmd),
         )),
         Some(TargetAction::DetachFromTarget) => {
-            Some(attachment::start_detach_from_target_command(cmd))
+            Some(attachment::start_detach_from_target_command(conn, cmd))
         }
         Some(TargetAction::CloseTarget) => Some(closing::start_close_target_command(conn, cmd)),
         Some(TargetAction::DisposeBrowserContext) => {
@@ -454,11 +579,14 @@ fn start_devtools_target_command(
             command_session_id,
             command,
         ),
-        AutomationCommand::CloseTarget(command) => {
-            closing::start_devtools_close_target_command(command_id, command_session_id, command)
-        }
+        AutomationCommand::CloseTarget(command) => closing::start_devtools_close_target_command(
+            conn,
+            command_id,
+            command_session_id,
+            command,
+        ),
         AutomationCommand::ActivateTarget(command) => {
-            pending_activate_target_command(command_id, command_session_id, command)
+            pending_activate_target_command(conn, command_id, command_session_id, command)
         }
         AutomationCommand::GetTargets(command) => TargetCommandTaskStep::Complete(
             browser_context::start_devtools_get_targets_command(conn, command),
@@ -680,12 +808,42 @@ async fn target_creation_response_plan_after_initial_document(
     plan
 }
 
+pub(crate) fn recover_failed_target_command(
+    conn: &mut CdpConnection,
+    context: &mut crate::conn::CommandDispatchContext,
+    cleanup: TargetCommandFailureCleanup,
+    command_id: Option<u64>,
+    session_id: Option<&str>,
+    response: CommandOutputPlan,
+) -> PendingTargetCommandDispatch {
+    let kind = match cleanup {
+        TargetCommandFailureCleanup::Detachment(cleanup) => {
+            PendingTargetCommandKind::RecoverDetachment(cleanup.prepare(conn, context, response))
+        }
+        TargetCommandFailureCleanup::PageClose(closing) => {
+            PendingTargetCommandKind::ClosePageTarget {
+                closing,
+                response,
+                access: conn.protocol_state_access(),
+            }
+        }
+    };
+    PendingTargetCommandDispatch {
+        command_id,
+        session_id: session_id.map(str::to_owned),
+        kind: Box::new(kind),
+    }
+}
+
 pub(crate) async fn complete_pending_target_command(
     conn: &mut CdpConnection,
     completed: CompletedTargetCommandDispatch,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> TargetCommandTaskStep {
-    match completed.kind {
+    match *completed.kind {
+        CompletedTargetCommandKind::RecoveredDetachment(recovery) => {
+            TargetCommandTaskStep::Complete(recovery.finish(conn))
+        }
         CompletedTargetCommandKind::AttachToTarget {
             prepared_session,
             target_info,
@@ -701,10 +859,14 @@ pub(crate) async fn complete_pending_target_command(
                 .await,
             );
         }
-        CompletedTargetCommandKind::ActivateTarget { command } => {
-            return TargetCommandTaskStep::Complete(
-                activation::complete_activate_target_command_async(conn, command).await,
-            );
+        CompletedTargetCommandKind::ActivateTarget(output) => {
+            TargetCommandTaskStep::Complete(activation::activation_result_plan(conn, output))
+        }
+        CompletedTargetCommandKind::InlineActivateTarget(activation) => {
+            let output = activation
+                .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
+                .await;
+            TargetCommandTaskStep::Complete(activation::activation_result_plan(conn, output))
         }
         CompletedTargetCommandKind::SetAutoAttach {
             auto_attach,
@@ -771,25 +933,45 @@ pub(crate) async fn complete_pending_target_command(
                 .await,
             )
         }
-        CompletedTargetCommandKind::DetachFromTarget {
-            target_id,
-            detach_session_id,
-        } => {
-            return TargetCommandTaskStep::Complete(
-                attachment::complete_detach_from_target_command_async(
-                    conn,
-                    completed.session_id.as_deref(),
-                    target_id,
-                    detach_session_id,
-                    command_context,
-                )
-                .await,
-            );
+        CompletedTargetCommandKind::DetachFromTarget(output) => {
+            TargetCommandTaskStep::Complete(output.finish(conn, command_context))
+        }
+        CompletedTargetCommandKind::InlineDetachFromTarget(detachment) => {
+            let output = detachment
+                .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
+                .await;
+            command_context.take_command_failure_cleanup();
+            TargetCommandTaskStep::Complete(output.finish(conn, command_context))
         }
         CompletedTargetCommandKind::CloseTarget { command } => {
             return TargetCommandTaskStep::Complete(
                 closing::complete_close_target_command_async(conn, command, command_context).await,
             );
+        }
+        CompletedTargetCommandKind::ClosePageTarget {
+            closing,
+            completed,
+            response,
+        } => {
+            command_context.take_command_failure_cleanup();
+            TargetCommandTaskStep::Complete(closing.finish(
+                conn,
+                command_context,
+                completed,
+                response,
+            ))
+        }
+        CompletedTargetCommandKind::InlineClosePageTarget { closing, response } => {
+            let completed = closing
+                .wait(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
+                .await;
+            command_context.take_command_failure_cleanup();
+            TargetCommandTaskStep::Complete(closing.finish(
+                conn,
+                command_context,
+                completed,
+                response,
+            ))
         }
         CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
             return TargetCommandTaskStep::Complete(
@@ -819,14 +1001,29 @@ pub(crate) async fn complete_pending_target_command(
 }
 
 fn pending_activate_target_command(
+    conn: &mut CdpConnection,
     command_id: Option<u64>,
     session_id: Option<&str>,
     command: DevToolsActivateTargetCommand,
 ) -> TargetCommandTaskStep {
+    let activation = match activation::prepare_target_activation(conn, command) {
+        Ok(Some(activation)) => activation,
+        Ok(None) => {
+            return TargetCommandTaskStep::Complete(CommandOutputPlan::result(serde_json::json!(
+                {}
+            )));
+        }
+        Err(error) => {
+            return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
+        }
+    };
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
         command_id,
         session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::ActivateTarget { command }),
+        kind: Box::new(PendingTargetCommandKind::ActivateTarget {
+            activation,
+            access: conn.protocol_state_access(),
+        }),
     })
 }
 
@@ -835,6 +1032,7 @@ fn pending_set_auto_attach_command(
     session_id: Option<&str>,
     auto_attach: bool,
     owner_session_id: Option<&str>,
+    initial_document: Option<crate::conn::InitialDocumentPageBuildWaiter>,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
         command_id,
@@ -842,22 +1040,7 @@ fn pending_set_auto_attach_command(
         kind: Box::new(PendingTargetCommandKind::SetAutoAttach {
             auto_attach,
             owner_session_id: owner_session_id.map(str::to_owned),
-        }),
-    })
-}
-
-fn pending_detach_from_target_command(
-    command_id: Option<u64>,
-    session_id: Option<&str>,
-    target_id: Option<String>,
-    detach_session_id: Option<String>,
-) -> TargetCommandTaskStep {
-    TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-        command_id,
-        session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::DetachFromTarget {
-            target_id,
-            detach_session_id,
+            initial_document,
         }),
     })
 }
@@ -985,12 +1168,9 @@ fn restore_previously_active_browser_context(
     }
 }
 
-fn select_browser_context_for_target(
-    conn: &mut CdpConnection,
-    target_id: &str,
-) -> Result<(), &'static str> {
+fn select_browser_context_for_target(conn: &mut CdpConnection, target_id: &str) -> Result<()> {
     if conn.browser_context.is_none() && conn.inactive_browser_contexts.is_empty() {
-        return Err("BrowserContextNotLoaded");
+        anyhow::bail!("BrowserContextNotLoaded");
     }
     if !conn.browser_contexts().any(|bc| {
         bc.active_target_id().is_some()
@@ -999,12 +1179,12 @@ fn select_browser_context_for_target(
             || bc.has_any_dedicated_worker_targets()
             || bc.has_any_service_worker_targets()
     }) {
-        return Err("TargetNotLoaded");
+        anyhow::bail!("TargetNotLoaded");
     }
     if conn.activate_browser_context_for_target(target_id) {
         return Ok(());
     }
-    Err("UnknownTargetId")
+    anyhow::bail!("UnknownTargetId")
 }
 
 #[cfg(test)]
@@ -1340,7 +1520,7 @@ mod devtools_runtime_entry_tests {
     }
 
     #[test]
-    fn devtools_target_entry_routes_activate_target_to_pending_command() {
+    fn devtools_target_entry_rejects_missing_activation_target_during_admission() {
         let mut conn = CdpConnection::new();
         let step = start_devtools_target_command(
             &mut conn,
@@ -1352,17 +1532,18 @@ mod devtools_runtime_entry_tests {
             }),
         );
 
-        let TargetCommandTaskStep::Pending(pending) = step else {
-            panic!("Target.activateTarget should enter the pending path through the unified entry");
+        let TargetCommandTaskStep::Complete(plan) = step else {
+            panic!("a missing activation target has no renderer work to wait for");
         };
-        assert_eq!(pending.command_id, Some(43));
-        assert_eq!(pending.session_id.as_deref(), Some("SID-2"));
-        match *pending.kind {
-            PendingTargetCommandKind::ActivateTarget { command } => {
-                assert_eq!(command.target_id.as_str(), "TARGET-2");
-            }
-            _ => panic!("Target.activateTarget should preserve the activate command payload"),
-        }
+        let messages: Vec<_> = plan
+            .into_background_events(Some(43), Some("SID-2"))
+            .into_iter()
+            .map(BackgroundProtocolEvent::into_protocol_message)
+            .collect();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["id"], 43);
+        assert_eq!(messages[0]["sessionId"], "SID-2");
+        assert!(messages[0].get("error").is_some());
     }
 
     #[tokio::test]

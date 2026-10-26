@@ -10,17 +10,35 @@ use moli_core::RendererOutputFence;
 use super::{PageCommandTaskStep, complete_materialized_navigation_into_buffer_async};
 use crate::domains::command_output::{CommandOutputBuffer, CommandOutputPlan};
 
-#[derive(Debug)]
+mod target;
+pub(crate) use target::{
+    CompletedTargetTermination, TargetTermination, TargetTerminationSelection,
+};
+
+#[derive(Clone, Debug)]
 pub(crate) struct PageTargetTerminationOwnerAction {
     owner_scope: CommandOwnerScope,
     target_id: String,
+    host: Option<crate::conn::PageTargetHostIdentity>,
 }
 
 impl PageTargetTerminationOwnerAction {
-    pub(crate) fn new(owner_scope: CommandOwnerScope, target_id: String) -> Self {
+    pub(crate) fn new(
+        conn: &CdpConnection,
+        owner_scope: CommandOwnerScope,
+        target_id: String,
+    ) -> Self {
+        let host = conn.page_target_host_identity_for_owner(&owner_scope);
+        // An admitted close belongs to the target, including after its
+        // initiating frontend session detaches.
+        let owner_scope = conn
+            .target_session_route_for_target_id(&target_id)
+            .map(CommandOwnerScope::for_route)
+            .unwrap_or(owner_scope);
         Self {
             owner_scope,
             target_id,
+            host,
         }
     }
 
@@ -32,8 +50,21 @@ impl PageTargetTerminationOwnerAction {
         &self.target_id
     }
 
-    fn into_parts(self) -> (CommandOwnerScope, String) {
-        (self.owner_scope, self.target_id)
+    pub(crate) fn is_current_host(&self, conn: &CdpConnection) -> bool {
+        self.host.as_ref().is_some_and(|host| {
+            conn.page_target_host_identity_for_owner(&self.owner_scope)
+                .is_some_and(|current| host.matches(&current))
+        })
+    }
+
+    fn into_parts(
+        self,
+    ) -> (
+        CommandOwnerScope,
+        String,
+        Option<crate::conn::PageTargetHostIdentity>,
+    ) {
+        (self.owner_scope, self.target_id, self.host)
     }
 }
 
@@ -635,6 +666,7 @@ pub(super) async fn prepare_page_target_termination_async(
     // fence first admits every renderer record produced above, then the
     // scheduler sends the Page.close response and runs this teardown action.
     conn.publish_page_target_termination_owner_action(PageTargetTerminationOwnerAction::new(
+        conn,
         owner.clone(),
         target_id,
     ));
@@ -645,71 +677,88 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
     conn: &mut CdpConnection,
     action: PageTargetTerminationOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (owner_scope, expected_target_id) = action.into_parts();
-    let mut out = Vec::new();
-    let current_target_id = conn
-        .target_owner_identity_for_owner(&owner_scope)
-        .and_then(|(_, target_id)| target_id);
-    if current_target_id.as_deref() != Some(expected_target_id.as_str()) {
+    let Some(termination) = TargetTermination::prepare(conn, action) else {
         return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            out,
+            Vec::new(),
             conn.take_scheduler_events(),
         );
-    }
-    if !conn.activate_browser_context_for_target(&expected_target_id) {
-        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            out,
-            conn.take_scheduler_events(),
-        );
-    }
-    let target_host_closure = conn.prepare_target_host_closure(&expected_target_id);
-    let is_active_target = conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|browser_context| browser_context.is_active_target(&expected_target_id));
-    let closed = if is_active_target {
-        conn.close_active_page_target_for_target_close_async(&mut out, "Target closed")
-            .await
-    } else {
-        conn.close_background_page_target_for_target_close_async(
-            &expected_target_id,
-            &mut out,
-            "Target closed",
-        )
+    };
+    termination
+        .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
         .await
-    };
-    let Some(closed) = closed else {
-        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            out,
-            conn.take_scheduler_events(),
+        .finish(conn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::BrowserContext;
+
+    #[tokio::test]
+    async fn admitted_target_termination_survives_its_initiating_session() {
+        let mut conn = CdpConnection::new();
+        let mut context = BrowserContext::new("BID-close-initiator".into());
+        context.set_active_target_id("TID-close-initiator");
+        context.attach_active_session("SID-primary");
+        assert!(
+            context
+                .assign_attached_session_to_target("TID-close-initiator", "SID-initiator".into())
         );
-    };
-    let closed_target_id = closed.target_id.clone();
-    let (target_detached_info_deltas, target_destroyed_deltas) = target_host_closure.into_parts();
-    for sid in closed.inspector_detached_session_ids() {
-        out.push(BackgroundProtocolEvent::inspector_detached(
-            Some(sid),
-            "Render process gone.",
-        ));
+        conn.install_browser_context_fixture_for_test(context);
+        let action = PageTargetTerminationOwnerAction::new(
+            &conn,
+            CommandOwnerScope::for_session("SID-initiator"),
+            "TID-close-initiator".into(),
+        );
+        let detached = conn.process_message_with_turn_outcome_async(
+            r#"{"id":2,"method":"Target.detachFromTarget","params":{"sessionId":"SID-initiator"}}"#,
+        ).await;
+        assert!(
+            detached
+                .into_parts()
+                .0
+                .iter()
+                .any(|message| message["id"] == 2 && message.get("result").is_some())
+        );
+        assert!(!conn.has_attached_devtools_session("SID-initiator"));
+
+        complete_page_target_termination_owner_action_async(&mut conn, action).await;
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .page_target("TID-close-initiator")
+                .is_none()
+        );
+        assert!(!conn.has_attached_devtools_session("SID-primary"));
     }
-    out.extend(conn.prepared_target_host_deltas_event_plan(target_detached_info_deltas));
-    out.extend(
-        conn.dispose_target_closure_sessions_event_plan_async(
-            closed.into_detach_cleanup_plan(Some("Render process gone.")),
-            None,
-        )
-        .await,
-    );
-    if let Some(tab_cleanup) = conn.take_closed_top_level_target_sessions_cleanup_plan(
-        &closed_target_id,
-        Some("Render process gone."),
-    ) {
-        out.extend(
-            conn.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
-                .await,
+
+    #[tokio::test]
+    async fn delayed_target_termination_rejects_a_recreated_host_with_the_same_ids() {
+        let mut conn = CdpConnection::new();
+        let install = |conn: &mut CdpConnection| {
+            let mut context = BrowserContext::new("BID-recreated".into());
+            context.set_active_target_id("TID-recreated");
+            conn.install_browser_context_fixture_for_test(context);
+        };
+        install(&mut conn);
+        let owner = CommandOwnerScope::capture(&conn, None);
+        let action =
+            PageTargetTerminationOwnerAction::new(&conn, owner.clone(), "TID-recreated".into());
+        let original = conn.page_target_host_identity_for_owner(&owner).unwrap();
+        install(&mut conn);
+        let replacement = conn.page_target_host_identity_for_owner(&owner).unwrap();
+        assert!(!original.matches(&replacement));
+
+        let outcome = complete_page_target_termination_owner_action_async(&mut conn, action).await;
+        assert!(outcome.into_parts().0.is_empty());
+        assert!(replacement.matches(&conn.page_target_host_identity_for_owner(&owner).unwrap()));
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .page_target("TID-recreated")
+                .is_some()
         );
     }
-    out.extend(conn.prepared_target_host_deltas_event_plan(target_destroyed_deltas));
-    conn.release_idle_navigation_engine_memory_after_target_close();
-    crate::conn::CdpTurnOutcome::new_with_protocol_events(out, conn.take_scheduler_events())
 }

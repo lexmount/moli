@@ -7,6 +7,11 @@
 mod node;
 pub(crate) use node::{NodeReferenceParams, with_backend_node};
 
+use anyhow::{Error, Result};
+use futures_util::{
+    FutureExt as _,
+    future::{LocalBoxFuture, Shared},
+};
 use serde_json::json;
 
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
@@ -19,9 +24,7 @@ use crate::conn::{
     TargetPageResidenceIdentity,
 };
 
-pub(crate) fn unit_response(
-    reply: anyhow::Result<RendererPageReply>,
-) -> RendererNativeProtocolResponse {
+pub(crate) fn unit_response(reply: Result<RendererPageReply>) -> RendererNativeProtocolResponse {
     match reply {
         Ok(RendererPageReply::Unit) => RendererNativeProtocolResponse::success(json!({})),
         Err(error) => RendererNativeProtocolResponse::error(-32000, error.to_string()),
@@ -35,85 +38,196 @@ pub(crate) enum NativeCommandStep {
 }
 
 type UnpublishedFailureProjection =
-    Box<dyn FnOnce(&CdpConnection, String) -> CommandOutputPlan + Send>;
+    Box<dyn FnOnce(&CdpConnection, Error) -> CommandOutputPlan + Send>;
 
 pub(crate) struct PendingNativeCommand {
-    // Retain wire routing only; Page settlement uses the exact residence.
-    session_id: Option<String>,
-    residence: TargetPageResidenceIdentity,
-    command_id: u64,
-    pending: PendingPageCommand,
-    guard: RendererNativeCommandResponseGuard,
+    scope: NativeCommandFailureCleanup,
+    pending: LocalBoxFuture<'static, NativeCommandCompletion>,
     unpublished_failure: Option<UnpublishedFailureProjection>,
+    recovering: bool,
+    _cancellation: NativeWaitCancellation,
 }
 
 pub(crate) struct CompletedNativeCommand {
-    session_id: Option<String>,
-    residence: TargetPageResidenceIdentity,
-    pub(crate) command_id: u64,
-    result: Result<CompletedPageCommand, String>,
-    guard: RendererNativeCommandResponseGuard,
+    scope: NativeCommandFailureCleanup,
+    result: NativeCommandCompletion,
     unpublished_failure: Option<UnpublishedFailureProjection>,
 }
 
+/// One native response authority survives cancellation and discarded ready
+/// results. Its receipt owns no connection, Page or additional task.
+#[derive(Clone)]
+pub(crate) struct NativeCommandFailureCleanup {
+    command_id: u64,
+    session_id: Option<String>,
+    publication: Shared<LocalBoxFuture<'static, Option<moli_core::RendererOutputFence>>>,
+}
+
+/// Cancels at wait-drop time, even if its context retains the original
+/// receipt for recovery. An already claimed publication keeps that receipt.
+struct NativeWaitCancellation(
+    Shared<LocalBoxFuture<'static, Option<moli_core::RendererOutputFence>>>,
+);
+
+impl Drop for NativeWaitCancellation {
+    fn drop(&mut self) {
+        // Poll once to revoke the open authority synchronously. If the
+        // producer already claimed it, recovery retains the same pending
+        // receipt; this does not wait or spawn a task.
+        let _ = self.0.clone().now_or_never();
+    }
+}
+
+impl NativeCommandFailureCleanup {
+    fn new(
+        command_id: u64,
+        session_id: Option<String>,
+        guard: RendererNativeCommandResponseGuard,
+    ) -> Self {
+        Self {
+            command_id,
+            session_id,
+            publication: guard.cancel_or_published().boxed_local().shared(),
+        }
+    }
+
+    fn wait_cancellation(&self) -> NativeWaitCancellation {
+        NativeWaitCancellation(self.publication.clone())
+    }
+
+    pub(crate) fn recover(self, response: CommandOutputPlan) -> PendingNativeCommand {
+        let publication = self.publication.clone();
+        let cancellation = self.wait_cancellation();
+        PendingNativeCommand {
+            scope: self,
+            pending: async move {
+                match publication.await {
+                    Some(fence) => NativeCommandCompletion::Published(fence),
+                    None => NativeCommandCompletion::AdapterFailure(response),
+                }
+            }
+            .boxed_local(),
+            unpublished_failure: None,
+            recovering: true,
+            _cancellation: cancellation,
+        }
+    }
+
+    async fn settle(
+        &self,
+        result: Result<CompletedPageCommand>,
+        residence: TargetPageResidenceIdentity,
+    ) -> NativeCommandCompletion {
+        match result {
+            Ok(completed) => NativeCommandCompletion::Page {
+                completed: Box::new(completed),
+                residence,
+            },
+            Err(error) => match self.publication.clone().await {
+                Some(fence) => NativeCommandCompletion::Published(fence),
+                None => NativeCommandCompletion::Unpublished(error),
+            },
+        }
+    }
+}
+
 impl PendingNativeCommand {
+    fn new(
+        command_id: u64,
+        session_id: Option<String>,
+        residence: TargetPageResidenceIdentity,
+        pending: PendingPageCommand,
+        guard: RendererNativeCommandResponseGuard,
+    ) -> Self {
+        let scope = NativeCommandFailureCleanup::new(command_id, session_id, guard);
+        let wait = scope.clone();
+        let cancellation = scope.wait_cancellation();
+        Self {
+            scope,
+            pending: async move { wait.settle(pending.wait().await, residence).await }
+                .boxed_local(),
+            unpublished_failure: None,
+            recovering: false,
+            _cancellation: cancellation,
+        }
+    }
+
     /// Browser policy may outlive a rejected old attachment. This projection
     /// only runs after publication lost; it cannot replace a committed reply.
     pub(crate) fn on_unpublished_failure(
         mut self,
-        project: impl FnOnce(&CdpConnection, String) -> CommandOutputPlan + Send + 'static,
+        project: impl FnOnce(&CdpConnection, Error) -> CommandOutputPlan + Send + 'static,
     ) -> Self {
         self.unpublished_failure = Some(Box::new(project));
         self
     }
 
-    pub(crate) fn command_id(&self) -> u64 {
-        self.command_id
+    pub(crate) fn failure_cleanup(&self) -> NativeCommandFailureCleanup {
+        self.scope.clone()
     }
-
+    pub(crate) fn continues_after_session_detachment(&self) -> bool {
+        self.recovering
+    }
+    pub(crate) fn command_id(&self) -> u64 {
+        self.scope.command_id
+    }
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.scope.session_id.as_deref()
     }
 
     pub(crate) async fn wait(self) -> CompletedNativeCommand {
         CompletedNativeCommand {
-            session_id: self.session_id,
-            residence: self.residence,
-            command_id: self.command_id,
-            result: self.pending.wait().await.map_err(|error| error.to_string()),
-            guard: self.guard,
+            scope: self.scope,
+            result: self.pending.await,
             unpublished_failure: self.unpublished_failure,
         }
     }
 }
 
+/// All renderer waits, including publication settlement after an adapter
+/// failure, finish before any of these results enter protocol state.
+enum NativeCommandCompletion {
+    Page {
+        completed: Box<CompletedPageCommand>,
+        residence: TargetPageResidenceIdentity,
+    },
+    Published(moli_core::RendererOutputFence),
+    Unpublished(Error),
+    AdapterFailure(CommandOutputPlan),
+}
+
 impl CompletedNativeCommand {
+    pub(crate) fn command_id(&self) -> u64 {
+        self.scope.command_id
+    }
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.scope.session_id.as_deref()
     }
 
-    pub(crate) async fn complete(
+    pub(crate) fn complete(
         self,
         conn: &mut CdpConnection,
         context: &mut CommandDispatchContext,
     ) -> CommandOutputPlan {
         match self.result {
-            Ok(completed) => {
-                let output = conn.settle_page_command_turn_for_owner(&self.residence, completed);
+            NativeCommandCompletion::Page {
+                completed,
+                residence,
+            } => {
+                let output = conn.settle_page_command_turn_for_owner(&residence, *completed);
                 let completion = context.consume_renderer_command_turn_output(output);
                 assert!(completion.native_response_was_published());
                 CommandOutputPlan::default()
             }
-            Err(error) => match self.guard.cancel_or_published().await {
-                Some(fence) => {
-                    context.set_renderer_output_predecessor(fence);
-                    CommandOutputPlan::default()
-                }
-                None => match self.unpublished_failure {
-                    Some(project) => project(conn, error),
-                    None => CommandOutputPlan::error(-32000, error),
-                },
+            NativeCommandCompletion::Published(fence) => {
+                context.set_renderer_output_predecessor(fence);
+                CommandOutputPlan::default()
+            }
+            NativeCommandCompletion::Unpublished(error) => match self.unpublished_failure {
+                Some(project) => project(conn, error),
+                None => CommandOutputPlan::error(-32000, error),
             },
+            NativeCommandCompletion::AdapterFailure(response) => response,
         }
     }
 }
@@ -122,9 +236,7 @@ pub(crate) fn start(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     operation: RendererPageCommand,
-    project: impl FnOnce(anyhow::Result<RendererPageReply>) -> RendererNativeProtocolResponse
-    + Send
-    + 'static,
+    project: impl FnOnce(Result<RendererPageReply>) -> RendererNativeProtocolResponse + Send + 'static,
 ) -> NativeCommandStep {
     start_operation(
         conn,
@@ -148,14 +260,13 @@ pub(crate) fn start_operation(
     };
     let command_id = cmd.id.expect("a native frontend command has a call id");
     match page.start_cdp_call(command_id, cmd.session_id, operation) {
-        Ok((pending, guard)) => NativeCommandStep::Pending(PendingNativeCommand {
-            session_id: cmd.session_id.map(str::to_owned),
-            residence,
+        Ok((pending, guard)) => NativeCommandStep::Pending(PendingNativeCommand::new(
             command_id,
+            cmd.session_id.map(str::to_owned),
+            residence,
             pending,
             guard,
-            unpublished_failure: None,
-        }),
+        )),
         Err(error) => {
             NativeCommandStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
         }
@@ -343,6 +454,241 @@ pub(crate) fn project_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_wait_drop_cancels_before_a_later_renderer_claim() {
+        use crate::conn::BrowserContext;
+        use crate::testing::TestContext;
+        struct ReleaseOnDrop(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                if let Some(release) = self.0.take() {
+                    let _ = release.send(());
+                }
+            }
+        }
+        let mut context = TestContext::new();
+        let mut browser = BrowserContext::new("BID-native-before-claim".into());
+        browser.set_active_target_id("TID-native-before-claim");
+        context
+            .conn
+            .install_browser_context_fixture_for_test(browser);
+        context
+            .install_navigation_fixture_for_session_owner("about:blank", None)
+            .await;
+        let (entered, before_claim) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let (pending, guard) = context
+            .conn
+            .loaded_page_mut_for_protocol_access(None)
+            .unwrap()
+            .start_cdp_call(
+                84,
+                None,
+                moli_core::RendererNativeOperation::then(
+                    RendererPageCommand::ChildFrameTreeSnapshot,
+                    move |_| {
+                        let _ = entered.send(());
+                        let _ = held.recv();
+                        moli_core::RendererNativeOperationStep::Complete(
+                            RendererNativeProtocolResponse::success(json!({})),
+                        )
+                    },
+                ),
+            )
+            .unwrap();
+        let release = ReleaseOnDrop(Some(release));
+        let scope = NativeCommandFailureCleanup::new(84, None, guard);
+        let cancellation = scope.wait_cancellation();
+        tokio::time::timeout(std::time::Duration::from_secs(5), before_claim)
+            .await
+            .unwrap()
+            .unwrap();
+        // Keep both the recovery scope and backend receipt alive. Only dropping
+        // the supervised wait must revoke publication, before recovery runs.
+        drop(cancellation);
+        drop(release);
+        assert!(
+            pending.wait().await.is_err(),
+            "a producer completing after cancellation cannot publish a terminal"
+        );
+        let completed = scope
+            .recover(CommandOutputPlan::error(-32000, "cancelled wait"))
+            .wait()
+            .await;
+        let mut dispatch = CommandDispatchContext::default();
+        let plan = completed.complete(&mut context.conn, &mut dispatch);
+        assert!(dispatch.take_renderer_output_predecessor().is_none());
+        let mut messages = Vec::new();
+        plan.emit_into(&mut messages, Some(84), None);
+        assert_eq!(
+            messages,
+            vec![json!({"id":84,"error":{"code":-32000,"message":"cancelled wait"}})]
+        );
+    }
+
+    #[tokio::test]
+    async fn unpublished_native_failure_preserves_its_typed_cause() {
+        use crate::conn::{BrowserContext, NoDocumentLoaded};
+        use crate::testing::TestContext;
+        use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
+
+        let mut context = TestContext::new();
+        let mut browser = BrowserContext::new("BID-native-failure".into());
+        browser.set_active_target_id("TID-native-failure");
+        context
+            .conn
+            .install_browser_context_fixture_for_test(browser);
+        context
+            .install_navigation_fixture_for_session_owner("about:blank", None)
+            .await;
+        let residence = context
+            .conn
+            .target_page_residence_identity_for_owner(&CommandOwnerScope::capture(
+                &context.conn,
+                None,
+            ))
+            .unwrap();
+        let (_unsubmitted, guard) = moli_core::RendererCdpCall::new(
+            FrontendCommandId::new(81),
+            DevToolsSessionKey::Primary,
+            RendererAgentAttachmentId::allocate(),
+            moli_core::RendererNativeOperation::new(
+                RendererPageCommand::ChildFrameTreeSnapshot,
+                |_| RendererNativeProtocolResponse::success(json!({})),
+            ),
+        );
+        let scope = NativeCommandFailureCleanup::new(81, None, guard);
+        let result = scope
+            .settle(
+                Err(Error::new(NoDocumentLoaded).context("native query failed")),
+                residence,
+            )
+            .await;
+        let NativeCommandCompletion::Unpublished(error) = &result else {
+            panic!("an unsubmitted call cannot publish");
+        };
+        assert!(error.is::<NoDocumentLoaded>());
+        let completed = CompletedNativeCommand {
+            scope,
+            result,
+            unpublished_failure: Some(Box::new(|_, error| {
+                assert!(
+                    error.is::<NoDocumentLoaded>(),
+                    "the callback retains the original cause"
+                );
+                CommandOutputPlan::success()
+            })),
+        };
+        let plan = completed.complete(&mut context.conn, &mut CommandDispatchContext::default());
+        let mut messages = Vec::new();
+        plan.emit_into(&mut messages, Some(81), None);
+        assert_eq!(messages, vec![json!({"id":81,"result":{}})]);
+    }
+
+    #[tokio::test]
+    async fn claimed_native_publication_survives_a_cancelled_error_wait() {
+        use crate::conn::{
+            BrowserContext, CdpCommandTaskStep, NoDocumentLoaded, ParsedCdpCommand,
+            ProtocolStateOwner,
+        };
+        use crate::testing::TestContext;
+        use futures_util::poll;
+
+        struct ReleaseOnDrop(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                if let Some(release) = self.0.take() {
+                    let _ = release.send(());
+                }
+            }
+        }
+        let mut context = TestContext::new();
+        let mut browser = BrowserContext::new("BID-native-receipt".into());
+        browser.set_active_target_id("TID-native-receipt");
+        context
+            .conn
+            .install_browser_context_fixture_for_test(browser);
+        context
+            .install_navigation_fixture_for_session_owner("about:blank", None)
+            .await;
+        let residence = context
+            .conn
+            .target_page_residence_identity_for_owner(&CommandOwnerScope::capture(
+                &context.conn,
+                None,
+            ))
+            .unwrap();
+        let (entered, claimed) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let (pending, guard) = context
+            .conn
+            .loaded_page_mut_for_protocol_access(None)
+            .unwrap()
+            .start_cdp_call(
+                82,
+                None,
+                moli_core::RendererNativeOperation::new(
+                    RendererPageCommand::ChildFrameTreeSnapshot,
+                    move |_| {
+                        let _ = entered.send(());
+                        let _ = held.recv();
+                        RendererNativeProtocolResponse::success(json!({"winner":"renderer"}))
+                    },
+                ),
+            )
+            .unwrap();
+        let scope = NativeCommandFailureCleanup::new(82, None, guard);
+        let owner = ProtocolStateOwner::new(context.conn);
+        let release = ReleaseOnDrop(Some(release));
+        let handle = owner.handle();
+        tokio::time::timeout(std::time::Duration::from_secs(5), claimed)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut waiting = Box::pin(scope.settle(Err(Error::new(NoDocumentLoaded)), residence));
+        assert!(
+            poll!(waiting.as_mut()).is_pending(),
+            "publication owns the receipt but has not released its fence"
+        );
+        drop(waiting);
+        let recovery = scope.recover(CommandOutputPlan::error(-32000, "cancelled adapter wait"));
+        let mut recovery = Box::pin(recovery.wait());
+        assert!(
+            poll!(recovery.as_mut()).is_pending(),
+            "recovery must wait for the same claimed publication"
+        );
+        let version =
+            ParsedCdpCommand::parse_str(r#"{"id":83,"method":"Browser.getVersion"}"#).unwrap();
+        assert!(matches!(
+            handle
+                .with_state(|state| state.start_parsed_command_dispatch_with_context(
+                    &version,
+                    &mut CommandDispatchContext::default()
+                ))
+                .unwrap(),
+            CdpCommandTaskStep::Complete(_)
+        ));
+        drop(release);
+        let completed = recovery.await;
+        let native = pending.wait().await.unwrap();
+        let mut dispatch = CommandDispatchContext::default();
+        let plan = completed.complete(&mut CdpConnection::new(), &mut dispatch);
+        assert_eq!(
+            dispatch
+                .take_renderer_output_predecessor()
+                .unwrap()
+                .cursor(),
+            native.renderer_output_predecessor().unwrap().cursor(),
+            "recovery retains the renderer terminal's exact publication cursor",
+        );
+        let mut messages = Vec::new();
+        plan.emit_into(&mut messages, Some(82), None);
+        assert!(
+            messages.is_empty(),
+            "the claimed renderer response wins over adapter cancellation"
+        );
+    }
 
     #[test]
     fn retired_native_terminal_keeps_response_and_discards_document_side_effects() {

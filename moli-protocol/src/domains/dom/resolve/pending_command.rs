@@ -11,7 +11,7 @@ pub(super) fn complete_pending_dom_command(
     let completed_work = match completed.completed {
         Ok(completion) => completion,
         Err(error) => {
-            out.push_error(-32000, error);
+            out.push_error(-32000, format!("{error:#}"));
             return DomCommandTaskStep::Complete;
         }
     };

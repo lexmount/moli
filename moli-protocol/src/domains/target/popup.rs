@@ -757,16 +757,16 @@ async fn activate_popup_target_async(
     conn: &mut CdpConnection,
     browser_context_id: &str,
     target_id: &str,
-) -> Result<Vec<BackgroundProtocolEvent>, String> {
+) -> Result<Vec<BackgroundProtocolEvent>> {
     let restore_browser_context_id = previously_active_browser_context_id(conn);
     let result = if let Err(message) = select_browser_context_for_target(conn, target_id) {
-        Err(message.to_owned())
+        Err(message)
     } else if conn
         .browser_context
         .as_ref()
         .is_none_or(|browser_context| browser_context.id != browser_context_id)
     {
-        Err("PopupTargetBrowserContextChanged".to_owned())
+        Err(anyhow::anyhow!("PopupTargetBrowserContextChanged"))
     } else if conn
         .browser_context
         .as_ref()
@@ -775,16 +775,15 @@ async fn activate_popup_target_async(
         conn.select_browser_focus_for_target(target_id);
         conn.apply_browser_document_activity_async()
             .await
-            .map_err(|error| error.to_string())?;
-        Ok(Vec::new())
+            .map(|()| Vec::new())
     } else {
         match conn
             .select_page_target_for_connection_async(target_id)
             .await
         {
             Ok(Some(activation)) => Ok(activation.into_protocol_events()),
-            Ok(None) => Err("PopupTargetUnavailable".to_owned()),
-            Err(error) => Err(error.to_string()),
+            Ok(None) => Err(anyhow::anyhow!("PopupTargetUnavailable")),
+            Err(error) => Err(error),
         }
     };
     restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());

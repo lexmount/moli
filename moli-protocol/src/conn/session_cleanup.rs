@@ -134,6 +134,7 @@ impl SessionPageUpdateResult {
             predecessor.merge_into_same_stream_tail(&mut self.predecessor);
         }
     }
+    #[cfg(test)]
     pub(crate) fn into_result(self) -> Result<()> {
         self.first_error.map_or(Ok(()), Err)
     }

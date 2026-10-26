@@ -64,6 +64,43 @@ fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchSt
     )
 }
 
+pub(crate) struct PendingPageTargetClose {
+    target: PageTargetHost,
+    closed: ClosedPageTarget,
+    collected_network_data_artifacts: Vec<crate::domains::network::CollectedNetworkDataArtifact>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CompletedPageTargetClose {
+    closed: ClosedPageTarget,
+    collected_network_data_artifacts: Vec<crate::domains::network::CollectedNetworkDataArtifact>,
+}
+
+impl PendingPageTargetClose {
+    pub(crate) fn session_cleanup_plan(
+        &self,
+        reason: Option<&str>,
+    ) -> crate::conn::TargetClosureCleanupPlan {
+        self.closed.clone().into_detach_cleanup_plan(reason)
+    }
+
+    pub(crate) async fn wait(mut self) -> CompletedPageTargetClose {
+        self.target.close_page_async().await;
+        CompletedPageTargetClose {
+            closed: self.closed,
+            collected_network_data_artifacts: self.collected_network_data_artifacts,
+        }
+    }
+}
+
+impl CompletedPageTargetClose {
+    pub(crate) fn finish(self, conn: &mut CdpConnection) -> ClosedPageTarget {
+        conn.record_collected_network_data_artifacts(self.collected_network_data_artifacts);
+        self.closed
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct ClosedPageTarget {
     pub(crate) target_id: String,
     pub(crate) primary_session_id: Option<String>,
@@ -71,13 +108,6 @@ pub(crate) struct ClosedPageTarget {
 }
 
 impl ClosedPageTarget {
-    pub(crate) fn inspector_detached_session_ids(&self) -> impl Iterator<Item = &str> {
-        self.primary_session_id
-            .as_deref()
-            .into_iter()
-            .chain(self.attached_session_ids.iter().map(String::as_str))
-    }
-
     pub(crate) fn into_detach_cleanup_plan(
         self,
         reason: Option<&str>,
@@ -278,15 +308,27 @@ impl TargetNavigationLoadInputs {
         let page_state = target;
         let mut document_start_scripts = Vec::new();
         document_start_scripts.extend(browser_context.default_document_start_script_descriptors());
-        document_start_scripts.extend(target.owner_state.document_start_scripts.iter().map(
-            |(identifier, script)| {
-                BrowserContext::target_document_start_script_descriptor(
-                    Some(target_id),
-                    identifier,
-                    script,
-                )
-            },
-        ));
+        document_start_scripts.extend(
+            target
+                .owner_state
+                .document_start_scripts
+                .iter()
+                .filter(|(_, script)| {
+                    !script.devtools_session.as_ref().is_some_and(|key| {
+                        target
+                            .devtools_sessions
+                            .session(key)
+                            .is_some_and(|state| state.closing)
+                    })
+                })
+                .map(|(identifier, script)| {
+                    BrowserContext::target_document_start_script_descriptor(
+                        Some(target_id),
+                        identifier,
+                        script,
+                    )
+                }),
+        );
 
         let effective_network_conditions = page_state
             .effective_emulation_state
@@ -830,6 +872,17 @@ impl<'a> TargetSessionOwnerMut<'a> {
         (pending, subresource_config, page_update_required)
     }
 
+    pub(super) fn disable_target_fetch_and_drain_pending_state(
+        &mut self,
+    ) -> FetchDisableStateWithSubresourceConfig {
+        let target = self.target_mut();
+        let previous = target.fetch_owner.subresource_interception_config();
+        target.fetch_owner.reset_config();
+        let config = target.fetch_owner.subresource_interception_config();
+        let pending = target.fetch_owner.drain_pending_requests();
+        (pending, config, previous != config)
+    }
+
     pub(super) fn drain_fetch_pending_state(
         &mut self,
     ) -> (
@@ -1171,6 +1224,55 @@ impl<'a> TargetSessionOwnerMut<'a> {
 }
 
 impl CdpConnection {
+    pub(crate) fn target_is_closing_for_owner(&self, owner: &CommandOwnerScope) -> bool {
+        self.target_session_owner_ref_for_owner(owner)
+            .is_some_and(|owner| owner.target().closing)
+    }
+
+    pub(crate) fn page_target_is_closing(&self, target_id: &str) -> bool {
+        self.target_session_route_for_target_id(target_id)
+            .map(CommandOwnerScope::for_route)
+            .is_some_and(|owner| self.target_is_closing_for_owner(&owner))
+    }
+
+    pub(crate) fn mark_page_target_closing(&mut self, owner: &CommandOwnerScope) {
+        let Some((_, Some(target_id))) = self.target_owner_identity_for_owner(owner) else {
+            return;
+        };
+        if let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) {
+            let target = owner.target_mut();
+            target.closing = true;
+            // Attachment may already be prepared but not yet committed to
+            // the control plane. Its session state must close as well.
+            for state in target.devtools_sessions.states_mut() {
+                state.closing = true;
+            }
+        }
+        let mut sessions = self.attached_sessions_for_target(&target_id);
+        if let Some(tab) = self.tab_target_id_for_page_target_id(&target_id) {
+            sessions.extend(self.attached_sessions_for_target(tab));
+        }
+        for session in sessions {
+            if let Some(route) = self.session_route(Some(&session))
+                && let Some(plan) =
+                    crate::conn::SessionDisposalPlan::for_session_route(&session, &route)
+            {
+                self.mark_session_closing(&plan);
+            }
+        }
+    }
+
+    pub(crate) fn page_target_host_identity_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<crate::conn::PageTargetHostIdentity> {
+        Some(
+            self.target_session_owner_ref_for_owner(owner)?
+                .target()
+                .host_identity(),
+        )
+    }
+
     pub(crate) fn navigation_browsing_context_group_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -1407,6 +1509,14 @@ impl CdpConnection {
             .await
     }
 
+    pub(crate) fn take_crashed_page_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Option<Page> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .take_crashed_page()
+    }
+
     pub(crate) fn take_loaded_page_after_failed_navigation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1436,7 +1546,26 @@ impl CdpConnection {
         out: &mut Vec<BackgroundProtocolEvent>,
         reason: &'static str,
     ) -> Option<ClosedPageTarget> {
+        crate::domains::target::session_disposal::close_page_target_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            target_id.to_owned(),
+            out,
+            reason,
+        )
+        .await
+        .expect("inline Page close retains its protocol state")
+    }
+
+    pub(crate) fn start_page_target_close(
+        &mut self,
+        target_id: &str,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        reason: &'static str,
+    ) -> Option<PendingPageTargetClose> {
         let primary_route = self.target_session_route_for_target_id(target_id)?;
+        let browser_context_id = primary_route.browser_context_id()?.to_owned();
+        self.browser_context_by_id(&browser_context_id)?
+            .page_target(target_id)?;
         let primary_owner = CommandOwnerScope::for_route(primary_route);
         let session_owners = self
             .page_event_session_ids_for_owner(&primary_owner)
@@ -1459,13 +1588,17 @@ impl CdpConnection {
         }
         out.extend(claimed_await_events);
 
-        let (
-            mut target,
-            primary_session_id,
-            attached_session_ids,
-            collected_network_data_artifacts,
-        ) = {
-            let browser_context = self.browser_context.as_mut()?;
+        for session_id in self.attached_sessions_for_target(target_id) {
+            if let Some(route) = self.session_route(Some(&session_id))
+                && let Some(plan) =
+                    crate::conn::SessionDisposalPlan::for_session_route(&session_id, &route)
+            {
+                self.mark_session_closing(&plan);
+            }
+        }
+
+        let (target, primary_session_id, attached_session_ids, collected_network_data_artifacts) = {
+            let browser_context = self.browser_context_by_id_mut(&browser_context_id)?;
             let target = browser_context.take_page_target_for_close(target_id)?;
             let collected_network_data_artifacts =
                 target.runtime_slot.collected_network_data_artifacts();
@@ -1482,13 +1615,14 @@ impl CdpConnection {
                 collected_network_data_artifacts,
             )
         };
-        target.close_page_async().await;
-        self.record_collected_network_data_artifacts(collected_network_data_artifacts);
-
-        Some(ClosedPageTarget {
-            target_id: target_id.to_owned(),
-            primary_session_id,
-            attached_session_ids,
+        Some(PendingPageTargetClose {
+            target,
+            closed: ClosedPageTarget {
+                target_id: target_id.to_owned(),
+                primary_session_id,
+                attached_session_ids,
+            },
+            collected_network_data_artifacts,
         })
     }
 

@@ -913,3 +913,101 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
         "original viewport owner"
     );
 }
+
+#[tokio::test]
+async fn tab_auto_attach_waits_outside_completion_for_the_original_page_install() {
+    use futures_util::FutureExt as _;
+    let mut conn = CdpConnection::new();
+    conn.publish_default_browser_target();
+    let mut page_context = CommandDispatchContext::default();
+    let page_command = ParsedCdpCommand::parse_str(
+        json!({"id":1,"method":"Target.attachToTarget",
+        "params":{"targetId":crate::DEFAULT_CDP_PAGE_TARGET_ID,"flatten":true}})
+        .to_string(),
+    )
+    .unwrap();
+    let CdpCommandTaskStep::Pending(page_attach) =
+        conn.start_parsed_command_dispatch_with_context(&page_command, &mut page_context)
+    else {
+        panic!("the first Page attachment must own its initial document build");
+    };
+    let tab_command = ParsedCdpCommand::parse_str(
+        json!({"id":2,"method":"Target.attachToTarget",
+        "params":{"targetId":crate::DEFAULT_CDP_TAB_TARGET_ID,"flatten":true}})
+        .to_string(),
+    )
+    .unwrap();
+    let CdpCommandTaskStep::Complete(tab) = conn.start_parsed_command_dispatch_with_context(
+        &tab_command,
+        &mut CommandDispatchContext::default(),
+    ) else {
+        panic!("attaching the Tab host does not wait for its Page");
+    };
+    let (events, _, _) = tab.into_protocol_event_parts();
+    let tab_session = events
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .find(|message| message["id"] == 2)
+        .unwrap()["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut auto_context = CommandDispatchContext::default();
+    let auto_command = ParsedCdpCommand::parse_str(
+        json!({"id":3,"sessionId":tab_session,"method":"Target.setAutoAttach",
+        "params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}})
+        .to_string(),
+    )
+    .unwrap();
+    let CdpCommandTaskStep::Pending(auto_attach) =
+        conn.start_parsed_command_dispatch_with_context(&auto_command, &mut auto_context)
+    else {
+        panic!("auto-attach retains its pending dependency");
+    };
+    // Hold the original Page's ready result until after the dependent command
+    // is polled. The actor must remain able to install that original result.
+    let completed_page = page_attach.wait().await;
+    let mut auto_wait = Box::pin(auto_attach.wait());
+    assert!(
+        auto_wait.as_mut().now_or_never().is_none(),
+        "auto-attach cannot join installation while borrowing the actor"
+    );
+    assert!(matches!(
+        conn.start_command_dispatch(r#"{"id":4,"method":"Browser.getVersion"}"#),
+        CdpCommandTaskStep::Complete(_)
+    ));
+    let CdpCommandTaskStep::Complete(_) = conn
+        .complete_pending_command_dispatch_with_context(completed_page, &mut page_context)
+        .await
+    else {
+        panic!("the original Page attach must finish installation");
+    };
+    let completed_auto = auto_wait.await;
+    let CdpCommandTaskStep::Complete(outcome) = conn
+        .complete_pending_command_dispatch_with_context(completed_auto, &mut auto_context)
+        .await
+    else {
+        panic!("auto-attach can now publish its child session");
+    };
+    let (events, _, _) = outcome.into_protocol_event_parts();
+    let messages: Vec<_> = events
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect();
+    let response = messages
+        .iter()
+        .position(|message| message["id"] == 3)
+        .expect("auto-attach response");
+    let attached = messages
+        .iter()
+        .position(|message| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["targetId"] == crate::DEFAULT_CDP_PAGE_TARGET_ID
+        })
+        .expect("original Page child attachment");
+    assert!(
+        attached < response,
+        "the child session must precede the auto-attach ACK"
+    );
+    assert_eq!(messages[response]["result"], json!({}));
+}

@@ -12,6 +12,35 @@ use super::{
 };
 
 impl CdpConnection {
+    pub(crate) fn session_disposal_wait(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.target_control.session_disposal_wait(session_id)
+    }
+
+    pub(crate) fn mark_session_closing(&mut self, plan: &SessionDisposalPlan) {
+        self.target_control.mark_session_closing(plan.session_id());
+        let owner = crate::conn::CommandOwnerScope::for_session(plan.session_id());
+        let _ = self.with_target_devtools_session_state_for_owner_mut(&owner, |state| {
+            state.closing = true;
+        });
+    }
+
+    pub fn session_is_closing(&self, session_id: &str) -> bool {
+        self.target_control.session_is_closing(session_id)
+            || self
+                .session_route(Some(session_id))
+                .as_ref()
+                .and_then(|route| route.target_id())
+                .is_some_and(|target| {
+                    let page = self
+                        .primary_page_target_id_for_tab_target_id(target)
+                        .unwrap_or(target);
+                    self.page_target_is_closing(page)
+                })
+    }
+
     /// Commits target-side session declarations built by low-level test
     /// fixtures into the same control-plane registry used by production
     /// attachment transactions.
@@ -122,6 +151,7 @@ impl CdpConnection {
         self.commit_declared_session_fixtures_for_test();
     }
 
+    #[cfg(test)]
     pub(crate) async fn clear_devtools_network_session_policy_async(
         &mut self,
         session_id: &str,
@@ -776,33 +806,16 @@ impl CdpConnection {
         cleanup_plan: TargetClosureCleanupPlan,
         parent_session_id: Option<&str>,
     ) -> TargetEventPlan {
-        let session_ids = cleanup_plan
-            .session_ids()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        for session_id in session_ids {
-            let Some(route) = self.session_route(Some(&session_id)) else {
-                tracing::warn!(
-                    session_id,
-                    "closed target session no longer has an authoritative route"
-                );
-                continue;
-            };
-            let Some(disposal_plan) = SessionDisposalPlan::for_session_route(&session_id, &route)
-            else {
-                tracing::warn!(
-                    session_id,
-                    "closed target session does not support target disposal"
-                );
-                continue;
-            };
-            crate::domains::target::dispose_closed_session_domains_async(self, &disposal_plan)
-                .await;
-        }
-        self.commit_target_closure_session_detachment_events(cleanup_plan, parent_session_id)
+        crate::domains::target::session_disposal::dispose_closed_target_sessions_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            cleanup_plan,
+            parent_session_id.map(str::to_owned),
+        )
+        .await
+        .expect("inline closed-session disposal retains its protocol state")
     }
 
-    fn commit_target_closure_session_detachment_events(
+    pub(crate) fn commit_target_closure_session_detachment_events(
         &mut self,
         cleanup_plan: TargetClosureCleanupPlan,
         parent_session_id: Option<&str>,

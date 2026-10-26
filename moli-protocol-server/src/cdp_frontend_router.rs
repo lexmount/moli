@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
 use moli_protocol::ParsedCdpCommand;
@@ -17,14 +17,15 @@ pub(crate) enum CdpPreparedFrontendCommand {
     ImmediateResponse { frontend_id: u64, message: Value },
 }
 
+#[derive(Clone)]
 pub(crate) struct CdpFrontendRouter {
-    routing: Mutex<CdpFrontendRoutingState>,
+    routing: Arc<Mutex<CdpFrontendRoutingState>>,
 }
 
 impl CdpFrontendRouter {
     pub(crate) fn new() -> Self {
         Self {
-            routing: Mutex::new(CdpFrontendRoutingState::default()),
+            routing: Arc::new(Mutex::new(CdpFrontendRoutingState::default())),
         }
     }
 

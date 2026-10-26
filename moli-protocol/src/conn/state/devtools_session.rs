@@ -31,6 +31,7 @@ use moli_page_types::{
 /// attachment, replay, and disposal all address the same session object.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
+    pub(crate) closing: bool,
     pub(crate) web_mcp_enabled: bool,
     pub(crate) dom_session_state: DevToolsDomSessionState,
     pub(crate) dom_debugger_event_listener_breakpoints:
@@ -464,6 +465,9 @@ impl DevToolsSessionRegistry {
     ) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
         let mut replays = Vec::new();
         for (key, state) in &mut self.states {
+            if state.closing {
+                continue;
+            }
             let (frontend_session_id, renderer_inspector_session_id) = match key {
                 DevToolsSessionKey::Primary => (primary_session_id.map(str::to_owned), None),
                 DevToolsSessionKey::Attached(session_id) => {
@@ -512,6 +516,9 @@ impl DevToolsSessionRegistry {
     pub(crate) fn runtime_bindings_for_renderer(&self) -> Vec<RuntimeBindingDefinition> {
         let mut bindings = Vec::new();
         for (key, state) in &self.states {
+            if state.closing {
+                continue;
+            }
             for binding in &state.runtime_bindings {
                 let binding = binding.with_devtools_session(key.clone());
                 if !bindings.iter().any(|existing| existing == &binding) {
@@ -528,6 +535,9 @@ impl DevToolsSessionRegistry {
         self.states
             .iter()
             .filter_map(|(key, state)| {
+                if state.closing {
+                    return None;
+                }
                 let requires_restore = state.runtime_session_state.runtime_frontend_enabled
                     || state.web_mcp_enabled
                     || state.console_output_session_state.console_enabled
@@ -561,7 +571,7 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
         self.states()
-            .any(|state| state.page_session_state.page_bypass_csp_enabled)
+            .any(|state| !state.closing && state.page_session_state.page_bypass_csp_enabled)
     }
 }
 

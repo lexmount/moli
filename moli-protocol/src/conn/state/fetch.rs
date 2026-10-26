@@ -1187,7 +1187,6 @@ impl TargetFetchConfig {
             })
     }
 
-    #[cfg(test)]
     pub(crate) fn reset(&mut self) {
         self.revoke_wait_lifetimes();
         *self = Self::default();
@@ -1822,7 +1821,6 @@ impl TargetFetchOwner {
         self.config.remove_network_intercept(intercept_id)
     }
 
-    #[cfg(test)]
     pub(crate) fn reset_config(&mut self) {
         self.config.reset();
     }

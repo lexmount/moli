@@ -859,14 +859,4 @@ impl CdpConnection {
         }
         false
     }
-
-    pub(crate) async fn release_worker_runtime_remote_objects_for_session_best_effort_async(
-        &mut self,
-        session_id: &str,
-    ) {
-        self.prepare_session_worker_cleanup(session_id)
-            .wait()
-            .await
-            .finish(self);
-    }
 }

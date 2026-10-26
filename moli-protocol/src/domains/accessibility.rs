@@ -24,7 +24,7 @@ pub(crate) struct CompletedAccessibilityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
-    completed: Box<Result<CompletedPageCommand, String>>,
+    completed: Box<Result<CompletedPageCommand>>,
 }
 
 pub(crate) enum AccessibilityCommandDispatchStep {
@@ -87,7 +87,7 @@ impl PendingAccessibilityCommandDispatch {
     }
 
     pub async fn wait(self) -> CompletedAccessibilityCommandDispatch {
-        let completed = Box::new(self.pending.wait().await.map_err(|error| error.to_string()));
+        let completed = Box::new(self.pending.wait().await);
         CompletedAccessibilityCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
@@ -603,7 +603,7 @@ fn start_child_frame_accessibility_page_command(
     }
 }
 
-pub(crate) async fn complete_pending_accessibility_command(
+pub(crate) fn complete_pending_accessibility_command(
     conn: &mut CdpConnection,
     completed: CompletedAccessibilityCommandDispatch,
 ) -> AccessibilityCommandDispatchStep {

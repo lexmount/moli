@@ -1,9 +1,10 @@
 use anyhow::Result;
 
 use std::{
-    cell::OnceCell,
+    cell::{OnceCell, RefCell},
     collections::{HashMap, HashSet},
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -46,6 +47,7 @@ mod browser_context;
 mod command_owner_scope;
 mod command_view;
 mod command_wait_lifetime;
+mod command_workflow;
 mod cookie_manager_surface;
 mod cookie_owner;
 mod cookie_policy_surface;
@@ -64,11 +66,15 @@ mod page_state;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
+pub use protocol_output::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
 mod renderer_command_turn;
 mod resource_runtime_support;
 mod runtime_eval;
 mod session_cleanup;
-pub(crate) use session_cleanup::SessionPageUpdates;
+pub(crate) use session_cleanup::{
+    CompletedSessionPageUpdates, CompletedSessionScriptCleanup, SessionPageUpdateResult,
+    SessionPageUpdates, SessionScriptCleanup,
+};
 mod runtime_load;
 mod scheduler_hooks;
 mod scheduler_state;
@@ -76,6 +82,7 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::InitialDocumentPageBuildWaiter;
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub use state_access::{
@@ -99,7 +106,8 @@ pub(crate) use bidi_channel_work::{
 };
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
-    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
+    ClosedPageTarget, CompletedPageTargetClose, PageLifecycleEventsEnableResult,
+    PendingPageTargetClose, SessionOwnerInspectorEnableResult,
     SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
     TargetNavigationLoadInputs,
 };
@@ -147,10 +155,11 @@ pub use moli_protocol_cdp::{
 pub use owned_wait_task::{
     OwnedProtocolWaitFailure, OwnedProtocolWaitTask, spawn_owned_protocol_wait,
 };
+pub(crate) use state::PageTargetHostIdentity;
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
     CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition, TargetHandlerAccessMode,
-    TargetWorkerProtocolAttachmentIdentity,
+    TargetSurfaceUpdate, TargetWorkerProtocolAttachmentIdentity,
 };
 
 #[derive(Clone, Debug)]
@@ -382,6 +391,12 @@ impl CommandResponseFlushContext {
     }
 }
 
+pub(crate) enum CommandFailureCleanup {
+    Workflow(command_workflow::CommandWorkflowContextReturn),
+    Native(crate::domains::native::NativeCommandFailureCleanup),
+    Target(crate::domains::target::TargetCommandFailureCleanup),
+}
+
 #[derive(Clone, Default)]
 pub struct CommandDispatchContext {
     response_flush: CommandResponseFlushContext,
@@ -391,6 +406,8 @@ pub struct CommandDispatchContext {
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
     post_response_events: Vec<BackgroundProtocolEvent>,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    command_failure_cleanup: Rc<RefCell<Option<CommandFailureCleanup>>>,
+    deferred_command_events: Vec<BackgroundProtocolEvent>,
 }
 
 impl CommandDispatchContext {
@@ -403,11 +420,30 @@ impl CommandDispatchContext {
             renderer_output_boundary: None,
             post_response_events: Vec::new(),
             renderer_output_predecessor: None,
+            command_failure_cleanup: Rc::default(),
+            deferred_command_events: Vec::new(),
         }
+    }
+
+    pub(crate) fn defer_command_events(&mut self, events: Vec<BackgroundProtocolEvent>) {
+        self.deferred_command_events.extend(events);
+    }
+
+    pub(crate) fn take_deferred_command_events(&mut self) -> Vec<BackgroundProtocolEvent> {
+        std::mem::take(&mut self.deferred_command_events)
     }
 
     pub(crate) fn response_flush(&self) -> &CommandResponseFlushContext {
         &self.response_flush
+    }
+
+    pub(crate) fn register_command_failure_cleanup(&mut self, cleanup: CommandFailureCleanup) {
+        let previous = self.command_failure_cleanup.borrow_mut().replace(cleanup);
+        assert!(previous.is_none(), "one command owns one recovery scope");
+    }
+
+    pub(crate) fn take_command_failure_cleanup(&mut self) -> Option<CommandFailureCleanup> {
+        self.command_failure_cleanup.borrow_mut().take()
     }
 
     pub(crate) fn set_terminal_response_delivery_override(
@@ -546,10 +582,10 @@ pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
 pub(crate) use runtime_eval::{
-    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner,
+    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, CompletedSessionWorkerCleanup,
     PreparedRendererNavigationFinish, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
-    RuntimeEnableReplayEvent, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    RuntimeEnableReplayEvent, SessionWorkerCleanup,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -621,8 +657,8 @@ pub(crate) use state::{
 };
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
-    SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
-    TargetSessionDetachCleanupPlan,
+    SessionDisposalTarget, SessionDisposalWait, TargetAttachSessionCommit,
+    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
 use target::{
     TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
@@ -1264,6 +1300,7 @@ impl Default for CdpConnection {
 
 impl Drop for CdpConnection {
     fn drop(&mut self) {
+        self.target_control.close_session_waiters();
         // Separate per-context roots from target/page state so teardown can
         // follow the observable producer order even though NavigationEngines
         // and detached local tasks retain only weak owner access.
@@ -3506,6 +3543,12 @@ impl CdpConnection {
         session_id: String,
         is_attached_session: bool,
     ) -> bool {
+        if self
+            .primary_page_target_id_for_tab_target_id(tab_target_id)
+            .is_some_and(|page| self.page_target_is_closing(page))
+        {
+            return false;
+        }
         self.target_control.assign_session_to_tab_target(
             tab_target_id,
             session_id,
@@ -3551,6 +3594,15 @@ impl CdpConnection {
             reason,
             tab_session_ids,
         ))
+    }
+
+    pub(crate) fn prepare_closed_top_level_target_sessions_cleanup_plan(
+        &self,
+        page_target_id: &str,
+        reason: Option<&str>,
+    ) -> Option<TargetClosureCleanupPlan> {
+        self.target_control
+            .tab_session_cleanup_plan_for_page_target(page_target_id, reason)
     }
 
     pub(crate) fn rollback_top_level_target_tab_sessions_without_event(

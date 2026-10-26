@@ -81,48 +81,6 @@ mod termination;
 #[cfg(test)]
 mod tests;
 
-/// Removes renderer-owned Page resources for one DevTools session while its
-/// Inspector binding is still usable for cleanup commands.
-pub(in crate::domains) async fn dispose_session_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) -> Result<()> {
-    conn.remove_document_start_scripts_for_detached_session_async(session_id)
-        .await
-}
-
-/// Clears target-visible state owned by the primary Page session after every
-/// per-session handler contribution has been removed.
-pub(in crate::domains) async fn dispose_primary_session_target_state_async(
-    conn: &mut CdpConnection,
-    plan: &crate::conn::SessionDisposalPlan,
-) -> Result<()> {
-    let session_id = plan.session_id();
-    if let crate::conn::SessionDisposalTarget::PageTarget {
-        browser_context_id,
-        target_id,
-        session_key: moli_page_types::DevToolsSessionKey::Primary,
-    } = plan.target()
-    {
-        let reset_result = match conn.browser_context_by_id_mut(browser_context_id) {
-            Some(browser_context) => {
-                browser_context
-                    .reset_primary_page_session_target_state_async(target_id, session_id)
-                    .await
-            }
-            None => Ok(false),
-        };
-        reset_result.and_then(|found| {
-            anyhow::ensure!(
-                found,
-                "primary Page target disappeared during session disposal"
-            );
-            Ok(())
-        })?;
-    }
-    Ok(())
-}
-
 fn missing_page_target_error_message(
     conn: &CdpConnection,
     session_id: Option<&str>,
@@ -164,7 +122,8 @@ use prepared_navigation::{
     PagePreparedSameDocumentNavigation, PagePreparedTopLevelLocationNavigation,
 };
 pub(crate) use termination::{
-    PageTargetTerminationOwnerAction, complete_page_target_termination_owner_action_async,
+    CompletedTargetTermination, PageTargetTerminationOwnerAction, TargetTermination,
+    TargetTerminationSelection, complete_page_target_termination_owner_action_async,
     fail_pending_fetch_state_background_events_async, take_pending_fetch_state,
 };
 

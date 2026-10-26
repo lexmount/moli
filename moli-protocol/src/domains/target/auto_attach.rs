@@ -350,7 +350,26 @@ pub(super) fn start_set_auto_attach_command(
         cmd.session_id,
         pause_dedicated_workers_on_start,
     );
-    pending_set_auto_attach_command(cmd.id, cmd.session_id, params.auto_attach, cmd.session_id)
+    let initial_document = params
+        .auto_attach
+        .then(|| {
+            let tab_target = conn.tab_target_id_for_session_id(cmd.session_id?)?;
+            let page_target = conn.primary_page_target_id_for_tab_target_id(tab_target)?;
+            if !conn.auto_attach_owner_allows_target_type(cmd.session_id, "page") {
+                return None;
+            }
+            let route = conn.target_session_route_for_target_id(page_target)?;
+            conn.runtime_session_owner_slot_for_owner(&CommandOwnerScope::for_route(route))?
+                .initial_document_page_build_waiter()
+        })
+        .flatten();
+    pending_set_auto_attach_command(
+        cmd.id,
+        cmd.session_id,
+        params.auto_attach,
+        cmd.session_id,
+        initial_document,
+    )
 }
 
 pub(super) async fn complete_set_auto_attach_command_async(
@@ -993,18 +1012,6 @@ pub(super) async fn detach_auto_attached_sessions_for_owner_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     let session_ids = conn.auto_attached_session_cascade_for_owner(owner_session_id);
-    for session_id in session_ids {
-        detach_attached_session_for_owner_async(conn, out, &session_id, command_context).await;
-    }
-}
-
-pub(super) async fn detach_attached_sessions_for_owner_async(
-    conn: &mut CdpConnection,
-    out: &mut events::TargetProtocolSideEffects,
-    owner_session_id: Option<&str>,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    let session_ids = conn.attached_session_cascade_for_owner(owner_session_id);
     for session_id in session_ids {
         detach_attached_session_for_owner_async(conn, out, &session_id, command_context).await;
     }

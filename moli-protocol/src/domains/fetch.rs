@@ -5,7 +5,7 @@ mod body_stream;
 mod cleanup;
 mod commands;
 pub(crate) use cleanup::CompletedSubresourceFailure;
-pub(in crate::domains) use cleanup::PreparedFetchCleanup;
+pub(crate) use cleanup::PreparedFetchCleanup;
 mod document_navigation;
 mod document_request;
 mod helpers;
@@ -63,16 +63,6 @@ pub(crate) use subresource::{
     subresource_fetch_pause_prepared_outputs_for_renderer_record_async,
 };
 
-/// Disables the Fetch handler owned by one DevTools session and drains every
-/// request that was paused by that handler before its binding is removed.
-pub(in crate::domains) async fn dispose_session_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: &str,
-) -> Result<Option<moli_core::RendererOutputFence>> {
-    dispose_owner_async(conn, out, Some(session_id)).await
-}
-
 pub(in crate::domains) async fn dispose_owner_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -97,6 +87,21 @@ pub(in crate::domains) fn prepare_owner_disposal(
         policy,
         "Target detached",
         true,
+    ))
+}
+
+pub(in crate::domains) fn prepare_target_close(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Option<PreparedFetchCleanup> {
+    let (pending, policy) = conn.start_disable_target_fetch_for_owner(owner)?;
+    Some(PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        policy,
+        "Target closed",
+        false,
     ))
 }
 

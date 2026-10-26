@@ -1,9 +1,48 @@
 use anyhow::Result;
 
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope,
-    SessionDisposalPlan, SessionDisposalTarget, TargetEventPlan, TargetSessionDetachCleanupPlan,
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, ProtocolWorkflowDriver,
+    RendererPageResidenceIdentity, SessionDisposalPlan, SessionDisposalTarget, TargetEventPlan,
+    TargetSessionDetachCleanupPlan,
 };
+
+pub(crate) async fn close_page_target_using(
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    target_id: String,
+    events: &mut Vec<BackgroundProtocolEvent>,
+    reason: &'static str,
+) -> Result<Option<crate::conn::ClosedPageTarget>> {
+    let (pending, claimed_events) = driver
+        .with_state(move |state| {
+            let mut events = Vec::new();
+            let pending = state.start_page_target_close(&target_id, &mut events, reason);
+            (pending, events)
+        })
+        .await?;
+    events.extend(claimed_events);
+    let Some(pending) = pending else {
+        return Ok(None);
+    };
+    let completed = pending.wait().await;
+    driver
+        .with_state(move |state| state.finish_page_target_close(completed))
+        .await
+        .map(Some)
+}
+
+pub(crate) async fn dispose_closed_target_sessions_using(
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    plan: crate::conn::TargetClosureCleanupPlan,
+    parent_session_id: Option<String>,
+) -> Result<TargetEventPlan> {
+    let pending = driver
+        .with_state(move |state| state.prepare_closed_target_sessions(plan, parent_session_id))
+        .await?;
+    let completed = pending.wait().await;
+    driver
+        .with_state(move |state| state.finish_closed_target_sessions(completed))
+        .await
+}
 
 fn prepare_session_disposal(
     conn: &CdpConnection,
@@ -49,63 +88,153 @@ impl TargetSessionDisposalOutcome {
     }
 }
 
-/// Runs every domain handler's disposal while `plan` still resolves to a live
-/// session. All handlers get a cleanup opportunity even if one fails. A Page
-/// whose renderer remains alive after such a failure is failed closed before
-/// the binding can be removed, because otherwise renderer-owned scripts or
-/// policy could outlive their DevTools session.
-async fn dispose_live_session_domains_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    protocol_events: &mut Vec<BackgroundProtocolEvent>,
-    plan: &SessionDisposalPlan,
-) -> Result<Option<moli_core::RendererOutputFence>> {
-    let disposal = crate::domains::session::dispose_live_handlers_async(
-        conn,
-        background_events,
-        protocol_events,
-        plan,
-    )
-    .await;
-    if let Some(error) = disposal.first_error() {
-        if matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }) {
-            recover_failed_page_session_disposal_async(conn, background_events, plan, error)
-                .await?;
-        } else {
-            return Err(anyhow::anyhow!("{error:#}"));
-        }
-    }
-    crate::domains::runtime::detach_session_inspector(conn, plan)?;
-    Ok(disposal.into_renderer_output_predecessor())
+/// Captures the original renderer before any handler can wait. A session can
+/// remain attached while a successor Document replaces that renderer.
+pub(crate) struct LiveSessionDisposal {
+    identity: SessionDisposalIdentity,
+    handlers: crate::domains::session::PreparedSessionHandlers,
 }
 
-async fn recover_failed_page_session_disposal_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    plan: &SessionDisposalPlan,
-    cleanup_error: &anyhow::Error,
-) -> Result<()> {
-    let SessionDisposalTarget::PageTarget {
-        browser_context_id,
-        target_id,
-        session_key,
-    } = plan.target()
-    else {
-        anyhow::bail!("Page cleanup recovery requires a Page target");
-    };
-    let owner = CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
-        browser_context_id: browser_context_id.clone(),
-        target_id: target_id.clone(),
-        session_key: session_key.clone(),
-    });
-    let has_live_page = conn
-        .runtime_session_owner_slot_for_owner(&owner)
-        .is_some_and(|slot| slot.loaded_page().is_some());
+#[derive(Clone)]
+pub(crate) struct SessionDisposalIdentity {
+    plan: SessionDisposalPlan,
+    page: Option<SessionDisposalPage>,
+}
 
-    if has_live_page {
-        let inspector_session_ids = conn.page_event_session_ids_for_owner(&owner);
-        for inspector_session_id in &inspector_session_ids {
-            let inspector_owner = inspector_session_id
+#[derive(Clone)]
+struct SessionDisposalPage {
+    residence: RendererPageResidenceIdentity,
+    attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+    document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+}
+
+pub(crate) struct FailedSessionPageRetirement {
+    page: Option<moli_core::page::Page>,
+    events: Vec<BackgroundProtocolEvent>,
+}
+
+impl FailedSessionPageRetirement {
+    pub(crate) fn take_page(&mut self) -> Option<moli_core::page::Page> {
+        self.page.take()
+    }
+}
+
+impl LiveSessionDisposal {
+    pub(crate) fn identity(&self) -> SessionDisposalIdentity {
+        self.identity.clone()
+    }
+
+    pub(crate) fn prepare(conn: &mut CdpConnection, plan: SessionDisposalPlan) -> Self {
+        let owner = CommandOwnerScope::for_session(plan.session_id());
+        let page = conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .and_then(|slot| slot.loaded_page())
+            .map(|page| SessionDisposalPage {
+                residence: RendererPageResidenceIdentity::from_page(page),
+                attachment: page.renderer_agent_attachment_id(),
+                document: conn.target_root_document_lifecycle_identity_for_owner(&owner),
+            });
+        let handlers = crate::domains::session::PreparedSessionHandlers::prepare(conn, &plan);
+        conn.mark_session_closing(&plan);
+        Self {
+            identity: SessionDisposalIdentity { plan, page },
+            handlers,
+        }
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        background_events: &mut Vec<BackgroundProtocolEvent>,
+        protocol_events: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Result<Option<moli_core::RendererOutputFence>> {
+        let Self { identity, handlers } = self;
+        let disposal = handlers
+            .run(driver, background_events, protocol_events, &identity.plan)
+            .await;
+        let (error, predecessor) = disposal.into_parts();
+        if let Some(error) = error {
+            identity
+                .recover_failure(driver, background_events, error)
+                .await?;
+        }
+        let completion = identity.clone();
+        if let Err(error) = driver
+            .with_state(move |state| state.detach_disposed_session_inspector(&completion))
+            .await?
+        {
+            identity
+                .recover_failure(driver, background_events, error)
+                .await?;
+        }
+        Ok(predecessor)
+    }
+}
+
+impl SessionDisposalIdentity {
+    async fn recover_failure(
+        &self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        background_events: &mut Vec<BackgroundProtocolEvent>,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        if !matches!(self.plan.target(), SessionDisposalTarget::PageTarget { .. }) {
+            return Err(error);
+        }
+        let preparation = self.clone();
+        let mut retired = driver
+            .with_state(move |state| state.prepare_failed_session_page_retirement(&preparation))
+            .await?;
+        if let Some(page) = retired.take_page() {
+            let _ = page.close_async().await;
+        }
+        let completion = self.clone();
+        background_events.extend(
+            driver
+                .with_state(move |state| {
+                    state.finish_failed_session_page_retirement(&completion, retired)
+                })
+                .await?,
+        );
+        tracing::warn!(session_id = self.plan.session_id(), %error,
+            "finished failed session cleanup after exact Page retirement");
+        Ok(())
+    }
+
+    fn owns_current_page(&self, conn: &CdpConnection) -> bool {
+        let owner = CommandOwnerScope::for_session(self.plan.session_id());
+        self.page.as_ref().is_some_and(|expected| {
+            conn.renderer_page_residence_identity_for_owner(&owner) == Some(expected.residence)
+                && conn.current_renderer_agent_attachment_id_for_owner(&owner)
+                    == expected.attachment
+                && conn.target_root_document_lifecycle_identity_for_owner(&owner)
+                    == expected.document
+        })
+    }
+
+    pub(crate) fn detach_inspector(&self, conn: &mut CdpConnection) -> Result<()> {
+        if matches!(self.plan.target(), SessionDisposalTarget::PageTarget { .. })
+            && !self.owns_current_page(conn)
+        {
+            return Ok(());
+        }
+        crate::domains::runtime::detach_session_inspector(conn, &self.plan)
+    }
+
+    pub(crate) fn prepare_failed_page_retirement(
+        &self,
+        conn: &mut CdpConnection,
+    ) -> FailedSessionPageRetirement {
+        let owner = CommandOwnerScope::for_session(self.plan.session_id());
+        if !self.owns_current_page(conn) {
+            return FailedSessionPageRetirement {
+                page: None,
+                events: Vec::new(),
+            };
+        }
+        let inspector_sessions = conn.page_event_session_ids_for_owner(&owner);
+        for session in &inspector_sessions {
+            let inspector_owner = session
                 .as_deref()
                 .map(CommandOwnerScope::for_session)
                 .unwrap_or_else(|| owner.clone());
@@ -116,35 +245,58 @@ async fn recover_failed_page_session_disposal_async(
                         .record_inspector_target_crashed()
                 });
         }
-        anyhow::ensure!(
-            conn.mark_target_crashed_for_owner_async(&owner)
-                .await
-                .is_some(),
-            "failed to close Page after session cleanup failure: {cleanup_error:#}"
-        );
-        background_events.extend(inspector_session_ids.into_iter().map(|session_id| {
-            BackgroundProtocolEvent::inspector_target_crashed(session_id.as_deref())
-        }));
-        background_events
-            .extend(conn.target_crashed_events_for_all_discovery_owners(target_id, "crashed", 1));
+        let page = conn.take_crashed_page_for_owner(&owner);
+        let mut events: Vec<_> = inspector_sessions
+            .into_iter()
+            .map(|session| BackgroundProtocolEvent::inspector_target_crashed(session.as_deref()))
+            .collect();
+        if let Some(target_id) = self.plan.target_id() {
+            events.extend(
+                conn.target_crashed_events_for_all_discovery_owners(target_id, "crashed", 1),
+            );
+        }
+        FailedSessionPageRetirement { page, events }
     }
 
-    // Once no renderer Page remains, protocol-side ownership records can be
-    // discarded without leaving executable renderer state behind.
-    crate::domains::page::dispose_session_async(conn, plan.session_id())
+    pub(crate) fn finish_failed_page_retirement(
+        &self,
+        conn: &mut CdpConnection,
+        retired: FailedSessionPageRetirement,
+    ) -> Vec<BackgroundProtocolEvent> {
+        if let SessionDisposalTarget::PageTarget { session_key, .. } = self.plan.target() {
+            // Retire only this session's metadata. Native removal belongs to
+            // the original Page, never to a replacement installed during close.
+            let _ = conn
+                .with_target_owner_state_for_session_mut(Some(self.plan.session_id()), |state| {
+                    state.remove_document_start_scripts_for_session(session_key)
+                });
+        }
+        let owner = CommandOwnerScope::for_session(self.plan.session_id());
+        if conn
+            .renderer_page_residence_identity_for_owner(&owner)
+            .is_none()
+        {
+            retired.events
+        } else {
+            // Do not deliver A's late crash notification to a replacement B.
+            Vec::new()
+        }
+    }
+}
+
+async fn dispose_live_session_domains_async(
+    conn: &mut CdpConnection,
+    background_events: &mut Vec<BackgroundProtocolEvent>,
+    protocol_events: &mut Vec<BackgroundProtocolEvent>,
+    plan: &SessionDisposalPlan,
+) -> Result<Option<moli_core::RendererOutputFence>> {
+    LiveSessionDisposal::prepare(conn, plan.clone())
+        .run(
+            &mut ProtocolWorkflowDriver::inline(conn),
+            background_events,
+            protocol_events,
+        )
         .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "failed to finalize Page cleanup after renderer retirement: {error:#}; original cleanup failure: {cleanup_error:#}"
-            )
-        })?;
-    tracing::warn!(
-        session_id = plan.session_id(),
-        target_id,
-        %cleanup_error,
-        "retired Page renderer after DevTools session cleanup failure"
-    );
-    Ok(())
 }
 
 pub(super) async fn dispose_browser_session_without_event_async(
@@ -162,23 +314,6 @@ pub(super) async fn dispose_browser_session_without_event_async(
     )
     .await?;
     conn.commit_browser_session_disposal_without_event(&plan)
-}
-
-pub(super) async fn dispose_browser_session_event_plan_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) -> Result<TargetEventPlan> {
-    let plan = prepare_browser_session_disposal(conn, session_id)?;
-    let mut discarded_background_events = Vec::new();
-    let mut discarded_protocol_events = Vec::new();
-    dispose_live_session_domains_async(
-        conn,
-        &mut discarded_background_events,
-        &mut discarded_protocol_events,
-        &plan,
-    )
-    .await?;
-    conn.commit_browser_session_disposal_event_plan(&plan)
 }
 
 /// Runs the connection-owned portion of domain disposal after a target has
@@ -311,4 +446,171 @@ pub(super) fn dispose_removed_dedicated_worker_session_after_failed_retirement(
 ) -> TargetEventPlan {
     crate::domains::session::dispose_closed_handlers_sync(conn, cleanup_plan.session_id());
     conn.commit_target_session_detachment_after_prepared_state_delta_event_plan(cleanup_plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::{
+        BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
+    };
+    use crate::testing::{TestContext, wait_until_renderer_document_load};
+    use base64::Engine as _;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn cancelled_old_session_cleanup_cannot_retire_or_reconfigure_its_successor() {
+        for retire_before_successor in [false, true] {
+            let mut context = TestContext::new();
+            let mut browser = BrowserContext::new("BID-retired-cleanup".into());
+            browser.set_active_target_id("TID-retired-cleanup");
+            browser.attach_active_session("SID-old");
+            assert!(
+                browser.assign_attached_session_to_target("TID-retired-cleanup", "SID-peer".into())
+            );
+            context
+                .conn
+                .install_browser_context_fixture_for_test(browser);
+            context
+                .install_navigation_fixture_for_session_owner(
+                    "about:blank#original",
+                    Some("SID-old"),
+                )
+                .await;
+            for (id, method, params) in [
+                (
+                    1,
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    json!({"source": "globalThis.oldSessionPreload = true;"}),
+                ),
+                (
+                    2,
+                    "Emulation.setScriptExecutionDisabled",
+                    json!({"value": true}),
+                ),
+            ] {
+                context.process_async(json!({"id": id, "sessionId": "SID-old", "method": method, "params": params})).await;
+                assert!(context.take_response_by_id(id).get("result").is_some());
+            }
+            let command = ParsedCdpCommand::parse_str(json!({"id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-old"}}).to_string()).unwrap();
+            let mut dispatch_context = CommandDispatchContext::default();
+            let CdpCommandTaskStep::Pending(pending) = context
+                .conn
+                .start_parsed_command_dispatch_with_context(&command, &mut dispatch_context)
+            else {
+                panic!("cleanup must retain its native work");
+            };
+            let mut pending = Some(pending);
+            assert!(
+                !context
+                    .conn
+                    .navigation_load_inputs_for_owner(&CommandOwnerScope::for_session("SID-peer"))
+                    .script_execution_disabled,
+                "Closing must revoke the old session's script policy"
+            );
+            let mut recovery = if retire_before_successor {
+                drop(pending.take());
+                Some(context.conn.complete_failed_command_wait_with_context(
+                    Some(10),
+                    None,
+                    "controlled cancellation",
+                    &mut dispatch_context,
+                ))
+            } else {
+                None
+            };
+            let successor_url = format!("data:text/html;base64,{}", base64::engine::general_purpose::STANDARD.encode(
+                "<script>globalThis.successor=[true,typeof oldSessionPreload]</script><p>successor</p>"));
+            context
+                .process_async(json!({
+                    "id": 20, "sessionId": "SID-peer", "method": "Page.navigate",
+                    "params": {"url": successor_url},
+                }))
+                .await;
+            let navigation = context.take_response_by_id(20);
+            assert!(
+                navigation.get("result").is_some(),
+                "retirement before successor={retire_before_successor}: {navigation:?}"
+            );
+            assert!(
+                navigation["result"].get("errorText").is_none(),
+                "retirement before successor={retire_before_successor}: {navigation:?}"
+            );
+            let loader_id = navigation["result"]["loaderId"].as_str().unwrap();
+            wait_until_renderer_document_load(
+                &mut context,
+                Some("SID-peer"),
+                "TID-retired-cleanup",
+                loader_id,
+            )
+            .await;
+            let owner = CommandOwnerScope::for_session("SID-peer");
+            let successor = context
+                .conn
+                .renderer_page_residence_identity_for_owner(&owner)
+                .unwrap();
+            let document = context
+                .conn
+                .target_root_document_lifecycle_identity_for_owner(&owner);
+            context.process_async(json!({"id": 21, "sessionId": "SID-peer", "method": "Runtime.evaluate", "params": {"expression": "globalThis.successor", "returnByValue": true}})).await;
+            let before_recovery = context.take_response_by_id(21);
+            assert_eq!(
+                before_recovery["result"]["result"]["value"],
+                json!([true, "undefined"]),
+                "before recovery retirement={retire_before_successor}: {before_recovery:?}"
+            );
+            // Exercise both sides of the retirement boundary: either A was
+            // already taken before B's installation, or cancellation occurs
+            // after B replaced A and may no longer retire the current Page.
+            drop(pending.take());
+            let recovery = recovery.take().unwrap_or_else(|| {
+                context.conn.complete_failed_command_wait_with_context(
+                    Some(10),
+                    None,
+                    "controlled cancellation",
+                    &mut dispatch_context,
+                )
+            });
+            let CdpCommandTaskStep::Pending(recovery) = recovery else {
+                panic!("cancellation retains the original cleanup scope");
+            };
+            let completed = recovery.wait().await;
+            let CdpCommandTaskStep::Complete(outcome) = context
+                .conn
+                .complete_pending_command_dispatch_with_context(completed, &mut dispatch_context)
+                .await
+            else {
+                panic!("recovery has no further wait");
+            };
+            assert!(
+                !outcome
+                    .into_parts()
+                    .0
+                    .iter()
+                    .any(|event| event["method"] == "Inspector.targetCrashed"
+                        || event["method"] == "Target.targetCrashed")
+            );
+            assert_eq!(
+                context
+                    .conn
+                    .renderer_page_residence_identity_for_owner(&owner),
+                Some(successor)
+            );
+            assert_eq!(
+                context
+                    .conn
+                    .target_root_document_lifecycle_identity_for_owner(&owner),
+                document
+            );
+            assert!(!context.conn.has_attached_devtools_session("SID-old"));
+            assert!(context.conn.has_attached_devtools_session("SID-peer"));
+            context.process_async(json!({"id": 11, "sessionId": "SID-peer", "method": "Runtime.evaluate", "params": {"expression": "globalThis.successor", "returnByValue": true}})).await;
+            let evaluation = context.take_response_by_id(11);
+            assert_eq!(
+                evaluation["result"]["result"]["value"],
+                json!([true, "undefined"]),
+                "retirement before successor={retire_before_successor}: {evaluation:?}"
+            );
+        }
+    }
 }

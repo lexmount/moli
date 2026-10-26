@@ -40,7 +40,7 @@ pub(crate) struct CompletedPerformanceCommandDispatch {
     owner_scope: CommandOwnerScope,
     renderer_access: CdpRendererCommandAccess,
     renderer_page: crate::conn::RendererPageResidenceIdentity,
-    completed: Result<CompletedPerformanceRendererCommand, String>,
+    completed: Result<CompletedPerformanceRendererCommand>,
 }
 
 enum PendingPerformanceRendererCommand {
@@ -59,7 +59,7 @@ enum CompletedPerformanceRendererCommand {
     Main(CompletedPageCommand),
     IoAdapterReply(RendererPerformanceMetricSnapshot),
     IoSessionOutput {
-        completed: Result<CompletedDevToolsIoCommandDispatch, String>,
+        completed: Result<CompletedDevToolsIoCommandDispatch>,
         correlation: RendererCommandCorrelation,
     },
 }
@@ -91,7 +91,7 @@ impl PendingPerformanceCommandDispatch {
                 pending,
                 correlation,
             } => Ok(CompletedPerformanceRendererCommand::IoSessionOutput {
-                completed: pending.wait().await.map_err(|error| error.to_string()),
+                completed: pending.wait().await,
                 correlation,
             }),
         };
@@ -100,7 +100,7 @@ impl PendingPerformanceCommandDispatch {
             owner_scope: self.owner_scope,
             renderer_access: self.renderer_access,
             renderer_page: self.renderer_page,
-            completed: completed.map_err(|error| error.to_string()),
+            completed,
         }
     }
 }
@@ -294,7 +294,8 @@ pub(crate) fn try_start_performance_command_dispatch(
             Ok(prepared) => prepared,
             Err(error) => {
                 return PerformanceCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000, error,
+                    -32000,
+                    format!("{error:#}"),
                 ));
             }
         };
@@ -309,14 +310,15 @@ pub(crate) fn try_start_performance_command_dispatch(
                 crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
                     && page.renderer_agent_attachment_id() == Some(attachment_id)
             })
-            .ok_or_else(|| "Performance renderer attachment changed before IO dispatch".to_owned())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Performance renderer attachment changed before IO dispatch")
+            })
             .and_then(|page| {
                 page.start_performance_get_metrics_from_io_with_response(
                     renderer_inspector_session_id,
                     result,
                     response,
                 )
-                .map_err(|error| error.to_string())
             });
         let pending = match pending {
             Ok(pending) => pending,
@@ -327,7 +329,8 @@ pub(crate) fn try_start_performance_command_dispatch(
                 );
                 debug_assert!(removed);
                 return PerformanceCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000, error,
+                    -32000,
+                    format!("{error:#}"),
                 ));
             }
         };
@@ -382,7 +385,7 @@ pub(crate) fn performance_metrics_result(snapshot: &RendererPerformanceMetricSna
     json!({ "metrics": build_performance_metrics(snapshot) })
 }
 
-pub(crate) async fn complete_pending_performance_command(
+pub(crate) fn complete_pending_performance_command(
     conn: &mut CdpConnection,
     completed: CompletedPerformanceCommandDispatch,
 ) -> CommandOutputPlan {

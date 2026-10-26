@@ -7,6 +7,7 @@ use crate::cdp_writer::CdpSocketSink;
 const FRONTEND_COMMAND_QUEUE_CAPACITY: usize = 256;
 
 pub(crate) struct CdpFrontendReceivers {
+    pub(crate) control_tx: mpsc::WeakUnboundedSender<CdpFrontendControlRequest>,
     pub(crate) control_rx: mpsc::UnboundedReceiver<CdpFrontendControlRequest>,
     pub(crate) command_rx: mpsc::Receiver<CdpFrontendCommand>,
 }
@@ -19,14 +20,21 @@ pub(crate) struct CdpFrontendEndpoint {
 }
 
 pub(crate) enum CdpFrontendControlRequest {
+    DisposeOrphanedResource(CdpControlResource),
+    ExecuteInternalCommand {
+        command: Box<ParsedCdpCommand>,
+        registration: Option<CdpFrontendRegistration>,
+        completion_tx: oneshot::Sender<Result<CdpInternalCommandResult>>,
+    },
+    Checkpoint,
     AttachBrowser {
         sink: CdpSocketSink,
-        completion_tx: oneshot::Sender<Result<u64>>,
+        completion_tx: oneshot::Sender<Result<CdpAttachedFrontend>>,
     },
     AttachTarget {
         target_id: String,
         sink: CdpSocketSink,
-        completion_tx: oneshot::Sender<Result<u64>>,
+        completion_tx: oneshot::Sender<Result<CdpAttachedFrontend>>,
     },
     DetachBrowser {
         frontend_id: u64,
@@ -47,7 +55,7 @@ pub(crate) enum CdpFrontendControlRequest {
     },
     CreateManagedTarget {
         target_url: String,
-        completion_tx: oneshot::Sender<Result<CdpCreatedTarget>>,
+        completion_tx: oneshot::Sender<Result<CdpCreatedTargetResult>>,
     },
     EnsureDefaultTargetPublished {
         completion_tx: oneshot::Sender<Result<()>>,
@@ -66,17 +74,109 @@ pub(crate) struct CdpCreatedTarget {
     pub(crate) tab_target_id: String,
 }
 
+pub(crate) struct CdpInternalCommandResult {
+    pub(crate) response: serde_json::Value,
+    pub(crate) created_target: Option<CdpCreatedTarget>,
+    pub(crate) registration: Option<Result<()>>,
+    pub(crate) rollback: Option<CdpControlResourceLease>,
+}
+
+pub(crate) struct CdpAttachedFrontend {
+    pub(crate) frontend_id: u64,
+    pub(crate) rollback: CdpControlResourceLease,
+}
+
+impl CdpAttachedFrontend {
+    fn into_id(mut self) -> u64 {
+        self.rollback.resource = None;
+        self.frontend_id
+    }
+}
+
+pub(crate) struct CdpCreatedTargetResult {
+    pub(crate) target: CdpCreatedTarget,
+    pub(crate) rollback: CdpControlResourceLease,
+}
+
+impl CdpCreatedTargetResult {
+    fn into_target(mut self) -> CdpCreatedTarget {
+        self.rollback.resource = None;
+        self.target
+    }
+}
+
+impl CdpInternalCommandResult {
+    pub(crate) fn commit_resource(&mut self) {
+        if let Some(lease) = &mut self.rollback {
+            lease.resource = None;
+        }
+    }
+}
+
+pub(crate) enum CdpControlResource {
+    Session(String),
+    BrowserFrontend {
+        session_id: String,
+        frontend_id: u64,
+    },
+    TargetFrontend {
+        session_id: String,
+        frontend_id: u64,
+    },
+    Target(String),
+}
+
+pub(crate) struct CdpControlResourceLease {
+    owner: mpsc::WeakUnboundedSender<CdpFrontendControlRequest>,
+    resource: Option<CdpControlResource>,
+}
+
+impl CdpControlResourceLease {
+    pub(crate) fn new(
+        owner: mpsc::WeakUnboundedSender<CdpFrontendControlRequest>,
+        resource: CdpControlResource,
+    ) -> Self {
+        Self {
+            owner,
+            resource: Some(resource),
+        }
+    }
+}
+
+impl Drop for CdpControlResourceLease {
+    fn drop(&mut self) {
+        if let Some(resource) = self.resource.take()
+            && let Some(owner) = self.owner.upgrade()
+        {
+            let _ = owner.send(CdpFrontendControlRequest::DisposeOrphanedResource(resource));
+        }
+    }
+}
+
+pub(crate) enum CdpFrontendRegistration {
+    Browser {
+        frontend_id: u64,
+        sink: CdpSocketSink,
+    },
+    Target {
+        frontend_id: u64,
+        target_id: String,
+        sink: CdpSocketSink,
+    },
+}
+
 pub(crate) fn cdp_frontend_channel() -> (CdpFrontendEndpoint, CdpFrontendReceivers) {
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     let (command_tx, command_rx) = mpsc::channel(FRONTEND_COMMAND_QUEUE_CAPACITY);
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     (
         CdpFrontendEndpoint {
-            control_tx,
+            control_tx: control_tx.clone(),
             command_tx,
             shutdown_tx,
         },
         CdpFrontendReceivers {
+            control_tx: control_tx.downgrade(),
             control_rx,
             command_rx,
         },
@@ -99,7 +199,7 @@ impl CdpFrontendEndpoint {
             biased;
             _ = self.wait_for_shutdown() => bail!("CDP owner stopped before browser frontend attach"),
             completion = completion_rx => completion
-                .context("CDP owner stopped before browser frontend attach")?,
+                .context("CDP owner stopped before browser frontend attach")?.map(CdpAttachedFrontend::into_id),
         }
     }
 
@@ -123,7 +223,7 @@ impl CdpFrontendEndpoint {
             biased;
             _ = self.wait_for_shutdown() => bail!("CDP target owner stopped before target frontend attach"),
             completion = completion_rx => completion
-                .context("CDP target owner stopped before target frontend attach")?,
+                .context("CDP target owner stopped before target frontend attach")?.map(CdpAttachedFrontend::into_id),
         }
     }
 
@@ -213,7 +313,7 @@ impl CdpFrontendEndpoint {
             biased;
             _ = self.wait_for_shutdown() => bail!("CDP target owner stopped before target creation"),
             completion = completion_rx => completion
-                .context("CDP target owner stopped before target creation")?,
+                .context("CDP target owner stopped before target creation")?.map(CdpCreatedTargetResult::into_target),
         }
     }
 
@@ -248,5 +348,142 @@ impl CdpFrontendEndpoint {
 
     fn is_shutting_down(&self) -> bool {
         *self.shutdown_tx.borrow()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_a_ready_internal_result_reclaims_its_original_resource() {
+        for target in [false, true] {
+            let (owner, mut requests) = mpsc::unbounded_channel();
+            let resource = if target {
+                CdpControlResource::Target("TID-orphan".into())
+            } else {
+                CdpControlResource::Session("SID-orphan".into())
+            };
+            let result = CdpInternalCommandResult {
+                response: serde_json::json!({"id": 1, "result": {}}),
+                created_target: None,
+                registration: None,
+                rollback: Some(CdpControlResourceLease::new(owner.downgrade(), resource)),
+            };
+            let (reply, receive) = oneshot::channel::<Result<CdpInternalCommandResult>>();
+            assert!(reply.send(Ok(result)).is_ok());
+            drop(receive);
+            match requests
+                .try_recv()
+                .expect("a result dropped before consumption must reclaim ownership")
+            {
+                CdpFrontendControlRequest::DisposeOrphanedResource(CdpControlResource::Target(
+                    id,
+                )) => {
+                    assert!(target);
+                    assert_eq!(id, "TID-orphan");
+                }
+                CdpFrontendControlRequest::DisposeOrphanedResource(
+                    CdpControlResource::Session(id),
+                ) => {
+                    assert!(!target);
+                    assert_eq!(id, "SID-orphan");
+                }
+                _ => panic!("cleanup must address the original resource"),
+            }
+            assert!(
+                requests.try_recv().is_err(),
+                "one resource has one cleanup obligation"
+            );
+        }
+    }
+
+    #[test]
+    fn unconsumed_frontend_and_target_callbacks_keep_their_cleanup_obligations() {
+        let (owner, mut requests) = mpsc::unbounded_channel();
+        let (reply, receive) = oneshot::channel::<Result<CdpAttachedFrontend>>();
+        assert!(
+            reply
+                .send(Ok(CdpAttachedFrontend {
+                    frontend_id: 7,
+                    rollback: CdpControlResourceLease::new(
+                        owner.downgrade(),
+                        CdpControlResource::BrowserFrontend {
+                            session_id: "SID-buffered".into(),
+                            frontend_id: 7,
+                        }
+                    ),
+                }))
+                .is_ok()
+        );
+        drop(receive);
+        assert!(
+            matches!(requests.try_recv(), Ok(CdpFrontendControlRequest::DisposeOrphanedResource(
+            CdpControlResource::BrowserFrontend { frontend_id: 7, session_id }
+        )) if session_id == "SID-buffered")
+        );
+
+        let (reply, receive) = oneshot::channel::<Result<CdpCreatedTargetResult>>();
+        assert!(
+            reply
+                .send(Ok(CdpCreatedTargetResult {
+                    target: CdpCreatedTarget {
+                        page_target_id: "TID-buffered".into(),
+                        tab_target_id: "TAB-buffered".into()
+                    },
+                    rollback: CdpControlResourceLease::new(
+                        owner.downgrade(),
+                        CdpControlResource::Target("TID-buffered".into())
+                    ),
+                }))
+                .is_ok()
+        );
+        drop(receive);
+        assert!(
+            matches!(requests.try_recv(), Ok(CdpFrontendControlRequest::DisposeOrphanedResource(
+            CdpControlResource::Target(target)
+        )) if target == "TID-buffered")
+        );
+
+        let adopted = CdpAttachedFrontend {
+            frontend_id: 8,
+            rollback: CdpControlResourceLease::new(
+                owner.downgrade(),
+                CdpControlResource::TargetFrontend {
+                    session_id: "SID-adopted".into(),
+                    frontend_id: 8,
+                },
+            ),
+        };
+        assert_eq!(adopted.into_id(), 8);
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn adopted_control_resources_do_not_roll_back_and_leases_do_not_keep_the_owner_alive() {
+        let (owner, mut requests) = mpsc::unbounded_channel();
+        let mut result = CdpInternalCommandResult {
+            response: serde_json::json!({}),
+            created_target: None,
+            registration: None,
+            rollback: Some(CdpControlResourceLease::new(
+                owner.downgrade(),
+                CdpControlResource::Session("SID-adopted".into()),
+            )),
+        };
+        result.commit_resource();
+        drop(result);
+        assert!(requests.try_recv().is_err());
+        let lease = CdpControlResourceLease::new(
+            owner.downgrade(),
+            CdpControlResource::Session("SID-closed".into()),
+        );
+        drop(owner);
+        assert!(requests.is_closed());
+        drop(lease);
+        assert!(matches!(
+            requests.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 }

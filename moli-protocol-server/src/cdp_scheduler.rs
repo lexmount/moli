@@ -112,6 +112,8 @@ pub(crate) enum CommandStartAction {
 
 pub(crate) struct CdpScheduler {
     conn: CdpConnection,
+    owned_protocol_work_tx:
+        Option<mpsc::UnboundedSender<moli_protocol::PendingProtocolSchedulerWork>>,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
     runtime_command_output_barriers: RuntimeCommandOutputBarriers,
     queues: SchedulerQueues,
@@ -714,6 +716,7 @@ impl CdpScheduler {
     fn new_with_screencast_interval(conn: CdpConnection, page_screencast_interval_ms: u32) -> Self {
         Self {
             conn,
+            owned_protocol_work_tx: None,
             pending_navigation_background_events: VecDeque::new(),
             runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
             queues: SchedulerQueues::default(),
@@ -2708,6 +2711,25 @@ impl CdpScheduler {
                     load_predecessors.is_empty(),
                     "scheduler selected protocol work before its exact load predecessor"
                 );
+                let work = if work.kind()
+                    == ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                    && let Some(sender) = &self.owned_protocol_work_tx
+                {
+                    match self.conn.try_start_owned_protocol_scheduler_work(work) {
+                        Ok(pending) => {
+                            if let Some(pending) = pending {
+                                assert!(
+                                    sender.send(pending).is_ok(),
+                                    "protocol task intake remains open while its actor runs"
+                                );
+                            }
+                            return out;
+                        }
+                        Err(work) => *work,
+                    }
+                } else {
+                    work
+                };
                 let load_observation_id = work.main_document_load_observation_id();
                 let outcome = self
                     .conn

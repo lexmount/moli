@@ -15,9 +15,8 @@ use moli_core::{
     page::{
         DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
-        RendererDomBidiNodeBindingResolution, RendererDomBidiNodeSharedIdResolution,
-        RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
-        RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+        RendererDomBidiNodeBindingResolution, RendererInspectorCommandRoute,
+        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
 };
 
@@ -893,6 +892,7 @@ mod worker_cleanup;
 pub(crate) use replay::{
     CompletedRendererCallReplay, PendingRendererCallReplay, PreparedRendererNavigationFinish,
 };
+pub(crate) use worker_cleanup::{CompletedSessionWorkerCleanup, SessionWorkerCleanup};
 mod runtime_dispatch;
 
 fn send_renderer_replacement_error(

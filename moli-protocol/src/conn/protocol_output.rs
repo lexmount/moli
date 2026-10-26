@@ -5,6 +5,9 @@ use crate::domains::activity::{
 };
 use moli_core::RendererOutputTransportMessage;
 
+mod task;
+pub use task::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
+
 impl CdpConnection {
     pub(crate) fn apply_renderer_output_stream_control(
         &mut self,
