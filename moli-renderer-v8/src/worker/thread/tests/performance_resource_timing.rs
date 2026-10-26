@@ -74,6 +74,9 @@ async fn worker_fetch_and_xhr_publish_native_resource_timing() {
                     let script_base = script_base.clone();
                     connections.spawn(async move {
                         let Ok(request) = read_http_request_head(&mut stream).await else { return };
+                        // Immediate cancellation may close an accepted socket
+                        // before sending any request bytes.
+                        if request.is_empty() { return; }
                         let target = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                         if target == "/timing-hang?abort=false" {
                             // The early-abort case must not race a response head
