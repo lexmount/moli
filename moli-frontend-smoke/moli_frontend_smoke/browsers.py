@@ -247,7 +247,7 @@ async def _start_process(
             logs,
             timeout=max(0.0, deadline - time.monotonic()),
         )
-    except Exception:
+    except (Exception, asyncio.CancelledError):
         holder = BrowserProcess(name, endpoint, process, logs, tasks, temp_dirs, {})
         await holder.stop()
         raise
