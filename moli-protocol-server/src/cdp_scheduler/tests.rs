@@ -3774,3 +3774,68 @@ async fn attachment_churn_needs_no_browser_readiness_waiter_and_reclaims_native_
         })
         .await;
 }
+
+#[test]
+fn runtime_deferred_initial_output_preserves_typed_event_sidecars() {
+    use moli_protocol::automation::{AutomationEvent, DevToolsFrameId, PageFileChooserOpenedEvent};
+
+    let output = super::ProtocolOutputSequence::from_background_events(vec![
+        BackgroundProtocolEvent::immediate_automation_event(
+            LocalCdpEvent::PageFileChooserOpened,
+            json!({"frameId":"FRAME-runtime", "backendNodeId":91, "mode":"selectSingle"}),
+            Some("SID-runtime"),
+            AutomationEvent::PageFileChooserOpened(PageFileChooserOpenedEvent {
+                frame_id: DevToolsFrameId::from("FRAME-runtime"),
+                backend_node_id: 91,
+                mode: "selectSingle".to_owned(),
+                element_shared_id: None,
+            }),
+        ),
+    ]);
+
+    let mut events = output.into_background_events();
+    let (message, automation_event) = events
+        .pop()
+        .expect("runtime deferred output should contain the raw event")
+        .into_parts();
+
+    assert_eq!(message["method"], json!("Page.fileChooserOpened"));
+    assert_eq!(message["sessionId"], json!("SID-runtime"));
+    assert!(matches!(
+        automation_event,
+        Some(AutomationEvent::PageFileChooserOpened(event))
+            if event.frame_id.as_str() == "FRAME-runtime"
+                && event.backend_node_id == 91
+                && event.mode == "selectSingle"
+    ));
+}
+
+#[test]
+fn runtime_deferred_initial_output_keeps_command_responses_sidecar_free() {
+    let mut output = super::ProtocolOutputSequence::from_background_events(vec![
+        BackgroundProtocolEvent::inspector_message(
+            json!({
+                "id": 71,
+                "result": {},
+                "sessionId": "SID-runtime"
+            }),
+            None,
+        ),
+    ]);
+
+    let responses = output
+        .take_protocol_events_with_id(71)
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        responses,
+        vec![json!({
+            "id": 71,
+            "result": {},
+            "sessionId": "SID-runtime"
+        })]
+    );
+    assert!(output.is_empty());
+}

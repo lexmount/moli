@@ -1981,3 +1981,129 @@ fn bidi_listener_uses_deep_serialization_additional_parameters() {
         json!("open")
     );
 }
+
+#[tokio::test]
+async fn raw_utf16_properties_keep_native_handle_owner_and_group() {
+    async fn call(
+        ctx: &mut TestContext,
+        session: &str,
+        method: &'static str,
+        params: Value,
+    ) -> crate::conn::BackgroundCommandResponsePayload {
+        let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, Some(session)));
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        ctx.drive_owned_wait(crate::conn::dispatch_runtime_helper_using(
+            &mut driver,
+            owner,
+            method,
+            params,
+        ))
+        .await
+        .expect("native Inspector helper must finish")
+    }
+    fn success(payload: crate::conn::BackgroundCommandResponsePayload) -> Value {
+        match payload {
+            crate::conn::BackgroundCommandResponsePayload::Success { result } => result,
+            other => panic!("expected native Inspector success, got {other:?}"),
+        }
+    }
+    let mut conn = connection_with_bidi_page_session();
+    assert!(
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .assign_attached_session_to_target("TID-active", "SID-other".to_owned())
+    );
+    let raw = r#"{"id":7,"result":{"result":[{"name":"\ud800","value":{"type":"object","description":"\udc00","objectId":"raw-nested-handle"}}]}}"#;
+    let message = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
+    let owner = CommandOwnerScope::capture(&conn, Some("SID-active"));
+    let mut responses = Vec::new();
+    let mut notifications = Vec::new();
+    assert!(
+        conn.route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
+            message.clone(),
+            Some(7),
+            &owner,
+            &mut responses,
+            &mut notifications
+        )
+    );
+    assert_eq!(responses.len(), 1);
+    assert!(notifications.is_empty());
+    assert!(!message.is_materialized());
+    let forwarded = responses[0].protocol_json().unwrap();
+    assert!(!forwarded.is_materialized());
+    assert_eq!(forwarded.session_id(), Some("SID-active"));
+    let mut payload = forwarded.clone();
+    payload.set_session_id(None);
+    assert!(!payload.is_materialized());
+    assert_eq!(payload.to_string(), raw);
+    let mut ctx = TestContext::from_conn(conn);
+    ctx.process_and_wait_for_response_async(json!({"id":1,"sessionId":"SID-active", "method":"Page.navigate", "params":{"url":"data:text/html,<p>native handles</p>"}})).await;
+    let evaluated = success(call(&mut ctx, "SID-active", "Runtime.evaluate", json!({
+        "expression": "({nested: {['\\uD800']: '\\uDC00'}})", "objectGroup":"raw-group", "generatePreview":false,
+    })).await);
+    let outer = evaluated["result"]["objectId"]
+        .as_str()
+        .expect("real outer object handle")
+        .to_owned();
+    let properties = success(
+        call(
+            &mut ctx,
+            "SID-active",
+            "Runtime.getProperties",
+            json!({
+                "objectId":outer, "ownProperties":true, "generatePreview":false,
+            }),
+        )
+        .await,
+    );
+    let nested = properties["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["name"] == "nested")
+        .unwrap()["value"]["objectId"]
+        .as_str()
+        .expect("real nested handle")
+        .to_owned();
+    let values = success(call(&mut ctx, "SID-active", "Runtime.callFunctionOn", json!({
+        "objectId":nested, "functionDeclaration":"function() { const key = Object.getOwnPropertyNames(this)[0]; return [key.charCodeAt(0), this[key].charCodeAt(0)]; }", "returnByValue":true,
+    })).await);
+    assert_eq!(values["result"]["value"], json!([0xd800, 0xdc00]));
+    assert!(
+        matches!(
+            call(
+                &mut ctx,
+                "SID-other",
+                "Runtime.getProperties",
+                json!({"objectId":nested})
+            )
+            .await,
+            crate::conn::BackgroundCommandResponsePayload::Error { .. }
+        ),
+        "a foreign Inspector session cannot use the nested handle"
+    );
+    success(
+        call(
+            &mut ctx,
+            "SID-active",
+            "Runtime.releaseObjectGroup",
+            json!({"objectGroup":"raw-group"}),
+        )
+        .await,
+    );
+    assert!(
+        matches!(
+            call(
+                &mut ctx,
+                "SID-active",
+                "Runtime.getProperties",
+                json!({"objectId":nested})
+            )
+            .await,
+            crate::conn::BackgroundCommandResponsePayload::Error { .. }
+        ),
+        "the nested handle inherits its actual V8 object group"
+    );
+}

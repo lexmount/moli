@@ -1295,3 +1295,77 @@ fn raw_inspector_response_rewrites_frontend_ids_without_decoding_the_body() {
         );
     }
 }
+
+#[test]
+fn raw_utf16_replies_restore_large_ids_for_their_own_frontend_once() {
+    let mut routing = CdpFrontendRoutingState::default();
+    for (frontend, session) in [(5, "browser-a"), (6, "browser-b")] {
+        routing
+            .register_browser_frontend(frontend, session.into(), test_sink())
+            .unwrap();
+    }
+    for client_id in [7, u64::MAX] {
+        let pending: Vec<_> = [(5, "browser-a"), (6, "browser-b")]
+            .into_iter()
+            .map(|(frontend, session)| {
+                let command = expect_prepared_command(
+                routing.prepare_command(frontend, parsed_command(json!({
+                    "id": client_id, "method": "Runtime.evaluate", "params": {"expression": "0"}
+                }).to_string())), "raw UTF-16",
+            );
+                (frontend, session, command.request().id())
+            })
+            .collect();
+        for (frontend, session, internal_id) in pending.into_iter().rev() {
+            let raw = format!(
+                r#"{{"id":{internal_id},"sessionId":"{session}","result":{{"result":{{"type":"string","value":"\ud800"}}}}}}"#
+            );
+            let response = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
+            let (owner, message) = routing
+                .route_message(response.clone(), Some(session), None)
+                .unwrap();
+            assert_eq!(owner.frontend_id(), frontend);
+            assert_eq!(message.id_u64(), Some(client_id));
+            assert_eq!(message.session_id(), None);
+            assert!(
+                serde_json::to_string(&message)
+                    .unwrap()
+                    .contains(r#""value":"\ud800""#)
+            );
+            assert!(
+                routing
+                    .route_message(response, Some(session), None)
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_utf16_target_titles_do_not_break_child_session_ownership() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "browser".into(), test_sink())
+        .unwrap();
+    let attached = moli_inspector_json::InspectorJson::from_slice((r#"{"method":"Target.attachedToTarget","sessionId":"browser","params":{"sessionId":"child","targetInfo":{"targetId":"worker","title":"\ud800"}}}"#).as_bytes()).unwrap();
+    let (owner, attached) = routing
+        .route_message(attached, Some("browser"), None)
+        .unwrap();
+    assert_eq!(owner.frontend_id(), 5);
+    assert!(
+        serde_json::to_string(&attached)
+            .unwrap()
+            .contains(r#""title":"\ud800""#)
+    );
+    let notification = moli_inspector_json::InspectorJson::from_slice((r#"{"method":"Runtime.consoleAPICalled","sessionId":"child","params":{"args":[{"value":"\udc00"}]}}"#).as_bytes()).unwrap();
+    let (owner, notification) = routing
+        .route_message(notification, Some("child"), None)
+        .unwrap();
+    assert_eq!(owner.frontend_id(), 5);
+    assert_eq!(notification.session_id(), Some("child"));
+    assert!(
+        serde_json::to_string(&notification)
+            .unwrap()
+            .contains(r#""value":"\udc00""#)
+    );
+}
