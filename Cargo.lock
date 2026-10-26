@@ -6304,6 +6304,7 @@ dependencies = [
  "tokio-util",
  "url",
  "web-transport-quinn",
+ "web-transport-trait",
 ]
 
 [[package]]
@@ -8055,8 +8056,6 @@ dependencies = [
 [[package]]
 name = "quinn"
 version = "0.11.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4051e23e9185c255a7e33ef59cdbca87a22d359052eecd22fc6b901fb37d9d11"
 dependencies = [
  "bytes",
  "cfg_aliases",
