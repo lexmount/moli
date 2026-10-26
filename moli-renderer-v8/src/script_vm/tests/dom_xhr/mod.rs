@@ -15,6 +15,7 @@ mod forms;
 #[cfg(feature = "devtools")]
 mod interception_route;
 mod json_response;
+mod local_tasks;
 mod misc;
 mod native_events;
 mod no_cors_redirect;

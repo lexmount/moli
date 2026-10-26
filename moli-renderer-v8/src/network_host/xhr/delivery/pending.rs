@@ -90,8 +90,15 @@ fn queue_xhr_delivery<'s>(
     xhr: v8::Local<'_, v8::Object>,
     delivery: XhrPendingDelivery<'s>,
 ) {
-    let generation = xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     let xhr = v8::Local::new(scope, xhr);
+    let Some(context) = xhr.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(host) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let generation = xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     let data = XhrDeliveryData::new(xhr, generation, delivery)
         .bind(scope)
         .expect("queued XHR delivery must bind");
@@ -99,7 +106,10 @@ fn queue_xhr_delivery<'s>(
         .data(data.into())
         .build(scope)
     {
-        enqueue_host_microtask(scope, callback);
+        // Borrowing another realm's send() does not change the XHR's task
+        // owner. Its networking task is retired with the relevant Window.
+        // SAFETY: this context's bridge owns the host in the current isolate.
+        unsafe { &mut *host }.queue_networking_task(scope, callback);
     }
 }
 
