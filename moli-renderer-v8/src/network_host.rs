@@ -249,10 +249,7 @@ use super::{
         AsyncSubresourceStreamingFinished, AsyncSubresourceStreamingStarted,
         PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceResourceType,
     },
-    util::{
-        context_host_ptr_from_global_bridge, enqueue_host_microtask, throw_type_error, v8_string,
-        v8str,
-    },
+    util::{context_host_ptr_from_global_bridge, throw_type_error, v8_string, v8str},
 };
 
 #[cfg(test)]
