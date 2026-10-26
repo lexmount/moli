@@ -1731,15 +1731,14 @@ async fn worker_main(
 ) {
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
-    let resource_task_runner = resource_task_runner.unwrap_or_else(|| {
-        RendererResourceTaskRunner::from_current_tokio()
-            .expect("Worker owner loop must expose its resource task runner")
-    });
+    let resource_task_runner = resource_task_runner
+        .unwrap_or_else(|| request_client.browser_resource_runtime().task_runner());
     let interception_context = Some(
         interception_context
             .map(|context| context.fork_worker_observer())
             .unwrap_or_else(|| super::resource_output::unobserved(parent_tx.clone())),
     );
+
 
     let loader = resource_loader_for_worker_context(
         request_client,
