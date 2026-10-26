@@ -31,6 +31,7 @@ moli-url = { path = "../moli-url" }
 moli-url-policy = { path = "../moli-url-policy" }
 moli-web-bot-auth = { path = "../moli-web-bot-auth" }
 moli-web-mime = { path = "../moli-web-mime" }
+moli-webtransport = { path = "../moli-webtransport" }
 parking_lot = "0.12"
 percent-encoding = "2.3"
 regex = "1"
@@ -51,7 +52,7 @@ serde_json = "1"
 h2 = "0.4"
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
-tokio = { version = "1.51.0", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1.51.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"] }
 
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }

@@ -44,6 +44,12 @@ impl FetchClientHandle {
         self.runtime.websocket_connector()
     }
 
+    /// Captures browser-owned QUIC policy without extending the semantic
+    /// network owner's lifetime. Poll connections on the resource executor.
+    pub fn webtransport_connector(&self) -> crate::WebTransportConnector {
+        self.runtime.webtransport_connector()
+    }
+
     /// Materialized text compatibility API.
     ///
     /// Non-auth requests enter the streaming raw transport first and only

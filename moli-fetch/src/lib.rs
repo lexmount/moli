@@ -73,6 +73,7 @@ pub use moli_header_field::{
     headers_from_byte_strings, headers_to_byte_strings,
 };
 pub use moli_web_bot_auth::{WebBotAuthProfile, WebBotAuthSigner};
+pub use moli_webtransport::Connector as WebTransportConnector;
 pub use network_fetch_result::{
     NetworkExchangeObservation, NetworkFetchFailureContext, NetworkFetchFailureRequestContext,
     NetworkFetchResult, NetworkObservationJournal, NetworkRequestObservation,
