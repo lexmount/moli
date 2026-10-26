@@ -3662,6 +3662,7 @@ dependencies = [
  "moli-webidl-callback",
  "moli-webmcp",
  "moli-websocket",
+ "moli-webtransport",
  "moli-window-features",
  "moli-xpath",
  "num-bigint",

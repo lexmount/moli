@@ -64,6 +64,7 @@ pub(crate) enum ResourceLoadKind {
     Beacon,
     CspReport,
     WebSocket,
+    WebTransport,
     Dictionary,
     Manifest,
 }

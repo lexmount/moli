@@ -115,6 +115,7 @@ impl JsContextHost {
         self.retire_web_locks_context_token(realm_token);
         let canvas_blobs = self.retire_canvas_blob_context_token(realm_token);
         let crypto = self.retire_webcrypto_context_token(realm_token);
+        self.retire_webtransport_context_token(realm_token);
         let fonts = self.retire_font_face_loads_for_context_token(realm_token);
         self.retire_opfs_context_token(realm_token);
         let workers = self.retire_workers_for_context_token(realm_token);
@@ -183,6 +184,7 @@ impl JsContextHost {
             self.retire_web_locks_execution_context_owner(owner);
             self.retire_canvas_blob_execution_context_owner(owner);
             self.retire_webcrypto_execution_context_owner(owner);
+            self.retire_webtransport_execution_context_owner(owner);
             self.retire_opfs_execution_context_owner(owner);
             self.retire_workers_for_execution_context_owner(owner);
             self.disconnect_shared_worker_clients_for_execution_context_owner(owner);

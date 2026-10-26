@@ -721,6 +721,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn retire_all_document_resource_loaders(&mut self) {
+        self.webtransport_tasks.retain(|_| false);
         let retired = self.document_resource_loaders.retire_all();
         for loader in retired {
             let registry_id = loader.load_diagnostics().registry_id;

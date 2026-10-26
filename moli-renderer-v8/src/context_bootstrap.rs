@@ -286,7 +286,7 @@ pub(crate) use webrtc::encoded_frames;
 pub(crate) use webrtc::rtp_transceivers::apply_task as apply_webrtc_task;
 pub(crate) use webrtc::script_transform::run_worker_task as run_rtp_transform_worker_task;
 mod websocket;
-mod webtransport;
+pub(crate) mod webtransport;
 mod window_accessors;
 pub(crate) use window_accessors::{
     window_closed_value, window_frames_value, window_length_value, window_opener_value,
