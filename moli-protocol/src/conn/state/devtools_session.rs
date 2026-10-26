@@ -847,9 +847,8 @@ pub(crate) struct DevToolsConsoleOutputSessionState {
     pub(crate) log_lifecycle_entries: usize,
     pub(crate) log_network_entries: usize,
     pub(crate) log_violation_thresholds: Vec<DevToolsLogViolationThreshold>,
-    pub(crate) runtime_console_entries: usize,
     pub(crate) runtime_exception_entries: usize,
-    pub(crate) renderer_console_agent_owns_page_console_api_events: bool,
+    pub(crate) renderer_console_agent_owns_console_api_events: bool,
     pub(crate) renderer_runtime_agent_owns_page_console_api_events: bool,
 }
 
@@ -1086,26 +1085,16 @@ impl DevToolsSessionState {
         &self,
         messages: &'a [moli_core::page::RuntimeConsoleMessageSnapshot],
     ) -> &'a [moli_core::page::RuntimeConsoleMessageSnapshot] {
-        if !self.console_output_session_state.console_enabled {
+        if !self.console_output_session_state.console_enabled
+            || self
+                .console_output_session_state
+                .renderer_console_agent_owns_console_api_events
+        {
             return &[];
         }
         &messages[self
             .console_output_session_state
             .console_domain_entries
-            .min(messages.len())..]
-    }
-
-    pub(crate) fn pending_runtime_console_messages<'a>(
-        &self,
-        messages: &'a [moli_core::page::RuntimeConsoleMessageSnapshot],
-        has_execution_context: bool,
-    ) -> &'a [moli_core::page::RuntimeConsoleMessageSnapshot] {
-        if !self.runtime_session_state.runtime_frontend_enabled || !has_execution_context {
-            return &[];
-        }
-        &messages[self
-            .console_output_session_state
-            .runtime_console_entries
             .min(messages.len())..]
     }
 }

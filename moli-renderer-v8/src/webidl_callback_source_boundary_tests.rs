@@ -190,8 +190,10 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
+    // Window and Worker share one captured-native-console forwarder.
+    // It invokes V8's console intrinsic.
     allowed(
-        "context_bootstrap/window_events/console.rs",
+        "context_bootstrap/shared/console.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
@@ -233,11 +235,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     // Native collection forwarding moved unchanged to moli_webapi::webidl_iterator.
-    allowed(
-        "worker/global_scope/console.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
     // XMLSerializer resolves native Node/Attr identity directly and no longer
     // needs permission to invoke observable DOM forwarding methods here.
 ];

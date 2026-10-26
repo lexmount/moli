@@ -35,6 +35,9 @@ fn console_command_has_renderer_agent(conn: &CdpConnection, cmd: &Cmd<'_>) -> bo
     if cmd.session_id.is_some_and(|session_id| {
         conn.shared_worker_target_for_session(Some(session_id))
             .is_some()
+            || conn
+                .service_worker_target_for_session(Some(session_id))
+                .is_some()
     }) {
         return true;
     }
