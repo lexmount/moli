@@ -15,6 +15,10 @@ pub(crate) enum Completion {
     Connected(Result<moli_webtransport::Session, String>),
     Closed(moli_webtransport::CloseReason),
     Stream(super::streams::StreamCompletion),
+    StreamClosed {
+        id: u64,
+        end: super::streams::StreamEnd,
+    },
     Datagram(Result<(), String>),
 }
 

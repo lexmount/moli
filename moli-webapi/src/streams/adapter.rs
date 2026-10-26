@@ -92,19 +92,18 @@ pub use readable::{
     cancel_readable_stream, cancel_readable_stream_for_fetch, maybe_pull_stream,
     prepare_readable_stream_read_with_steps,
 };
-pub use readable_byte::enqueue_byte_chunk;
 pub(in crate::streams) use readable_byte::{
-    enqueue_auto_allocate_pull_into, finish_byte_stream_tee_branch_close,
-    finish_readable_byte_stream_close, initialize_readable_byte_stream_state,
-    perform_read_into_byte_stream, prepare_readable_byte_stream_close,
-    read_into_byte_stream_as_promise, readable_byte_stream_byob_request,
-    readable_byte_stream_pending_byob_view, readable_stream_byob_request_respond_callback,
+    enqueue_auto_allocate_pull_into, finish_readable_byte_stream_close,
+    initialize_readable_byte_stream_state, perform_read_into_byte_stream,
+    prepare_readable_byte_stream_close, read_into_byte_stream_as_promise,
+    readable_byte_stream_byob_request, readable_byte_stream_pending_byob_view,
+    readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, release_byte_stream_reader,
     reset_byte_stream_pending_pull_intos, respond_byte_stream_with_new_view,
 };
+pub use readable_byte::{enqueue_byte_chunk, finish_readable_byte_stream_source_close};
 pub use readable_state::EnqueueChunkError;
-pub use readable_state::writable_stream_locked;
 pub use readable_state::{
     apply_readable_stream_access_transition, readable_stream_access_snapshot,
 };
