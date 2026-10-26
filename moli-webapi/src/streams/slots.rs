@@ -63,7 +63,7 @@ pub(super) const WRITABLE_STREAM_PIPE_OWNER_SLOT: &str = "__moliWritableStreamPi
 pub const TRANSFORM_STREAM_READABLE_SLOT: &str = "__moliTransformStreamReadable";
 pub const TRANSFORM_STREAM_WRITABLE_SLOT: &str = "__moliTransformStreamWritable";
 pub(super) const STREAM_CONTROLLER_STREAM_SLOT: &str = "__moliStreamControllerStream";
-pub(super) const STREAM_CONTROLLER_SIGNAL_SLOT: &str = "__moliStreamControllerSignal";
+pub const STREAM_CONTROLLER_SIGNAL_SLOT: &str = "__moliStreamControllerSignal";
 pub(super) const STREAM_CONTROLLER_WRITABLE_STREAM_SLOT: &str =
     "__moliStreamControllerWritableStream";
 pub const STREAM_CONTROLLER_ALGORITHMS_SLOT: &str = "__moliStreamControllerAlgorithms";

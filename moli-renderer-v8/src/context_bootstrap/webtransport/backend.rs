@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::BTreeMap,
     rc::Rc,
     sync::Arc,
 };
@@ -34,7 +35,8 @@ struct NativeState {
     runner: RendererResourceTaskRunner,
     lease: ResourceLoadLease,
     session: RefCell<Option<Session>>,
-    streams: RefCell<Vec<v8::Weak<v8::Object>>>,
+    streams: RefCell<BTreeMap<u64, v8::Weak<v8::Object>>>,
+    next_stream: Cell<u64>,
     incoming: RefCell<Option<Arc<incoming_datagrams::Incoming>>>,
     ingress: RefCell<Option<tokio::task::AbortHandle>>,
     graceful_close: Cell<bool>,
@@ -83,7 +85,8 @@ fn initialize<'s>(
         runner: context.runner.clone(),
         lease: context.lease.clone(),
         session: RefCell::new(None),
-        streams: RefCell::new(Vec::new()),
+        streams: RefCell::new(BTreeMap::new()),
+        next_stream: Cell::new(1),
         incoming: RefCell::new(None),
         ingress: RefCell::new(None),
         graceful_close: Cell::new(false),
@@ -207,6 +210,7 @@ pub(crate) fn apply<'s>(
     // A failed live session still has in-flight sink promises to settle.
     match result {
         Completion::Stream(result) => streams::apply(scope, owner, payload, result),
+        Completion::StreamClosed { id, end } => streams::closed(scope, owner, id, end),
         Completion::Datagram(result) => datagrams::complete(scope, owner, payload, result),
         Completion::Connected(Err(message)) => {
             if connecting(scope, owner) {
@@ -277,17 +281,7 @@ pub(crate) fn apply<'s>(
             native.lease.finish();
             let value = v8str(scope, "closed");
             set_private_value(scope, owner, STATE, value.into());
-            let error = super::super::build_web_transport_error(
-                scope,
-                &super::super::WebTransportErrorClonePayload {
-                    message: "The WebTransport session is closed."
-                        .encode_utf16()
-                        .collect(),
-                    source: super::super::WebTransportErrorSource::Session,
-                    stream_error_code: None,
-                },
-            )
-            .expect("closed session error");
+            let error = tasks::session_error(scope, owner, "The WebTransport session is closed.");
             error_streams(scope, owner, error.into());
             let incoming_bidi = object(scope, owner, INCOMING_BIDI);
             let incoming_uni = object(scope, owner, INCOMING_UNI);
@@ -408,15 +402,25 @@ pub(super) fn remember_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     stream: v8::Local<'s, v8::Object>,
-) {
-    if let Some(native) = state(scope, owner) {
-        let weak = v8::Weak::new(scope, stream);
-        let mut streams = native.streams.borrow_mut();
-        if streams.len().is_multiple_of(64) {
-            streams.retain(|stream| !stream.is_empty());
-        }
-        streams.push(weak);
-    }
+) -> u64 {
+    let native = state(scope, owner).expect("native endpoint owner");
+    let id = native.next_stream.get();
+    native
+        .next_stream
+        .set(id.checked_add(1).expect("stream identity overflow"));
+    let weak = v8::Weak::new(scope, stream);
+    native.streams.borrow_mut().insert(id, weak);
+    id
+}
+
+pub(super) fn forget_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    id: u64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let native = state(scope, owner)?;
+    let weak = native.streams.borrow_mut().remove(&id)?;
+    weak.to_local(scope)
 }
 
 pub(super) fn error_streams<'s>(
@@ -429,15 +433,11 @@ pub(super) fn error_streams<'s>(
     };
     let endpoints = std::mem::take(&mut *native.streams.borrow_mut());
     let endpoints: Vec<_> = endpoints
-        .into_iter()
+        .into_values()
         .filter_map(|weak| weak.to_local(scope))
         .collect();
     for endpoint in endpoints {
-        if web_api_interfaces::ReadableStream::is_instance(scope, endpoint) {
-            super::super::stream_adapter::error_stream(scope, endpoint, error);
-        } else {
-            super::super::stream_adapter::error_writable_stream_with_value(scope, endpoint, error);
-        }
+        streams::error_endpoint(scope, endpoint, error);
     }
 }
 
