@@ -616,24 +616,10 @@ pub(super) fn record_service_worker_target_console_message(
             let console_end = target.console_message_count();
             target.mark_console_domain_emitted(&session_id, console_end);
             outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerConsoleMessages {
-                runtime: runtime.clone(),
+                runtime,
                 messages: console_messages,
                 console_end,
             });
-        }
-        let runtime_messages = target
-            .pending_runtime_console_messages(&session_id)
-            .to_vec();
-        if !runtime_messages.is_empty() {
-            let console_end = target.console_message_count();
-            target.mark_runtime_console_emitted(&session_id, console_end);
-            outputs.push(
-                WorkerTargetLifecycleOutput::ServiceWorkerRuntimeConsoleMessages {
-                    runtime,
-                    messages: runtime_messages,
-                    console_end,
-                },
-            );
         }
     }
     outputs
@@ -802,17 +788,8 @@ pub(super) fn record_service_worker_target_runtime_inspector_messages(
         );
         debug_assert!(!current_response_seen);
 
-        let mut pending_runtime_console = None;
         let mut pending_runtime_exceptions = None;
         if let Some(target) = exact_service_worker_runtime_target_mut(conn, &runtime) {
-            let pending_console = target
-                .pending_runtime_console_messages(&session_id)
-                .to_vec();
-            if !pending_console.is_empty() {
-                let console_end = target.console_message_count();
-                target.mark_runtime_console_emitted(&session_id, console_end);
-                pending_runtime_console = Some((pending_console, console_end));
-            }
             let exception_start = target
                 .exception_message_count()
                 .saturating_sub(target.pending_runtime_exception_messages(&session_id).len());
@@ -831,7 +808,6 @@ pub(super) fn record_service_worker_target_runtime_inspector_messages(
                 runtime,
                 background_events,
                 response_events,
-                pending_runtime_console,
                 pending_runtime_exceptions,
             },
         );

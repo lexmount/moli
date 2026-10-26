@@ -14,8 +14,8 @@ pub(in crate::domains) use emission::{
 };
 pub(in crate::domains) use items::{
     console_message_added_background_event, console_message_level_and_text, log_entry_event,
-    log_lifecycle_error_level_and_text, runtime_console_api_called_background_event,
-    runtime_console_message_type_and_text, runtime_exception_thrown_background_event,
+    log_lifecycle_error_level_and_text, runtime_console_message_type_and_text,
+    runtime_exception_thrown_background_event,
 };
 pub(in crate::domains) use output_queue::ObservablePreparedOutputSlot;
 #[cfg(test)]

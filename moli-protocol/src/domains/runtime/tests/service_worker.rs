@@ -276,11 +276,7 @@ async fn runtime_enable_on_service_worker_session_replays_real_worker_context() 
         .iter()
         .position(|message| message["id"] == json!(82))
         .expect("enable response");
-    for method in [
-        "Runtime.executionContextCreated",
-        "Runtime.consoleAPICalled",
-        "Runtime.exceptionThrown",
-    ] {
+    for method in ["Runtime.executionContextCreated", "Runtime.exceptionThrown"] {
         let event_index = ctx
             .sent
             .iter()
@@ -312,20 +308,12 @@ async fn runtime_enable_on_service_worker_session_replays_real_worker_context() 
         })
     );
 
-    let console_event = ctx.take_first_matching("service worker runtime console", |message| {
-        message["method"] == json!("Runtime.consoleAPICalled")
-    });
-    assert_eq!(console_event["sessionId"], "SID-service-worker");
-    assert_eq!(console_event["params"]["type"], "warning");
-    assert_eq!(
-        console_event["params"]["args"],
-        json!([{
-            "type": "string",
-            "value": "boot warning"
-        }])
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != json!("Runtime.consoleAPICalled")),
+        "Rust reporting snapshots must not synthesize native Inspector console events"
     );
-    assert_eq!(console_event["params"]["executionContextId"], json!(91_007));
-
     let exception_event = ctx.take_first_matching("service worker runtime exception", |message| {
         message["method"] == json!("Runtime.exceptionThrown")
     });

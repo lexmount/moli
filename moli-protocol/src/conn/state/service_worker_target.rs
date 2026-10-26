@@ -654,7 +654,6 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn set_runtime_frontend_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
         let exception_len = self.exception_messages.len();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
@@ -664,7 +663,6 @@ impl ServiceWorkerTargetState {
             state
                 .runtime_session_state
                 .runtime_contexts_reported_to_frontend = false;
-            state.console_output_session_state.runtime_console_entries = console_len;
             state.console_output_session_state.runtime_exception_entries = exception_len;
         }
     }
@@ -748,17 +746,20 @@ impl ServiceWorkerTargetState {
             .is_some_and(|state| state.network_session_state.network_enabled)
     }
 
+    /// Keep classic log capture while the native Console agent owns CDP output.
+    pub(crate) fn set_console_enabled_from_renderer(&mut self, session_id: &str, enabled: bool) {
+        self.set_console_enabled(session_id, enabled);
+        if let Some(state) = self.session_state_mut(session_id) {
+            state
+                .console_output_session_state
+                .renderer_console_agent_owns_console_api_events = enabled;
+        }
+    }
+
     pub(crate) fn clear_console_messages(&mut self, session_id: &str) {
         let console_len = self.console_messages.len();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.console_domain_entries = console_len;
-        }
-    }
-
-    pub(crate) fn discard_runtime_console_entries(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
-        if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries = console_len;
         }
     }
 
@@ -809,31 +810,16 @@ impl ServiceWorkerTargetState {
         let Some(state) = self.session_state(session_id) else {
             return &[];
         };
-        if !state.console_output_session_state.console_enabled {
+        if !state.console_output_session_state.console_enabled
+            || state
+                .console_output_session_state
+                .renderer_console_agent_owns_console_api_events
+        {
             return &[];
         }
         &self.console_messages[state
             .console_output_session_state
             .console_domain_entries
-            .min(self.console_messages.len())..]
-    }
-
-    pub(crate) fn pending_runtime_console_messages(
-        &self,
-        session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
-        let Some(state) = self.session_state(session_id) else {
-            return &[];
-        };
-        if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
-        }
-        if self.runtime_execution_context_id.is_none() {
-            return &[];
-        }
-        &self.console_messages[state
-            .console_output_session_state
-            .runtime_console_entries
             .min(self.console_messages.len())..]
     }
 
@@ -883,14 +869,6 @@ impl ServiceWorkerTargetState {
             .network_session_state
             .service_worker_fetch_diagnostic_entries
             .min(self.fetch_diagnostics.len())..]
-    }
-
-    pub(crate) fn mark_runtime_console_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
-        if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries =
-                console_end.min(console_len);
-        }
     }
 
     pub(crate) fn mark_classic_log_emitted(&mut self, cursor_id: String, console_end: usize) {
@@ -1203,6 +1181,38 @@ mod tests {
     }
 
     #[test]
+    fn native_console_ownership_is_session_local_and_preserves_reporting_capture() {
+        let mut target = target();
+        target.attach_session("SID-native".to_owned());
+        target.attach_session("SID-fallback".to_owned());
+        target.set_console_enabled_from_renderer("SID-native", true);
+        target.set_console_enabled("SID-fallback", true);
+        target.record_console_message("log: captured".to_owned(), Vec::new(), None);
+        assert_eq!(target.console_message_count(), 1);
+        assert!(
+            target
+                .pending_console_domain_messages("SID-native")
+                .is_empty()
+        );
+        assert_eq!(
+            target.pending_console_domain_messages("SID-fallback").len(),
+            1
+        );
+        target.set_console_enabled_from_renderer("SID-native", false);
+        target.set_console_enabled("SID-native", true);
+        target.record_console_message("log: captured".to_owned(), Vec::new(), None);
+        assert_eq!(target.console_message_count(), 2);
+        assert_eq!(
+            target.pending_console_domain_messages("SID-native").len(),
+            1
+        );
+        assert_eq!(
+            target.pending_console_domain_messages("SID-fallback").len(),
+            2
+        );
+    }
+
+    #[test]
     fn records_runtime_execution_context_from_worker_aux_types() {
         let mut target = target();
 
@@ -1225,6 +1235,7 @@ mod tests {
         let mut target = target();
         target.attach_session("SID-service-worker".to_owned());
         target.set_runtime_frontend_enabled("SID-service-worker", true);
+        target.set_console_enabled("SID-service-worker", true);
         target.record_console_message("log: before context".to_owned(), Vec::new(), None);
         target.record_exception_message(RendererServiceWorkerExceptionMessage {
             message: "Uncaught Error: before context".to_owned(),
@@ -1236,11 +1247,11 @@ mod tests {
             source: "runtime".to_owned(),
         });
 
-        assert!(
-            target
-                .pending_runtime_console_messages("SID-service-worker")
-                .is_empty(),
-            "Runtime console messages must wait for a real renderer context id"
+        let synthetic_id = target.execution_context_id();
+        assert!(synthetic_id < 0);
+        assert_eq!(
+            target.pending_console_domain_messages("SID-service-worker")[0].execution_context_id,
+            synthetic_id
         );
         assert!(
             target
@@ -1254,7 +1265,7 @@ mod tests {
         );
 
         assert_eq!(
-            target.pending_runtime_console_messages("SID-service-worker")[0].execution_context_id,
+            target.pending_console_domain_messages("SID-service-worker")[0].execution_context_id,
             9101
         );
         assert_eq!(

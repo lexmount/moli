@@ -763,10 +763,7 @@ pub(super) fn record_dedicated_worker_target_console_message(
     let console_end = target.console_message_count();
     for session_id in target.session_ids() {
         let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
-        let runtime_messages = target
-            .pending_runtime_console_messages(&session_id)
-            .to_vec();
-        if console_messages.is_empty() && runtime_messages.is_empty() {
+        if console_messages.is_empty() {
             continue;
         }
         outputs.push(
@@ -776,7 +773,6 @@ pub(super) fn record_dedicated_worker_target_console_message(
                 target_id: target_id.clone(),
                 session_id,
                 console_messages,
-                runtime_messages,
                 console_end,
             },
         );

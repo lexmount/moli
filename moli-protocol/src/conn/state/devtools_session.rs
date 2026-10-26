@@ -754,9 +754,8 @@ pub(crate) struct DevToolsConsoleOutputSessionState {
     pub(crate) log_lifecycle_entries: usize,
     pub(crate) log_network_entries: usize,
     pub(crate) log_violation_thresholds: Vec<DevToolsLogViolationThreshold>,
-    pub(crate) runtime_console_entries: usize,
     pub(crate) runtime_exception_entries: usize,
-    pub(crate) renderer_console_agent_owns_page_console_api_events: bool,
+    pub(crate) renderer_console_agent_owns_console_api_events: bool,
     pub(crate) renderer_runtime_agent_owns_page_console_api_events: bool,
 }
 

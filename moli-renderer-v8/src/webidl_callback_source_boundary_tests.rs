@@ -211,8 +211,10 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         11,
         DirectCallOwner::NativeForwardingOrScript,
     ),
+    // Window and Worker share one captured-native-console forwarder. This
+    // invokes V8's console intrinsic, not an author-provided Web IDL callback.
     allowed(
-        "context_bootstrap/window_events/console.rs",
+        "context_bootstrap/shared/console.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
@@ -253,11 +255,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         // functions are native primordials captured before author code runs;
         // maplike forEach author callbacks still use the typed WebIDL adapter.
         6,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
-        "worker/global_scope/console.rs",
-        1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
     // XMLSerializer resolves native Node/Attr identity directly and no longer

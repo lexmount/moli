@@ -46,7 +46,6 @@ use crate::{
     },
     domains::observable_output::{
         console_message_added_background_event, console_message_level_and_text,
-        runtime_console_api_called_background_event, runtime_console_message_type_and_text,
         runtime_exception_thrown_background_event,
     },
     domains::runtime::replay_shared_worker_runtime_bindings_for_session_async,
@@ -104,7 +103,6 @@ enum WorkerTargetLifecycleOutput {
         target_id: String,
         session_id: String,
         console_messages: Vec<RuntimeConsoleMessageSnapshot>,
-        runtime_messages: Vec<RuntimeConsoleMessageSnapshot>,
         console_end: usize,
     },
     DedicatedWorkerCreated {
@@ -198,16 +196,6 @@ enum WorkerTargetLifecycleOutput {
         messages: Vec<RuntimeConsoleMessageSnapshot>,
         console_end: usize,
     },
-    ServiceWorkerRuntimeConsoleMessages {
-        runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
-        messages: Vec<RuntimeConsoleMessageSnapshot>,
-        console_end: usize,
-    },
-    SharedWorkerRuntimeConsoleMessages {
-        attachment: TargetSharedWorkerProtocolAttachmentIdentity,
-        messages: Vec<RuntimeConsoleMessageSnapshot>,
-        console_end: usize,
-    },
     ServiceWorkerRuntimeExceptionMessages {
         runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
         messages: Vec<ServiceWorkerRuntimeExceptionSnapshot>,
@@ -224,7 +212,6 @@ enum WorkerTargetLifecycleOutput {
         runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
         background_events: Vec<BackgroundProtocolEvent>,
         response_events: Vec<BackgroundProtocolEvent>,
-        pending_runtime_console: Option<(Vec<RuntimeConsoleMessageSnapshot>, usize)>,
         pending_runtime_exceptions:
             Option<(Vec<ServiceWorkerRuntimeExceptionSnapshot>, usize, usize)>,
     },

@@ -301,22 +301,10 @@ pub(super) fn record_shared_worker_target_console_message(
         let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
         if !console_messages.is_empty() {
             outputs.push(WorkerTargetLifecycleOutput::SharedWorkerConsoleMessages {
-                attachment: attachment.clone(),
+                attachment,
                 messages: console_messages,
                 console_end: target.console_message_count(),
             });
-        }
-        let runtime_messages = target
-            .pending_runtime_console_messages(&session_id)
-            .to_vec();
-        if !runtime_messages.is_empty() {
-            outputs.push(
-                WorkerTargetLifecycleOutput::SharedWorkerRuntimeConsoleMessages {
-                    attachment,
-                    messages: runtime_messages,
-                    console_end: target.console_message_count(),
-                },
-            );
         }
     }
     outputs
@@ -367,23 +355,6 @@ pub(super) fn record_shared_worker_target_runtime_inspector_messages(
     outputs
 }
 
-pub(super) fn exact_shared_worker_target<'a>(
-    conn: &'a CdpConnection,
-    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
-) -> Option<&'a SharedWorkerTargetState> {
-    if !attachment.is_current() {
-        return None;
-    }
-    let target = conn
-        .browser_context_by_id(attachment.browser_context_id())?
-        .shared_worker_target(attachment.target_id())?;
-    (target.renderer_owner_local_host_id == attachment.renderer_owner_local_host_id()
-        && target.renderer_instance_id == attachment.renderer_instance_id()
-        && target.owner_target_id() == attachment.owner_target_id()
-        && target.is_session(attachment.session_id()))
-    .then_some(target)
-}
-
 pub(super) fn exact_shared_worker_target_mut<'a>(
     conn: &'a mut CdpConnection,
     attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
@@ -401,17 +372,6 @@ pub(super) fn exact_shared_worker_target_mut<'a>(
     .then_some(target)
 }
 
-pub(super) fn exact_shared_worker_pending_runtime_console(
-    conn: &CdpConnection,
-    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
-) -> Option<(Vec<RuntimeConsoleMessageSnapshot>, usize)> {
-    let target = exact_shared_worker_target(conn, attachment)?;
-    let messages = target
-        .pending_runtime_console_messages(attachment.session_id())
-        .to_vec();
-    (!messages.is_empty()).then(|| (messages, target.console_message_count()))
-}
-
 pub(super) fn mark_exact_shared_worker_console_domain_emitted(
     conn: &mut CdpConnection,
     attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
@@ -419,15 +379,5 @@ pub(super) fn mark_exact_shared_worker_console_domain_emitted(
 ) {
     if let Some(target) = exact_shared_worker_target_mut(conn, attachment) {
         target.mark_console_domain_emitted(attachment.session_id(), console_end);
-    }
-}
-
-pub(super) fn mark_exact_shared_worker_runtime_console_emitted(
-    conn: &mut CdpConnection,
-    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
-    console_end: usize,
-) {
-    if let Some(target) = exact_shared_worker_target_mut(conn, attachment) {
-        target.mark_runtime_console_emitted(attachment.session_id(), console_end);
     }
 }

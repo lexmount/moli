@@ -111,16 +111,15 @@ fn console_arg_snapshots_json(
     snapshots
 }
 
-fn console_log_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+fn console_log_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let level = args
-        .data()
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "log".to_owned());
+    let Ok(method_name) = v8::Local::<v8::String>::try_from(args.data()) else {
+        return;
+    };
+    let level = method_name.to_rust_string_lossy(scope);
     let text = format_console_args(scope, &args);
     let message = format!("{level}: {text}");
     let arg_snapshots = console_arg_snapshots_json(scope, &args);
@@ -134,6 +133,7 @@ fn console_log_callback(
             stack,
         }));
     }
+    call_original_worker_console_method(scope, &args, method_name);
 }
 
 fn console_noop_callback(
@@ -152,7 +152,12 @@ fn console_label_callback<'s>(
     else {
         return;
     };
-    call_original_worker_console_method_with_arguments(scope, &arguments, method);
+    crate::context_bootstrap::forward_native_console_arguments(
+        scope,
+        &arguments,
+        method,
+        WORKER_ORIGINAL_CONSOLE_SLOT,
+    );
     rv.set_undefined();
 }
 
@@ -161,7 +166,8 @@ fn console_profile_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    call_original_worker_console_method(scope, &args, "profile");
+    let method = v8str(scope, "profile");
+    call_original_worker_console_method(scope, &args, method);
     rv.set_undefined();
 }
 
@@ -170,40 +176,24 @@ fn console_profile_end_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    call_original_worker_console_method(scope, &args, "profileEnd");
+    let method = v8str(scope, "profileEnd");
+    call_original_worker_console_method(scope, &args, method);
     rv.set_undefined();
 }
 
 fn call_original_worker_console_method<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-    method_name: &'static str,
+    method_name: v8::Local<'s, v8::String>,
 ) {
     let mut forwarded_args = Vec::with_capacity(args.length().max(0) as usize);
     for index in 0..args.length() {
         forwarded_args.push(args.get(index));
     }
-    let method_name = v8str(scope, method_name);
-    call_original_worker_console_method_with_arguments(scope, &forwarded_args, method_name);
-}
-
-fn call_original_worker_console_method_with_arguments<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    forwarded_args: &[v8::Local<'s, v8::Value>],
-    method_name: v8::Local<'s, v8::String>,
-) {
-    let global = scope.get_current_context().global(scope);
-    let Some(original_console) = get_private_value(scope, global, WORKER_ORIGINAL_CONSOLE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(method) = original_console
-        .get(scope, method_name.into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
-
-    let _ = method.call(scope, original_console.into(), forwarded_args);
+    crate::context_bootstrap::forward_native_console_arguments(
+        scope,
+        &forwarded_args,
+        method_name,
+        WORKER_ORIGINAL_CONSOLE_SLOT,
+    );
 }

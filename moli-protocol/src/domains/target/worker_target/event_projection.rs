@@ -57,7 +57,6 @@ pub(super) async fn emit_target_lifecycle_events(
                 target_id,
                 session_id,
                 console_messages,
-                runtime_messages,
                 console_end,
             } => {
                 if !dedicated_worker_target_is_current(
@@ -76,10 +75,6 @@ pub(super) async fn emit_target_lifecycle_events(
                     &session_id,
                     &console_messages,
                 ));
-                side_effects.extend_background_events(runtime_console_api_called_events(
-                    &session_id,
-                    &runtime_messages,
-                ));
                 if let Some(target) = conn
                     .browser_context_by_id_mut(&browser_context_id)
                     .and_then(|context| {
@@ -88,13 +83,9 @@ pub(super) async fn emit_target_lifecycle_events(
                             .get_mut(&renderer_instance_id)
                     })
                     .filter(|target| target.target_id == target_id)
+                    && !console_messages.is_empty()
                 {
-                    if !console_messages.is_empty() {
-                        target.mark_console_domain_emitted(&session_id, console_end);
-                    }
-                    if !runtime_messages.is_empty() {
-                        target.mark_runtime_console_emitted(&session_id, console_end);
-                    }
+                    target.mark_console_domain_emitted(&session_id, console_end);
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
@@ -326,32 +317,6 @@ pub(super) async fn emit_target_lifecycle_events(
                 ));
                 mark_exact_shared_worker_console_domain_emitted(conn, &attachment, console_end);
             }
-            WorkerTargetLifecycleOutput::ServiceWorkerRuntimeConsoleMessages {
-                runtime,
-                messages,
-                console_end: _,
-            } => {
-                if runtime.is_current() {
-                    side_effects.extend_background_events(runtime_console_api_called_events(
-                        runtime.session_id(),
-                        &messages,
-                    ));
-                }
-            }
-            WorkerTargetLifecycleOutput::SharedWorkerRuntimeConsoleMessages {
-                attachment,
-                messages,
-                console_end,
-            } => {
-                if !attachment.is_current() {
-                    continue;
-                }
-                side_effects.extend_background_events(runtime_console_api_called_events(
-                    attachment.session_id(),
-                    &messages,
-                ));
-                mark_exact_shared_worker_runtime_console_emitted(conn, &attachment, console_end);
-            }
             WorkerTargetLifecycleOutput::ServiceWorkerRuntimeExceptionMessages {
                 runtime,
                 messages,
@@ -385,7 +350,6 @@ pub(super) async fn emit_target_lifecycle_events(
                 runtime,
                 background_events,
                 response_events,
-                pending_runtime_console,
                 pending_runtime_exceptions,
             } => {
                 if !runtime.is_current() {
@@ -398,11 +362,6 @@ pub(super) async fn emit_target_lifecycle_events(
                         .await;
                 }
                 side_effects.extend_background_events(response_events);
-                if let Some((messages, _console_end)) = pending_runtime_console {
-                    side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
-                    ));
-                }
                 if let Some((messages, exception_start, _exception_end)) =
                     pending_runtime_exceptions
                 {
@@ -432,21 +391,9 @@ pub(super) async fn emit_target_lifecycle_events(
                 );
                 debug_assert!(!current_response_seen);
                 side_effects.extend_background_events(background_events);
-                let pending_runtime_console =
-                    exact_shared_worker_pending_runtime_console(conn, &attachment);
                 replay_shared_worker_runtime_bindings_for_session_async(conn, Some(session_id))
                     .await;
                 side_effects.extend_background_events(response_events);
-                if let Some((messages, console_end)) = pending_runtime_console {
-                    side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
-                    ));
-                    mark_exact_shared_worker_runtime_console_emitted(
-                        conn,
-                        &attachment,
-                        console_end,
-                    );
-                }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
                 browser_context_id,
@@ -511,30 +458,6 @@ pub(super) fn console_message_added_events(
         .map(|message| {
             let (level, text) = console_message_level_and_text(&message.message);
             console_message_added_background_event(Some(session_id), "console-api", level, text, "")
-        })
-        .collect()
-}
-
-pub(super) fn runtime_console_api_called_events(
-    session_id: &str,
-    messages: &[RuntimeConsoleMessageSnapshot],
-) -> Vec<BackgroundProtocolEvent> {
-    let base_timestamp = monotonic_timestamp_seconds();
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-            runtime_console_api_called_background_event(
-                Some(session_id),
-                None,
-                console_type,
-                text,
-                &message.args,
-                message.stack.as_deref(),
-                message.execution_context_id,
-                base_timestamp + ((index + 1) as f64 * 0.000_001),
-            )
         })
         .collect()
 }

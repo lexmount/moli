@@ -91,12 +91,6 @@ pub(super) fn try_start_shared_worker_runtime_command_dispatch(
                 Err(message)
                     if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) =>
                 {
-                    if let Some(session_id) = cmd.session_id
-                        && let Some(target) =
-                            conn.shared_worker_target_for_session_mut(Some(session_id))
-                    {
-                        target.discard_runtime_console_entries(session_id);
-                    }
                     RuntimeCommandTaskStep::Complete(CommandOutputPlan::success())
                 }
                 Err(message) => {
@@ -218,12 +212,6 @@ pub(super) fn try_start_service_worker_runtime_command_dispatch(
                     if message == "NoDocumentLoaded"
                         || message == "ServiceWorkerRuntimeUnavailable" =>
                 {
-                    if let Some(session_id) = cmd.session_id
-                        && let Some(target) =
-                            conn.service_worker_target_for_session_mut(Some(session_id))
-                    {
-                        target.discard_runtime_console_entries(session_id);
-                    }
                     RuntimeCommandTaskStep::Complete(CommandOutputPlan::success())
                 }
                 Err(message) => {
@@ -645,9 +633,6 @@ pub(super) async fn complete_pending_shared_worker_runtime_inspector_command(
         }
     }
     routed_output.push_background_events_before_response_events(&mut plan, completed.command_id);
-    if completed.action == "enable" && succeeded {
-        append_shared_worker_runtime_console_messages(conn, completed.session_id(), &mut plan);
-    }
     if let Some(started) = timing_started {
         tracing::info!(
             target: "moli_cdp_nav_timing",
@@ -813,7 +798,6 @@ pub(super) async fn complete_pending_service_worker_runtime_inspector_command(
     }
     routed_output.push_background_events_before_response_events(&mut plan, completed.command_id);
     if completed.action == "enable" && succeeded {
-        append_service_worker_runtime_console_messages(conn, completed.session_id(), &mut plan);
         append_service_worker_runtime_exception_messages(conn, completed.session_id(), &mut plan);
     }
     if let Some(started) = timing_started {
@@ -849,8 +833,11 @@ pub(super) fn apply_shared_worker_runtime_completion_projection(
                 target.clear_runtime_binding_definitions(owner_session_id);
             }
         }
-        "discardConsoleEntries" if succeeded => {
-            target.discard_runtime_console_entries(owner_session_id)
+        "Console.enable" if succeeded => {
+            target.set_console_enabled_from_renderer(owner_session_id, true);
+        }
+        "Console.disable" if succeeded => {
+            target.set_console_enabled_from_renderer(owner_session_id, false);
         }
         _ => {}
     }
@@ -908,12 +895,6 @@ pub(super) fn complete_shared_worker_runtime_inspector_error(
         "discardConsoleEntries"
             if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) =>
         {
-            if let Some(owner_session_id) = completed.session_id()
-                && let Some(target) =
-                    conn.shared_worker_target_for_session_mut(Some(owner_session_id))
-            {
-                target.discard_runtime_console_entries(owner_session_id);
-            }
             RuntimeCommandTaskStep::Complete(CommandOutputPlan::success())
         }
         "Console.enable" | "Console.disable" | "Console.clearMessages"
@@ -954,8 +935,11 @@ pub(super) fn apply_service_worker_runtime_completion_projection(
         "disable" if succeeded => {
             target.set_runtime_frontend_enabled(owner_session_id, false);
         }
-        "discardConsoleEntries" if succeeded => {
-            target.discard_runtime_console_entries(owner_session_id)
+        "Console.enable" if succeeded => {
+            target.set_console_enabled_from_renderer(owner_session_id, true);
+        }
+        "Console.disable" if succeeded => {
+            target.set_console_enabled_from_renderer(owner_session_id, false);
         }
         _ => {}
     }
@@ -1013,12 +997,6 @@ pub(super) fn complete_service_worker_runtime_inspector_error(
         "discardConsoleEntries"
             if message == "NoDocumentLoaded" || message == "ServiceWorkerRuntimeUnavailable" =>
         {
-            if let Some(owner_session_id) = completed.session_id()
-                && let Some(target) =
-                    conn.service_worker_target_for_session_mut(Some(owner_session_id))
-            {
-                target.discard_runtime_console_entries(owner_session_id);
-            }
             RuntimeCommandTaskStep::Complete(CommandOutputPlan::success())
         }
         "Console.enable" | "Console.disable" | "Console.clearMessages"
@@ -1060,74 +1038,6 @@ pub(super) fn service_worker_runtime_error_plan(message: String) -> CommandOutpu
         "UnknownMethod" => CommandOutputPlan::error(-32601, "UnknownMethod"),
         "NoDocumentLoaded" => CommandOutputPlan::error(-32000, "NoDocumentLoaded"),
         _ => CommandOutputPlan::error(-32000, message),
-    }
-}
-
-pub(super) fn append_shared_worker_runtime_console_messages(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    plan: &mut CommandOutputPlan,
-) {
-    let Some(target) = conn.shared_worker_target_for_session_mut(session_id) else {
-        return;
-    };
-    let Some(session_id) = session_id else {
-        return;
-    };
-    let has_runtime_context = target.real_runtime_execution_context_id().is_some();
-    let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
-    let console_end = target.console_message_count();
-    if has_runtime_context {
-        target.mark_runtime_console_emitted(session_id, console_end);
-    }
-
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
-}
-
-pub(super) fn append_service_worker_runtime_console_messages(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    plan: &mut CommandOutputPlan,
-) {
-    let Some(target) = conn.service_worker_target_for_session_mut(session_id) else {
-        return;
-    };
-    let Some(session_id) = session_id else {
-        return;
-    };
-    let has_runtime_context = target.real_runtime_execution_context_id().is_some();
-    let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
-    let console_end = target.console_message_count();
-    if has_runtime_context {
-        target.mark_runtime_console_emitted(session_id, console_end);
-    }
-
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
     }
 }
 
@@ -1174,13 +1084,6 @@ pub(super) fn shared_worker_runtime_enable_command_output_plan_for_session(
     };
     target.set_runtime_frontend_enabled(session_id, true);
     let execution_context_created = build_shared_worker_execution_context_created_event(target);
-    let has_runtime_context = target.real_runtime_execution_context_id().is_some();
-    let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
-    let console_end = target.console_message_count();
-    if has_runtime_context {
-        target.mark_runtime_console_emitted(session_id, console_end);
-    }
-
     // Runtime.enable reports its existing inventory before acknowledging the
     // enable. Keep replay and reply in one ordered plan, including worker
     // adapters that synthesize the replay outside the V8 session sink.
@@ -1191,20 +1094,6 @@ pub(super) fn shared_worker_runtime_enable_command_output_plan_for_session(
             &mut plan,
             execution_context_created,
             session_id,
-        );
-    }
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            &mut plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
         );
     }
     plan.push_success();
@@ -1224,11 +1113,6 @@ pub(super) fn service_worker_runtime_enable_command_output_plan_for_session(
     target.set_runtime_frontend_enabled(session_id, true);
     let execution_context_created = build_service_worker_execution_context_created_event(target);
     let has_runtime_context = target.real_runtime_execution_context_id().is_some();
-    let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
-    let console_end = target.console_message_count();
-    if has_runtime_context {
-        target.mark_runtime_console_emitted(session_id, console_end);
-    }
     let exception_messages = target
         .pending_runtime_exception_messages(session_id)
         .to_vec();
@@ -1252,20 +1136,6 @@ pub(super) fn service_worker_runtime_enable_command_output_plan_for_session(
             session_id,
         );
     }
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            &mut plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
     push_runtime_exception_thrown_protocol_messages(
         &mut plan,
         session_id,
@@ -1284,28 +1154,6 @@ pub(super) fn push_execution_context_created_background_event(
     let mut events = Vec::new();
     emit_runtime_context_protocol_background_event_typed(&mut events, event, Some(session_id));
     plan.extend_background_events(events);
-}
-
-pub(super) fn push_runtime_console_api_called_background_event(
-    plan: &mut CommandOutputPlan,
-    session_id: Option<&str>,
-    console_type: &str,
-    text: &str,
-    args: &[Value],
-    stack: Option<&str>,
-    execution_context_id: i64,
-    timestamp: f64,
-) {
-    plan.push_background_event(runtime_console_api_called_background_event(
-        session_id,
-        None,
-        console_type,
-        text,
-        args,
-        stack,
-        execution_context_id,
-        timestamp,
-    ));
 }
 
 pub(super) fn push_runtime_exception_thrown_protocol_messages(

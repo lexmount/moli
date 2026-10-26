@@ -466,7 +466,6 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_runtime_frontend_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -475,9 +474,6 @@ impl SharedWorkerTargetState {
             state
                 .runtime_session_state
                 .runtime_contexts_reported_to_frontend = false;
-        }
-        if !enabled {
-            state.console_output_session_state.runtime_console_entries = console_len;
         }
     }
 
@@ -512,17 +508,21 @@ impl SharedWorkerTargetState {
         state.console_output_session_state.console_domain_entries = console_len;
     }
 
+    /// Successful native Console commands transfer notification ownership to
+    /// Inspector. Reporting snapshots remain available to non-native consumers.
+    pub(crate) fn set_console_enabled_from_renderer(&mut self, session_id: &str, enabled: bool) {
+        self.set_console_enabled(session_id, enabled);
+        if let Some(state) = self.session_state_mut(session_id) {
+            state
+                .console_output_session_state
+                .renderer_console_agent_owns_console_api_events = enabled;
+        }
+    }
+
     pub(crate) fn clear_console_messages(&mut self, session_id: &str) {
         let console_len = self.console_messages.len();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.console_domain_entries = console_len;
-        }
-    }
-
-    pub(crate) fn discard_runtime_console_entries(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
-        if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries = console_len;
         }
     }
 
@@ -542,7 +542,11 @@ impl SharedWorkerTargetState {
         let Some(state) = self.session_state(session_id) else {
             return &[];
         };
-        if !state.console_output_session_state.console_enabled {
+        if !state.console_output_session_state.console_enabled
+            || state
+                .console_output_session_state
+                .renderer_console_agent_owns_console_api_events
+        {
             return &[];
         }
         &self.console_messages[state
@@ -551,37 +555,10 @@ impl SharedWorkerTargetState {
             .min(self.console_messages.len())..]
     }
 
-    pub(crate) fn pending_runtime_console_messages(
-        &self,
-        session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
-        let Some(state) = self.session_state(session_id) else {
-            return &[];
-        };
-        if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
-        }
-        if self.runtime_execution_context_id.is_none() {
-            return &[];
-        }
-        &self.console_messages[state
-            .console_output_session_state
-            .runtime_console_entries
-            .min(self.console_messages.len())..]
-    }
-
     pub(crate) fn mark_console_domain_emitted(&mut self, session_id: &str, console_end: usize) {
         let console_len = self.console_messages.len();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.console_domain_entries =
-                console_end.min(console_len);
-        }
-    }
-
-    pub(crate) fn mark_runtime_console_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
-        if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries =
                 console_end.min(console_len);
         }
     }
@@ -785,6 +762,46 @@ mod tests {
     }
 
     #[test]
+    fn native_console_ownership_is_session_local_and_preserves_reporting_capture() {
+        let mut target = shared_worker_target();
+        target.attach_session("SID-native".to_owned());
+        target.attach_session("SID-fallback".to_owned());
+        target.set_console_enabled_from_renderer("SID-native", true);
+        target.set_console_enabled("SID-fallback", true);
+        target.record_console_message(RendererSharedWorkerConsoleMessage {
+            message: "log: captured".to_owned(),
+            args: Vec::new(),
+            stack: None,
+        });
+        assert_eq!(target.console_message_count(), 1);
+        assert!(
+            target
+                .pending_console_domain_messages("SID-native")
+                .is_empty()
+        );
+        assert_eq!(
+            target.pending_console_domain_messages("SID-fallback").len(),
+            1
+        );
+        target.set_console_enabled_from_renderer("SID-native", false);
+        target.set_console_enabled("SID-native", true);
+        target.record_console_message(RendererSharedWorkerConsoleMessage {
+            message: "log: captured".to_owned(),
+            args: Vec::new(),
+            stack: None,
+        });
+        assert_eq!(target.console_message_count(), 2);
+        assert_eq!(
+            target.pending_console_domain_messages("SID-native").len(),
+            1
+        );
+        assert_eq!(
+            target.pending_console_domain_messages("SID-fallback").len(),
+            2
+        );
+    }
+
+    #[test]
     fn shared_worker_target_detach_clears_only_that_session_state() {
         let mut target = shared_worker_target();
         target.attach_session("SID-shared-worker".to_owned());
@@ -829,24 +846,24 @@ mod tests {
     fn real_runtime_context_rebinds_synthetic_console_snapshots() {
         let mut target = shared_worker_target();
         target.attach_session("SID-shared-worker".to_owned());
-        target.set_runtime_frontend_enabled("SID-shared-worker", true);
+        target.set_console_enabled("SID-shared-worker", true);
         target.record_console_message(RendererSharedWorkerConsoleMessage {
             message: "log: before context".to_owned(),
             args: Vec::new(),
             stack: None,
         });
 
-        assert!(
-            target
-                .pending_runtime_console_messages("SID-shared-worker")
-                .is_empty(),
-            "Runtime console messages must wait for a real renderer context id"
+        let synthetic_id = target.execution_context_id();
+        assert!(synthetic_id < 0);
+        assert_eq!(
+            target.pending_console_domain_messages("SID-shared-worker")[0].execution_context_id,
+            synthetic_id
         );
 
         target.record_runtime_execution_context_created_event(&worker_context_created_event(2901));
 
         assert_eq!(
-            target.pending_runtime_console_messages("SID-shared-worker")[0].execution_context_id,
+            target.pending_console_domain_messages("SID-shared-worker")[0].execution_context_id,
             2901
         );
     }

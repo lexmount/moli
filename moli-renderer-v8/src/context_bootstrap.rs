@@ -532,7 +532,8 @@ pub(crate) use self::shared::{
 };
 pub(crate) use self::shared::{
     console_arg_remote_object_json, console_label_arguments, current_console_stack,
-    initialize_console_namespace, install_console_message_buffers_for_context,
+    forward_native_console_arguments, initialize_console_namespace,
+    install_console_message_buffers_for_context,
     snapshot_console_message_details_for_current_context,
     snapshot_console_messages_for_current_context,
 };
