@@ -11,7 +11,9 @@ pub(in crate::network_host::xhr) fn xhr_fire_readystatechange(
 ) {
     let xhr = v8::Local::new(scope, xhr);
     set_xhr_ready_state(scope, xhr, ready_state);
-    if !xhr_has_event_observers(scope, xhr, "readystatechange") {
+    if !xhr_has_event_observers(scope, xhr, "readystatechange")
+        || super::super::lifecycle::xhr_context_is_destroyed(scope, xhr)
+    {
         return;
     }
 
@@ -52,7 +54,9 @@ pub(crate) fn xhr_dispatch_progress_event_with_length_computable(
     total: f64,
 ) {
     let xhr = v8::Local::new(scope, xhr);
-    if !xhr_has_event_observers(scope, xhr, event_type) {
+    if !xhr_has_event_observers(scope, xhr, event_type)
+        || super::super::lifecycle::xhr_context_is_destroyed(scope, xhr)
+    {
         return;
     }
     let Some(context) = xhr.get_creation_context(scope) else {
@@ -88,7 +92,9 @@ pub(crate) fn xhr_dispatch_upload_progress_events(
     loaded: f64,
     total: f64,
 ) {
-    if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_LISTENER_SLOT).unwrap_or(false) {
+    if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_LISTENER_SLOT).unwrap_or(false)
+        || super::super::lifecycle::xhr_context_is_destroyed(scope, xhr)
+    {
         return;
     }
     let Some(upload) = xhr_upload_object(scope, xhr) else {

@@ -144,6 +144,7 @@ pub(crate) fn initialize_xml_http_request_instance(
         let snapshot = serde_json::to_string(&snapshot)
             .expect("Window XHR execution-context snapshot must serialize");
         set_xhr_state_string(scope, xhr, XHR_EXECUTION_CONTEXT_BINDING_SLOT, &snapshot);
+        super::lifecycle::register_window_xhr(scope, xhr, execution_context);
     }
 }
 
