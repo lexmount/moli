@@ -970,6 +970,13 @@ impl JsContextHost {
                     super::super::OwnerDispatchScope::Child(retirement.handle),
                 );
             }
+            if let Some(local_window) = retirement.local_window {
+                Self::retire_window_xhr_instances_for_owner(
+                    scope,
+                    host_ptr,
+                    super::super::WindowExecutionContextOwner::Frame(local_window),
+                );
+            }
             let host = unsafe { &mut *host_ptr };
             if host.child_window_retirement_is_current(&retirement) {
                 host.drop_child_browsing_context_handles(vec![retirement.handle]);
