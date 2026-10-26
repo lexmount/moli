@@ -1611,8 +1611,9 @@ async fn worker_main(
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
     let resource_task_runner = resource_task_runner.unwrap_or_else(|| {
-        RendererResourceTaskRunner::from_current_tokio()
-            .expect("Worker owner loop must expose its resource task runner")
+        request_client
+            .browser_resource_runtime()
+            .resource_task_runner()
     });
     let loader = resource_loader_for_worker_context(
         request_client,

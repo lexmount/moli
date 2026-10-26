@@ -679,7 +679,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) {
     timing.begin_transport(cancel_handle.clone());
-    tokio::task::spawn_local(async move {
+    load.task_runner().spawn(async move {
         let cors_preflight_request_headers = headers.to_byte_strings();
         let request = Request::new_browser_bytes(
             &method,
