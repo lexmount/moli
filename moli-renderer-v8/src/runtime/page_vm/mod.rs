@@ -1419,8 +1419,9 @@ impl PageVmRuntimeHooks {
             owner_wake: Some(owner_wake),
             page_creation_progress: None,
             resource_task_runner: Some(
-                crate::network::RendererResourceTaskRunner::from_current_tokio()
-                    .expect("renderer owner must install its resource task runner"),
+                browser_context_runtime
+                    .browser_resource_runtime()
+                    .task_runner(),
             ),
             browser_context_runtime,
             document_lifecycle: None,

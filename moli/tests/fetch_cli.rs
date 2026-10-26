@@ -63,6 +63,8 @@ mod readiness;
 mod realtime;
 #[path = "fetch_cli/redirect_chain.rs"]
 mod redirect_chain;
+#[path = "fetch_cli/resource_io.rs"]
+mod resource_io;
 #[path = "fetch_cli/subprocess.rs"]
 mod subprocess;
 #[path = "fetch_cli/timing.rs"]

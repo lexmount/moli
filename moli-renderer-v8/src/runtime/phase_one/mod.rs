@@ -102,6 +102,12 @@ use super::script_preloads::{BufferedDocumentPreloadState, ServiceWorkerScriptPr
 
 fn script_preloads_require_owner_admission(env: &PageVmEnvConfig) -> bool {
     !main_document_parser_scripting_enabled(env)
+        // Prebootstrap scans precede installation of the Document's request
+        // policy. Background IO must not submit these requests before the
+        // owner applies its headers, blocking rules and network conditions.
+        || !env.extra_http_headers.is_empty()
+        || !env.blocked_url_patterns.is_empty()
+        || env.network_offline
         || (cfg!(feature = "devtools")
             && env
                 .fetch_subresource_interception_classes
