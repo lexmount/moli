@@ -98,8 +98,8 @@ pub(crate) enum PageFileReadingTargetEffect {
 pub(crate) type PageFileReadingTurnAction = PageWindowDocumentTaskTurnAction<
     RendererPageFileReadingTaskId,
     RendererPageFileReadingTaskKind,
-    PageFileReadingTargetEffect,
     WindowExecutionContextIdentity,
+    PageFileReadingTargetEffect,
 >;
 
 pub(crate) type PageFileReadingTurnOutcome = PageOwnerTurnOutcome<PageFileReadingTurnAction>;

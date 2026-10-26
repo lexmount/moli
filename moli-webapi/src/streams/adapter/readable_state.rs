@@ -56,7 +56,7 @@ pub fn enqueue_chunk<'s>(
     Ok(())
 }
 
-pub(in crate::streams) fn readable_stream_is_byte_stream<'s>(
+pub fn readable_stream_is_byte_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {

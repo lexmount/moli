@@ -123,7 +123,7 @@ impl PageVm {
         ) -> anyhow::Result<E>,
         discard: impl FnOnce(&mut ScriptVm, I) -> bool,
         stale_effect: impl FnOnce(Option<RendererPageWindowDocumentTaskOwner<T>>) -> E,
-    ) -> anyhow::Result<PageOwnerTurnOutcome<PageWindowDocumentTaskTurnAction<I, K, E, T>>>
+    ) -> anyhow::Result<PageOwnerTurnOutcome<PageWindowDocumentTaskTurnAction<I, K, T, E>>>
     where
         I: Copy + Debug,
         K: Copy + Eq + Debug,

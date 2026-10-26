@@ -4,6 +4,17 @@
 
 use super::*;
 
+const FAILURE_MESSAGE: &str = "__moliWebTransportConnectionFailureMessage";
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct ConnectionFailure<'s> {
+    #[webapi(slot = OWNER)]
+    owner: v8::Local<'s, v8::Object>,
+    #[webapi(slot = FAILURE_MESSAGE)]
+    message: v8::Local<'s, v8::String>,
+}
+
 pub(super) fn queue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -29,8 +40,13 @@ pub(super) fn queue<'s>(
 pub(super) fn queue_connection_failure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
+    message: &str,
 ) {
-    queue(scope, owner, connection_failure, owner.into());
+    let message = v8::String::new(scope, message).expect("connection failure message");
+    let payload = ConnectionFailure::new(owner, message)
+        .bind(scope)
+        .expect("failure payload");
+    queue(scope, owner, connection_failure, payload.into());
 }
 
 fn connection_failure<'s>(
@@ -38,13 +54,14 @@ fn connection_failure<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let owner = v8::Local::<v8::Object>::try_from(args.data()).expect("WebTransport task payload");
+    let payload =
+        v8::Local::<v8::Object>::try_from(args.data()).expect("WebTransport task payload");
+    let owner = object(scope, payload, OWNER);
     if connecting(scope, owner) {
-        fail(
-            scope,
-            owner,
-            "No WebTransport session backend is available.",
-        );
+        let message = get_private_value(scope, payload, FAILURE_MESSAGE)
+            .expect("failure message")
+            .to_rust_string_lossy(scope);
+        fail(scope, owner, &message);
     }
 }
 
@@ -81,12 +98,16 @@ pub(super) fn wait_for_connection<'s>(
     owner: v8::Local<'s, v8::Object>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !connecting(scope, owner) {
+    if !connecting(scope, owner) && backend::connection(scope, owner).is_none() {
         invalid_state(scope);
         return;
     }
     let resolver = v8::PromiseResolver::new(scope).expect("WebTransport operation promise");
     rv.set(resolver.get_promise(scope).into());
+    if !connecting(scope, owner) {
+        queue_unsupported(scope, owner, resolver.into());
+        return;
+    }
     let pending = array(scope, owner, PENDING);
     push(scope, pending, resolver.into());
 }
@@ -95,11 +116,20 @@ pub(super) fn fail<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     message: &str,
-) {
+) -> v8::Local<'s, v8::Object> {
     let context = owner
         .get_creation_context(scope)
         .expect("WebTransport cleanup realm");
     let scope = &mut v8::ContextScope::new(scope, context);
+    if get_private_value(scope, owner, STATE)
+        .is_some_and(|value| value.to_rust_string_lossy(scope) == "failed")
+    {
+        let value = get_private_value(scope, owner, CLOSED_RESOLVER).expect("closed resolver");
+        let closed = resolver(value).get_promise(scope);
+        if closed.state() == v8::PromiseState::Rejected {
+            return v8::Local::<v8::Object>::try_from(closed.result(scope)).expect("session error");
+        }
+    }
     let error = super::super::build_web_transport_error(
         scope,
         &super::super::WebTransportErrorClonePayload {
@@ -127,8 +157,12 @@ pub(super) fn fail<'s>(
     // Commit all session state and retain cleanup snapshots before settling
     // promises or erroring streams, which can expose user Promise hooks.
     let datagrams = datagrams::prepare_failure(scope, datagrams);
+    backend::cancel(scope, owner);
+    backend::error_streams(scope, owner, error.into());
     for pending in pending_values {
-        queue(scope, owner, reject_operation, pending);
+        let object = v8::Local::<v8::Object>::try_from(pending).expect("pending operation");
+        let resolver = get_private_value(scope, object, streams::RESOLVER).unwrap_or(pending);
+        queue(scope, owner, reject_operation, resolver);
     }
     closed.reject(scope, error.into());
     closed.get_promise(scope).mark_as_handled();
@@ -137,6 +171,7 @@ pub(super) fn fail<'s>(
     super::super::stream_adapter::error_stream(scope, incoming_bidi, error.into());
     super::super::stream_adapter::error_stream(scope, incoming_uni, error.into());
     datagrams::finish_failure(scope, datagrams, error.into());
+    error
 }
 
 fn reject_operation<'s>(
@@ -189,4 +224,29 @@ fn empty_group_stats<'s>(
         );
     }
     resolver.resolve(scope, stats.into());
+}
+
+pub(super) fn queue_unsupported<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    resolver: v8::Local<'s, v8::Value>,
+) {
+    queue(scope, owner, unsupported_operation, resolver);
+}
+fn unsupported_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let resolver = resolver(args.data());
+    let context = resolver
+        .get_creation_context(scope)
+        .expect("operation realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let error = super::super::new_dom_exception_value(
+        scope,
+        "This native WebTransport operation is not available.",
+        "NotSupportedError",
+    );
+    resolver.reject(scope, error);
 }

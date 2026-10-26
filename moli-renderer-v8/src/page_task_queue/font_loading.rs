@@ -63,6 +63,7 @@ pub(crate) enum PageFontLoadingTargetEffect {
 pub(crate) type PageFontLoadingTurnAction = PageWindowDocumentTaskTurnAction<
     RendererPageFontLoadingTaskId,
     RendererPageFontLoadingTaskKind,
+    WindowDocumentTaskTarget,
     PageFontLoadingTargetEffect,
 >;
 

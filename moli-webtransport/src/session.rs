@@ -113,6 +113,11 @@ impl Session {
         self.0.native.send_datagram(bytes)
     }
 
+    /// Queue a datagram with QUIC backpressure, without blocking its owner thread.
+    pub async fn send_datagram_wait(&self, bytes: Bytes) -> Result<(), SessionError> {
+        self.0.native.send_datagram_wait(bytes).await
+    }
+
     pub async fn read_datagram(&self) -> Result<Bytes, SessionError> {
         self.0.native.read_datagram().await
     }

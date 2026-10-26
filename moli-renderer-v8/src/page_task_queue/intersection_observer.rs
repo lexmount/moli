@@ -66,6 +66,7 @@ pub(crate) enum PageIntersectionObserverTargetEffect {
 pub(crate) type PageIntersectionObserverTurnAction = PageWindowDocumentTaskTurnAction<
     RendererPageIntersectionObserverTaskId,
     RendererPageIntersectionObserverTaskKind,
+    WindowDocumentTaskTarget,
     PageIntersectionObserverTargetEffect,
 >;
 
