@@ -25,14 +25,24 @@ class MoliServe:
 async def _collect_process_output(stream: asyncio.StreamReader | None, logs: list[str], label: str) -> None:
     if stream is None:
         return
-    while True:
-        line = await stream.readline()
-        if not line:
-            return
+    def record(line: bytes) -> None:
         text = line.decode("utf-8", errors="replace").rstrip()
         logs.append(f"{label}: {text}")
         if os.environ.get("MOLI_WEBDRIVER_SMOKE_TRACE_BG") == "1":
             print(f"[moli serve {label}] {text}", file=sys.stderr, flush=True)
+
+    # Child diagnostics can exceed StreamReader.readline's default 64 KiB
+    # limit. Drain chunks so a long line cannot terminate the collector and
+    # leave the child blocked on its output pipe. Decode complete lines to
+    # preserve multibyte UTF-8 characters split across reads.
+    pending = bytearray()
+    while chunk := await stream.read(65536):
+        pending.extend(chunk)
+        while (newline := pending.find(b"\n")) != -1:
+            record(bytes(pending[:newline]))
+            del pending[:newline + 1]
+    if pending:
+        record(bytes(pending))
 
 
 async def start_moli_serve(port: int) -> MoliServe:
