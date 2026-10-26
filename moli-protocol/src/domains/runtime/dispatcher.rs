@@ -51,7 +51,6 @@ use crate::domains::console::{
 use crate::domains::observable_output::{
     advance_runtime_observable_cursors_to_current_for_owner,
     advance_runtime_observable_cursors_to_current_for_session_owner,
-    runtime_console_api_called_background_event, runtime_console_message_type_and_text,
     runtime_exception_thrown_background_event,
 };
 use crate::domains::runtime_context_events::{
@@ -2789,13 +2788,11 @@ mod protocol_neutral_tests {
             false,
         );
 
-        assert_eq!(
+        assert!(
             conn.shared_worker_target_for_session(Some("SID-shared-worker"))
-                .expect("shared worker target should remain attached")
-                .pending_runtime_console_messages("SID-shared-worker")
-                .len(),
-            1,
-            "failed V8 Runtime.disable must not clear target-local Runtime replay state"
+                .unwrap()
+                .runtime_frontend_enabled("SID-shared-worker"),
+            "failed V8 Runtime.disable must not change the frontend subscription"
         );
         assert_eq!(
             conn.shared_worker_target_for_session(Some("SID-shared-worker"))
@@ -2814,11 +2811,11 @@ mod protocol_neutral_tests {
         );
 
         assert!(
-            conn.shared_worker_target_for_session(Some("SID-shared-worker"))
-                .expect("shared worker target should remain attached")
-                .pending_runtime_console_messages("SID-shared-worker")
-                .is_empty(),
-            "successful V8 Runtime.disable should clear target-local Runtime replay state"
+            !conn
+                .shared_worker_target_for_session(Some("SID-shared-worker"))
+                .unwrap()
+                .runtime_frontend_enabled("SID-shared-worker"),
+            "successful V8 Runtime.disable must retire the frontend subscription"
         );
         assert!(
             conn.shared_worker_target_for_session(Some("SID-shared-worker"))

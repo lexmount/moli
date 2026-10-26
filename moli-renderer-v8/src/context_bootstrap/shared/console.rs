@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::{get_private_value, v8str};
 use moli_webapi_declare::{BindError, WebApiObject, WebApiValue};
 use std::{cell::RefCell, rc::Rc};
 
@@ -342,4 +343,90 @@ pub(in crate::context_bootstrap) fn throw_error_exception(
     message: &str,
 ) {
     throw_error(scope, message);
+}
+
+pub(crate) fn forward_native_console_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    forwarded_args: &[v8::Local<'s, v8::Value>],
+    method_name: v8::Local<'s, v8::String>,
+    original_console_slot: &'static str,
+) {
+    let global = scope.get_current_context().global(scope);
+    let Some(original_console) = get_private_value(scope, global, original_console_slot)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(method) = original_console
+        .get(scope, method_name.into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    else {
+        return;
+    };
+
+    let suppress_page_stack_hook = forwarded_args.iter().any(|value| value.is_native_error())
+        && error_prepare_stack_trace_has_page_hook(scope);
+    if suppress_page_stack_hook {
+        scope.set_prepare_stack_trace_callback(inspector_console_stack_without_page_hook);
+    }
+    let _ = method.call(scope, original_console.into(), forwarded_args);
+    if suppress_page_stack_hook {
+        scope.clear_prepare_stack_trace_callback();
+    }
+}
+
+fn error_prepare_stack_trace_has_page_hook(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    let global = scope.get_current_context().global(scope);
+    let Some(descriptor) = own_property_descriptor(scope, global, "Error") else {
+        return false;
+    };
+    // Inspect descriptor data, never the property itself. Looking for a page
+    // hook must not invoke an Error/prepareStackTrace accessor or Proxy trap.
+    if own_descriptor_value(scope, descriptor, "get").is_some_and(|v| v.is_function()) {
+        return true;
+    }
+    let Some(error) = own_descriptor_value(scope, descriptor, "value")
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return false;
+    };
+    if error.is_proxy() {
+        return true;
+    }
+    let Some(descriptor) = own_property_descriptor(scope, error, "prepareStackTrace") else {
+        return false;
+    };
+    ["value", "get"].into_iter().any(|key| {
+        own_descriptor_value(scope, descriptor, key).is_some_and(|value| value.is_function())
+    })
+}
+
+fn own_property_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    object
+        .get_own_property_descriptor(scope, v8str(scope, name).into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+fn own_descriptor_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    descriptor: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let key = v8str(scope, name);
+    if descriptor.has_own_property(scope, key.into()) != Some(true) {
+        return None;
+    }
+    descriptor.get(scope, key.into())
+}
+
+fn inspector_console_stack_without_page_hook<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _error: v8::Local<'s, v8::Value>,
+    _sites: v8::Local<'s, v8::Array>,
+) -> v8::Local<'s, v8::Value> {
+    v8::String::empty(scope).into()
 }

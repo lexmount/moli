@@ -678,15 +678,15 @@ impl CdpConnection {
             })
             .unwrap_or(accepts_without_target);
         if handled {
-            let renderer_console_agent_owns_page_console_api_events = enabled
+            let renderer_console_agent_owns_console_api_events = enabled
                 && self
                     .runtime_session_owner_slot_for_owner(owner)
                     .is_some_and(|slot| slot.has_loaded_page());
             let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
                 state
                     .console_output_session_state
-                    .renderer_console_agent_owns_page_console_api_events =
-                    renderer_console_agent_owns_page_console_api_events;
+                    .renderer_console_agent_owns_console_api_events =
+                    renderer_console_agent_owns_console_api_events;
             });
         }
         handled
