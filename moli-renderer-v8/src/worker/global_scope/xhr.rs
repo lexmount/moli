@@ -795,6 +795,19 @@ pub(crate) fn try_worker_xhr_abort_callback(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
+    if !try_worker_xhr_terminate_fetch(scope, xhr) {
+        return false;
+    }
+    crate::network_host::finish_xhr_abort(scope, xhr);
+    true
+}
+
+/// Return true for Worker contexts after retiring native XHR work.
+/// Public state and event transitions remain caller-owned.
+pub(crate) fn try_worker_xhr_terminate_fetch(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
@@ -840,7 +853,6 @@ pub(crate) fn try_worker_xhr_abort_callback(
         }
     }
 
-    crate::network_host::finish_xhr_abort(scope, xhr);
     true
 }
 

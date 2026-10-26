@@ -1925,3 +1925,99 @@ async fn worker_termination_releases_native_websocket_transport() {
         .await
         .expect("terminating Worker releases its native socket");
 }
+
+#[tokio::test]
+async fn worker_xhr_reopen_cancels_paused_requests_without_abort_events() {
+    ensure_v8();
+    for action in ["reopen", "invalid-open"] {
+        let mut handle = spawn_worker(
+            r#"
+          const xhr = new XMLHttpRequest();
+          const events = [];
+          xhr.onabort = () => events.push('abort');
+          xhr.onerror = () => events.push('error');
+          xhr.onload = () => events.push('load');
+          xhr.onloadend = () => {
+            events.push('loadend');
+            postMessage({events, state:xhr.readyState, status:xhr.status, text:xhr.responseText});
+            close();
+          };
+          onmessage = event => {
+            if (event.data === 'start') {
+              xhr.open('GET', 'http://example.test/old-xhr'); xhr.send();
+            } else if (event.data === 'reopen') {
+              xhr.open('GET', 'http://example.test/new-xhr'); xhr.send();
+            } else {
+              let rejected;
+              try {xhr.open('GET', 'http://[');}
+              catch (error) {rejected = error.name;}
+              postMessage({rejected, state:xhr.readyState});
+            }
+          };
+        "#
+            .into(),
+            "http://example.test/worker/main.js".into(),
+        );
+        handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+        handle.post_message(serialize_test_string("start"));
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        let WorkerToParentMessage::PendingSubresourceFetch(old) = message else {
+            panic!("expected old XHR pause, got {message:?}");
+        };
+        assert_eq!(old.info.url.as_str(), "http://example.test/old-xhr");
+        handle.post_message(serialize_test_string(action));
+        if action == "invalid-open" {
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&expect_post_json(message)).unwrap(),
+                serde_json::json!({"rejected":"SyntaxError", "state":1})
+            );
+            handle.fulfill_pending_xhr(
+                pending_worker_xhr_continue(old.fetch_id, 71, &old.info, false),
+                200,
+                vec![("content-type".into(), b"text/plain".to_vec())],
+                RendererSyntheticResponseBody::from_bytes(b"original".to_vec()),
+            );
+        } else {
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let WorkerToParentMessage::PendingSubresourceFetchCanceled {
+                fetch_id,
+                error_text,
+            } = message
+            else {
+                panic!(
+                    "reopen must cancel the old native request before queuing its replacement: {message:?}"
+                );
+            };
+            assert_eq!(fetch_id, old.fetch_id);
+            assert!(!error_text.is_empty());
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let WorkerToParentMessage::PendingSubresourceFetch(new) = message else {
+                panic!("expected replacement XHR pause, got {message:?}");
+            };
+            assert_ne!(new.fetch_id, old.fetch_id);
+            assert_eq!(new.info.url.as_str(), "http://example.test/new-xhr");
+            // A late result for the retired request must not complete the new one.
+            handle.fulfill_pending_xhr(
+                pending_worker_xhr_continue(old.fetch_id, 71, &old.info, false),
+                200,
+                vec![],
+                RendererSyntheticResponseBody::from_bytes(b"late old result".to_vec()),
+            );
+            handle.fulfill_pending_xhr(
+                pending_worker_xhr_continue(new.fetch_id, 72, &new.info, false),
+                200,
+                vec![("content-type".into(), b"text/plain".to_vec())],
+                RendererSyntheticResponseBody::from_bytes(b"replacement".to_vec()),
+            );
+        }
+        let result: serde_json::Value =
+            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"events":["load","loadend"], "state":4, "status":200,
+            "text":if action == "reopen" {"replacement"} else {"original"}}),
+            "{action}"
+        );
+    }
+}
