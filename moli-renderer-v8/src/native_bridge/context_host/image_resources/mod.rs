@@ -323,6 +323,26 @@ impl super::JsContextHost {
             .filter(|url| url.as_str() != identity.request_key.url())
     }
 
+    pub(crate) fn cached_css_image_response_url(
+        &self,
+        request_url: &url::Url,
+    ) -> Option<std::sync::Arc<url::Url>> {
+        let key = ImageRequestKey::with_density(
+            request_url.to_string(),
+            crate::types::ImageRequestCorsMode::NoCors,
+            1.0,
+        );
+        let resource = self.image_resources.ready_resource(&key)?;
+        if resource.pixels.is_none() && resource.svg.is_none() {
+            return None;
+        }
+        resource
+            .descriptor
+            .response_url
+            .clone()
+            .filter(|url| url.as_ref() != request_url)
+    }
+
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
         self.image_resources.has_ready_request(request_key)
     }

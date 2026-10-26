@@ -324,6 +324,31 @@ impl DocumentRuntime {
                     }
                 }
                 StylesheetLoadBlockingResource::Image(url) => {
+                    let owner = binding.child_handle().map_or(
+                        crate::native_bridge::OwnerDispatchScope::Top,
+                        crate::native_bridge::OwnerDispatchScope::Child,
+                    );
+                    if !host.stylesheet_subresource_load_delay_is_current(binding)
+                        || host.check_owner_subresource_csp(
+                            scope,
+                            owner,
+                            &url,
+                            crate::document_runtime::DocumentSubresourceCspKind::Image,
+                            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
+                        ).blocks_request()
+                        || host.cached_css_image_response_url(&url).is_some_and(|response_url| {
+                            host.check_owner_subresource_csp(
+                                scope,
+                                owner,
+                                &response_url,
+                                crate::document_runtime::DocumentSubresourceCspKind::Image,
+                                crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                            ).blocks_request()
+                        })
+                    {
+                        host.settle_stylesheet_subresource_load_delay(binding);
+                        continue;
+                    }
                     let identity = if retain_css_images {
                         match host.admit_stylesheet_css_image(binding, url.as_str().to_owned()) {
                             crate::native_bridge::CssImageResourceAdmission::Fetch(identity) => {
