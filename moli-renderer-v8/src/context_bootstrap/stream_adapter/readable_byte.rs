@@ -1809,7 +1809,9 @@ pub(in crate::context_bootstrap) fn finish_readable_byte_stream_close<'s>(
         == FinishByteClosePlan::WaitForByobResponse
 }
 
-pub(in crate::context_bootstrap) fn finish_byte_stream_tee_branch_close<'s>(
+/// An internal source acknowledges EOF, including pending BYOB read-into
+/// requests. A controller close alone intentionally leaves those pending.
+pub(in crate::context_bootstrap) fn finish_readable_byte_stream_source_close<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> Result<(), v8::Local<'s, v8::Value>> {
