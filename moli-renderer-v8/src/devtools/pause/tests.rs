@@ -595,3 +595,27 @@ fn detached_page_cannot_enter_a_new_pause() {
         RendererInspectorPausePhase::Running
     );
 }
+
+#[test]
+fn raw_utf16_call_frame_names_keep_the_frontend_pause_and_resume_balanced() {
+    let bridge = RendererInspectorPauseBridge::default();
+    configure_page(&bridge, PageId::new_for_testing(1));
+    let route = outbound_route(&bridge);
+    let paused = moli_inspector_json::InspectorJson::from_slice((r#"{"method":"Debugger.paused","params":{"reason":"other","callFrames":[{"functionName":"\ud800"}]}}"#).as_bytes()).unwrap();
+    expect_immediate_preface(route.route_notification(&paused));
+    assert!(bridge.enter_pause().is_some());
+    bridge.leave_pause();
+    expect_immediate_preface(
+        route.route_notification(
+            &json!({
+                "method": "Debugger.resumed", "params": {}
+            })
+            .into(),
+        ),
+    );
+    assert!(
+        serde_json::to_string(&paused)
+            .unwrap()
+            .contains(r#""functionName":"\ud800""#)
+    );
+}
