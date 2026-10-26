@@ -784,7 +784,11 @@ impl PageScriptHost {
             self.clear_custom_element_registry_associations_for_document(document_handle);
         }
         self.retire_lightweight_popup_document_owner(transition.retired_owner);
-        self.retire_lightweight_popup_local_window(popup_id, transition.retired_local_window_id);
+        self.retire_lightweight_popup_local_window(
+            scope,
+            popup_id,
+            transition.retired_local_window_id,
+        );
         true
     }
 
@@ -2562,7 +2566,7 @@ impl PageScriptHost {
             );
         }
         if let Some(retired_local_window_id) = transition.retired_local_window_id {
-            self.retire_lightweight_popup_local_window(popup_id, retired_local_window_id);
+            self.retire_lightweight_popup_local_window(scope, popup_id, retired_local_window_id);
         }
         let context = match self.ensure_popup_default_context(scope, popup_id) {
             Ok(context) => context,
@@ -2622,6 +2626,7 @@ impl PageScriptHost {
 
     fn retire_lightweight_popup_local_window(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
         local_window_id: LightweightPopupLocalWindowId,
     ) {
@@ -2629,6 +2634,7 @@ impl PageScriptHost {
             popup_id,
             local_window_id,
         };
+        Self::retire_window_xhr_instances_for_owner(scope, self, execution_context_owner);
         self.pending_history_traversal_admissions
             .retire_owner(execution_context_owner);
         let retired_timer_count = unsafe { &mut *self.document_runtime }
