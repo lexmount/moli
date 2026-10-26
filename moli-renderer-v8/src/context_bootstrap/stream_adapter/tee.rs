@@ -395,7 +395,7 @@ fn apply_terminal_branch_actions<'s>(
             TerminalBranchAction::Skip => {}
             TerminalBranchAction::Close => {
                 let _ = close_stream(scope, stream);
-                if let Err(error) = finish_byte_stream_tee_branch_close(scope, stream) {
+                if let Err(error) = finish_readable_byte_stream_source_close(scope, stream) {
                     error_stream(scope, stream, error);
                 }
             }
@@ -1073,7 +1073,7 @@ fn apply_byte_tee_close_actions<'s>(
             ByteCloseAction::Skip => continue,
             ByteCloseAction::CloseAndFinish => {
                 let _ = close_stream(scope, stream);
-                finish_byte_stream_tee_branch_close(scope, stream)
+                finish_readable_byte_stream_source_close(scope, stream)
             }
             ByteCloseAction::CloseAndRespondWithView => {
                 let _ = close_stream(scope, stream);

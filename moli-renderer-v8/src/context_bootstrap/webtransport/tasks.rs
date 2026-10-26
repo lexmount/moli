@@ -5,6 +5,32 @@
 use super::*;
 
 const FAILURE_MESSAGE: &str = "__moliWebTransportConnectionFailureMessage";
+const SESSION_ERROR: &str = "__moliWebTransportSessionError";
+
+pub(super) fn session_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    message: &str,
+) -> v8::Local<'s, v8::Object> {
+    if let Some(error) = crate::util::get_private_object(scope, owner, SESSION_ERROR) {
+        return error;
+    }
+    let context = owner
+        .get_creation_context(scope)
+        .expect("session error realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let error = super::super::build_web_transport_error(
+        scope,
+        &super::super::WebTransportErrorClonePayload {
+            message: message.encode_utf16().collect(),
+            source: super::super::WebTransportErrorSource::Session,
+            stream_error_code: None,
+        },
+    )
+    .expect("WebTransport session error");
+    set_private_value(scope, owner, SESSION_ERROR, error.into());
+    error
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -130,15 +156,7 @@ pub(super) fn fail<'s>(
             return v8::Local::<v8::Object>::try_from(closed.result(scope)).expect("session error");
         }
     }
-    let error = super::super::build_web_transport_error(
-        scope,
-        &super::super::WebTransportErrorClonePayload {
-            message: message.encode_utf16().collect(),
-            source: super::super::WebTransportErrorSource::Session,
-            stream_error_code: None,
-        },
-    )
-    .expect("WebTransport session error");
+    let error = session_error(scope, owner, message);
     let ready_value = get_private_value(scope, owner, READY_RESOLVER).expect("ready resolver");
     let ready = resolver(ready_value);
     let closed_value = get_private_value(scope, owner, CLOSED_RESOLVER).expect("closed resolver");
