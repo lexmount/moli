@@ -16,7 +16,7 @@ pub(crate) fn define_custom_element_for_registry<'s>(
     name: &str,
     constructor: v8::Local<'s, v8::Function>,
     extends_local_name: Option<String>,
-) -> Result<bool, CustomElementDefineError> {
+) -> Result<Option<bool>, CustomElementDefineError> {
     let constructor_value: v8::Local<'_, v8::Value> = constructor.into();
     if constructor_value.is_async_function() || constructor_value.is_generator_function() {
         return Err(CustomElementDefineError::ConstructorNotConstructable);
@@ -62,6 +62,15 @@ pub(crate) fn define_custom_element_for_registry<'s>(
         .definition_is_running = false;
 
     let definition = definition_result?;
+    // Constructor getters can retire the defining Realm. Do not retain the
+    // constructor or schedule upgrades after that Realm has been detached.
+    let host = unsafe { &*host_ptr };
+    let realm_is_current = host
+        .window_execution_context_identity_for_access_check(scope.get_current_context())
+        .is_some_and(|identity| host.window_execution_context_identity_is_current(identity));
+    if !realm_is_current {
+        return Ok(None);
+    }
     let disables_shadow = definition.disables_shadow;
     let pending = {
         let store = unsafe { &mut *host_ptr }.custom_elements_mut_for_registry_key(registry_key);
@@ -72,7 +81,7 @@ pub(crate) fn define_custom_element_for_registry<'s>(
         let resolver = v8::Local::new(scope, &pending.resolver);
         let _ = resolver.resolve(scope, constructor.into());
     }
-    Ok(disables_shadow)
+    Ok(Some(disables_shadow))
 }
 
 impl CustomElementStore {

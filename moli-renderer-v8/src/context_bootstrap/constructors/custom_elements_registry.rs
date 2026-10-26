@@ -164,7 +164,8 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
         parsed.constructor,
         extends_local_name,
     ) {
-        Ok(disables_shadow) => disables_shadow,
+        Ok(Some(disables_shadow)) => disables_shadow,
+        Ok(None) => return,
         Err(err) => {
             if err.is_pending_exception() {
                 return;

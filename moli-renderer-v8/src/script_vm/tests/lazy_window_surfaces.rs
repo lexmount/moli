@@ -892,16 +892,22 @@ fn detached_child_cold_navigator_and_performance_keep_realm_and_seed() {
                 performanceSame: perf === child.performance,
                 performanceRealm: Object.getPrototypeOf(perf) === __coldPerformancePrototype,
                 performanceNotParent: Object.getPrototypeOf(perf) !== Performance.prototype,
-                timeOrigin: perf.timeOrigin,
                 timeOriginStable: perf.timeOrigin === child.performance.timeOrigin
               });
             })()
             "#,
         )
         .expect("cold surfaces should materialize in the retained child's original Realm");
-    let mut result = serde_json::from_str::<serde_json::Value>(&result).unwrap();
-    assert_eq!(result["timeOrigin"].as_f64(), Some(time_origin));
-    result.as_object_mut().unwrap().remove("timeOrigin");
+    let result = serde_json::from_str::<serde_json::Value>(&result).unwrap();
+    // Compare V8 numbers directly: parsing an epoch-sized JSON float can
+    // introduce a one-ULP rounding difference in the Rust assertion.
+    assert_eq!(
+        vm.eval(&format!(
+            "__coldChildWindow.performance.timeOrigin === {time_origin:?}"
+        ))
+        .unwrap(),
+        "true"
+    );
     assert_eq!(
         result,
         serde_json::json!({
