@@ -27,11 +27,12 @@ pub(super) struct ImageResourceRequestIdentity {
     pub(super) request_key: ImageRequestKey,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ImageResponseDescriptor {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(super) decode_metadata: ImageDecodeMetadata,
+    pub(crate) response_url: Option<std::sync::Arc<url::Url>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,6 +56,7 @@ impl ImageResponseDescriptor {
             width: metadata.width,
             height: metadata.height,
             decode_metadata: ImageDecodeMetadata::Raster(metadata),
+            response_url: None,
         }
     }
 
@@ -64,6 +66,7 @@ impl ImageResponseDescriptor {
             width,
             height,
             decode_metadata: ImageDecodeMetadata::Svg(metadata),
+            response_url: None,
         })
     }
 }
@@ -260,7 +263,7 @@ impl super::JsContextHost {
         if !self
             .image_resources
             .css
-            .mark_decode_queued(identity, descriptor)
+            .mark_decode_queued(identity, descriptor.clone())
         {
             return false;
         }
@@ -305,6 +308,19 @@ impl super::JsContextHost {
 
     pub(crate) fn image_resource_is_ready(&self, element: DomHandle) -> bool {
         self.image_resources.is_ready(element)
+    }
+
+    pub(crate) fn cached_image_response_url(
+        &self,
+        element: DomHandle,
+    ) -> Option<std::sync::Arc<url::Url>> {
+        let identity = self.image_resources.identity(element)?;
+        self.image_resources
+            .ready_resource(&identity.request_key)?
+            .descriptor
+            .response_url
+            .clone()
+            .filter(|url| url.as_str() != identity.request_key.url())
     }
 
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
@@ -422,7 +438,11 @@ impl super::JsContextHost {
                     .request_client()
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
             });
-        if decode_enabled && self.image_resources.complete_shared_ready(&identity) {
+        if decode_enabled
+            && self
+                .image_resources
+                .complete_shared_ready(&identity, descriptor.response_url.as_deref())
+        {
             let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
                 return ImageResponseCompletion::Ignored;
             };
@@ -434,7 +454,7 @@ impl super::JsContextHost {
         if decode_enabled {
             if !self
                 .image_resources
-                .mark_decode_queued(&identity, descriptor)
+                .mark_decode_queued(&identity, descriptor.clone())
             {
                 return ImageResponseCompletion::Ignored;
             }

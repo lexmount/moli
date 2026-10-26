@@ -36,6 +36,9 @@ impl JsContextHost {
                     .map(|entry| entry.document_policy_container_snapshot())
             })
             .unwrap_or_else(|| self.document_policy_container().clone());
+        policy_container
+            .content_security_policy_self_url
+            .get_or_insert_with(|| self.document_url_for_child_context(handle));
         if let Some(parent_document) = self
             .dom_host()
             .node(handle)

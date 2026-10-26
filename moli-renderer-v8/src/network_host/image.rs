@@ -435,7 +435,10 @@ pub(crate) fn image_response_descriptor_from_parkable(
     encoded: &moli_parkable_image::ParkableImage,
 ) -> Option<crate::native_bridge::ImageResponseDescriptor> {
     let snapshot = encoded.snapshot().ok()?;
-    image_response_descriptor_from_bytes(&response.headers, &snapshot)
+    image_response_descriptor_from_bytes(&response.headers, &snapshot).map(|mut descriptor| {
+        descriptor.response_url = Some(std::sync::Arc::new(response.final_url.clone()));
+        descriptor
+    })
 }
 
 fn image_response_descriptor_from_bytes(

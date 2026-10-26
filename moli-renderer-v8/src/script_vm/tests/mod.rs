@@ -7,6 +7,7 @@ mod credential_json_options;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
+mod image_csp;
 mod message_port_transfer;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;

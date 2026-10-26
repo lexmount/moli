@@ -500,6 +500,18 @@ impl ScriptVm {
             let security_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
             let mut opaque_response_blocked = false;
             let result = result.and_then(|response| {
+                if pending.info.resource_type == SubresourceResourceType::Image
+                    && (!response.redirect_chain.is_empty() || response.final_url != pending.info.url)
+                    && let Some(violation) = context_host.borrow_mut().check_owner_subresource_csp(
+                        scope,
+                        pending.execution_context.dispatch_scope(),
+                        &response.final_url,
+                        crate::document_runtime::DocumentSubresourceCspKind::Image,
+                        crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                    ).into_blocking_violation()
+                {
+                    return Err(crate::document_runtime::document_content_security_policy_error_message(&violation, "image"));
+                }
                 if matches!(pending.continuation, PendingSubresourceContinuation::FontFace(_))
                     && !response.redirect_chain.is_empty()
                     && !context_host.borrow_mut().font_request_allowed_by_csp(scope, pending.execution_context.dispatch_scope(), &pending.info.document_url, &response.final_url, crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect) {
