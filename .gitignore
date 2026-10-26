@@ -18,6 +18,8 @@
 !/vendor/url-2.5.8/**
 !/vendor/urlpattern-0.6.0/
 !/vendor/urlpattern-0.6.0/**
+!/vendor/quinn-0.11.12/
+!/vendor/quinn-0.11.12/**
 /.moli
 __pycache__
 *.pyc
