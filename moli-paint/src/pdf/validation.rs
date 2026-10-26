@@ -87,7 +87,7 @@ pub(super) fn validate(snapshot: &PaintSnapshot) -> Result<(), PdfError> {
                 image.transform,
             ),
             PaintFragment::SvgImage(image) => (rect(image.destination), image.transform),
-            PaintFragment::PopLayer => continue,
+            PaintFragment::PopLayer | PaintFragment::BackdropFilter { .. } => continue,
         };
         if !valid
             || !matrix
@@ -139,6 +139,9 @@ fn glyphs(run: &PaintGlyphRun) -> bool {
             .glyph_skew_radians
             .is_none_or(|v| v.is_finite() && v.tan().is_finite())
         && run.glyphs.iter().all(|g| finite([g.x, g.y]))
+        && run
+            .stroke
+            .is_none_or(|s| s.width.is_finite() && s.width >= 0.0)
         && run.text.as_ref().is_none_or(|t| {
             t.clusters.len() == run.glyphs.len()
                 && t.clusters.iter().all(|r| t.text.get(r.clone()).is_some())

@@ -885,7 +885,7 @@ fn parse_live_stylesheet(
         media,
         shared_lock,
         stylesheet_loader,
-        None,
+        Some(&crate::style_engine::filter_diagnostics::FILTER_PARSE_DIAGNOSTICS),
         quirks_mode,
         allow_import_rules,
     )

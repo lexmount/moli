@@ -1670,6 +1670,7 @@ impl ResolvedLayoutStyle {
                 synthetic_bold: false,
                 decoration: crate::stylo_to_parley::TextDecorationBrush::default(),
                 shadows: std::sync::Arc::from([]),
+                stroke: None,
             },
             ..parley::TextStyle::default()
         }

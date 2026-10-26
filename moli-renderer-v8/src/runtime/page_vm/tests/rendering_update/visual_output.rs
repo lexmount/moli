@@ -947,3 +947,128 @@ nextChildContext.fillRect(0,0,1,1);
     .await
     .expect("canvas screenshot/screencast fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn webkit_text_stroke_and_paint_order_reach_glyph_runs() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/text-stroke.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0}div{font:20px/1 sans-serif}#a{-webkit-text-stroke:3px rgb(255,0,0);paint-order:stroke fill}#b{-webkit-text-stroke:2px;color:rgb(0,0,255)}#c{}</style>';
+document.body.innerHTML = '<div id=a>A</div><div id=b>B</div><div id=c>C</div>';
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(100, 80, 1.0))?
+            .expect("text stroke fixture must retain a layout root");
+        let strokes: Vec<_> = snapshot
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::GlyphRun(run) => Some(run.stroke),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            strokes,
+            vec![
+                Some(moli_layout::PaintTextStroke {
+                    width: 3.0,
+                    color: moli_layout::PaintColor::new(1.0, 0.0, 0.0, 1.0),
+                    paint_first: true,
+                }),
+                // -webkit-text-stroke-color defaults to currentcolor.
+                Some(moli_layout::PaintTextStroke {
+                    width: 2.0,
+                    color: moli_layout::PaintColor::new(0.0, 0.0, 1.0, 1.0),
+                    paint_first: false,
+                }),
+                None,
+            ]
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("text stroke fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn backdrop_filter_projects_a_fragment_inside_the_elements_own_layers() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/backdrop-filter.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0}div{position:absolute;width:20px;height:20px}#glass{left:0;opacity:.5;filter:invert(1);backdrop-filter:blur(3px) drop-shadow(1px 1px red) saturate(2)}#plain{left:30px;backdrop-filter:grayscale(1)}</style>';
+document.body.innerHTML = '<div id=glass></div><div id=plain></div>';
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(60, 30, 1.0))?
+            .expect("backdrop fixture must retain a layout root");
+        let codes: Vec<_> = snapshot
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert!(codes.contains(&"backdrop-filter-drop-shadow-unsupported"), "{codes:?}");
+        assert!(!codes.contains(&"backdrop-filter-unsupported"), "{codes:?}");
+
+        let backdrops: Vec<_> = snapshot
+            .fragments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, fragment)| match fragment {
+                moli_layout::PaintFragment::BackdropFilter {
+                    filters,
+                    element_layers,
+                    ..
+                } => Some((index, filters.clone(), *element_layers)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(backdrops.len(), 2);
+        let (glass, filters, element_layers) = &backdrops[0];
+        assert_eq!(
+            filters,
+            &vec![
+                moli_layout::PaintFilter::Blur(3.0),
+                moli_layout::PaintFilter::Saturate(2.0),
+            ]
+        );
+        // Its own opacity layer wraps the backdrop ...
+        assert_eq!(*element_layers, 1);
+        assert!(matches!(
+            snapshot.fragments[glass - 1],
+            moli_layout::PaintFragment::PushLayer { opacity, filter: None, .. } if opacity == 0.5
+        ));
+        // ... while its own filter layer starts after it (known limitation).
+        assert!(matches!(
+            snapshot.fragments[glass + 1],
+            moli_layout::PaintFragment::PushLayer {
+                filter: Some(moli_layout::PaintFilter::Invert(_)),
+                ..
+            }
+        ));
+        assert_eq!(backdrops[1].1, vec![moli_layout::PaintFilter::Grayscale(1.0)]);
+        assert_eq!(backdrops[1].2, 0);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("backdrop filter fixture should run");
+}

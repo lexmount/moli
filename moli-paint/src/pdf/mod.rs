@@ -12,7 +12,9 @@ mod validation;
 use std::{collections::BTreeSet, fmt, ops::RangeInclusive};
 
 use krilla::{Document, geom::Size, page::PageSettings};
-use moli_layout::{PaintRect, PaintSnapshot};
+use moli_layout::{
+    PaintDiagnostic, PaintDiagnosticSeverity, PaintFragment, PaintRect, PaintSnapshot,
+};
 use peniko::kurbo::{Affine, Rect};
 
 use primitives::PdfPainter;
@@ -70,6 +72,24 @@ impl From<crate::PaintError> for PdfError {
     fn from(error: crate::PaintError) -> Self {
         Self::Paint(error)
     }
+}
+
+/// Effects in `snapshot` that [`pdf_snapshot`] omits, in addition to
+/// `PaintSnapshot::diagnostics`. Callers report these alongside the PDF.
+pub fn pdf_snapshot_diagnostics(snapshot: &PaintSnapshot) -> Vec<PaintDiagnostic> {
+    let backdrops = snapshot
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment, PaintFragment::BackdropFilter { .. }))
+        .count();
+    if backdrops == 0 {
+        return Vec::new();
+    }
+    vec![PaintDiagnostic::new(
+        "backdrop-filter-unsupported",
+        format!("PDF export omits {backdrops} backdrop-filter effect(s)"),
+        PaintDiagnosticSeverity::Warning,
+    )]
 }
 
 /// Writes embedded, subsetted fonts and native drawing commands. Device pixel

@@ -311,12 +311,22 @@ where
                         ),
                     );
                 }
-                if filters.has_backdrop_filter {
+                if filters.backdrop_skipped_url {
                     push_diagnostic_once(
                         &mut snapshot,
-                        "backdrop-filter-unsupported",
+                        "backdrop-filter-url-reference-unsupported",
                         format!(
-                            "{} uses backdrop-filter, which the CPU backend does not implement",
+                            "{} uses a URL-referenced backdrop-filter that software paint skips",
+                            layout_box.source_label
+                        ),
+                    );
+                }
+                if filters.backdrop_skipped_drop_shadow {
+                    push_diagnostic_once(
+                        &mut snapshot,
+                        "backdrop-filter-drop-shadow-unsupported",
+                        format!(
+                            "{} uses drop-shadow() in backdrop-filter, which software paint skips",
                             layout_box.source_label
                         ),
                     );
@@ -347,6 +357,20 @@ where
                         filter: None,
                     });
                     effect_layers += 1;
+                }
+                // The filtered backdrop is the element's bottom-most paint. It
+                // sits inside the element's own clip-path, mask, and
+                // opacity/blend scopes so those apply to it; the raster
+                // backend skips them when locating the Backdrop Root.
+                if !filters.backdrop.is_empty() {
+                    let element_layers =
+                        usize::from(clip_path_layer) + usize::from(mask_layer) + effect_layers;
+                    snapshot.push_fragment(PaintFragment::BackdropFilter {
+                        shape: areas.shape(BoxModelBox::Border),
+                        transform,
+                        filters: filters.backdrop.clone(),
+                        element_layers: element_layers as u8,
+                    });
                 }
                 // CSS applies filter functions in list order. Nest the list in
                 // reverse so pop order evaluates f1, f2, ... while every CPU
