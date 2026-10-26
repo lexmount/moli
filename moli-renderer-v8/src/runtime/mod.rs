@@ -327,8 +327,9 @@ pub use self::page_print::{
 pub use self::page_screenshot::{
     RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
-    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererScreenshotClip,
-    RendererScreenshotFormat, RendererScreenshotRegion, RendererVisualStateToken,
+    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCapturedVideoFrame,
+    RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotRegion,
+    RendererVisualStateToken,
 };
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;

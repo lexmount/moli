@@ -664,6 +664,7 @@ fn infers_serve_mode_when_called_without_args() {
             port: 9222,
             timeout: 10,
             screencast_interval: None,
+            screencast_video: None,
             common: CommonArgs::default(),
         }))
     );
@@ -691,6 +692,7 @@ fn parses_serve_flags_with_explicit_command() {
             port: 9333,
             timeout: 42,
             screencast_interval: None,
+            screencast_video: None,
             common: CommonArgs::default(),
         }))
     );

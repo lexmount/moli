@@ -101,6 +101,7 @@ fn take_frame(
     let PageScreencastCaptureCompletion::Frame {
         event,
         visual_state,
+        ..
     } = completion
     else {
         panic!("changed presentation must produce a frame");

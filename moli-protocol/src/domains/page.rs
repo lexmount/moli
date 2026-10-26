@@ -951,6 +951,7 @@ pub enum PageScreencastCaptureCompletion {
     Frame {
         event: BackgroundProtocolEvent,
         visual_state: RendererVisualStateToken,
+        video_frame: Option<moli_core::page::RendererCapturedVideoFrame>,
     },
     Unchanged,
     Retry,
@@ -1050,7 +1051,7 @@ fn screencast_frame_ack_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Comm
 
 impl CdpConnection {
     pub fn page_screencast_subscription_status(
-        &mut self,
+        &self,
         registration: &PageScreencastRegistration,
     ) -> PageScreencastSubscriptionStatus {
         page_screencast_subscription_status_for_owner(
@@ -1064,6 +1065,26 @@ impl CdpConnection {
         &mut self,
         registration: &PageScreencastRegistration,
         known_visual_state: Option<RendererVisualStateToken>,
+    ) -> PageScreencastCaptureStart {
+        self.start_page_screencast_frame_capture_with_video(registration, known_visual_state, false)
+    }
+
+    pub fn page_screencast_targets_main_page(
+        &self,
+        registration: &PageScreencastRegistration,
+    ) -> bool {
+        self.target_owner_identity_for_owner(&registration.owner_scope)
+            == Some((
+                self.default_browser_context_id().into(),
+                Some(self.default_target_id().into()),
+            ))
+    }
+
+    pub fn start_page_screencast_frame_capture_with_video(
+        &mut self,
+        registration: &PageScreencastRegistration,
+        known_visual_state: Option<RendererVisualStateToken>,
+        capture_video: bool,
     ) -> PageScreencastCaptureStart {
         let session_id = registration.session_id().map(str::to_owned);
         let generation = registration.generation;
@@ -1081,6 +1102,7 @@ impl CdpConnection {
             return PageScreencastCaptureStart::Stale;
         };
         let request = RendererCaptureScreencastFrameRequest {
+            capture_video,
             base_background_color: self.default_background_color_for_owner(&owner_scope),
             format: match config.format() {
                 PageScreencastFormat::Png => RendererScreenshotFormat::Png,
@@ -1211,6 +1233,7 @@ impl CdpConnection {
                 generation,
             ),
             visual_state,
+            video_frame: frame.video_frame,
         }
     }
 }

@@ -3774,6 +3774,7 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
     let PageScreencastCaptureCompletion::Frame {
         event: frame,
         visual_state,
+        ..
     } = ctx
         .conn
         .complete_page_screencast_frame_capture(capture.wait().await)
@@ -3858,6 +3859,7 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
     let PageScreencastCaptureCompletion::Frame {
         event,
         visual_state: changed_state,
+        ..
     } = ctx
         .conn
         .complete_page_screencast_frame_capture(changed_capture.wait().await)
@@ -3936,6 +3938,7 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
     let PageScreencastCaptureCompletion::Frame {
         event: primary_event,
         visual_state: primary_state,
+        ..
     } = ctx
         .conn
         .complete_page_screencast_frame_capture(primary_capture.wait().await)
@@ -3945,6 +3948,7 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
     let PageScreencastCaptureCompletion::Frame {
         event: attached_event,
         visual_state: attached_state,
+        ..
     } = ctx
         .conn
         .complete_page_screencast_frame_capture(attached_capture.wait().await)

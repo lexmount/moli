@@ -1,0 +1,25 @@
+[package]
+name = "moli-screencast-video"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+links = "moli_x264"
+
+[dependencies]
+anyhow = "1.0.100"
+bytes = "1"
+image = { version = "0.25", default-features = false }
+moli-image = { path = "../moli-image" }
+mp4 = "0.14.0"
+parking_lot = "0.12"
+tempfile = "3"
+tokio = { version = "1.51.0", features = ["sync", "rt", "macros", "time"] }
+yuv = { version = "=0.8.19", default-features = false, features = ["avx", "sse"] }
+
+[build-dependencies]
+cc = "1"
+flate2 = "1"
+tar = "0.4"
+
+[lints]
+workspace = true

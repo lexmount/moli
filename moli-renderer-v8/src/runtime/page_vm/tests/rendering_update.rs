@@ -5,6 +5,7 @@ mod planar_transforms;
 mod print;
 mod print_isolation;
 mod transform_precision;
+mod video_capture;
 
 use base64::Engine as _;
 
@@ -19,6 +20,7 @@ fn viewport_screencast_request(
     known_visual_state: Option<crate::runtime::RendererVisualStateToken>,
 ) -> crate::runtime::RendererCaptureScreencastFrameRequest {
     crate::runtime::RendererCaptureScreencastFrameRequest {
+        capture_video: false,
         base_background_color: [255; 4],
         format: crate::runtime::RendererScreenshotFormat::Png,
         quality: 100,

@@ -99,13 +99,30 @@ impl SharedCdpOwnerRegistry {
             return Ok(endpoint.clone());
         }
         let (owner_id, endpoint) = self
-            .spawn_owner()
+            .spawn_owner(None)
             .context("failed to spawn shared CDP owner")?;
         *shared_owner = Some((owner_id, endpoint.clone()));
         Ok(endpoint)
     }
 
-    fn spawn_owner(&self) -> Result<(u64, CdpFrontendEndpoint)> {
+    pub(super) fn enable_screencast_video(
+        &self,
+        recorder: moli_screencast_video::RecorderHandle,
+    ) -> Result<()> {
+        let mut shared_owner = self.inner.shared_owner.lock();
+        anyhow::ensure!(
+            shared_owner.is_none(),
+            "main Page recording must start before frontend attachment"
+        );
+        let (owner_id, endpoint) = self.spawn_owner(Some(recorder))?;
+        *shared_owner = Some((owner_id, endpoint));
+        Ok(())
+    }
+
+    fn spawn_owner(
+        &self,
+        recorder: Option<moli_screencast_video::RecorderHandle>,
+    ) -> Result<(u64, CdpFrontendEndpoint)> {
         let owner_id = self.inner.config.directory.allocate_owner_id();
         let (endpoint, receivers) = cdp_frontend_channel();
         let lifecycle_observer = self
@@ -152,6 +169,7 @@ impl SharedCdpOwnerRegistry {
                 instance_control: self.inner.config.instance_control.clone(),
             }),
             checkpoint_tx,
+            recorder,
         );
         let weak_registry = Arc::downgrade(&self.inner);
         let directory = self.inner.config.directory.clone();
@@ -214,15 +232,19 @@ fn spawn_owner_task(
     target_host_integration: Option<CdpTargetHostIntegration>,
     owner_lifecycle: Option<CdpOwnerActorLifecycle>,
     checkpoint_tx: mpsc::UnboundedSender<CdpCookieSnapshot>,
+    recorder: Option<moli_screencast_video::RecorderHandle>,
 ) -> oneshot::Receiver<()> {
     spawn_protocol_local_task("cdp-owner", move || async move {
-        let (scheduler, scheduler_receivers) =
+        let (mut scheduler, scheduler_receivers) =
             CdpScheduler::new_with_deferred_default_target_runtime_and_screencast_interval(
                 initial_storage_partition,
                 navigation_runtime_config,
                 target_host_integration,
                 screencast_interval_ms,
             );
+        if let Some(recorder) = recorder {
+            scheduler.enable_screencast_video(recorder);
+        }
         let actor = spawn_cdp_scheduler_actor(
             scheduler,
             scheduler_receivers,

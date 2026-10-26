@@ -160,6 +160,15 @@ pub struct RendererCaptureScreencastFrameRequest {
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
     pub known_visual_state: Option<RendererVisualStateToken>,
+    /// Retain the pre-encoding raster for the optional MP4 sink.
+    pub capture_video: bool,
+}
+
+/// Raw pixels from the same raster pass as a CDP screencast frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererCapturedVideoFrame {
+    pub image: moli_image::RgbaImage,
+    pub captured_at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +188,7 @@ pub enum RendererCaptureScreenshotReply {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererCapturedScreencastFrame {
+    pub video_frame: Option<RendererCapturedVideoFrame>,
     /// Native viewport dimensions before the encoded frame is fitted to limits.
     pub viewport_size: (u32, u32),
     pub image: RendererCapturedScreenshot,
@@ -277,21 +287,30 @@ impl PageVm {
             max_width: request.max_width,
             max_height: request.max_height,
         };
-        let image = match self.capture_image(
+        let total_started = moli_trace::cpu_profile_enabled().then(Instant::now);
+        let mut raster =
+            match self.capture_raster(paint_capture, moli_layout::LayoutFlushReason::Screencast)? {
+                RendererRasterCaptureOutcome::Captured(raster) => raster,
+                RendererRasterCaptureOutcome::LayoutDisabled => {
+                    return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
+                }
+                RendererRasterCaptureOutcome::NoDocument => {
+                    return Ok(RendererCaptureScreencastFrameReply::NoDocument);
+                }
+            };
+        let image = Self::encode_raster_capture(
+            &mut raster,
             request.format,
             request.quality,
             request.optimize_for_speed,
-            paint_capture,
+            request.capture_video,
             moli_layout::LayoutFlushReason::Screencast,
-        )? {
-            RendererImageCaptureOutcome::Captured(image) => image,
-            RendererImageCaptureOutcome::LayoutDisabled => {
-                return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
-            }
-            RendererImageCaptureOutcome::NoDocument => {
-                return Ok(RendererCaptureScreencastFrameReply::NoDocument);
-            }
-        };
+            total_started,
+        )?;
+        let video_frame = request.capture_video.then_some(RendererCapturedVideoFrame {
+            image: raster.image,
+            captured_at: raster.captured_at,
+        });
         let visual_state_after = self.vm().visual_state_token(
             self.document_lifecycle.identity(),
             viewport,
@@ -301,6 +320,7 @@ impl PageVm {
             visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
+                video_frame,
                 viewport_size: surface.visible_size(),
                 image,
                 visual_state,
@@ -308,18 +328,14 @@ impl PageVm {
         ))
     }
 
-    fn capture_image(
+    fn capture_raster(
         &mut self,
-        format: RendererScreenshotFormat,
-        quality: u8,
-        optimize_for_speed: bool,
         paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
-    ) -> anyhow::Result<RendererImageCaptureOutcome> {
+    ) -> anyhow::Result<RendererRasterCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
-        let total_started = profile_enabled.then(Instant::now);
         if self.layout_configuration.policy == LayoutPolicy::Mock {
-            return Ok(RendererImageCaptureOutcome::LayoutDisabled);
+            return Ok(RendererRasterCaptureOutcome::LayoutDisabled);
         }
         let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
@@ -332,8 +348,9 @@ impl PageVm {
             self.vm_mut()
                 .paint_layout_snapshot_with_capture(viewport, reason, paint_capture)?
         else {
-            return Ok(RendererImageCaptureOutcome::NoDocument);
+            return Ok(RendererRasterCaptureOutcome::NoDocument);
         };
+        let captured_at = Instant::now();
         let layout_us = layout_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -360,20 +377,83 @@ impl PageVm {
         }
 
         let raster_started = profile_enabled.then(Instant::now);
-        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
+        Ok(RendererRasterCaptureOutcome::Captured(CapturedRaster {
+            image: raster,
+            captured_at,
+            layout_us,
+            raster_us,
+        }))
+    }
+
+    fn capture_image(
+        &mut self,
+        format: RendererScreenshotFormat,
+        quality: u8,
+        optimize_for_speed: bool,
+        paint_capture: PaintCaptureRequest,
+        reason: moli_layout::LayoutFlushReason,
+    ) -> anyhow::Result<RendererImageCaptureOutcome> {
+        let profile_enabled = moli_trace::cpu_profile_enabled();
+        let total_started = profile_enabled.then(Instant::now);
+        let mut captured = match self.capture_raster(paint_capture, reason)? {
+            RendererRasterCaptureOutcome::Captured(captured) => captured,
+            RendererRasterCaptureOutcome::LayoutDisabled => {
+                return Ok(RendererImageCaptureOutcome::LayoutDisabled);
+            }
+            RendererRasterCaptureOutcome::NoDocument => {
+                return Ok(RendererImageCaptureOutcome::NoDocument);
+            }
+        };
+        Self::encode_raster_capture(
+            &mut captured,
+            format,
+            quality,
+            optimize_for_speed,
+            false,
+            reason,
+            total_started,
+        )
+        .map(RendererImageCaptureOutcome::Captured)
+    }
+
+    fn encode_raster_capture(
+        captured: &mut CapturedRaster,
+        format: RendererScreenshotFormat,
+        quality: u8,
+        optimize_for_speed: bool,
+        preserve_raw: bool,
+        reason: moli_layout::LayoutFlushReason,
+        total_started: Option<Instant>,
+    ) -> anyhow::Result<RendererCapturedScreenshot> {
+        let profile_enabled = moli_trace::cpu_profile_enabled();
+        let layout_us = captured.layout_us;
+        let raster_us = captured.raster_us;
+        let raster = &mut captured.image;
         let encode_started = profile_enabled.then(Instant::now);
         let (mime_type, width, height, bytes) = match format {
             RendererScreenshotFormat::Png => {
                 let encoded = moli_image::encode_png_with_options(
-                    &raster,
+                    raster,
                     moli_image::PngEncodeOptions { optimize_for_speed },
                 )?;
                 ("image/png", encoded.width, encoded.height, encoded.bytes)
             }
             RendererScreenshotFormat::Jpeg => {
+                // The video sink needs the original straight-alpha pixels.
+                // Clone only when JPEG's black compositing would change them.
+                let mut composite = (preserve_raw
+                    && raster
+                        .rgba
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|pixel| pixel[3] != 255))
+                .then(|| raster.clone());
+                let raster = composite.as_mut().unwrap_or(raster);
                 // Chrome captures JPEG against black. The encoder discards alpha,
                 // so composite our straight-alpha raster before handing it over.
                 for pixel in raster.rgba.as_chunks_mut::<4>().0 {
@@ -385,7 +465,7 @@ impl PageVm {
                         pixel[3] = 255;
                     }
                 }
-                let encoded = moli_image::encode_jpeg(&raster, quality)?;
+                let encoded = moli_image::encode_jpeg(raster, quality)?;
                 ("image/jpeg", encoded.width, encoded.height, encoded.bytes)
             }
         };
@@ -406,15 +486,26 @@ impl PageVm {
                 total_us = started.elapsed().as_micros(),
             );
         }
-        Ok(RendererImageCaptureOutcome::Captured(
-            RendererCapturedScreenshot {
-                mime_type: mime_type.to_owned(),
-                width,
-                height,
-                bytes: bytes.into(),
-            },
-        ))
+        Ok(RendererCapturedScreenshot {
+            mime_type: mime_type.to_owned(),
+            width,
+            height,
+            bytes: bytes.into(),
+        })
     }
+}
+
+struct CapturedRaster {
+    image: moli_image::RgbaImage,
+    captured_at: Instant,
+    layout_us: u128,
+    raster_us: u128,
+}
+
+enum RendererRasterCaptureOutcome {
+    Captured(CapturedRaster),
+    LayoutDisabled,
+    NoDocument,
 }
 
 enum RendererImageCaptureOutcome {

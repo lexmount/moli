@@ -182,6 +182,17 @@ def copy_release_materials(package_dir: Path) -> None:
         raise ReleaseError(f"required license directory is missing: {licenses_dir}")
     shutil.copytree(licenses_dir, package_dir / licenses_dir.name)
 
+    video_source = REPO_ROOT / "moli-screencast-video"
+    shutil.copy2(video_source / "THIRD_PARTY.txt", package_dir / "SCREENCAST-LICENSE.txt")
+    # Include the exact encoder/assembler sources and local bridge/build code,
+    # alongside their notices. The remainder of Moli's source is at this tag.
+    bundled_source = package_dir / "sources" / video_source.name
+    bundled_source.mkdir(parents=True)
+    for name in ("Cargo.toml", "build.rs", "THIRD_PARTY.txt"):
+        shutil.copy2(video_source / name, bundled_source / name)
+    for name in ("native", "src"):
+        shutil.copytree(video_source / name, bundled_source / name)
+
 
 def write_archive(
     package_dir: Path, archive_path: Path, package_name: str, target: str

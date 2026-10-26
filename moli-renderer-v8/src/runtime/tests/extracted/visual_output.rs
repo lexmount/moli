@@ -215,6 +215,7 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
     let screencast = capture_screencast_frame_with_request(
         &page,
         super::RendererCaptureScreencastFrameRequest {
+            capture_video: false,
             base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -727,6 +728,7 @@ addEventListener("wheel", event => {
     let screencast = capture_screencast_frame_with_request(
         &page,
         super::RendererCaptureScreencastFrameRequest {
+            capture_video: false,
             base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,

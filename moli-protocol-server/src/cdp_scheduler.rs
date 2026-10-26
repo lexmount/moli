@@ -40,6 +40,7 @@ mod instance_command;
 mod protocol_residence;
 mod runtime_command_barrier;
 mod runtime_dispatch;
+mod screencast_video;
 
 pub(crate) use actor::spawn_cdp_scheduler_actor;
 pub(crate) use adapter_scheduler::{
@@ -116,6 +117,7 @@ pub(crate) struct CdpScheduler {
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
     page_screencast_interval_ms: u32,
+    screencast_video: Option<Box<screencast_video::ScreencastVideo>>,
 }
 
 #[derive(Clone, Copy)]
@@ -523,6 +525,7 @@ impl CdpScheduler {
                 known_visual_state: None,
             },
         );
+        self.refresh_screencast_video_source();
     }
 
     fn page_screencast_schedule_matches(
@@ -566,6 +569,7 @@ impl CdpScheduler {
                 | PageScreencastSubscriptionStatus::AwaitingAck => {}
             }
         }
+        self.refresh_screencast_video_source();
         next_deadline
     }
 
@@ -597,10 +601,21 @@ impl CdpScheduler {
                 PageScreencastSubscriptionStatus::CaptureInProgress
                 | PageScreencastSubscriptionStatus::AwaitingAck => {}
                 PageScreencastSubscriptionStatus::Ready => {
-                    match self
-                        .conn
-                        .start_page_screencast_frame_capture(&registration, known_visual_state)
-                    {
+                    let capture_video = self.capture_video_for(&registration);
+                    // An older non-video capture can still complete after a
+                    // source handover and restore its visual-state token.
+                    // Require a fresh raster until this source supplies video.
+                    let known_visual_state =
+                        if capture_video && self.screencast_video_needs_first_frame() {
+                            None
+                        } else {
+                            known_visual_state
+                        };
+                    match self.conn.start_page_screencast_frame_capture_with_video(
+                        &registration,
+                        known_visual_state,
+                        capture_video,
+                    ) {
                         PageScreencastCaptureStart::Pending(capture) => pending.push(capture),
                         PageScreencastCaptureStart::Retry => {
                             if let Some(schedule) = self.page_screencasts.get_mut(&session_id)
@@ -642,12 +657,18 @@ impl CdpScheduler {
             PageScreencastCaptureCompletion::Frame {
                 event,
                 visual_state,
-            } => Some(ScheduledPageScreencastFrame {
-                event,
-                session_id,
-                generation,
-                visual_state,
-            }),
+                video_frame,
+            } => {
+                if let Some(frame) = video_frame {
+                    self.accept_screencast_video_frame(&session_id, generation, frame);
+                }
+                Some(ScheduledPageScreencastFrame {
+                    event,
+                    session_id,
+                    generation,
+                    visual_state,
+                })
+            }
             PageScreencastCaptureCompletion::Unchanged => {
                 let schedule = self
                     .page_screencasts
@@ -713,6 +734,7 @@ impl CdpScheduler {
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
             page_screencast_interval_ms,
+            screencast_video: None,
         }
     }
 

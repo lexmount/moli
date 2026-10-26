@@ -3236,6 +3236,10 @@ impl CdpConnection {
         DEFAULT_CDP_PAGE_TARGET_ID
     }
 
+    pub fn default_target_is_closed(&self) -> bool {
+        self.default_target_lifecycle.is_closed()
+    }
+
     pub fn default_tab_target_id(&self) -> &'static str {
         DEFAULT_CDP_TAB_TARGET_ID
     }
