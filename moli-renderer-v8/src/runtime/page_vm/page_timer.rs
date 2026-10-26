@@ -24,6 +24,23 @@ pub(in crate::runtime) enum PageTimerTurnAction {
 }
 
 impl PageVm {
+    /// Run the next ready timer in queue order while the post-parse lifecycle
+    /// still has ready classic defer timers, then commit the ordinary callback
+    /// task completion once.
+    pub(in crate::runtime) async fn run_timer_before_domcontentloaded(
+        &mut self,
+        loader: &crate::network::ResourceRequestClient,
+    ) -> Result<()> {
+        let body = self
+            .vm_mut()
+            .run_next_timer_before_domcontentloaded_body()?;
+        ensure!(
+            body.consumed_heap_head(),
+            "a ready timer selected before DOMContentLoaded must consume its heap entry"
+        );
+        self.finish_selected_page_callback_task(loader).await
+    }
+
     /// Execute one already-selected timer body without committing its
     /// task-end checkpoint.
     ///

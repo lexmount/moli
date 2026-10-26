@@ -238,10 +238,18 @@ where
             let dynamic_script_owner_id = runtime_script_claim
                 .as_ref()
                 .map(DynamicScriptPageTaskClaim::id);
+            let records_classic_defer_timer_range =
+                matches!(lane, DocumentScriptExecutionLane::ClassicDefer);
+            if records_classic_defer_timer_range {
+                self.hooks.begin_classic_defer_timer_schedule_range();
+            }
             let execution = self
                 .hooks
                 .execute_prepared_script(*script, runtime_script_claim)
                 .await;
+            if records_classic_defer_timer_range {
+                self.hooks.finish_classic_defer_timer_schedule_range();
+            }
             let document_owner_token_after_body = self.hooks.current_document_owner_token();
             let script_elapsed_ms = script_started.elapsed().as_millis();
             Ok(PageOwnedDocumentScriptResult {

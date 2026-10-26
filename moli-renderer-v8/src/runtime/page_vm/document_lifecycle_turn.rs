@@ -428,6 +428,17 @@ impl PageVm {
                 )
                 .await
             }
+            PostParseLifecycleAdvance::TimerBeforeDomContentLoaded => {
+                self.run_timer_before_domcontentloaded(&request_client)
+                    .await?;
+                self.outcome_after_exact_post_parse_action(
+                    pending_document_lifecycle_turn,
+                    document,
+                    stage,
+                    DocumentLifecycleTurnAction::Progressed,
+                    false,
+                )
+            }
             PostParseLifecycleAdvance::NeedsContinuation => self
                 .outcome_after_exact_post_parse_action(
                     pending_document_lifecycle_turn,
