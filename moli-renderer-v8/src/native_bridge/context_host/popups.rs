@@ -2633,6 +2633,7 @@ impl JsContextHost {
             self.retire_canvas_blob_execution_context_owner(execution_context_owner);
         let retired_webcrypto_count =
             self.retire_webcrypto_execution_context_owner(execution_context_owner);
+        self.retire_webtransport_execution_context_owner(execution_context_owner);
         self.retire_opfs_execution_context_owner(execution_context_owner);
         let retired_worker_count =
             self.retire_workers_for_execution_context_owner(execution_context_owner);

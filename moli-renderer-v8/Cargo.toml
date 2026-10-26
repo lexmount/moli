@@ -102,6 +102,7 @@ moli-webidl = { path = "../moli-webidl" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
 moli-webmcp = { path = "../moli-webmcp" }
 moli-window-features = { path = "../moli-window-features" }
+moli-webtransport = { path = "../moli-webtransport" }
 moli-websocket = { path = "../moli-websocket" }
 moli-xpath = { path = "../moli-xpath" }
 curl = { version = "0.4.51", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }

@@ -1,5 +1,6 @@
-//! Native WebTransport frontend. The initial streams, WebIDL conversion and
-//! failure lifecycle are real; no HTTP/3 or HTTP/2 session backend is available.
+//! Native WebTransport frontend backed by browser-owned HTTP/3 sessions.
+//! WebIDL, streams and networking completions retain their exact Window/worker
+//! owner; resource retirement cancels transport independently from V8 handles.
 
 use crate::{
     util::{
@@ -10,8 +11,12 @@ use crate::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 
+pub(crate) mod backend;
 mod datagrams;
+mod incoming_datagrams;
+pub(crate) mod networking;
 mod schema;
+mod streams;
 mod tasks;
 
 const STATE: &str = "__moliWebTransportState";
@@ -86,11 +91,11 @@ struct Prototype {
     close: (),
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, DATAGRAMS))]
     datagrams: (),
-    #[webapi(method, returns_promise, length = 0, callback = create_stream)]
+    #[webapi(method, returns_promise, length = 0, callback = create_bidirectional_stream)]
     create_bidirectional_stream: (),
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, INCOMING_BIDI))]
     incoming_bidirectional_streams: (),
-    #[webapi(method, returns_promise, length = 0, callback = create_stream)]
+    #[webapi(method, returns_promise, length = 0, callback = create_unidirectional_stream)]
     create_unidirectional_stream: (),
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, INCOMING_UNI))]
     incoming_unidirectional_streams: (),
@@ -205,16 +210,22 @@ pub(super) fn constructor<'s>(
             return;
         }
     }
-    if !options.headers.validate(scope) {
+    let Some(headers) = options.headers.into_entries(scope) else {
         return;
-    }
+    };
     let csp_error = connection_csp_error(scope, &url);
     let ready = v8::PromiseResolver::new(scope).expect("WebTransport ready promise");
     let closed = v8::PromiseResolver::new(scope).expect("WebTransport closed promise");
     let draining = v8::PromiseResolver::new(scope).expect("WebTransport draining promise");
-    let incoming_bidi = super::stream_adapter::new_readable_stream_object(scope, None, 0.0, None);
-    let incoming_uni = super::stream_adapter::new_readable_stream_object(scope, None, 0.0, None);
-    let datagrams = datagrams::build(scope, owner, options.datagrams_readable_type.is_some());
+    let ready_promise = ready.get_promise(scope);
+    let incoming_bidi = streams::incoming(scope, owner, ready_promise, true);
+    let incoming_uni = streams::incoming(scope, owner, ready_promise, false);
+    let datagrams = datagrams::build(
+        scope,
+        owner,
+        ready_promise,
+        options.datagrams_readable_type.is_some(),
+    );
     let limit_bidi = nullable_limit(
         scope,
         options.anticipated_concurrent_incoming_bidirectional_streams,
@@ -242,7 +253,23 @@ pub(super) fn constructor<'s>(
         // violation events still use the owning context's queued task source.
         tasks::fail(scope, owner, &message);
     } else {
-        tasks::queue_connection_failure(scope, owner);
+        let certificate_hashes = options
+            .server_certificate_hashes
+            .into_iter()
+            .map(|hash| moli_webtransport::CertificateHash {
+                algorithm: String::from_utf16_lossy(&hash.algorithm.0),
+                value: hash.value.to_vec(scope),
+            })
+            .collect();
+        backend::connect(
+            scope,
+            owner,
+            url,
+            headers,
+            options.protocols,
+            options.congestion_control,
+            certificate_hashes,
+        );
     }
     rv.set(owner.into());
 }
@@ -339,24 +366,28 @@ fn set_limit<'s>(
 
 fn reliability<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(v8str(scope, "pending").into());
+    let owner = target(scope, args.this());
+    let value = backend::reliability(scope, owner);
+    rv.set(v8str(scope, value).into());
 }
 fn congestion_control<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(v8str(scope, "default").into());
+    let owner = target(scope, args.this());
+    rv.set(backend::congestion(scope, owner));
 }
 fn protocol<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(v8str(scope, "").into());
+    let owner = target(scope, args.this());
+    rv.set(backend::protocol(scope, owner));
 }
 fn response_headers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -378,17 +409,11 @@ fn close<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_converted) = webidl::parse_args::<schema::CloseArgs>(scope, &args) else {
+    let Some(converted) = webidl::parse_args::<schema::CloseArgs>(scope, &args) else {
         return;
     };
     let receiver = target(scope, args.this());
-    if connecting(scope, receiver) {
-        tasks::fail(
-            scope,
-            receiver,
-            "WebTransport was closed before connecting.",
-        );
-    }
+    backend::close(scope, receiver, converted.close_info);
 }
 
 fn get_stats<'s>(
@@ -431,10 +456,26 @@ fn same_group<'s>(
     })
 }
 
+fn create_bidirectional_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    create_stream(scope, args, rv, true);
+}
+fn create_unidirectional_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    create_stream(scope, args, rv, false);
+}
+
 fn create_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
+    bidi: bool,
 ) {
     let Some(parsed) = webidl::parse_args::<schema::CreateStreamArgs>(scope, &args) else {
         return;
@@ -444,7 +485,7 @@ fn create_stream<'s>(
         throw_type_error(scope, "The send group belongs to another WebTransport.");
         return;
     }
-    tasks::wait_for_connection(scope, owner, rv);
+    streams::open(scope, owner, bidi, rv);
 }
 
 fn create_send_group<'s>(
@@ -453,7 +494,7 @@ fn create_send_group<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let owner = target(scope, args.this());
-    if !connecting(scope, owner) {
+    if !connecting(scope, owner) && backend::connection(scope, owner).is_none() {
         invalid_state(scope);
         return;
     }

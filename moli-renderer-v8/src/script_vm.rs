@@ -841,6 +841,7 @@ mod page_task_capabilities;
 mod page_task_enqueue;
 mod parser_owned_classic;
 mod webrtc;
+mod webtransport;
 pub(crate) use parser_owned_classic::*;
 mod parser_module_terminal;
 mod popup_close;
