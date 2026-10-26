@@ -1,5 +1,4 @@
 mod dispatch;
-mod progress;
 mod state;
 
 pub(super) use self::dispatch::xhr_fire_readystatechange;
