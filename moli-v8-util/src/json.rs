@@ -163,4 +163,33 @@ mod tests {
             "{broken 中文"
         );
     }
+
+    #[test]
+    fn inspector_utf16_preserves_lone_units_replacement_character_and_valid_pairs() {
+        let mut units: Vec<u16> = r#"{"value":""#.encode_utf16().collect();
+        units.extend([0xd800, 0x61, 0xdc00, 0xfffd, 0xd83d, 0xde00]);
+        units.extend(r#""}"#.encode_utf16());
+        let view = v8::inspector::StringView::from(&units[..]);
+        assert_eq!(
+            super::inspector_protocol_json(view).unwrap().to_string(),
+            r#"{"value":"\ud800a\udc00�😀"}"#
+        );
+    }
+
+    #[test]
+    fn inspector_ascii_keeps_literal_backslashes_distinct_from_utf16_escapes() {
+        for bytes in [
+            br#"{"value":"\ud800"}"#.as_slice(),
+            br#"{"value":"\\ud800"}"#.as_slice(),
+        ] {
+            let view = v8::inspector::StringView::from(bytes);
+            assert_eq!(
+                super::inspector_protocol_json(view)
+                    .unwrap()
+                    .to_string()
+                    .as_bytes(),
+                bytes
+            );
+        }
+    }
 }
