@@ -3374,6 +3374,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "png",
+ "serde",
  "serde_json",
  "socket2",
  "thiserror",

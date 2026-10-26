@@ -678,7 +678,7 @@ async fn runtime_binding_replay_cannot_consume_same_id_frontend_deferred_respons
         .protocol_response(colliding_call_id)
         .expect("frontend completion should contain its protocol response");
     assert_eq!(
-        response["result"]["result"]["value"],
+        response.as_json().expect("scalar protocol fixture")["result"]["result"]["value"],
         serde_json::json!("frontend-result")
     );
 
@@ -822,7 +822,12 @@ async fn child_default_runtime_evaluate_pending_await_promise_does_not_leak_inte
         .messages()
         .iter()
         .cloned()
-        .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+        .map(|event| {
+            event
+                .into_v8_inspector_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect();
     let messages_json =
         serde_json::to_string(&messages).expect("Runtime.evaluate messages should serialize");
@@ -835,10 +840,20 @@ async fn child_default_runtime_evaluate_pending_await_promise_does_not_leak_inte
         "child Runtime.evaluate awaitPromise leaked internal pending marker: {messages_json}"
     );
     assert!(
-        response.get("error").is_none() && response["result"].get("exceptionDetails").is_none(),
+        response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("error")
+            .is_none()
+            && response.as_json().expect("scalar protocol fixture")["result"]
+                .get("exceptionDetails")
+                .is_none(),
         "a resolved child Promise must return its native result: {response:?}"
     );
-    assert_eq!(response["result"]["result"]["value"], "child-result");
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["result"]["result"]["value"],
+        "child-result"
+    );
 
     page.close_async()
         .await
@@ -1230,7 +1245,7 @@ async fn inspector_output_flushes_v8_state_for_commands_and_notifications() {
                     ) if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("id").and_then(serde_json::Value::as_i64) == Some(701)
+                            if message.as_json().expect("scalar protocol fixture").get("id").and_then(serde_json::Value::as_i64) == Some(701)
                     ))
                 )
             })
@@ -1255,7 +1270,7 @@ async fn inspector_output_flushes_v8_state_for_commands_and_notifications() {
                         && batch.messages.iter().any(|message| matches!(
                             message,
                             RendererRuntimeInspectorMessage::Protocol(message)
-                                if message.get("method")
+                                if message.as_json().expect("scalar protocol fixture").get("method")
                                     == Some(&serde_json::json!("Runtime.consoleAPICalled"))
                         ))
             ))
@@ -1315,7 +1330,7 @@ async fn owner_command_fences_exact_cursor_when_later_output_is_already_publishe
                     if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("method")
+                            if message.as_json().expect("scalar protocol fixture").get("method")
                                 == Some(&serde_json::json!("Runtime.consoleAPICalled"))
                     ))
             )),
@@ -1419,7 +1434,7 @@ async fn page_diagnostics_snapshot_is_read_only_for_current_inspector_output() {
                     if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("method")
+                            if message.as_json().expect("scalar protocol fixture").get("method")
                                 == Some(&serde_json::json!("Runtime.consoleAPICalled"))
                     ))
             ))
@@ -3629,7 +3644,9 @@ async fn command_turn_output_scope_is_removed_after_command_error() {
         completion
             .runtime_inspector_output()
             .and_then(|output| output.protocol_response(call_id))
-            .expect("the next Runtime command should retain its response")["result"]["result"]["value"],
+            .expect("the next Runtime command should retain its response")
+            .as_json()
+            .expect("scalar protocol fixture")["result"]["result"]["value"],
         serde_json::json!(42)
     );
 
@@ -4171,9 +4188,9 @@ async fn pending_expression_publishes_console_output_before_settlement() {
                     let RendererRuntimeInspectorMessage::Protocol(message) = message else {
                         continue;
                     };
-                    if message.get("method").and_then(serde_json::Value::as_str)
+                    if message.as_json().expect("scalar protocol fixture").get("method").and_then(serde_json::Value::as_str)
                         == Some("Runtime.consoleAPICalled")
-                        && let Some(value) = message["params"]["args"][0]["value"].as_str()
+                        && let Some(value) = message.as_json().expect("scalar protocol fixture")["params"]["args"][0]["value"].as_str()
                     {
                         observed.push(value.to_owned());
                     }
@@ -4277,8 +4294,8 @@ async fn navigation_follow_publishes_command_output_before_replacing_document() 
                     if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message["method"] == "Runtime.consoleAPICalled"
-                                && message["params"]["args"][0]["value"] == "command-output-before-navigation"
+                            if message.as_json().expect("scalar protocol fixture")["method"] == "Runtime.consoleAPICalled"
+                                && message.as_json().expect("scalar protocol fixture")["params"]["args"][0]["value"] == "command-output-before-navigation"
                     ))
             ))
         })

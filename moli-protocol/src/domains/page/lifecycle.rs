@@ -738,7 +738,10 @@ mod tests {
                 );
                 assert!(event.protocol_method().is_some());
                 assert!(event.has_protocol_wire_message());
-                event.into_protocol_message()
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
             })
             .collect()
     }
@@ -1079,7 +1082,13 @@ mod tests {
 
         let parts = out
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             parts

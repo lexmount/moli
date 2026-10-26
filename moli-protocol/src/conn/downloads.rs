@@ -1631,6 +1631,7 @@ mod tests {
         );
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], "Browser.downloadWillBegin");
         assert_eq!(message["params"]["frameId"], "FRAME-download");
@@ -1653,6 +1654,7 @@ mod tests {
         );
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], "Browser.downloadProgress");
         assert_eq!(message["params"]["guid"], "GUID-download");
@@ -1733,7 +1735,13 @@ mod tests {
         );
         let parts = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(parts.len(), 4);
@@ -1817,7 +1825,13 @@ mod tests {
         );
         let parts = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(parts[0].0["method"], "Page.downloadProgress");
@@ -1855,7 +1869,9 @@ mod tests {
             .into_iter()
             .next()
             .expect("Page observer should receive the download event")
-            .into_protocol_message();
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture");
         assert_eq!(message["method"], "Page.downloadWillBegin");
         assert_eq!(message["sessionId"], "SID-page");
     }

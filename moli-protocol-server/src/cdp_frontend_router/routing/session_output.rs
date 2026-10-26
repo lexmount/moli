@@ -1,6 +1,5 @@
-use serde_json::{Value, json};
-
-use super::set_top_level_session_id;
+use moli_protocol_cdp::CdpMessage;
+use serde_json::json;
 
 /// A session's complete path back to its WebSocket, also captured by pending
 /// replies so detachment cannot lose an already admitted command's terminal.
@@ -35,13 +34,13 @@ impl SessionOutputRoute {
         self.payload_session_id = session_id.map(str::to_owned);
     }
 
-    pub(super) fn encode(&self, mut message: Value) -> Value {
-        set_top_level_session_id(&mut message, self.payload_session_id.as_deref());
+    pub(super) fn encode(&self, mut message: CdpMessage) -> CdpMessage {
+        message.set_session_id(self.payload_session_id.as_deref());
         for envelope in self.envelopes.iter().rev() {
             message = json!({"method":"Target.receivedMessageFromTarget", "params":{
                 "sessionId": envelope.target_session_id, "message":message.to_string(),
-            }});
-            set_top_level_session_id(&mut message, envelope.carrier_session_id.as_deref());
+            }}).into();
+            message.set_session_id(envelope.carrier_session_id.as_deref());
         }
         message
     }

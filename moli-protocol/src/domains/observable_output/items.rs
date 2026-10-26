@@ -682,6 +682,7 @@ mod tests {
             "Console.messageAdded should stay typed until wire projection"
         );
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["sessionId"], json!("SID-1"));
         assert_eq!(message["method"], json!("Console.messageAdded"));
@@ -722,6 +723,7 @@ mod tests {
             "Log.entryAdded should stay typed until wire projection"
         );
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["sessionId"], json!("SID-1"));
         assert_eq!(message["method"], json!("Log.entryAdded"));
@@ -781,6 +783,7 @@ Error: Console
         assert!(event.protocol_message().is_none());
         assert_eq!(event.protocol_method(), Some("Runtime.consoleAPICalled"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["sessionId"], json!("SID-1"));
         assert_eq!(message["method"], json!("Runtime.consoleAPICalled"));
@@ -823,6 +826,7 @@ Error: Console
         assert!(event.protocol_message().is_none());
         assert_eq!(event.protocol_method(), Some("Runtime.exceptionThrown"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["sessionId"], json!("SID-1"));
         assert_eq!(message["method"], json!("Runtime.exceptionThrown"));

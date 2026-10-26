@@ -3324,7 +3324,8 @@ fn inspector_context_created_matches_same_name_child_isolated_world_by_frame_id(
                         }
                     }
                 }
-            })],
+            })
+            .into()],
             root_frame_id.as_deref(),
         );
 

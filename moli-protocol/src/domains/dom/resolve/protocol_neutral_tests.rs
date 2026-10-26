@@ -56,6 +56,7 @@ fn set_child_nodes_output_preserves_typed_automation_sidecar() {
     assert_eq!(events[0].protocol_method(), Some("DOM.setChildNodes"));
     assert!(events[0].has_protocol_wire_message());
     let (message, automation_event) = events.remove(0).into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert_eq!(message["method"], json!("DOM.setChildNodes"));
     assert_eq!(message["sessionId"], json!("SID-dom"));
     assert_eq!(message["params"]["parentId"], json!(8));

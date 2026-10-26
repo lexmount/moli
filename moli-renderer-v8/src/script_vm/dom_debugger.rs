@@ -389,6 +389,11 @@ fn wrap_inspector_value<'s>(
         .ok_or_else(|| {
             anyhow!("internal Runtime.callFunctionOn `{call_id}` returned no response")
         })?;
+    let response = response.into_json().map_err(|_| {
+        anyhow!(
+            "internal Runtime.callFunctionOn `{call_id}` returned a non-scalar UTF-16 JSON payload"
+        )
+    })?;
     if let Some(error) = response.get("error") {
         return Err(anyhow!(
             "internal Runtime.callFunctionOn `{call_id}` failed: {error}"

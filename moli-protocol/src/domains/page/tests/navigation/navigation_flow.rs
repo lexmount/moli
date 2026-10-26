@@ -272,13 +272,17 @@ async fn renderer_navigation_publishes_one_fact_and_separate_cdp_projection() {
         .map(|event| event.into_parts())
         .collect::<Vec<_>>();
     assert!(
-        parts.iter().all(|(message, _)| message.get("id").is_none()),
+        parts.iter().all(|(message, _)| message
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("id")
+            .is_none()),
         "renderer-owned navigation must not synthesize a command response"
     );
     let frame_methods = parts
         .iter()
         .filter_map(|(message, _)| {
-            message["method"]
+            message.as_json().expect("scalar protocol fixture")["method"]
                 .as_str()
                 .filter(|method| method.starts_with("Page.frame"))
         })
@@ -296,14 +300,26 @@ async fn renderer_navigation_publishes_one_fact_and_separate_cdp_projection() {
     );
     let (message, wire_fact) = parts
         .iter()
-        .find(|(message, _)| message["method"] == json!("Page.frameStartedNavigating"))
+        .find(|(message, _)| {
+            message.as_json().expect("scalar protocol fixture")["method"]
+                == json!("Page.frameStartedNavigating")
+        })
         .expect("renderer navigation should emit frameStartedNavigating");
 
-    assert_eq!(message["sessionId"], "SID-typed");
-    assert_eq!(message["params"]["frameId"], "TID-typed");
-    assert_eq!(message["params"]["loaderId"], LOADER_ID);
     assert_eq!(
-        message["params"]["url"],
+        message.as_json().expect("scalar protocol fixture")["sessionId"],
+        "SID-typed"
+    );
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["params"]["frameId"],
+        "TID-typed"
+    );
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["params"]["loaderId"],
+        LOADER_ID
+    );
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["params"]["url"],
         "data:text/html,<body>typed</body>"
     );
     assert!(

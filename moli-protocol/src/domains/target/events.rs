@@ -281,6 +281,8 @@ mod tests {
         out.pop()
             .expect("target event should be emitted")
             .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture")
     }
 
     #[test]
@@ -336,7 +338,10 @@ mod tests {
             .pop()
             .expect("target event should be emitted")
             .into_parts();
-        assert_eq!(message["method"], json!("Target.targetCreated"));
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Target.targetCreated")
+        );
         let Some(AutomationEvent::TargetCreated(event)) = automation_event else {
             panic!("expected TargetCreated automation sidecar");
         };
@@ -369,7 +374,7 @@ mod tests {
             .expect("target event should be emitted")
             .into_parts();
         assert_eq!(
-            message["params"]["targetInfo"]["type"],
+            message.as_json().expect("scalar protocol fixture")["params"]["targetInfo"]["type"],
             json!("shared_worker")
         );
         let Some(AutomationEvent::TargetCreated(event)) = automation_event else {
@@ -464,8 +469,14 @@ mod tests {
             .pop()
             .expect("target attach event should be emitted")
             .into_parts();
-        assert_eq!(message["method"], json!("Target.attachedToTarget"));
-        assert_eq!(message["sessionId"], json!("SID-parent"));
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Target.attachedToTarget")
+        );
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["sessionId"],
+            json!("SID-parent")
+        );
         let Some(AutomationEvent::TargetAttached(event)) = automation_event else {
             panic!("expected TargetAttached automation sidecar");
         };
@@ -544,10 +555,12 @@ mod tests {
         let mut events = out.into_background_events();
         assert_eq!(events.len(), 3);
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Inspector.detached"));
         assert!(automation_event.is_none());
 
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Target.targetDestroyed"));
         let Some(AutomationEvent::TargetDestroyed(event)) = automation_event else {
             panic!("expected TargetDestroyed automation sidecar");
@@ -555,6 +568,7 @@ mod tests {
         assert_eq!(event.target_id.as_str(), "TID-destroyed");
 
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Target.detachedFromTarget"));
         assert_eq!(message["sessionId"], json!("SID-parent"));
         let Some(AutomationEvent::TargetDetached(event)) = automation_event else {
@@ -586,6 +600,7 @@ mod tests {
         let mut events = out.into_background_events();
         assert_eq!(events.len(), 2);
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Target.targetDestroyed"));
         let Some(AutomationEvent::TargetDestroyed(event)) = automation_event else {
             panic!("expected first TargetDestroyed sidecar");
@@ -593,6 +608,7 @@ mod tests {
         assert_eq!(event.target_id.as_str(), "TID-before-background");
 
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Target.detachedFromTarget"));
         let Some(AutomationEvent::TargetDetached(event)) = automation_event else {
             panic!("expected later TargetDetached sidecar");

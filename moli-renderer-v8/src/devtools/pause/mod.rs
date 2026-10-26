@@ -541,9 +541,9 @@ impl RendererInspectorPauseBridge {
         &self,
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
-        message: &Value,
+        message: &moli_protocol_cdp::CdpMessage,
     ) -> RendererInspectorPauseNotificationRoute {
-        let method = message.get("method").and_then(Value::as_str);
+        let method = message.method();
         let is_paused_notification = method == Some("Debugger.paused");
         let is_resumed_notification = method == Some("Debugger.resumed");
         let session_route = (agent_token, session.clone());
@@ -604,11 +604,23 @@ impl RendererInspectorPauseBridge {
             state.pending_command_transition = None;
         }
         if is_paused_notification {
-            let is_instrumentation_pause = message
-                .get("params")
-                .and_then(|params| params.get("reason"))
-                .and_then(Value::as_str)
-                == Some("instrumentation");
+            #[derive(serde::Deserialize)]
+            struct PauseParams {
+                reason: Option<String>,
+            }
+            let is_instrumentation_pause = if let Some(value) = message.as_json() {
+                value
+                    .get("params")
+                    .and_then(|params| params.get("reason"))
+                    .and_then(Value::as_str)
+                    == Some("instrumentation")
+            } else {
+                message
+                    .field::<PauseParams>("params")
+                    .ok()
+                    .flatten()
+                    .is_some_and(|params| params.reason.as_deref() == Some("instrumentation"))
+            };
             if state.phase == RendererInspectorPausePhase::Running {
                 state.phase = RendererInspectorPausePhase::Entering;
                 state.pause_loop_policy = if is_instrumentation_pause {
@@ -686,7 +698,7 @@ impl RendererInspectorPauseBridge {
 impl RendererInspectorSessionOutboundRoute {
     pub(crate) fn route_notification(
         &self,
-        message: &Value,
+        message: &moli_protocol_cdp::CdpMessage,
     ) -> RendererInspectorPauseNotificationRoute {
         self.target
             .pause_ref()

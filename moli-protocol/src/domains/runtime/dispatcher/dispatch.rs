@@ -13,8 +13,7 @@ pub(super) fn command_response_succeeded(
         let RendererRuntimeInspectorMessage::Protocol(message) = message else {
             return false;
         };
-        message.get("id").and_then(Value::as_u64) == Some(command_id)
-            && message.get("result").is_some()
+        message.id() == Some(command_id) && message.has_field("result")
     })
 }
 
@@ -29,7 +28,13 @@ pub(super) fn command_response_succeeded_for_events(
         if let Some((event_command_id, _, payload)) = event.command_response_payload_ref()
             && event_command_id == Some(command_id)
         {
-            return matches!(payload, BackgroundCommandResponsePayloadRef::Success { .. });
+            return match payload {
+                BackgroundCommandResponsePayloadRef::Inspector(message) => {
+                    !message.has_field("error")
+                }
+                BackgroundCommandResponsePayloadRef::Success { .. } => true,
+                _ => false,
+            };
         }
         event.protocol_message().is_some_and(|message| {
             message.get("id").and_then(Value::as_u64) == Some(command_id)

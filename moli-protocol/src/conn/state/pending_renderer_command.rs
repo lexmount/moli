@@ -1343,8 +1343,14 @@ mod tests {
                 .output
                 .protocol_response(completion.call_id)
                 .expect("terminal response");
-            assert_eq!(response["error"]["code"], -32000);
-            assert_eq!(response["error"]["message"], "Inspector detached");
+            assert_eq!(
+                response.as_json().expect("scalar protocol fixture")["error"]["code"],
+                -32000
+            );
+            assert_eq!(
+                response.as_json().expect("scalar protocol fixture")["error"]["message"],
+                "Inspector detached"
+            );
         }
         assert!(registry.renderer_calls_by_frontend.is_empty());
         assert!(registry.frontend_commands_by_renderer.is_empty());

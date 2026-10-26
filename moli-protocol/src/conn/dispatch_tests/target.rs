@@ -153,7 +153,9 @@ async fn automation_command_preserves_target_close_detached_typed_sidecar() {
     let mut saw_detached = false;
     for event in protocol_events {
         let (message, automation_event) = event.into_parts();
-        if message["method"] != json!("Target.detachedFromTarget") {
+        if message.as_json().expect("scalar protocol fixture")["method"]
+            != json!("Target.detachedFromTarget")
+        {
             continue;
         }
         let Some(AutomationEvent::TargetDetached(event)) = automation_event else {

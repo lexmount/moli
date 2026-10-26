@@ -232,7 +232,7 @@ impl ScriptVm {
 
     pub(super) fn runtime_inspector_messages_from_v8_messages(
         &self,
-        messages: impl IntoIterator<Item = Value>,
+        messages: impl IntoIterator<Item = impl Into<moli_protocol_cdp::CdpMessage>>,
     ) -> Vec<RendererRuntimeInspectorMessage> {
         messages
             .into_iter()

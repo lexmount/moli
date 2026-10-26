@@ -1,43 +1,44 @@
-use serde_json::Value as JsonValue;
 use v8::{Array, Function, Local, Object, PinScope, Value};
 
 use crate::properties::get_static_property;
 use crate::strings::v8_string;
 
-/// Decodes one V8 Inspector protocol message without first materializing an
-/// additional UTF-8 `String` when V8 already exposes ASCII JSON bytes.
-///
-/// Inspector's 8-bit string view contains Latin-1 code units rather than an
-/// unconditional UTF-8 byte string. JSON emitted by V8 is normally ASCII at
-/// this boundary (non-ASCII string contents are escaped), so that common path
-/// can be parsed in place. The non-ASCII 8-bit and 16-bit paths retain the
-/// prior text conversion semantics.
-pub fn decode_inspector_protocol_message(
-    view: v8::inspector::StringView<'_>,
-) -> serde_json::Result<JsonValue> {
+/// JSON text from Inspector, preserving JavaScript's UTF-16 string contents.
+/// ASCII buffers stay borrowed; a raw unpaired UTF-16 unit is escaped rather
+/// than substituted with the distinct U+FFFD character.
+pub fn inspector_protocol_message_json<'a>(
+    view: &'a v8::inspector::StringView<'_>,
+) -> std::borrow::Cow<'a, str> {
     if let Some(bytes) = view.characters8() {
         if bytes.is_ascii() {
-            return serde_json::from_slice(bytes);
+            return std::borrow::Cow::Borrowed(
+                std::str::from_utf8(bytes).expect("ASCII Inspector JSON"),
+            );
         }
-        let text = inspector_protocol_message_text(view);
-        return serde_json::from_str(&text);
+        return std::borrow::Cow::Owned(bytes.iter().copied().map(char::from).collect());
     }
-
-    let text = inspector_protocol_message_text(view);
-    serde_json::from_str(&text)
+    let mut text = String::with_capacity(view.len());
+    for unit in char::decode_utf16(
+        view.characters16()
+            .expect("UTF-16 Inspector JSON")
+            .iter()
+            .copied(),
+    ) {
+        match unit {
+            Ok(character) => text.push(character),
+            Err(error) => {
+                use std::fmt::Write;
+                write!(&mut text, "\\u{:04x}", error.unpaired_surrogate())
+                    .expect("write Inspector JSON escape");
+            }
+        }
+    }
+    std::borrow::Cow::Owned(text)
 }
 
-/// Materializes an Inspector string view for diagnostics and uncommon text
-/// decoding paths. Callers on the ASCII JSON fast path should avoid this so a
-/// successful protocol message does not allocate an intermediate `String`.
+/// Materialize protocol text for diagnostics without substituting UTF-16 units.
 pub fn inspector_protocol_message_text(view: v8::inspector::StringView<'_>) -> String {
-    if let Some(bytes) = view.characters8() {
-        return bytes.iter().copied().map(char::from).collect();
-    }
-    String::from_utf16_lossy(
-        view.characters16()
-            .expect("a non-8-bit Inspector StringView must expose UTF-16 units"),
-    )
+    inspector_protocol_message_json(&view).into_owned()
 }
 
 pub fn v8_json_parse<'s>(scope: &mut PinScope<'s, '_>, json: &str) -> Option<Local<'s, Value>> {
@@ -78,13 +79,15 @@ pub fn array_push_value(
 mod tests {
     use serde_json::json;
 
-    use super::{decode_inspector_protocol_message, inspector_protocol_message_text};
+    use super::{inspector_protocol_message_json, inspector_protocol_message_text};
 
     #[test]
     fn inspector_protocol_ascii_bytes_decode_without_an_intermediate_string() {
         let raw = br#"{"id":7,"result":{"value":"\u7f51\u6613"}}"#;
-        let decoded = decode_inspector_protocol_message(v8::inspector::StringView::from(&raw[..]))
-            .expect("valid Inspector JSON");
+        let view = v8::inspector::StringView::from(&raw[..]);
+        let text = inspector_protocol_message_json(&view);
+        assert!(matches!(text, std::borrow::Cow::Borrowed(_)));
+        let decoded: serde_json::Value = serde_json::from_str(&text).expect("valid Inspector JSON");
 
         assert_eq!(decoded, json!({"id": 7, "result": {"value": "网易"}}));
     }
@@ -92,15 +95,17 @@ mod tests {
     #[test]
     fn inspector_protocol_latin1_and_utf16_views_keep_existing_text_semantics() {
         let latin1 = b"{\"value\":\"caf\xe9\"}";
-        let decoded =
-            decode_inspector_protocol_message(v8::inspector::StringView::from(&latin1[..]))
-                .expect("valid Latin-1 Inspector JSON");
+        let decoded = serde_json::from_str::<serde_json::Value>(&inspector_protocol_message_json(
+            &v8::inspector::StringView::from(&latin1[..]),
+        ))
+        .expect("valid Latin-1 Inspector JSON");
         assert_eq!(decoded, json!({"value": "café"}));
 
         let utf16 = "{\"value\":\"中文\"}".encode_utf16().collect::<Vec<_>>();
-        let decoded =
-            decode_inspector_protocol_message(v8::inspector::StringView::from(&utf16[..]))
-                .expect("valid UTF-16 Inspector JSON");
+        let decoded = serde_json::from_str::<serde_json::Value>(&inspector_protocol_message_json(
+            &v8::inspector::StringView::from(&utf16[..]),
+        ))
+        .expect("valid UTF-16 Inspector JSON");
         assert_eq!(decoded, json!({"value": "中文"}));
     }
 
@@ -117,5 +122,27 @@ mod tests {
             inspector_protocol_message_text(v8::inspector::StringView::from(&utf16[..])),
             "{broken 中文"
         );
+    }
+    #[test]
+    fn inspector_utf16_preserves_lone_units_replacement_character_and_valid_pairs() {
+        let mut units: Vec<u16> = r#"{"value":""#.encode_utf16().collect();
+        units.extend([0xd800, 0x61, 0xdc00, 0xfffd, 0xd83d, 0xde00]);
+        units.extend(r#""}"#.encode_utf16());
+        let view = v8::inspector::StringView::from(&units[..]);
+        assert_eq!(
+            inspector_protocol_message_json(&view),
+            r#"{"value":"\ud800a\udc00�😀"}"#
+        );
+    }
+
+    #[test]
+    fn inspector_ascii_keeps_literal_backslashes_distinct_from_utf16_escapes() {
+        for bytes in [
+            br#"{"value":"\ud800"}"#.as_slice(),
+            br#"{"value":"\\ud800"}"#.as_slice(),
+        ] {
+            let view = v8::inspector::StringView::from(bytes);
+            assert_eq!(inspector_protocol_message_json(&view).as_bytes(), bytes);
+        }
     }
 }

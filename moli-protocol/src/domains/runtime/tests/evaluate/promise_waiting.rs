@@ -706,7 +706,9 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
             completion
                 .output
                 .protocol_response(completion.call_id)
-                .expect("Console.clearMessages replay response")["result"],
+                .expect("Console.clearMessages replay response")
+                .as_json()
+                .expect("scalar protocol fixture")["result"],
             json!({})
         );
 

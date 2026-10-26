@@ -175,10 +175,13 @@ impl PageIsolatedWorldRegistry {
 
     pub(super) fn record_inspector_context_state(
         &mut self,
-        messages: &[Value],
+        messages: &[moli_protocol_cdp::CdpMessage],
         root_frame_id: Option<&str>,
     ) {
-        for message in messages {
+        for message in messages
+            .iter()
+            .filter_map(moli_protocol_cdp::CdpMessage::as_json)
+        {
             match message["method"].as_str() {
                 Some("Runtime.executionContextsCleared") => self.clear_inspector_context_state(),
                 Some("Runtime.executionContextDestroyed") => {

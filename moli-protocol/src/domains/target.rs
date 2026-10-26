@@ -1046,6 +1046,7 @@ mod devtools_runtime_entry_tests {
         assert_eq!(protocol_events.len(), 1);
 
         let (message, automation_event) = protocol_events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Target.attachedToTarget"));
         assert_eq!(message["sessionId"], json!("SID-parent"));
         assert_eq!(message["params"]["sessionId"], json!("SID-child"));

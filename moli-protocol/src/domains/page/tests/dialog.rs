@@ -429,7 +429,13 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
     let closed_event = events
         .into_iter()
         .find(|event| {
-            event.clone().into_parts().0["method"] == json!("Page.javascriptDialogClosed")
+            event
+                .clone()
+                .into_parts()
+                .0
+                .as_json()
+                .expect("scalar protocol fixture")["method"]
+                == json!("Page.javascriptDialogClosed")
         })
         .expect("peeked dialog should emit Page.javascriptDialogClosed");
     assert!(
@@ -437,8 +443,14 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
         "closed dialog event should stay typed until wire projection"
     );
     let (closed_message, closed_sidecar) = closed_event.into_parts();
-    assert_eq!(closed_message["params"]["result"], json!(true));
-    assert_eq!(closed_message["params"]["frameId"], json!("TID-1"));
+    assert_eq!(
+        closed_message.as_json().expect("scalar protocol fixture")["params"]["result"],
+        json!(true)
+    );
+    assert_eq!(
+        closed_message.as_json().expect("scalar protocol fixture")["params"]["frameId"],
+        json!("TID-1")
+    );
     assert!(matches!(
         closed_sidecar,
         Some(crate::automation::AutomationEvent::UserPromptClosed(_))

@@ -356,7 +356,10 @@ mod tests {
 
         assert_eq!(events.len(), 2, "expected response and replay event");
         let (log_message, log_sidecar) = events[0].clone().into_parts();
-        assert_eq!(log_message["method"], json!("Log.entryAdded"));
+        assert_eq!(
+            log_message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Log.entryAdded")
+        );
         let Some(AutomationEvent::LogEntryAdded(log_event)) = log_sidecar else {
             panic!("Log.entryAdded replay should preserve typed sidecar");
         };
@@ -373,7 +376,10 @@ mod tests {
         );
 
         let (response, response_sidecar) = events[1].clone().into_parts();
-        assert_eq!(response["id"], json!(1));
+        assert_eq!(
+            response.as_json().expect("scalar protocol fixture")["id"],
+            json!(1)
+        );
         assert!(response_sidecar.is_none());
     }
 

@@ -2,6 +2,28 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn raw_utf16_serialization_obeys_the_same_exact_wire_byte_limit() {
+    let raw =
+        r#"{"id":7,"result":{"result":{"value":"\ud800","nested":{"\udc00":"literal \\ud800"}}}}"#;
+    let message = CdpMessage::parse(raw).unwrap();
+    let text = serialize_owned_message_with_limit(message.clone(), usize::MAX).unwrap();
+    assert!(text.contains(r#""value":"\ud800""#));
+    assert!(text.contains(r#""\udc00":"literal \\ud800""#));
+    assert_eq!(
+        serialize_owned_message_with_limit(message.clone(), text.len()).unwrap(),
+        text
+    );
+    assert!(matches!(
+        serialize_owned_message_with_limit(message.clone(), text.len() - 1),
+        Err(BoundedJsonError::LimitExceeded { .. })
+    ));
+    assert!(
+        message.retained_bytes_with(|_| panic!("raw payload must use raw accounting"))
+            >= text.len()
+    );
+}
+
 fn test_sink() -> (
     CdpSocketSink,
     mpsc::Receiver<SocketWriterCommand>,

@@ -1862,10 +1862,16 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
             .output
             .protocol_response(call_id)
             .expect("teardown completion should contain its protocol response");
-        assert_eq!(response["id"], serde_json::json!(call_id));
-        assert_eq!(response["error"]["code"], serde_json::json!(-32000));
         assert_eq!(
-            response["error"]["message"],
+            response.as_json().expect("scalar protocol fixture")["id"],
+            serde_json::json!(call_id)
+        );
+        assert_eq!(
+            response.as_json().expect("scalar protocol fixture")["error"]["code"],
+            serde_json::json!(-32000)
+        );
+        assert_eq!(
+            response.as_json().expect("scalar protocol fixture")["error"]["message"],
             serde_json::json!("Execution context was destroyed.")
         );
     }
@@ -1903,7 +1909,9 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
         .and_then(|output| output.protocol_response(reused_call_id))
         .expect("synchronous replacement response should stay in the command completion");
     assert_eq!(
-        replacement_response["result"]["result"]["value"],
+        replacement_response
+            .as_json()
+            .expect("scalar protocol fixture")["result"]["result"]["value"],
         serde_json::json!(42)
     );
     let (replacement_dispatch, _, _) = replacement_completion.into_parts();

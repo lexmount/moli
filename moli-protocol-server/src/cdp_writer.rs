@@ -1,3 +1,4 @@
+use moli_protocol_cdp::CdpMessage;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -181,7 +182,7 @@ impl CdpSocketSink {
         receiver.await.unwrap_or(false)
     }
 
-    pub(crate) fn enqueue_owned_message(&self, message: Value) -> bool {
+    pub(crate) fn enqueue_owned_message(&self, message: impl Into<CdpMessage>) -> bool {
         let available_pending_bytes = self.pending_byte_budget.available();
         let serialization_limit = self.max_message_bytes.min(available_pending_bytes);
         let message = match serialize_owned_message_with_limit(message, serialization_limit) {
@@ -289,9 +290,13 @@ struct OwnedOuterHtmlResponse {
 }
 
 fn serialize_owned_message_with_limit(
-    message: Value,
+    message: impl Into<CdpMessage>,
     limit: usize,
 ) -> Result<String, BoundedJsonError> {
+    let message = match message.into().into_json() {
+        Ok(value) => value,
+        Err(raw) => return to_string_with_limit(&raw, limit),
+    };
     let response = match take_owned_outer_html_response(message) {
         Ok(response) => response,
         Err(message) => return to_string_with_limit(&message, limit),

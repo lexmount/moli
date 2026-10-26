@@ -354,6 +354,8 @@ mod tests {
             return None;
         };
         message
+            .as_json()
+            .expect("scalar protocol fixture")
             .get("params")
             .and_then(|params| params.get("marker"))
             .and_then(serde_json::Value::as_str)
