@@ -281,8 +281,9 @@ async fn main_document_open_preserves_local_window_owned_dedicated_worker() {
         .borrow_mut()
         .forget_worker(workers_before_open[0].0);
 }
-#[test]
-fn main_document_open_preserves_active_xhr_and_its_wrapper() {
+#[tokio::test(flavor = "current_thread")]
+async fn main_document_open_preserves_active_xhr_and_its_wrapper() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://main-owner-xhr.test/");
     vm.eval("globalThis.__preservedXhrWrapper = new XMLHttpRequest(); 'created'")
         .expect("main XHR wrapper should capture its creation execution context");
@@ -357,8 +358,9 @@ fn main_document_open_preserves_active_xhr_and_its_wrapper() {
         "#,
     )
     .expect("the same-LocalWindow XHR wrapper should remain usable after document.open");
-    vm.eval("0")
-        .expect("the preserved XHR data URL completion should run");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the preserved XHR networking task should run");
     assert_eq!(
         vm.eval("__preservedXhrWrapper.responseText")
             .expect("preserved XHR response should be readable"),
