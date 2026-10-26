@@ -226,7 +226,10 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         if event.target_id.as_str() != create_target_result.target_id.as_str() {
             continue;
         }
-        assert_eq!(message["method"], json!("Moli.automationOnly"));
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Moli.automationOnly")
+        );
         assert_eq!(
             event.browser_context_id.as_ref().map(|id| id.as_str()),
             Some("user-context-1")
@@ -526,7 +529,9 @@ async fn automation_command_preserves_remove_browser_context_detached_typed_side
     let mut saw_detached = false;
     for event in protocol_events {
         let (message, automation_event) = event.into_parts();
-        if message["method"] != json!("Target.detachedFromTarget") {
+        if message.as_json().expect("scalar protocol fixture")["method"]
+            != json!("Target.detachedFromTarget")
+        {
             continue;
         }
         let Some(AutomationEvent::TargetDetached(event)) = automation_event else {

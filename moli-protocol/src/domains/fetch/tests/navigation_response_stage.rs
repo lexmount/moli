@@ -1340,7 +1340,12 @@ async fn response_stage_continue_response_streams_network_events_through_backgro
 
     let mut background_events = Vec::new();
     while let Ok(event) = background_rx.try_recv() {
-        background_events.push(event.into_protocol_message());
+        background_events.push(
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture"),
+        );
     }
     assert!(
         background_events

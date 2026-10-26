@@ -685,7 +685,7 @@ mod tests {
         let messages = events
             .into_iter()
             .filter(crate::conn::BackgroundProtocolEvent::has_protocol_wire_message)
-            .map(|event| event.into_parts().0)
+            .map(|event| event.into_parts().0.into_json().expect("scalar protocol fixture"))
             .collect::<Vec<_>>();
         for message in &messages {
             assert_eq!(message["method"], "Target.targetCrashed");

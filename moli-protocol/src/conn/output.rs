@@ -21,6 +21,7 @@ use moli_core::{
 use moli_page_types::{
     DevToolsSessionKey, FrontendCommandId, InspectorIssueSnapshot, RendererCallId,
 };
+use moli_protocol_cdp::CdpMessage;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -261,7 +262,7 @@ impl RuntimeInspectorResponseReady {
         (command_id, output, renderer_output_predecessor)
     }
 
-    pub fn into_protocol_message_for_typed_runtime_route(self) -> Value {
+    pub fn into_protocol_message_for_typed_runtime_route(self) -> CdpMessage {
         let command_id = self.frontend_command_id.get();
         command_response_payload_protocol_message(command_id, self.into_command_response_payload())
     }
@@ -315,7 +316,7 @@ fn rewrite_runtime_command_output_response_id(
             .renderer_call_id()
             .is_some_and(|call_id| call_id.get() == renderer_call_id)
         {
-            message.value_mut()["id"] = json!(frontend_command_id);
+            message.set_frontend_command_id(frontend_command_id);
             rewritten = true;
             break;
         }
@@ -332,7 +333,9 @@ fn runtime_command_output_response_message(
     output: &RendererRuntimeCommandOutput,
     call_id: i32,
 ) -> Option<&Value> {
-    output.protocol_response(call_id)
+    output
+        .protocol_response(call_id)
+        .and_then(moli_protocol_cdp::CdpMessage::as_json)
 }
 
 fn runtime_command_output_from_response_payload(
@@ -362,8 +365,13 @@ fn runtime_inspector_mismatched_completion_payload(
 fn command_response_payload_protocol_message(
     command_id: u64,
     payload: BackgroundCommandResponsePayload,
-) -> Value {
-    match payload {
+) -> CdpMessage {
+    let value = match payload {
+        BackgroundCommandResponsePayload::Inspector(mut message) => {
+            message.set_id(command_id);
+            message.set_session_id(None);
+            return message;
+        }
         BackgroundCommandResponsePayload::Success { result } => {
             build_command_success_response(Some(command_id), result, None)
         }
@@ -381,7 +389,8 @@ fn command_response_payload_protocol_message(
                 "error": error,
             })
         }
-    }
+    };
+    value.into()
 }
 
 pub type RuntimeInspectorAsyncCompletionReceiver =
@@ -488,7 +497,7 @@ define_background_protocol_event_payloads!(
 impl BackgroundProtocolEventPayload {
     fn protocol_session_id(&self) -> Option<&str> {
         match self {
-            Self::Protocol(event) => event.message.get("sessionId").and_then(Value::as_str),
+            Self::Protocol(event) => event.message.session_id(),
             Self::CommandResponse(event) => event.session_id.as_deref(),
             Self::NetworkRequestWillBeSentExtraInfo(event) => event.session_id.as_deref(),
             Self::NetworkResponseReceivedExtraInfo(event) => event.session_id.as_deref(),
@@ -549,6 +558,7 @@ impl BackgroundProtocolEventPayload {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundCommandResponsePayload {
+    Inspector(CdpMessage),
     Success {
         result: Value,
     },
@@ -561,6 +571,7 @@ pub enum BackgroundCommandResponsePayload {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum BackgroundCommandResponsePayloadRef<'a> {
+    Inspector(&'a CdpMessage),
     Success {
         result: &'a Value,
     },
@@ -573,7 +584,7 @@ pub(crate) enum BackgroundCommandResponsePayloadRef<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundProtocolMessageEvent {
-    message: Value,
+    message: moli_protocol_cdp::CdpMessage,
     automation_event: Option<Box<AutomationEvent>>,
 }
 
@@ -641,6 +652,7 @@ pub struct BackgroundCommandResponseEvent {
 
 #[derive(Debug, Clone, PartialEq)]
 enum BackgroundCommandResponse {
+    Inspector(CdpMessage),
     Success {
         result: Value,
     },
@@ -1075,16 +1087,16 @@ impl ProtocolDeliveryEnvelope {
         self
     }
 
-    pub fn immediate(message: Value) -> Self {
+    pub fn immediate(message: impl Into<moli_protocol_cdp::CdpMessage>) -> Self {
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
-            message,
+            message: message.into(),
             automation_event: None,
         })
     }
 
     pub fn immediate_automation_event(message: Value, automation_event: AutomationEvent) -> Self {
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
-            message,
+            message: message.into(),
             automation_event: Some(Box::new(automation_event)),
         })
     }
@@ -1126,7 +1138,8 @@ impl ProtocolDeliveryEnvelope {
                     "suggestedFilename": suggested_filename,
                 }),
                 session_id,
-            ),
+            )
+            .into(),
             automation_event: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
@@ -1150,7 +1163,8 @@ impl ProtocolDeliveryEnvelope {
                     "totalBytes": total_bytes,
                 }),
                 session_id,
-            ),
+            )
+            .into(),
             automation_event: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
@@ -1170,6 +1184,13 @@ impl ProtocolDeliveryEnvelope {
         response: BackgroundCommandResponsePayload,
     ) -> Self {
         match response {
+            BackgroundCommandResponsePayload::Inspector(message) => {
+                Self::wrap_command_response_event(Box::new(BackgroundCommandResponseEvent {
+                    command_id,
+                    session_id: session_id.map(str::to_owned),
+                    response: BackgroundCommandResponse::Inspector(message),
+                }))
+            }
             BackgroundCommandResponsePayload::Success { result } => {
                 Self::command_success(command_id, session_id, result)
             }
@@ -1984,8 +2005,8 @@ impl ProtocolDeliveryEnvelope {
         };
         match &mut self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
-                if event.message.get("sessionId").is_none() {
-                    event.message["sessionId"] = json!(session_id);
+                if event.message.session_id().is_none() {
+                    event.message.set_session_id(Some(session_id));
                 }
             }
             BackgroundProtocolEventPayload::CommandResponse(event) => {
@@ -2414,16 +2435,19 @@ impl ProtocolDeliveryEnvelope {
     /// control inputs remain on their typed delivery paths.
     pub fn into_wire_message(self) -> Option<Value> {
         self.has_protocol_wire_message()
-            .then(|| self.into_protocol_message())
+            .then(|| self.into_protocol_message().into_json().expect("JSON-only protocol adapter requires scalar payload"))
     }
 
-    pub fn into_protocol_message(self) -> Value {
-        match self.payload {
+    pub fn into_protocol_message(self) -> CdpMessage {
+        let value = match self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
-                strip_moli_private_protocol_fields(event.message)
+                return match event.message.into_json() {
+                    Ok(value) => strip_moli_private_protocol_fields(value).into(),
+                    Err(raw) => CdpMessage::Raw(Box::new(raw)),
+                };
             }
             BackgroundProtocolEventPayload::CommandResponse(event) => {
-                (*event).into_protocol_message()
+                return (*event).into_protocol_message();
             }
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(event) => {
                 (*event).into_protocol_message()
@@ -2566,19 +2590,22 @@ impl ProtocolDeliveryEnvelope {
                     "message": "InternalRuntimeInspectorResponseReadyNotRouted",
                 },
             }),
-        }
+        };
+        value.into()
     }
 
-    pub fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        match self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => (
-                event.message,
-                event
-                    .automation_event
-                    .map(|automation_event| *automation_event),
-            ),
+    pub fn into_parts(self) -> (CdpMessage, Option<AutomationEvent>) {
+        let value = match self.payload {
+            BackgroundProtocolEventPayload::Protocol(event) => {
+                return (
+                    event.message,
+                    event
+                        .automation_event
+                        .map(|automation_event| *automation_event),
+                );
+            }
             BackgroundProtocolEventPayload::CommandResponse(event) => {
-                ((*event).into_protocol_message(), None)
+                return ((*event).into_protocol_message(), None);
             }
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(event) => {
                 (*event).into_parts()
@@ -2677,7 +2704,8 @@ impl ProtocolDeliveryEnvelope {
                 }),
                 None,
             ),
-        }
+        };
+        (value.0.into(), value.1)
     }
 
     pub fn take_runtime_inspector_response_ready(
@@ -2714,7 +2742,7 @@ impl ProtocolDeliveryEnvelope {
 
     pub fn protocol_message(&self) -> Option<&Value> {
         match &self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => Some(&event.message),
+            BackgroundProtocolEventPayload::Protocol(event) => event.message.as_json(),
             BackgroundProtocolEventPayload::CommandResponse(_) => None,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_) => None,
             BackgroundProtocolEventPayload::NetworkResponseReceivedExtraInfo(_) => None,
@@ -2766,9 +2794,7 @@ impl ProtocolDeliveryEnvelope {
 
     pub fn protocol_method(&self) -> Option<&str> {
         match &self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => {
-                event.message.get("method").and_then(Value::as_str)
-            }
+            BackgroundProtocolEventPayload::Protocol(event) => event.message.method(),
             BackgroundProtocolEventPayload::CommandResponse(_) => None,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_) => {
                 Some("Network.requestWillBeSentExtraInfo")
@@ -2919,9 +2945,7 @@ impl ProtocolDeliveryEnvelope {
 
     pub fn protocol_message_id(&self) -> Option<u64> {
         match &self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => {
-                event.message.get("id").and_then(Value::as_u64)
-            }
+            BackgroundProtocolEventPayload::Protocol(event) => event.message.id(),
             BackgroundProtocolEventPayload::CommandResponse(event) => event.command_id,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_)
             | BackgroundProtocolEventPayload::NetworkResponseReceivedExtraInfo(_)
@@ -3030,10 +3054,12 @@ impl ProtocolDeliveryEnvelope {
     ) -> bool {
         match &self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
-                event.message["method"] == json!("Console.messageAdded")
-                    && event.message["params"]["message"]["source"] == json!(source)
-                    && event.message["params"]["message"]["level"] == json!(level)
-                    && event.message["params"]["message"]["text"] == json!(text)
+                event.message.as_json().is_some_and(|message| {
+                    message["method"] == json!("Console.messageAdded")
+                        && message["params"]["message"]["source"] == json!(source)
+                        && message["params"]["message"]["level"] == json!(level)
+                        && message["params"]["message"]["text"] == json!(text)
+                })
             }
             BackgroundProtocolEventPayload::ConsoleMessageAdded(event) => {
                 event.source == source && event.level == level && event.text == text
@@ -3044,7 +3070,10 @@ impl ProtocolDeliveryEnvelope {
 
     pub(crate) fn protocol_params_mut(&mut self) -> Option<&mut Value> {
         match &mut self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => event.message.get_mut("params"),
+            BackgroundProtocolEventPayload::Protocol(event) => event
+                .message
+                .as_json_mut()
+                .and_then(|message| message.get_mut("params")),
             BackgroundProtocolEventPayload::CommandResponse(_) => None,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_) => None,
             BackgroundProtocolEventPayload::NetworkResponseReceivedExtraInfo(_) => None,
@@ -3096,10 +3125,18 @@ impl ProtocolDeliveryEnvelope {
 }
 
 impl BackgroundCommandResponseEvent {
-    fn into_protocol_message(self) -> Value {
+    fn into_protocol_message(self) -> CdpMessage {
         let mut message = match self.response {
+            BackgroundCommandResponse::Inspector(mut message) => {
+                if let Some(id) = self.command_id {
+                    message.set_id(id);
+                }
+                message.set_session_id(self.session_id.as_deref());
+                return message;
+            }
             BackgroundCommandResponse::Success { result } => {
-                return build_command_success_response(self.command_id, result, self.session_id);
+                return build_command_success_response(self.command_id, result, self.session_id)
+                    .into();
             }
             BackgroundCommandResponse::Error {
                 code,
@@ -3116,7 +3153,7 @@ impl BackgroundCommandResponseEvent {
         if let Some(session_id) = self.session_id {
             message["sessionId"] = json!(session_id);
         }
-        message
+        message.into()
     }
 }
 
@@ -3165,7 +3202,11 @@ impl BackgroundCommandResponsePayload {
         Self::internal_error("MissingDevToolsCommandResult")
     }
 
-    pub(crate) fn from_owned_runtime_inspector_message(mut message: Value) -> Self {
+    pub(crate) fn from_owned_runtime_inspector_message(message: impl Into<CdpMessage>) -> Self {
+        let mut message = match message.into().into_json() {
+            Ok(value) => value,
+            Err(raw) => return Self::Inspector(CdpMessage::Raw(Box::new(raw))),
+        };
         let Some(message) = message.as_object_mut() else {
             return Self::internal_error("MissingDevToolsCommandResult");
         };
@@ -3211,6 +3252,7 @@ impl BackgroundCommandResponsePayload {
 impl BackgroundCommandResponse {
     fn payload_ref(&self) -> BackgroundCommandResponsePayloadRef<'_> {
         match self {
+            Self::Inspector(message) => BackgroundCommandResponsePayloadRef::Inspector(message),
             Self::Success { result } => BackgroundCommandResponsePayloadRef::Success { result },
             Self::Error {
                 code,
@@ -3226,6 +3268,7 @@ impl BackgroundCommandResponse {
 
     fn into_payload(self) -> BackgroundCommandResponsePayload {
         match self {
+            Self::Inspector(message) => BackgroundCommandResponsePayload::Inspector(message),
             Self::Success { result } => BackgroundCommandResponsePayload::Success { result },
             Self::Error {
                 code,
@@ -4794,7 +4837,10 @@ mod tests {
         assert_eq!(message, "renderer rejected command");
         assert_eq!(data, Some(json!({ "reason": "negative call id" })));
 
-        let message = response.into_protocol_message_for_typed_runtime_route();
+        let message = response
+            .into_protocol_message_for_typed_runtime_route()
+            .into_json()
+            .expect("scalar protocol fixture");
         assert_eq!(message["id"], json!(42));
         assert_eq!(message["error"]["code"], json!(-32001));
         assert_eq!(
@@ -4833,7 +4879,9 @@ mod tests {
         assert_eq!(
             output
                 .protocol_response(42)
-                .expect("generated error output should contain the frontend response")["error"]["message"],
+                .expect("generated error output should contain the frontend response")
+                .as_json()
+                .expect("scalar protocol fixture")["error"]["message"],
             json!("RuntimeInspectorResponseMissingProtocolResponse")
         );
     }
@@ -4856,7 +4904,10 @@ mod tests {
             ),
         );
 
-        let message = response.into_protocol_message_for_typed_runtime_route();
+        let message = response
+            .into_protocol_message_for_typed_runtime_route()
+            .into_json()
+            .expect("scalar protocol fixture");
 
         assert_eq!(message["id"], json!(frontend_command_id));
         assert_eq!(message["result"]["result"]["value"], json!(42));
@@ -4872,6 +4923,7 @@ mod tests {
 
         event.ensure_protocol_session_id(Some("SID-runtime"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Runtime.bindingCalled"));
         assert_eq!(message["sessionId"], json!("SID-runtime"));
@@ -4892,6 +4944,7 @@ mod tests {
 
         event.ensure_protocol_session_id(Some("SID-page"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Page.frameAttached"));
         assert_eq!(message["sessionId"], json!("SID-page"));
@@ -4910,6 +4963,7 @@ mod tests {
 
         event.ensure_protocol_session_id(Some("SID-page"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Page.frameDetached"));
         assert_eq!(message["sessionId"], json!("SID-page"));
@@ -4935,6 +4989,7 @@ mod tests {
         assert!(event.has_protocol_wire_message());
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Page.javascriptDialogClosed"));
         assert_eq!(message["sessionId"], json!("SID-dialog"));
@@ -4962,6 +5017,7 @@ mod tests {
         assert!(event.has_protocol_wire_message());
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Page.screencastVisibilityChanged"));
         assert_eq!(message["sessionId"], json!("SID-page"));
@@ -4991,6 +5047,7 @@ mod tests {
         assert!(event.has_protocol_wire_message());
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Page.screencastFrame"));
         assert_eq!(message["sessionId"], json!("SID-page"));
@@ -5016,7 +5073,13 @@ mod tests {
 
         let parts = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(parts[0].0["method"], json!("Inspector.targetCrashed"));
@@ -5081,7 +5144,13 @@ mod tests {
 
         let parts = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -5159,6 +5228,7 @@ mod tests {
         assert!(event.has_protocol_wire_message());
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Target.targetInfoChanged"));
         assert!(message.get("sessionId").is_none());
@@ -5239,7 +5309,13 @@ mod tests {
 
         let parts = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(parts[0].0["method"], json!("Target.targetCreated"));
@@ -5294,6 +5370,7 @@ mod tests {
         assert!(event.has_protocol_wire_message());
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Target.targetDestroyed"));
         assert!(message.get("sessionId").is_none());
@@ -5322,6 +5399,7 @@ mod tests {
         );
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Target.targetDestroyed"));
         assert_eq!(message["sessionId"], json!("SID-owner"));
@@ -5341,6 +5419,7 @@ mod tests {
         assert!(event.has_protocol_wire_message());
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Target.targetCrashed"));
         assert!(message.get("sessionId").is_none());
@@ -5365,6 +5444,7 @@ mod tests {
 
         event.ensure_protocol_session_id(Some("SID-parent"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Target.receivedMessageFromTarget"));
         assert!(
@@ -5422,9 +5502,18 @@ mod tests {
             "",
         );
         let (console_message, console_event) = console.into_parts();
-        assert_eq!(console_message["method"], json!("Console.messageAdded"));
-        assert_eq!(console_message["sessionId"], json!("SID-console"));
-        assert_eq!(console_message["params"]["message"]["text"], json!("hello"));
+        assert_eq!(
+            console_message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Console.messageAdded")
+        );
+        assert_eq!(
+            console_message.as_json().expect("scalar protocol fixture")["sessionId"],
+            json!("SID-console")
+        );
+        assert_eq!(
+            console_message.as_json().expect("scalar protocol fixture")["params"]["message"]["text"],
+            json!("hello")
+        );
         let Some(AutomationEvent::RuntimeConsoleApiCalled(console_event)) = console_event else {
             panic!("Console.messageAdded should expose a RuntimeConsoleApiCalled sidecar");
         };
@@ -5440,9 +5529,18 @@ mod tests {
             None,
         );
         let (log_message, log_event) = log.into_parts();
-        assert_eq!(log_message["method"], json!("Log.entryAdded"));
-        assert_eq!(log_message["sessionId"], json!("SID-log"));
-        assert_eq!(log_message["params"]["entry"]["text"], json!("boom"));
+        assert_eq!(
+            log_message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Log.entryAdded")
+        );
+        assert_eq!(
+            log_message.as_json().expect("scalar protocol fixture")["sessionId"],
+            json!("SID-log")
+        );
+        assert_eq!(
+            log_message.as_json().expect("scalar protocol fixture")["params"]["entry"]["text"],
+            json!("boom")
+        );
         let Some(AutomationEvent::LogEntryAdded(log_event)) = log_event else {
             panic!("Log.entryAdded should expose a LogEntryAdded sidecar");
         };
@@ -5466,6 +5564,7 @@ mod tests {
         );
         assert!(request.has_protocol_wire_message());
         let (message, automation_event) = request.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(
             message["method"],
             json!("Network.requestWillBeSentExtraInfo")
@@ -5494,6 +5593,7 @@ mod tests {
             Some("Network.responseReceivedExtraInfo")
         );
         let (message, automation_event) = response.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(
             message["method"],
             json!("Network.responseReceivedExtraInfo")
@@ -5569,6 +5669,7 @@ mod tests {
             assert_eq!(event.protocol_method(), Some(method));
             assert!(event.has_protocol_wire_message());
             let (message, automation_event) = event.into_parts();
+            let message = message.into_json().expect("scalar protocol fixture");
             assert_eq!(message["method"], json!(method));
             assert_eq!(message["sessionId"], json!("SID-ws"));
             assert_eq!(message["params"]["requestId"], json!("REQ-ws"));
@@ -5622,6 +5723,7 @@ mod tests {
             assert!(event.has_protocol_wire_message());
 
             let (message, automation_event) = event.into_parts();
+            let message = message.into_json().expect("scalar protocol fixture");
             assert_eq!(message["method"], json!(method));
             assert_eq!(message["sessionId"], json!("SID-runtime"));
             assert!(automation_event.is_some());
@@ -5678,7 +5780,13 @@ mod tests {
 
         let parts = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>();
         let methods = parts
             .iter()
@@ -5868,7 +5976,9 @@ mod tests {
                 "__moliFetchRequestId": "FETCH-1"
             }
         }))
-        .into_protocol_message();
+        .into_protocol_message()
+        .into_json()
+        .expect("scalar protocol fixture");
 
         assert_eq!(message["params"]["requestId"], json!("FETCH-1"));
         assert!(message["params"].get("__moliBlockedInterceptors").is_none());

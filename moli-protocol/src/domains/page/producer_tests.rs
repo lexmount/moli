@@ -384,6 +384,7 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
 
     assert_eq!(out.len(), 1);
     let (message, automation_event) = out.remove(0).into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert_eq!(message["method"], json!("Page.javascriptDialogOpening"));
     assert_eq!(message["params"]["frameId"], json!("FRAME-1"));
     assert_eq!(message["params"]["type"], json!("alert"));
@@ -448,7 +449,11 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
     });
 
     assert_eq!(out.len(), 1);
-    let message = out.remove(0).into_protocol_message();
+    let message = out
+        .remove(0)
+        .into_protocol_message()
+        .into_json()
+        .expect("scalar protocol fixture");
     assert_eq!(message["sessionId"], json!("SID-attached"));
     assert_eq!(message["params"]["frameId"], json!("FRAME-child"));
     ctx.with_fixture(|conn| {
@@ -1086,7 +1091,11 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
     });
 
     assert_eq!(out.len(), 1);
-    let message = out.remove(0).into_protocol_message();
+    let message = out
+        .remove(0)
+        .into_protocol_message()
+        .into_json()
+        .expect("scalar protocol fixture");
     assert_eq!(message["params"]["frameId"], json!("FRAME-source"));
     assert_eq!(
         message["params"]["url"],
@@ -1201,7 +1210,13 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
     let events = command_context.take_protocol_events();
     let parts = events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_parts)
+        .map(|event| {
+            let (message, automation_event) = event.into_parts();
+            (
+                message.into_json().expect("scalar protocol fixture"),
+                automation_event,
+            )
+        })
         .collect::<Vec<_>>();
     let ordered_methods = parts
         .iter()
@@ -1357,7 +1372,13 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
     let events = command_context.take_protocol_events();
     let parts = events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_parts)
+        .map(|event| {
+            let (message, automation_event) = event.into_parts();
+            (
+                message.into_json().expect("scalar protocol fixture"),
+                automation_event,
+            )
+        })
         .collect::<Vec<_>>();
     let ordered_markers = parts
         .iter()
@@ -2797,7 +2818,13 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
 
     let events = out
         .into_iter()
-        .map(BackgroundProtocolEvent::into_parts)
+        .map(|event| {
+            let (message, automation_event) = event.into_parts();
+            (
+                message.into_json().expect("scalar protocol fixture"),
+                automation_event,
+            )
+        })
         .collect::<Vec<_>>();
     let (target_created, target_created_sidecar) = events
         .iter()
@@ -2886,7 +2913,13 @@ async fn popup_activation_publishes_automation_lifecycle_without_cdp_discovery()
 
     let events = out
         .into_iter()
-        .map(BackgroundProtocolEvent::into_parts)
+        .map(|event| {
+            let (message, automation_event) = event.into_parts();
+            (
+                message.into_json().expect("scalar protocol fixture"),
+                automation_event,
+            )
+        })
         .collect::<Vec<_>>();
     assert!(
         events
@@ -3212,7 +3245,13 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
     }));
     let events = events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_parts)
+        .map(|event| {
+            let (message, automation_event) = event.into_parts();
+            (
+                message.into_json().expect("scalar protocol fixture"),
+                automation_event,
+            )
+        })
         .collect::<Vec<_>>();
     let automation_event = events.iter().find_map(|(_, fact)| fact.as_ref());
     assert!(matches!(

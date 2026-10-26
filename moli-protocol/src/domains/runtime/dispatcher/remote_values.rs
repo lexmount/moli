@@ -161,10 +161,16 @@ pub(super) fn collect_devtools_remote_references(
 }
 
 pub(super) fn devtools_script_result_from_response(
-    response: Value,
+    response: impl Into<moli_protocol_cdp::CdpMessage>,
     result_ownership: DevToolsResultOwnership,
     target_realm: Option<DevToolsRealmId>,
 ) -> Result<AutomationResult, DevToolsError> {
+    let response = response.into().into_json().map_err(|_| {
+        DevToolsError::new(
+            DevToolsErrorKind::Internal,
+            "Inspector result cannot be represented by the scalar JSON adapter",
+        )
+    })?;
     if let Some(error) = response.get("error") {
         return Err(devtools_error_from_cdp_error_value(error));
     }
@@ -192,8 +198,14 @@ pub(super) fn devtools_script_result_from_response(
 }
 
 pub(super) fn devtools_empty_result_from_response(
-    response: Value,
+    response: impl Into<moli_protocol_cdp::CdpMessage>,
 ) -> Result<AutomationResult, DevToolsError> {
+    let response = response.into().into_json().map_err(|_| {
+        DevToolsError::new(
+            DevToolsErrorKind::Internal,
+            "Inspector result cannot be represented by the scalar JSON adapter",
+        )
+    })?;
     if let Some(error) = response.get("error") {
         return Err(devtools_error_from_cdp_error_value(error));
     }

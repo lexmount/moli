@@ -417,11 +417,15 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     let evaluation = messages
         .iter()
         .find_map(|message| {
-            let message = message.clone();
-            (message["id"] == json!(7001)).then_some(message)
+            let message = moli_protocol_cdp::CdpMessage::from(message.clone());
+            (message.as_json().expect("scalar protocol fixture")["id"] == json!(7001))
+                .then_some(message)
         })
         .expect("replacement evaluation should return a protocol response");
-    assert_eq!(evaluation["result"]["result"]["value"], json!("real-page"));
+    assert_eq!(
+        evaluation.as_json().expect("scalar protocol fixture")["result"]["result"]["value"],
+        json!("real-page")
+    );
 
     let large_frontend_command_id = i32::MAX as u64 + 73;
     let large_id_messages = ctx
@@ -436,11 +440,18 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     let large_id_evaluation = large_id_messages
         .iter()
         .find_map(|message| {
-            let message = message.clone();
-            (message["id"] == json!(large_frontend_command_id)).then_some(message)
+            let message = moli_protocol_cdp::CdpMessage::from(message.clone());
+            (message.as_json().expect("scalar protocol fixture")["id"]
+                == json!(large_frontend_command_id))
+            .then_some(message)
         })
         .expect("renderer response should restore the large frontend command id");
-    assert_eq!(large_id_evaluation["result"]["result"]["value"], json!(42));
+    assert_eq!(
+        large_id_evaluation
+            .as_json()
+            .expect("scalar protocol fixture")["result"]["result"]["value"],
+        json!(42)
+    );
 
     let current_attachment_id = ctx.with_fixture(|conn| {
         conn.browser_context
@@ -519,7 +530,10 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .expect("matching session, renderer call, and attachment should resolve")
     });
     assert_eq!(
-        resolved.into_protocol_message_for_typed_runtime_route()["id"],
+        resolved
+            .into_protocol_message_for_typed_runtime_route()
+            .as_json()
+            .expect("scalar protocol fixture")["id"],
         json!(attachment_test_frontend_id)
     );
 

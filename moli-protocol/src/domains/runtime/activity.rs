@@ -1029,6 +1029,7 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         let (message, automation_event) = events.into_iter().next().unwrap().into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Runtime.consoleAPICalled"));
         assert_eq!(message["sessionId"], json!("SID-1"));
         assert_eq!(message["params"]["executionContextId"], json!(7));

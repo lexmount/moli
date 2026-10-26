@@ -37,8 +37,13 @@ fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
         .page_inspector
         .take_outbound_messages_for_session(None)
         .into_iter()
-        .filter(|message| message["method"] == serde_json::json!("Runtime.executionContextCreated"))
-        .filter_map(|message| message["params"]["context"]["id"].as_i64())
+        .filter(|message| {
+            message.as_json().expect("scalar protocol fixture")["method"]
+                == serde_json::json!("Runtime.executionContextCreated")
+        })
+        .filter_map(|message| {
+            message.as_json().expect("scalar protocol fixture")["params"]["context"]["id"].as_i64()
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         created_context_ids,
@@ -82,9 +87,13 @@ fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
         .take_outbound_messages_for_session(None)
         .into_iter()
         .filter(|message| {
-            message["method"] == serde_json::json!("Runtime.executionContextDestroyed")
+            message.as_json().expect("scalar protocol fixture")["method"]
+                == serde_json::json!("Runtime.executionContextDestroyed")
         })
-        .filter_map(|message| message["params"]["executionContextId"].as_i64())
+        .filter_map(|message| {
+            message.as_json().expect("scalar protocol fixture")["params"]["executionContextId"]
+                .as_i64()
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         destroyed_context_ids,

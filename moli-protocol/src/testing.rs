@@ -2299,7 +2299,7 @@ impl TestContext {
                     .drain(..position)
                     .filter_map(BackgroundProtocolEvent::into_wire_message),
             );
-            let message = events.remove(0).into_protocol_message();
+            let message = events.remove(0).into_protocol_message().into_json().expect("scalar protocol fixture");
             let Some(command_id) = message.get("id").and_then(Value::as_u64) else {
                 self.sent.push(message);
                 continue;
@@ -2767,7 +2767,7 @@ pub(crate) fn protocol_events_into_internal_messages(
     events
         .into_iter()
         .filter(BackgroundProtocolEvent::has_protocol_wire_message)
-        .map(|event| event.into_parts().0)
+        .map(|event| event.into_parts().0.into_json().expect("scalar protocol fixture"))
         .collect()
 }
 

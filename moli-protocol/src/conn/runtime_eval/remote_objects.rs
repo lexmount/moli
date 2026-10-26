@@ -89,6 +89,51 @@ impl CdpConnection {
             .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
     }
 
+    pub(crate) fn register_runtime_remote_object_ids_from_message_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        message: &moli_protocol_cdp::CdpMessage,
+    ) {
+        if let Some(value) = message.as_json() {
+            self.register_runtime_remote_object_ids_from_value_for_owner(owner, value);
+            return;
+        }
+        let ids = message.object_ids(MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH);
+        if owner.session_id().is_some() {
+            self.register_runtime_remote_object_ids_for_session_owner(owner.session_id(), ids);
+        } else {
+            let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                state.register_runtime_remote_object_ids(ids)
+            });
+        }
+    }
+
+    pub(crate) fn register_runtime_remote_object_ids_from_message_for_owner_with_group(
+        &mut self,
+        owner: &CommandOwnerScope,
+        message: &moli_protocol_cdp::CdpMessage,
+        group: &str,
+    ) {
+        if let Some(value) = message.as_json() {
+            self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                owner, value, group,
+            );
+            return;
+        }
+        let ids = message.object_ids(MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH);
+        if owner.session_id().is_some() {
+            self.register_runtime_remote_object_ids_for_session_owner_with_group(
+                owner.session_id(),
+                ids,
+                group,
+            );
+        } else {
+            let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                state.register_runtime_remote_object_ids_with_group(ids, group)
+            });
+        }
+    }
+
     pub(crate) fn register_runtime_remote_object_ids_from_value_for_session_owner(
         &mut self,
         session_id: Option<&str>,

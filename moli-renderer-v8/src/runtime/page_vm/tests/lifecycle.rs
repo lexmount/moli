@@ -10,7 +10,7 @@ use crate::{
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
     RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageReply,
-    RendererPageState, RendererRuntimeInspectorMessage,
+    RendererPageState,
     page_task_queue::PostParseLifecycleWork,
     runtime::document_lifecycle_turn::DocumentLifecycleNavigationTiming,
     script_vm::{
@@ -3017,7 +3017,7 @@ async fn runtime_document_close_response_does_not_wait_for_replacement_lifecycle
                     output
                         .protocol_response(call_id)
                         .expect("completed Runtime command output should retain its response")
-                        ["result"]["result"]["value"],
+                        .as_json().expect("scalar protocol fixture")["result"]["result"]["value"],
                     serde_json::json!("done")
                 );
                 assert!(matches!(
@@ -3910,7 +3910,12 @@ fn runtime_stack_capture_preserves_independent_session_limits() {
             .dispatch_inspector_protocol_message_for_session(Some(session), request)
             .expect("Page Inspector session dispatch")
             .into_iter()
-            .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+            .map(|event| {
+                event
+                    .into_v8_inspector_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect()
     });
 }

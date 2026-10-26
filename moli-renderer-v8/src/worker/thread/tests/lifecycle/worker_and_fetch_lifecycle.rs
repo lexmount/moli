@@ -373,7 +373,12 @@ async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap
             .expect("worker Runtime response channel closed")
             .expect("worker Runtime command failed")
             .into_iter()
-            .map(crate::runtime::RendererRuntimeInspectorMessage::into_v8_inspector_message)
+            .map(|event| {
+                event
+                    .into_v8_inspector_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect()
     }
 
@@ -430,7 +435,11 @@ async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap
                 saw_worker_script_loaded |= batches.iter().any(|batch| {
                     batch.inspector_session_id.as_deref() == Some("SID-worker-pause")
                         && batch.messages.iter().any(|message| {
-                            message.clone().into_v8_inspector_message()
+                            message
+                                .clone()
+                                .into_v8_inspector_message()
+                                .into_json()
+                                .expect("scalar protocol fixture")
                                 == serde_json::json!({
                                     "method": "Inspector.workerScriptLoaded",
                                     "params": {}
@@ -491,7 +500,11 @@ async fn worker_attach_before_runtime_enable_preserves_script_loaded_after_resum
                 saw_worker_script_loaded |= batches.iter().any(|batch| {
                     batch.inspector_session_id.as_deref() == Some("SID-worker-attached")
                         && batch.messages.iter().any(|message| {
-                            message.clone().into_v8_inspector_message()
+                            message
+                                .clone()
+                                .into_v8_inspector_message()
+                                .into_json()
+                                .expect("scalar protocol fixture")
                                 == serde_json::json!({
                                     "method": "Inspector.workerScriptLoaded",
                                     "params": {}
@@ -606,7 +619,12 @@ async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_j
         .expect("queued Runtime.evaluate failed after termination");
     let evaluate_response = evaluate_messages
         .into_iter()
-        .map(crate::runtime::RendererRuntimeInspectorMessage::into_v8_inspector_message)
+        .map(|event| {
+            event
+                .into_v8_inspector_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .find(|message| message["id"] == 2)
         .expect("queued Runtime.evaluate response");
     assert_eq!(evaluate_response["result"]["result"]["value"], 42);

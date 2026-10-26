@@ -761,11 +761,8 @@ impl CdpConnection {
             .iter()
             .filter_map(|event| {
                 let message = event.clone().into_protocol_message();
-                let method = message.get("method")?.as_str()?.to_owned();
-                let session_id = message
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+                let method = message.method()?.to_owned();
+                let session_id = message.session_id().map(str::to_owned);
                 let frame = self.tracing_frame_snapshot(session_id.as_deref());
                 Some((method, session_id, frame))
             })

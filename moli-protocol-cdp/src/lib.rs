@@ -5,6 +5,7 @@
 //! `moli-protocol`.
 
 mod dom;
+mod message;
 mod metadata;
 mod runtime;
 mod target;
@@ -15,6 +16,7 @@ pub use dom::{
     backend_node_id_for_snapshot, collect_flattened_node_snapshot, frontend_node_id_for_snapshot,
     node_snapshot_base_payload, node_snapshot_to_cdp, node_snapshot_to_cdp_with_limit,
 };
+pub use message::{CdpMessage, RawCdpMessage};
 pub use metadata::CDP_PROTOCOL_JSON;
 pub use runtime::remote_object_from_json_value;
 pub use target::{CdpTargetKindWire, CdpTargetType, cdp_target_type_wire_value};

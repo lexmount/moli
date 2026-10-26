@@ -217,6 +217,42 @@ fn runtime_remote_object_validation_allows_session_local_id_collisions() {
 }
 
 #[test]
+fn raw_utf16_properties_register_nested_handles_only_for_their_owner_and_group() {
+    let mut conn = connection_with_bidi_page_session();
+    assert!(
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .assign_attached_session_to_target("TID-active", "SID-other".to_owned(),)
+    );
+    let message = moli_protocol_cdp::CdpMessage::parse(
+        r#"{"id":7,"result":{"result":[{"name":"\ud800","value":{"type":"object","description":"\udc00","objectId":"raw-nested-handle"}}]}}"#,
+    ).unwrap();
+    let owner = CommandOwnerScope::capture(&conn, Some("SID-active"));
+    conn.register_runtime_remote_object_ids_from_message_for_owner_with_group(
+        &owner,
+        &message,
+        "raw-group",
+    );
+    assert!(
+        conn.runtime_remote_object_id_known_for_session_owner(
+            Some("SID-active"),
+            "raw-nested-handle"
+        )
+    );
+    assert!(
+        !conn.runtime_remote_object_id_known_for_session_owner(
+            Some("SID-other"),
+            "raw-nested-handle"
+        )
+    );
+    assert_eq!(
+        conn.runtime_remote_object_group_for_session_owner(Some("SID-active"), "raw-nested-handle"),
+        Some("raw-group".to_owned())
+    );
+}
+
+#[test]
 fn runtime_remote_object_validation_tolerates_an_empty_browser_context() {
     let mut conn = connection_with_bidi_page_session();
     conn.insert_browser_context(BrowserContext::new("BID-empty".to_owned()));
@@ -704,7 +740,10 @@ fn devtools_session_output_wrong_attachment_does_not_consume_live_correlation() 
     let [RendererRuntimeInspectorMessage::Protocol(message)] = live_messages.as_slice() else {
         panic!("the live attachment must publish exactly one response");
     };
-    assert_eq!(message.value()["id"], json!(70));
+    assert_eq!(
+        message.value().as_json().expect("scalar protocol fixture")["id"],
+        json!(70)
+    );
     assert!(
         conn.renderer_runtime_command_cause_for_frontend(Some("SID-attachment-race"), 70,)
             .is_none(),
@@ -749,8 +788,14 @@ fn devtools_session_output_keeps_first_of_duplicate_terminal_responses() {
     let [RendererRuntimeInspectorMessage::Protocol(message)] = messages.as_slice() else {
         panic!("duplicate terminal responses must collapse to one frontend response");
     };
-    assert_eq!(message.value()["id"], json!(71));
-    assert_eq!(message.value()["result"]["result"]["value"], json!("first"));
+    assert_eq!(
+        message.value().as_json().expect("scalar protocol fixture")["id"],
+        json!(71)
+    );
+    assert_eq!(
+        message.value().as_json().expect("scalar protocol fixture")["result"]["result"]["value"],
+        json!("first")
+    );
 }
 
 #[test]
@@ -808,12 +853,27 @@ fn devtools_session_output_restores_interleaved_calls_without_reordering() {
     let RendererRuntimeInspectorMessage::Protocol(first_response) = &messages[2] else {
         panic!("the first call response must remain last");
     };
-    assert_eq!(second_response.value()["id"], json!(81));
     assert_eq!(
-        notification.value()["method"],
+        second_response
+            .value()
+            .as_json()
+            .expect("scalar protocol fixture")["id"],
+        json!(81)
+    );
+    assert_eq!(
+        notification
+            .value()
+            .as_json()
+            .expect("scalar protocol fixture")["method"],
         json!("Debugger.scriptParsed")
     );
-    assert_eq!(first_response.value()["id"], json!(80));
+    assert_eq!(
+        first_response
+            .value()
+            .as_json()
+            .expect("scalar protocol fixture")["id"],
+        json!(80)
+    );
 }
 
 #[tokio::test]
@@ -885,7 +945,7 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
     let RendererRuntimeInspectorMessage::Protocol(response) = &messages[1] else {
         panic!("expected a protocol response");
     };
-    assert_eq!(response.value()["id"], json!(44));
+    assert_eq!(response.value().as_json().expect("scalar protocol fixture")["id"], json!(44));
     ctx.with_fixture(|conn| {
         assert_eq!(
             conn.runtime_remote_object_group_for_session_owner(
@@ -1302,6 +1362,7 @@ fn route_inspector_notifications_strip_stale_session_id_without_current_session(
         "runtime context notification should remain typed until wire projection"
     );
     let (message, automation_event) = background_events[0].clone().into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert!(matches!(
         automation_event,
         Some(AutomationEvent::RuntimeExecutionContextCreated(_))
@@ -1367,19 +1428,34 @@ fn route_inspector_runtime_context_notifications_use_current_session() {
         cleared_automation_event,
         Some(AutomationEvent::RuntimeExecutionContextsCleared(_))
     ));
-    assert_eq!(destroyed["sessionId"], json!("SID-1"));
     assert_eq!(
-        destroyed["method"],
+        destroyed.as_json().expect("scalar protocol fixture")["sessionId"],
+        json!("SID-1")
+    );
+    assert_eq!(
+        destroyed.as_json().expect("scalar protocol fixture")["method"],
         json!("Runtime.executionContextDestroyed")
     );
-    assert_eq!(destroyed["params"]["executionContextId"], json!(7));
     assert_eq!(
-        destroyed["params"]["executionContextUniqueId"],
+        destroyed.as_json().expect("scalar protocol fixture")["params"]["executionContextId"],
+        json!(7)
+    );
+    assert_eq!(
+        destroyed.as_json().expect("scalar protocol fixture")["params"]["executionContextUniqueId"],
         json!("realm-7")
     );
-    assert_eq!(cleared["sessionId"], json!("SID-1"));
-    assert_eq!(cleared["method"], json!("Runtime.executionContextsCleared"));
-    assert_eq!(cleared["params"], json!({}));
+    assert_eq!(
+        cleared.as_json().expect("scalar protocol fixture")["sessionId"],
+        json!("SID-1")
+    );
+    assert_eq!(
+        cleared.as_json().expect("scalar protocol fixture")["method"],
+        json!("Runtime.executionContextsCleared")
+    );
+    assert_eq!(
+        cleared.as_json().expect("scalar protocol fixture")["params"],
+        json!({})
+    );
 }
 
 #[test]
@@ -1431,6 +1507,7 @@ fn pending_inspector_await_registry_scopes_entries_to_devtools_session() {
     assert!(claimed_events.is_empty());
     assert_eq!(direct_events.len(), 1);
     let (message, automation_event) = direct_events.remove(0).into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert!(automation_event.is_none());
     assert_eq!(message["id"], json!(1));
     assert_eq!(message["sessionId"], json!("SID-active"));
@@ -1715,6 +1792,7 @@ async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend
     assert!(claimed_events.is_empty());
     assert_eq!(direct_events.len(), 1);
     let (message, automation_event) = direct_events.remove(0).into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert!(automation_event.is_none());
     assert_eq!(message["id"], json!(31));
     assert_eq!(message["sessionId"], json!("SID-terminal"));
@@ -1738,8 +1816,8 @@ async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend
         .output
         .protocol_response(completion.call_id)
         .expect("terminal response payload");
-    assert_eq!(terminal["error"]["code"], json!(-32000));
-    assert_eq!(terminal["error"]["message"], json!("Inspector detached"));
+    assert_eq!(terminal.as_json().expect("scalar protocol fixture")["error"]["code"], json!(-32000));
+    assert_eq!(terminal.as_json().expect("scalar protocol fixture")["error"]["message"], json!("Inspector detached"));
     ctx.with_fixture(|conn| {
         assert!(
             conn.try_register_renderer_call_for_session_owner(
@@ -1863,6 +1941,7 @@ async fn failing_pending_awaits_retire_concrete_listener_work_without_client_err
     assert!(claimed_events.is_empty());
     assert_eq!(direct_events.len(), 1);
     let (message, automation_event) = direct_events.remove(0).into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert!(automation_event.is_none());
     assert_eq!(message["id"], json!(1));
     assert_eq!(message["sessionId"], json!("SID-active"));

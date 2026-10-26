@@ -118,9 +118,7 @@ impl RendererSharedWorkerHost {
                 .messages
                 .into_iter()
                 .partition(|message| match message {
-                    RendererRuntimeInspectorMessage::Protocol(message) => {
-                        message.get("id").is_some()
-                    }
+                    RendererRuntimeInspectorMessage::Protocol(message) => message.has_field("id"),
                     RendererRuntimeInspectorMessage::RuntimeContext(_) => false,
                 });
             for message in responses {

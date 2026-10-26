@@ -1719,6 +1719,15 @@ impl BidiDevToolsEventSources {
             Err(event) => event,
         };
         let (message, automation_event) = event.into_parts();
+        // BiDi's scalar-value adapter cannot yet represent unpaired UTF-16.
+        // This is separate from CDP, whose opaque payload reaches the socket.
+        let message = match message.into_json() {
+            Ok(message) => message,
+            Err(_) => {
+                tracing::warn!("BiDi event requires unsupported UTF-16 string representation");
+                return;
+            }
+        };
         match automation_event {
             Some(event) => self.sources.push(
                 BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent {
@@ -1867,6 +1876,14 @@ fn pending_navigation_response_from_command_response(
                 Some(pending.id),
                 BidiErrorCode::UnsupportedOperation,
                 message,
+            ),
+            pending.channel.as_deref(),
+        )),
+        BackgroundCommandResponsePayload::Inspector(_) => Some(bidi_message_with_channel(
+            error_response(
+                Some(pending.id),
+                BidiErrorCode::UnsupportedOperation,
+                "BiDi navigation response requires unsupported UTF-16 string representation",
             ),
             pending.channel.as_deref(),
         )),

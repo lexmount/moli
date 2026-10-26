@@ -94,11 +94,27 @@ fn pending_subresource_auth_required_event_carries_typed_sidecar() {
 
     let (message, sidecar) = event.into_parts();
 
-    assert_eq!(message["method"], "Fetch.authRequired");
-    assert_eq!(message["sessionId"], "SID-attached");
-    assert_eq!(message["params"]["requestId"], "FETCH-7");
-    assert!(message["params"].get("networkId").is_none());
-    assert_eq!(message["params"]["authChallenge"]["realm"], "private");
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["method"],
+        "Fetch.authRequired"
+    );
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["sessionId"],
+        "SID-attached"
+    );
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["params"]["requestId"],
+        "FETCH-7"
+    );
+    assert!(
+        message.as_json().expect("scalar protocol fixture")["params"]
+            .get("networkId")
+            .is_none()
+    );
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["params"]["authChallenge"]["realm"],
+        "private"
+    );
     let Some(AutomationEvent::NetworkAuthRequired(sidecar)) = sidecar else {
         panic!("authRequired should carry typed network sidecar");
     };

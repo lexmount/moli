@@ -264,10 +264,19 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
         while let Ok(message) = background_rx.try_recv() {
             match message.take_runtime_inspector_response_ready() {
                 Ok(response) => {
-                    ctx.sent
-                        .push(response.into_protocol_message_for_typed_runtime_route());
+                    ctx.sent.push(
+                        response
+                            .into_protocol_message_for_typed_runtime_route()
+                            .into_json()
+                            .expect("scalar protocol fixture"),
+                    );
                 }
-                Err(message) => ctx.sent.push(message.into_protocol_message()),
+                Err(message) => ctx.sent.push(
+                    message
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture"),
+                ),
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;

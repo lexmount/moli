@@ -2109,6 +2109,7 @@ mod producer_tests {
 
         assert_eq!(events.len(), 1);
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Browser.downloadWillBegin"));
         assert_eq!(message["params"]["frameId"], json!("FRAME-download"));
         assert_eq!(message["params"]["guid"], json!("GUID-download"));
@@ -2153,6 +2154,7 @@ mod producer_tests {
 
         assert_eq!(events.len(), 1);
         let (message, automation_event) = events.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Browser.downloadProgress"));
         assert_eq!(message["params"]["guid"], json!("GUID-download"));
         assert_eq!(message["params"]["state"], json!("completed"));
@@ -2200,6 +2202,7 @@ mod producer_tests {
 
         assert_eq!(out.len(), 1);
         let (message, automation_event) = out.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Page.fileChooserOpened"));
         assert_eq!(message["params"]["frameId"], json!("FRAME-typed"));
         assert_eq!(message["params"]["mode"], json!("selectSingle"));
@@ -2309,6 +2312,7 @@ mod producer_tests {
             "Chromium preserves an activation whose listener synchronously replaced the Document"
         );
         let (message, automation_event) = out.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(
             message["params"]["backendNodeId"],
             json!(RENDERER_BACKEND_NODE_ID_START + 42)
@@ -2409,7 +2413,11 @@ mod producer_tests {
             1,
             "a retired Page must not project a colliding backend node id into its replacement"
         );
-        let message = out.remove(0).into_protocol_message();
+        let message = out
+            .remove(0)
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture");
         assert_eq!(
             message["params"]["backendNodeId"],
             json!(RENDERER_BACKEND_NODE_ID_START + 43)
@@ -2508,7 +2516,11 @@ mod producer_tests {
         .await;
 
         assert_eq!(out.len(), 1);
-        let message = out.remove(0).into_protocol_message();
+        let message = out
+            .remove(0)
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Page.fileChooserOpened"));
         assert_eq!(message["params"]["frameId"], json!("FRAME-1"));
         assert_eq!(message["params"]["mode"], json!("selectMultiple"));
@@ -2560,6 +2572,7 @@ mod producer_tests {
 
         assert_eq!(out.len(), 1);
         let (message, automation_event) = out.remove(0).into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Page.fileChooserOpened"));
         assert_eq!(message["params"]["frameId"], json!("FRAME-context"));
         assert_eq!(message["params"]["mode"], json!("selectSingle"));

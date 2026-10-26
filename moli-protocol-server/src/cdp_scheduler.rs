@@ -470,9 +470,12 @@ impl ProtocolOutputSequence {
         self.events
             .into_iter()
             .filter_map(|event| {
-                event
-                    .has_protocol_wire_message()
-                    .then(|| event.into_protocol_message())
+                event.has_protocol_wire_message().then(|| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
             })
             .collect()
     }

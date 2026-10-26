@@ -343,10 +343,7 @@ mod tests {
     };
     use serde_json::json;
 
-    use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, PageTargetHost, TargetIdentityState,
-        TargetPageSlot,
-    };
+    use crate::conn::{BrowserContext, PageTargetHost, TargetIdentityState, TargetPageSlot};
     use crate::domains::observable_output::{
         ObservablePreparedOutputSlot, TargetRuntimeObservableSourceSummary,
         observable_backlog_activity_outputs_for_session_owner as observable_backlog_activity_outputs,

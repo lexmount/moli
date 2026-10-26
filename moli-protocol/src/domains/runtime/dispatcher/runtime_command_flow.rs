@@ -704,6 +704,10 @@ pub(super) fn push_command_response_payload_into_plan(
     payload: BackgroundCommandResponsePayload,
 ) {
     match payload {
+        BackgroundCommandResponsePayload::Inspector(message) => {
+            let id = message.id();
+            plan.push_runtime_inspector_protocol_response(message, id);
+        }
         BackgroundCommandResponsePayload::Success { result } => plan.push_result(result),
         BackgroundCommandResponsePayload::Error {
             code,
@@ -1015,6 +1019,16 @@ pub(super) fn record_runtime_binding_command_response_from_routed_events(
             continue;
         }
         let response = match payload {
+            BackgroundCommandResponsePayloadRef::Inspector(message) => {
+                if message.has_field("error") {
+                    RuntimeBindingCommandResponse::Error {
+                        code: -32000,
+                        message: "Runtime binding command failed".to_owned(),
+                    }
+                } else {
+                    RuntimeBindingCommandResponse::Success
+                }
+            }
             BackgroundCommandResponsePayloadRef::Success { .. } => {
                 RuntimeBindingCommandResponse::Success
             }
