@@ -40,7 +40,15 @@ pub enum CongestionControl {
     LowLatency,
 }
 
+/// An owned certificate fingerprint captured after WebIDL conversion.
+#[derive(Clone, Debug)]
+pub struct CertificateHash {
+    pub algorithm: String,
+    pub value: Vec<u8>,
+}
+
 /// Typed session inputs after the binding has applied WebIDL and CSP policy.
+/// A nonempty certificate hash list replaces Web PKI for this session only.
 #[derive(Clone, Debug)]
 pub struct ConnectOptions {
     pub url: Url,
@@ -48,6 +56,7 @@ pub struct ConnectOptions {
     pub protocols: Vec<String>,
     pub headers: HeaderMap,
     pub congestion_control: CongestionControl,
+    pub server_certificate_hashes: Vec<CertificateHash>,
 }
 
 impl ConnectOptions {
@@ -58,6 +67,7 @@ impl ConnectOptions {
             protocols: Vec::new(),
             headers: HeaderMap::new(),
             congestion_control: CongestionControl::Default,
+            server_certificate_hashes: Vec::new(),
         }
     }
 }

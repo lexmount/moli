@@ -20,9 +20,17 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let cert = rcgen::generate_simple_self_signed(vec!["wt.test".to_owned()]).unwrap();
+        Self::with_identity(
+            cert.cert.der().to_vec(),
+            cert.key_pair.serialize_der(),
+            cert.cert.pem(),
+        )
+    }
+
+    fn with_identity(certificate: Vec<u8>, key: Vec<u8>, pem: String) -> Self {
         let certificates = tempfile::tempdir().unwrap();
         let ca = certificates.path().join("ca.pem");
-        std::fs::write(&ca, cert.cert.pem()).unwrap();
+        std::fs::write(&ca, pem).unwrap();
         let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))
@@ -30,8 +38,8 @@ impl Fixture {
         .unwrap()
         .with_no_client_auth()
         .with_single_cert(
-            vec![CertificateDer::from(cert.cert.der().to_vec())],
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der())),
+            vec![CertificateDer::from(certificate)],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
         )
         .unwrap();
         tls.alpn_protocols = vec![web_transport_quinn::ALPN.as_bytes().to_vec()];
@@ -383,6 +391,45 @@ async fn an_unresponsive_address_does_not_block_another_admitted_address() {
 }
 
 #[tokio::test]
+async fn a_rejected_certificate_does_not_wait_for_a_silent_address() {
+    timeout(Duration::from_secs(5), async {
+        let fixture = Fixture::new();
+        let port = fixture.options.url.port().unwrap();
+        let _silent = tokio::net::UdpSocket::bind((std::net::Ipv4Addr::new(127, 0, 0, 2), port))
+            .await
+            .unwrap();
+        let endpoint = fixture.endpoint.clone();
+        let peer = tokio::spawn(async move {
+            endpoint
+                .accept()
+                .await
+                .unwrap()
+                .await
+                .expect_err("TLS pin must reject the connection")
+        });
+        let mut config = fixture.config.clone();
+        config.host_resolve = vec![format!("wt.test:{port}:127.0.0.2,127.0.0.1")];
+        config.connect_timeout = None;
+        let owner = Owner::new(config);
+        let mut options = fixture.options.clone();
+        options.server_certificate_hashes = vec![crate::CertificateHash {
+            algorithm: "sha-256".into(),
+            value: vec![0; 32],
+        }];
+        let error = owner
+            .connector()
+            .connect(options)
+            .await
+            .err()
+            .expect("pin mismatch must fail");
+        assert!(format!("{error:#}").contains("hash mismatch"), "{error:#}");
+        peer.await.unwrap();
+    })
+    .await
+    .expect("a terminal TLS failure must not wait for an unrelated address timeout");
+}
+
+#[tokio::test]
 async fn long_close_reason_is_retained_locally_and_truncated_only_on_the_wire() {
     timeout(DEADLINE, async {
         let fixture = Fixture::new();
@@ -464,6 +511,119 @@ async fn retiring_one_session_does_not_retire_its_sibling_or_shared_connector() 
             reason: "sibling still active".into(),
         });
         peer.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn certificate_hash_authenticates_a_short_lived_leaf_without_ca_or_dns_trust() {
+    timeout(DEADLINE, async {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let (certificate, key) =
+            crate::tls::tests::identity(now - 86400, now + 13 * 86400, false, 2);
+        let der = certificate.to_der().unwrap();
+        let fingerprint = openssl::hash::hash(openssl::hash::MessageDigest::sha256(), &der)
+            .unwrap()
+            .to_vec();
+        let mut fixture = Fixture::with_identity(
+            der,
+            key.private_key_to_pkcs8().unwrap(),
+            String::from_utf8(certificate.to_pem().unwrap()).unwrap(),
+        );
+        fixture.config.tls.ca_cert = Some(fixture._certificates.path().join("not-a-ca.pem"));
+        fixture.options.server_certificate_hashes = vec![crate::CertificateHash {
+            algorithm: "SHA-256".into(),
+            value: fingerprint,
+        }];
+        let mut server = fixture.server();
+        let peer = tokio::spawn(async move {
+            let session = server.accept().await.unwrap().ok().await.unwrap();
+            let mut stream = session.accept_uni().await.unwrap();
+            assert_eq!(stream.read_to_end(1024).await.unwrap(), b"pinned leaf");
+            session.close(19, b"pinned peer");
+            session.closed().await;
+        });
+        let owner = Owner::new(fixture.config.clone());
+        let session = owner
+            .connector()
+            .connect(fixture.options.clone())
+            .await
+            .unwrap();
+        let mut send = session.open_uni().await.unwrap();
+        send.write_all(b"pinned leaf").await.unwrap();
+        send.finish().unwrap();
+        assert!(matches!(
+            session.closed().await,
+            CloseReason::Remote(CloseInfo { code: 19, .. })
+        ));
+        peer.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn certificate_hash_policy_cannot_reuse_a_cached_public_ca_verifier() {
+    timeout(DEADLINE, async {
+        let fixture = Fixture::new();
+        let owner = Owner::new(fixture.config.clone());
+        let mut server = fixture.server();
+        let peer = tokio::spawn(async move {
+            let session = server.accept().await.unwrap().ok().await.unwrap();
+            session.closed().await;
+        });
+        let session = owner
+            .connector()
+            .connect(fixture.options.clone())
+            .await
+            .unwrap();
+        session.close(CloseInfo {
+            code: 0,
+            reason: String::new(),
+        });
+        session.closed().await;
+        peer.await.unwrap();
+        for value in [vec![0; 32], {
+            let bytes = std::fs::read(fixture.config.tls.ca_cert.as_ref().unwrap()).unwrap();
+            let certificate = openssl::x509::X509::from_pem(&bytes).unwrap();
+            openssl::hash::hash(
+                openssl::hash::MessageDigest::sha256(),
+                &certificate.to_der().unwrap(),
+            )
+            .unwrap()
+            .to_vec()
+        }] {
+            let endpoint = fixture.endpoint.clone();
+            let peer = tokio::spawn(async move {
+                endpoint
+                    .accept()
+                    .await
+                    .unwrap()
+                    .await
+                    .expect_err("hash policy must fail during TLS")
+            });
+            let mut options = fixture.options.clone();
+            options.server_certificate_hashes = vec![crate::CertificateHash {
+                algorithm: "sha-256".into(),
+                value,
+            }];
+            let error = owner
+                .connector()
+                .connect(options)
+                .await
+                .err()
+                .expect("explicit pins override cached CA trust");
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("hash mismatch") || message.contains("two weeks"),
+                "{message}"
+            );
+            peer.await.unwrap();
+        }
     })
     .await
     .unwrap();

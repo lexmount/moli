@@ -4019,10 +4019,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "der",
  "futures-util",
  "http",
  "moli-curl",
  "moli-dns-resolver",
+ "openssl",
  "parking_lot",
  "quinn",
  "rcgen",
