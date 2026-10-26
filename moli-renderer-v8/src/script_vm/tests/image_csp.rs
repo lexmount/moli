@@ -333,6 +333,75 @@ async fn image_csp_network_child_uses_its_own_policy_source_after_navigation() {
 }
 
 #[tokio::test]
+async fn css_image_csp_checks_owner_before_network_and_keeps_report_only_loads() {
+    for report_only in [false, true] {
+        let server = ImageCspServer::spawn().await;
+        let loader = server.loader();
+        let document_url = format!("{}/page.html", server.origin);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(&document_url, &loader);
+        vm.set_layout_policy(crate::real_layout_test_policy());
+        set_header_policy(&mut vm, &document_url, "img-src 'none'", report_only);
+        loaded_child(&mut vm, &loader, "frame.srcdoc = '<!doctype html><body>';").await;
+        vm.eval(&format!(r#"
+            globalThis.events = [];
+            addEventListener('securitypolicyviolation', () => events.push('parent-report'));
+            frame.contentWindow.addEventListener('securitypolicyviolation', event => {{
+                events.push(event.disposition + ':' + event.documentURI + ':' + event.effectiveDirective);
+            }});
+            frame.contentDocument.body.innerHTML = '<div style="width:20px;height:20px;background-image:url({}/pixel.gif)"></div>';
+        "#, server.origin)).unwrap();
+        vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(80, 60, 1.0))
+            .unwrap()
+            .expect("CSS image discovery layout");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(events.length)",
+            "1",
+            "CSS image owner CSP report",
+        )
+        .await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+        let completion = vm.css_image_completion_notify_for_test();
+        loop {
+            let notified = completion.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let (pending, decoding, _, _, _) = vm.css_image_resource_observability_for_test();
+            if pending + decoding == 0 {
+                break;
+            }
+            if pending == 0 {
+                tokio::time::timeout_at(deadline, notified)
+                    .await
+                    .expect("CSS image decode should complete");
+            } else {
+                wait_for_one_selected_page_task_executor_test_turn_until(
+                    &mut vm, &loader, deadline,
+                )
+                .await
+                .unwrap();
+            }
+        }
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            if report_only {
+                "report:about:img-src"
+            } else {
+                "enforce:about:img-src"
+            }
+        );
+        if report_only {
+            assert_eq!(*server.requests.lock(), ["/pixel.gif"]);
+            assert_eq!(vm.css_image_resource_observability_for_test().2, 1);
+        } else {
+            assert!(server.requests.lock().is_empty());
+            assert_eq!(vm.css_image_resource_observability_for_test().2, 0);
+        }
+    }
+}
+
+#[tokio::test]
 async fn image_csp_rechecks_cached_redirect_response_for_the_requesting_document() {
     for report_only in [false, true] {
         let server = ImageCspServer::spawn().await;
@@ -402,4 +471,62 @@ async fn image_csp_rechecks_cached_redirect_response_for_the_requesting_document
             ["/allowed/redirect-cross", "/pixel.gif"]
         );
     }
+}
+
+#[tokio::test]
+async fn css_image_csp_checks_cached_redirect_before_shared_ready_reuse() {
+    let server = ImageCspServer::spawn().await;
+    let loader = server.loader();
+    let document_url = format!("{}/page.html", server.origin);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(&document_url, &loader);
+    vm.set_layout_policy(crate::real_layout_test_policy());
+    vm.eval(&format!(
+        r#"
+        globalThis.warmResult = 'pending';
+        globalThis.warmImage = new Image();
+        warmImage.onload = () => {{ warmResult = 'load'; }};
+        warmImage.onerror = () => {{ warmResult = 'error'; }};
+        warmImage.src = '{}/allowed/redirect-cross';
+        document.body.append(warmImage);
+    "#,
+        server.origin
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "warmResult",
+        "load",
+        "unrestricted image must warm the decoded cache",
+    )
+    .await;
+    set_header_policy(&mut vm, &document_url, "img-src 'self'", false);
+    loaded_child(&mut vm, &loader, "frame.srcdoc = '<!doctype html><body>';").await;
+    vm.eval(&format!(r#"
+        globalThis.events = [];
+        frame.contentWindow.addEventListener('securitypolicyviolation', event => {{
+            events.push(event.documentURI + '|' + event.blockedURI);
+        }});
+        frame.contentDocument.body.innerHTML = '<div style="width:20px;height:20px;background-image:url({}/allowed/redirect-cross)"></div>';
+    "#, server.origin)).unwrap();
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(80, 60, 1.0))
+        .unwrap()
+        .expect("cached CSS image discovery layout");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(events.length)",
+        "1",
+        "cached CSS image must be rejected for the new owner",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("events.join(',')").unwrap(),
+        format!("about|{}/pixel.gif", server.cross_origin)
+    );
+    assert_eq!(vm.css_image_resource_observability_for_test().2, 0);
+    assert_eq!(
+        *server.requests.lock(),
+        ["/allowed/redirect-cross", "/pixel.gif"]
+    );
 }
