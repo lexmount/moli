@@ -8,6 +8,7 @@ use web_transport_quinn::{SessionError, WebTransportError};
 
 use crate::{CloseInfo, CloseReason, Config, ConnectOptions, Owner};
 
+mod http3;
 mod stream_io;
 
 const DEADLINE: Duration = Duration::from_secs(10);
