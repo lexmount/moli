@@ -26,6 +26,12 @@ mod main_document_task_owner;
 mod main_native_module_task;
 mod main_parser_continuation;
 mod media_element_event;
+mod webtransport;
+pub(crate) use webtransport::{
+    PageWebTransportTargetEffect, PageWebTransportTurnAction, PageWebTransportTurnOutcome,
+    RendererPageWebTransportOwner, RendererPageWebTransportSender, RendererPageWebTransportTask,
+    RendererPageWebTransportTaskId, RendererPageWebTransportTaskKind,
+};
 mod webrtc;
 pub(crate) use webrtc::{
     PageWebRtcTargetEffect, PageWebRtcTurnAction, PageWebRtcTurnOutcome, RendererPageWebRtcOwner,
@@ -148,24 +154,24 @@ impl<I: Copy, K: Copy, T: Copy> RendererPageWindowDocumentTask<I, K, T> {
 
 /// Common settlement of one exact Window/Document event task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PageWindowDocumentTaskTargetEffect {
+pub(crate) enum PageWindowDocumentTaskTargetEffect<T = WindowDocumentTaskTarget> {
     DispatchedToCurrentOwner,
     CurrentOwnerHadNoEventTarget,
     DiscardedStaleOwner {
-        current_owner: Option<RendererPageWindowDocumentTaskOwner>,
+        current_owner: Option<RendererPageWindowDocumentTaskOwner<T>>,
     },
 }
 
 /// Common owner-turn fact emitted after an exact Window/Document task settles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PageWindowDocumentTaskTurnAction<I, K> {
-    pub(crate) owner: RendererPageWindowDocumentTaskOwner,
+pub(crate) struct PageWindowDocumentTaskTurnAction<I, K, T = WindowDocumentTaskTarget> {
+    pub(crate) owner: RendererPageWindowDocumentTaskOwner<T>,
     pub(crate) task_id: I,
     pub(crate) kind: K,
-    pub(crate) target_effect: PageWindowDocumentTaskTargetEffect,
+    pub(crate) target_effect: PageWindowDocumentTaskTargetEffect<T>,
 }
 
-impl<I, K> PageWindowDocumentTaskTurnAction<I, K> {}
+impl<I, K, T> PageWindowDocumentTaskTurnAction<I, K, T> {}
 
 pub(crate) use self::bitmap_task::{
     PageBitmapTaskTargetEffect, PageBitmapTaskTurnAction, PageBitmapTaskTurnOutcome,

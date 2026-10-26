@@ -548,7 +548,7 @@ pub fn initialize_readable_stream_object<'s>(
     finish_browser_readable_stream_start(scope, stream, source, true);
 }
 
-pub(in crate::streams) fn initialize_webidl_readable_stream_object<'s>(
+pub fn initialize_webidl_readable_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
     source: Option<WebIdlReadableStreamSource<'s>>,
@@ -831,7 +831,7 @@ pub fn initialize_writable_stream_object<'s>(
     let _ = call_named_method(scope, sink, "start", &[controller.into()]);
 }
 
-pub(in crate::streams) fn initialize_webidl_writable_stream_object<'s>(
+pub fn initialize_webidl_writable_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
     sink: Option<WebIdlWritableStreamSink<'s>>,

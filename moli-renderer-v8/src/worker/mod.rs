@@ -35,6 +35,7 @@ pub(crate) use file_reading_tasks::{
 pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) mod web_locks_tasks;
 mod websocket_events;
+pub(crate) mod webtransport_tasks;
 
 pub(crate) type WorkerScriptUpdateResources =
     std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;

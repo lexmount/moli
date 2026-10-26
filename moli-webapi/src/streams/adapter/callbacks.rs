@@ -87,7 +87,7 @@ pub(in crate::streams) struct QueuingStrategyMembers {
     size: Option<webidl::WebIdlCallbackFunction>,
 }
 
-pub(in crate::streams) struct WebIdlReadableStreamSource<'s> {
+pub struct WebIdlReadableStreamSource<'s> {
     pub(in crate::streams) object: v8::Local<'s, v8::Object>,
     pub(in crate::streams) start: Option<webidl::WebIdlCallbackFunction>,
     pub(in crate::streams) pull: Option<webidl::WebIdlCallbackFunction>,
@@ -96,7 +96,7 @@ pub(in crate::streams) struct WebIdlReadableStreamSource<'s> {
     pub(in crate::streams) byte_stream: bool,
 }
 
-pub(in crate::streams) struct WebIdlWritableStreamSink<'s> {
+pub struct WebIdlWritableStreamSink<'s> {
     pub(in crate::streams) object: v8::Local<'s, v8::Object>,
     pub(in crate::streams) start: Option<webidl::WebIdlCallbackFunction>,
     pub(in crate::streams) write: Option<webidl::WebIdlCallbackFunction>,
@@ -153,7 +153,7 @@ pub(in crate::streams) fn callback_carrier_value<'s>(
         .unwrap_or_else(|| v8::undefined(scope).into())
 }
 
-pub(in crate::streams) fn parse_readable_stream_source_object<'s>(
+pub fn parse_readable_stream_source_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<WebIdlReadableStreamSource<'s>, webidl::WebIdlError> {
@@ -168,7 +168,7 @@ pub(in crate::streams) fn parse_readable_stream_source_object<'s>(
     })
 }
 
-pub(in crate::streams) fn parse_writable_stream_sink_object<'s>(
+pub fn parse_writable_stream_sink_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<WebIdlWritableStreamSink<'s>, webidl::WebIdlError> {
