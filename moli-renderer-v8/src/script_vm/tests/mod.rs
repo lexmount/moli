@@ -13,6 +13,7 @@ mod document_encodings;
 mod document_location_activity;
 mod drag_drop_outcomes;
 mod idb_transaction_gc;
+mod image_csp;
 mod message_port_transfer;
 mod native_drag_payloads;
 mod native_drag_pointer_coordinates;

@@ -187,7 +187,7 @@ impl CssImageResourceStore {
             return false;
         };
         let descriptor = match &slot.state {
-            CssImageResourceState::DecodeQueued(descriptor) => *descriptor,
+            CssImageResourceState::DecodeQueued(descriptor) => descriptor.clone(),
             _ => return false,
         };
         let (pixels, svg) = match ready.content {
@@ -381,7 +381,7 @@ mod tests {
         else {
             panic!("the first exact request must fetch");
         };
-        assert!(store.mark_decode_queued(&first, descriptor));
+        assert!(store.mark_decode_queued(&first, descriptor.clone()));
 
         let CssImageResourceAdmission::Fetch(replacement) =
             store.admit(first_document, owner(2), url.to_owned())
@@ -392,7 +392,7 @@ mod tests {
             !store.complete_decode(&first, ready_red_pixel()),
             "the retired owner cannot commit into the replacement slot"
         );
-        assert!(store.mark_decode_queued(&replacement, descriptor));
+        assert!(store.mark_decode_queued(&replacement, descriptor.clone()));
         assert!(store.complete_decode(&replacement, ready_red_pixel()));
         assert!(
             !store.fail(&replacement),
