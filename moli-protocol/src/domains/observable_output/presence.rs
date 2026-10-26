@@ -341,7 +341,7 @@ fn renderer_agent_owns_page_console_api_events(
         .is_some_and(|state| {
             state
                 .console_output_session_state
-                .renderer_console_agent_owns_page_console_api_events
+                .renderer_console_agent_owns_console_api_events
         })
 }
 

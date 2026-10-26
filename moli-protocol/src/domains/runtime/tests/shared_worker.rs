@@ -109,21 +109,16 @@ async fn runtime_enable_on_shared_worker_session_replays_real_worker_context() {
         .iter()
         .position(|message| message["id"] == json!(72))
         .expect("enable response");
-    for method in [
-        "Runtime.executionContextCreated",
-        "Runtime.consoleAPICalled",
-    ] {
-        let event_index = ctx
-            .sent
-            .iter()
-            .position(|message| message["method"] == json!(method))
-            .expect("buffered Runtime replay");
-        assert!(
-            event_index < response_index,
-            "{method} must precede the enable reply: {:#?}",
-            ctx.sent
-        );
-    }
+    let event_index = ctx
+        .sent
+        .iter()
+        .position(|message| message["method"] == json!("Runtime.executionContextCreated"))
+        .expect("buffered Runtime context replay");
+    assert!(
+        event_index < response_index,
+        "context replay must precede the enable reply: {:#?}",
+        ctx.sent
+    );
 
     ctx.expect_result(72, json!({}), Some("SID-shared-worker"));
     let context_event = ctx.take_first_matching("shared worker execution context", |message| {
@@ -144,19 +139,12 @@ async fn runtime_enable_on_shared_worker_session_replays_real_worker_context() {
         })
     );
 
-    let console_event = ctx.take_first_matching("shared worker runtime console", |message| {
-        message["method"] == json!("Runtime.consoleAPICalled")
-    });
-    assert_eq!(console_event["sessionId"], "SID-shared-worker");
-    assert_eq!(console_event["params"]["type"], "warning");
-    assert_eq!(
-        console_event["params"]["args"],
-        json!([{
-            "type": "string",
-            "value": "boot warning"
-        }])
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != json!("Runtime.consoleAPICalled")),
+        "Rust reporting snapshots must not synthesize native Inspector console events"
     );
-    assert_eq!(console_event["params"]["executionContextId"], json!(81_081));
 }
 
 #[tokio::test]
