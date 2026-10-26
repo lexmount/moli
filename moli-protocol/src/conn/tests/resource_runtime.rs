@@ -57,13 +57,9 @@ async fn commit_navigation_outcome_for_session_test(
                     navigation.final_url(),
                 )
                 .expect("test navigation commit configuration should resolve");
-            navigation
-                .update_commit_configuration(configuration)
-                .await
-                .expect("test navigation commit configuration should apply");
             let permit = navigation.issue_commit_permit();
             navigation
-                .commit(permit)
+                .commit(permit, configuration)
                 .await
                 .expect("test navigation should commit")
         }

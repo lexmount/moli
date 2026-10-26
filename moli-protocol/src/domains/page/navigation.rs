@@ -3506,67 +3506,62 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
             let stable_page_target = navigation.stable_page_target().cloned();
-            let update_result = match conn.prepared_document_commit_configuration_for_owner(
+            let configuration = conn.prepared_document_commit_configuration_for_owner(
                 &state.owner,
                 navigation.final_url(),
-            ) {
+            );
+            match configuration {
+                Err(error) => push_navigation_commit_error(out, &state, error),
                 Ok(mut configuration) => {
                     configuration.web_mcp_invocation = state.web_mcp_invocation.clone();
-                    navigation.update_commit_configuration(configuration).await
-                }
-                Err(error) => Err(error),
-            };
-            if let Err(error) = update_result {
-                push_navigation_commit_error(out, &state, error);
-            } else {
-                let renderer_page = navigation.renderer_page_residence_identity();
-                let candidate = conn.prepare_renderer_agent_candidate_token_for_owner(
-                    &state.owner,
-                    &token,
-                    navigation.renderer_devtools_agent_token(),
-                );
-                match candidate.and_then(|candidate| match stable_page_target.as_ref() {
-                    Some(expected) => conn.commit_renderer_agent_candidate_for_existing_page(
+                    let renderer_page = navigation.renderer_page_residence_identity();
+                    let candidate = conn.prepare_renderer_agent_candidate_token_for_owner(
                         &state.owner,
-                        candidate,
-                        expected,
-                    ),
-                    None => conn.commit_renderer_agent_candidate_for_owner(
-                        &state.owner,
-                        candidate,
-                        renderer_page,
-                    ),
-                }) {
-                    Ok(transaction) => {
-                        let permit = navigation.issue_commit_permit();
-                        let failed_url = navigation.final_url().clone();
-                        let committed = match stable_page_target.as_ref() {
+                        &token,
+                        navigation.renderer_devtools_agent_token(),
+                    );
+                    match candidate.and_then(|candidate| match stable_page_target.as_ref() {
+                        Some(expected) => conn.commit_renderer_agent_candidate_for_existing_page(
+                            &state.owner,
+                            candidate,
+                            expected,
+                        ),
+                        None => conn.commit_renderer_agent_candidate_for_owner(
+                            &state.owner,
+                            candidate,
+                            renderer_page,
+                        ),
+                    }) {
+                        Ok(transaction) => {
+                            let permit = navigation.issue_commit_permit();
+                            let failed_url = navigation.final_url().clone();
+                            let committed = match stable_page_target.as_ref() {
                             Some(expected) => conn.commit_existing_page_navigation_document(
-                                &state.owner, expected, navigation, permit,
+                                &state.owner, expected, navigation, permit, configuration,
                             ).await.map(|navigation| network::materialize_loaded_navigation_progress(
                                 conn, &state, navigation,
                             )),
-                            None => navigation.commit(permit).await
+                            None => navigation.commit(permit, configuration).await
                                 .map(|navigation| network::materialize_loaded_navigation_progress(
                                     conn, &state, navigation,
                                 ))
                                 .map_err(moli_core::page::RendererPageReplacementError::document_preserved),
                         };
-                        match committed {
-                            Ok(navigation) => {
-                                commit_loaded_navigation_async(
-                                    conn,
-                                    out,
-                                    Some(&token),
-                                    state,
-                                    navigation,
-                                    Some(transaction),
-                                    command_context,
-                                )
-                                .await;
-                            }
-                            Err(error) => {
-                                if error.disposition() == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable {
+                            match committed {
+                                Ok(navigation) => {
+                                    commit_loaded_navigation_async(
+                                        conn,
+                                        out,
+                                        Some(&token),
+                                        state,
+                                        navigation,
+                                        Some(transaction),
+                                        command_context,
+                                    )
+                                    .await;
+                                }
+                                Err(error) => {
+                                    if error.disposition() == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable {
                                     if let Some(expected) = stable_page_target.as_ref()
                                         && let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
                                             &state.owner, &token, Some(expected), &failed_url,
@@ -3586,18 +3581,19 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                                         "failed to roll back renderer channel after prepared document commit failure"
                                     );
                                 }
-                                push_navigation_commit_error(out, &state, error);
+                                    push_navigation_commit_error(out, &state, error);
+                                }
                             }
                         }
-                    }
-                    Err(error) => {
-                        tracing::debug!(
-                            %error,
-                            session_id = state.owner.session_id(),
-                            loader_id = token.loader_id,
-                            "dropping superseded response commit-ready navigation"
-                        );
-                        push_navigation_commit_error(out, &state, error);
+                        Err(error) => {
+                            tracing::debug!(
+                                %error,
+                                session_id = state.owner.session_id(),
+                                loader_id = token.loader_id,
+                                "dropping superseded response commit-ready navigation"
+                            );
+                            push_navigation_commit_error(out, &state, error);
+                        }
                     }
                 }
             }

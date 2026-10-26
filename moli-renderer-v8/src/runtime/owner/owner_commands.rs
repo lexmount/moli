@@ -569,7 +569,10 @@ impl RendererOwnerHandle {
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedRendererDocument { permit } => {
+            RendererOwnerCommand::CommitPreparedRendererDocument {
+                permit,
+                configuration,
+            } => {
                 let token = permit.prepared_document();
                 if token.replacement.is_some() {
                     owner_local_store.cancel_prepared_document(token);
@@ -586,7 +589,14 @@ impl RendererOwnerHandle {
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(token) {
+                let prepared = (|| {
+                    if let Some(configuration) = configuration {
+                        owner_local_store
+                            .update_prepared_document_commit_configuration(token, *configuration)?;
+                    }
+                    owner_local_store.take_prepared_document(token)
+                })();
+                match prepared {
                     Ok(residence) => {
                         self.create_page_reply_from_prepared_document_on_owner_local_store(
                             token.page_id(),
@@ -598,7 +608,10 @@ impl RendererOwnerHandle {
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedPageReplacement { permit } => {
+            RendererOwnerCommand::CommitPreparedPageReplacement {
+                permit,
+                configuration,
+            } => {
                 let reservation = permit.prepared_document();
                 if reservation.local_host_id() != self.state.owner_local_host_id
                     || reservation.replacement.is_none()
@@ -608,7 +621,16 @@ impl RendererOwnerHandle {
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(reservation) {
+                let prepared = (|| {
+                    if let Some(configuration) = configuration {
+                        owner_local_store.update_prepared_document_commit_configuration(
+                            reservation,
+                            *configuration,
+                        )?;
+                    }
+                    owner_local_store.take_prepared_document(reservation)
+                })();
+                match prepared {
                     Ok(residence) => {
                         Box::pin(self.commit_prepared_page_replacement(reservation, residence))
                             .await

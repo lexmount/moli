@@ -264,6 +264,32 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub fetch_subresource_interception: (bool, Option<SubresourceResourceType>),
 }
 
+impl PreparedDocumentPageCommitConfiguration {
+    fn into_renderer_configuration(
+        self,
+    ) -> moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
+        moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
+            web_mcp_invocation: self.web_mcp_invocation,
+            document_start_scripts: self.document_start_scripts,
+            runtime_bindings: self.runtime_bindings,
+            runtime_inspector_session_restore_snapshots: self
+                .runtime_inspector_session_restore_snapshots,
+            runtime_isolated_worlds: self.runtime_isolated_worlds,
+            permission_overrides: self.permission_overrides,
+            extra_http_headers: self.extra_http_headers,
+            document_settings: self.document_settings,
+            browser_resource_runtime: self.browser_resource_runtime,
+            navigator_identity: self.navigator_identity,
+            network_offline: self.network_offline,
+            bypass_service_worker: self.bypass_service_worker,
+            cache_disabled: self.cache_disabled,
+            blocked_url_patterns: self.blocked_url_patterns,
+            fetch_subresource_interception_enabled: self.fetch_subresource_interception.0,
+            fetch_subresource_interception_resource_type: self.fetch_subresource_interception.1,
+        }
+    }
+}
+
 impl std::fmt::Debug for PreparedDocumentPage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -300,31 +326,7 @@ impl PreparedDocumentPage {
         configuration: PreparedDocumentPageCommitConfiguration,
     ) -> Result<()> {
         self.prepared
-            .update_commit_configuration(
-                moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
-                    web_mcp_invocation: configuration.web_mcp_invocation,
-                    document_start_scripts: configuration.document_start_scripts,
-                    runtime_bindings: configuration.runtime_bindings,
-                    runtime_inspector_session_restore_snapshots: configuration
-                        .runtime_inspector_session_restore_snapshots,
-                    runtime_isolated_worlds: configuration.runtime_isolated_worlds,
-                    permission_overrides: configuration.permission_overrides,
-                    extra_http_headers: configuration.extra_http_headers,
-                    document_settings: configuration.document_settings,
-                    browser_resource_runtime: configuration.browser_resource_runtime,
-                    navigator_identity: configuration.navigator_identity,
-                    network_offline: configuration.network_offline,
-                    bypass_service_worker: configuration.bypass_service_worker,
-                    cache_disabled: configuration.cache_disabled,
-                    blocked_url_patterns: configuration.blocked_url_patterns,
-                    fetch_subresource_interception_enabled: configuration
-                        .fetch_subresource_interception
-                        .0,
-                    fetch_subresource_interception_resource_type: configuration
-                        .fetch_subresource_interception
-                        .1,
-                },
-            )
+            .update_commit_configuration(configuration.into_renderer_configuration())
             .await
     }
 
@@ -337,8 +339,12 @@ impl PreparedDocumentPage {
     pub fn start_commit(
         self,
         permit: PreparedDocumentPageCommitPermit,
+        configuration: Option<PreparedDocumentPageCommitConfiguration>,
     ) -> Result<impl std::future::Future<Output = Result<BuiltDocumentPage>> + 'static> {
-        let pending = self.prepared.start_commit(permit.permit)?;
+        let pending = self.prepared.start_commit(
+            permit.permit,
+            configuration.map(PreparedDocumentPageCommitConfiguration::into_renderer_configuration),
+        )?;
         Ok(async move {
             let (
                 handle,
@@ -362,7 +368,7 @@ impl PreparedDocumentPage {
         self,
         permit: PreparedDocumentPageCommitPermit,
     ) -> Result<BuiltDocumentPage> {
-        self.start_commit(permit)?.await
+        self.start_commit(permit, None)?.await
     }
 
     pub async fn cancel(self) -> Result<()> {
@@ -373,6 +379,7 @@ impl PreparedDocumentPage {
         self,
         permit: PreparedDocumentPageCommitPermit,
         page: &Page,
+        configuration: Option<PreparedDocumentPageCommitConfiguration>,
     ) -> std::result::Result<
         PendingDocumentPageReplacement,
         moli_renderer_v8::RendererPageReplacementError,
@@ -386,7 +393,11 @@ impl PreparedDocumentPage {
             )));
         }
         Ok(PendingDocumentPageReplacement {
-            pending: self.prepared.start_commit_page_replacement(permit.permit)?,
+            pending: self.prepared.start_commit_page_replacement(
+                permit.permit,
+                configuration
+                    .map(PreparedDocumentPageCommitConfiguration::into_renderer_configuration),
+            )?,
         })
     }
 
@@ -398,7 +409,7 @@ impl PreparedDocumentPage {
         CommittedDocumentPageReplacement,
         moli_renderer_v8::RendererPageReplacementError,
     > {
-        self.start_commit_page_replacement(permit, page)?
+        self.start_commit_page_replacement(permit, page, None)?
             .wait()
             .await?
             .adopt(page)

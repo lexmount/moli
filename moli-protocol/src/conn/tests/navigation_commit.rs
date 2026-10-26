@@ -78,6 +78,79 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
 }
 
 #[tokio::test]
+async fn queued_commit_captures_preload_changes_at_native_admission() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for replace_existing in [false, true] {
+                for remove_preload in [false, true] {
+                    let CommitFixture {
+                        mut ctx,
+                        token,
+                        navigation,
+                        prepared,
+                        mut requests,
+                        mut completions,
+                    } = commit_fixture(replace_existing).await;
+                    let mut preload_id = None;
+                    if remove_preload {
+                        ctx.process_async(json!({
+                            "id": 70, "sessionId": "SID-1",
+                            "method": "Page.addScriptToEvaluateOnNewDocument",
+                            "params": {"source": "globalThis.__commitConfiguration = 'removed'"}
+                        })).await;
+                        preload_id = Some(ctx.take_response_by_id(70)["result"]["identifier"].clone());
+                    }
+                    ctx.conn.start_background_prepared_navigation_commit(
+                        token,
+                        navigation,
+                        prepared,
+                    );
+                    // Hold the real state request, not a timing assumption:
+                    // the workflow is alive, but native admission is queued.
+                    let admission = requests.recv().await.unwrap();
+                    if let Some(identifier) = preload_id {
+                        assert!(identifier.is_string());
+                        ctx.process_async(json!({
+                            "id": 71, "sessionId": "SID-1",
+                            "method": "Page.removeScriptToEvaluateOnNewDocument",
+                            "params": {"identifier": identifier}
+                        })).await;
+                        ctx.expect_result(71, json!({}), Some("SID-1"));
+                    } else {
+                        ctx.process_async(json!({
+                            "id": 71, "sessionId": "SID-1",
+                            "method": "Page.addScriptToEvaluateOnNewDocument",
+                            "params": {"source": "globalThis.__commitConfiguration = 'latest'"}
+                        })).await;
+                        assert!(ctx.take_response_by_id(71)["result"]["identifier"].is_string());
+                    }
+                    independent_command(&mut ctx, 72).await;
+                    assert!(completions.try_recv().is_err());
+                    admission.apply(&mut ctx.conn);
+                    if replace_existing {
+                        requests.recv().await.unwrap().apply(&mut ctx.conn);
+                    }
+                    let completion = completions.recv().await.unwrap();
+                    assert!(matches!(&completion, BackgroundNavigationCompletion::PreparedDocument(result) if result.navigation.is_ok()));
+                    let outcome = ctx.conn.drain_background_navigation_completion_turn_async(completion).await;
+                    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                    assert_eq!(messages.iter().filter(|message| message["id"] == json!(1)).count(), 1);
+                    ctx.process_async(json!({
+                        "id": 73, "sessionId": "SID-1", "method": "Runtime.evaluate",
+                        "params": {"expression": "String(globalThis.__commitConfiguration)", "returnByValue": true}
+                    })).await;
+                    assert_eq!(
+                        ctx.take_response_by_id(73)["result"]["result"]["value"],
+                        json!(if remove_preload { "undefined" } else { "latest" }),
+                        "replace_existing={replace_existing}, remove_preload={remove_preload}"
+                    );
+                }
+            }
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn aborting_owned_commit_before_admission_preserves_page_and_reports_failure() {
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -161,8 +234,8 @@ async fn prepared_navigation_commit_yields_between_configuration_commit_and_adop
                     navigation.clone(),
                     prepared,
                 );
-                // Configuration has completed, but no commit is admitted until
-                // the actor handles this synchronous operation.
+                // Configuration is captured together with native admission
+                // when the actor handles this synchronous operation.
                 let admission = requests.recv().await.unwrap();
                 independent_command(&mut ctx, 90).await;
                 assert!(completions.try_recv().is_err());

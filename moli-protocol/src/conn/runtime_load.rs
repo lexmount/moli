@@ -461,23 +461,6 @@ impl ResponseCommitReady {
         )
     }
 
-    pub(crate) async fn update_commit_configuration(
-        &self,
-        configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> anyhow::Result<()> {
-        self.prepared_page
-            .as_ref()
-            .expect("response commit-ready value must retain its prepared Page")
-            .update_commit_configuration(configuration)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to attach commit-time target configuration for page `{}`",
-                    self.requested_url
-                )
-            })
-    }
-
     pub(crate) fn issue_commit_permit(&self) -> PreparedDocumentPageCommitPermit {
         self.prepared_page
             .as_ref()
@@ -488,6 +471,7 @@ impl ResponseCommitReady {
     pub(crate) async fn commit(
         mut self,
         permit: PreparedDocumentPageCommitPermit,
+        configuration: PreparedDocumentPageCommitConfiguration,
     ) -> anyhow::Result<LoadedNavigation> {
         anyhow::ensure!(
             self.stable_page_target.is_none(),
@@ -497,7 +481,11 @@ impl ResponseCommitReady {
             .prepared_page
             .take()
             .expect("response commit-ready value must retain its prepared Page");
-        let built = match prepared_page.commit(permit).await {
+        let built = match prepared_page.start_commit(permit, Some(configuration)) {
+            Ok(pending) => pending.await,
+            Err(error) => Err(error),
+        };
+        let built = match built {
             Ok(built) => built,
             Err(error) => {
                 if let Some(body_capture) = self.body_capture.take() {
@@ -522,6 +510,7 @@ impl ResponseCommitReady {
         mut self,
         permit: PreparedDocumentPageCommitPermit,
         page: &mut Page,
+        configuration: PreparedDocumentPageCommitConfiguration,
     ) -> Result<LoadedNavigation<StablePageNavigationCommitTarget>, RendererPageReplacementError>
     {
         let target = self.stable_page_target.take().ok_or_else(|| {
@@ -538,7 +527,11 @@ impl ResponseCommitReady {
             .prepared_page
             .take()
             .expect("prepared response retains its Document");
-        let committed = prepared.commit_page_replacement(permit, page).await?;
+        let committed = prepared
+            .start_commit_page_replacement(permit, page, Some(configuration))?
+            .wait()
+            .await?
+            .adopt(page)?;
         self.finish_committed_document(
             target,
             committed.pending_download,
@@ -553,6 +546,7 @@ impl ResponseCommitReady {
         &mut self,
         permit: PreparedDocumentPageCommitPermit,
         page: &Page,
+        configuration: PreparedDocumentPageCommitConfiguration,
     ) -> Result<moli_core::runtime::PendingDocumentPageReplacement, RendererPageReplacementError>
     {
         let target = self.stable_page_target.as_ref().ok_or_else(|| {
@@ -568,12 +562,13 @@ impl ResponseCommitReady {
         self.prepared_page
             .take()
             .expect("prepared response retains its Document")
-            .start_commit_page_replacement(permit, page)
+            .start_commit_page_replacement(permit, page, Some(configuration))
     }
 
     pub(crate) fn start_new_document_commit(
         &mut self,
         permit: PreparedDocumentPageCommitPermit,
+        configuration: PreparedDocumentPageCommitConfiguration,
     ) -> anyhow::Result<
         impl std::future::Future<Output = anyhow::Result<moli_core::runtime::BuiltDocumentPage>>
         + 'static
@@ -586,7 +581,7 @@ impl ResponseCommitReady {
         self.prepared_page
             .take()
             .expect("prepared response retains its Document")
-            .start_commit(permit)
+            .start_commit(permit, Some(configuration))
     }
 
     pub(crate) async fn finish_committed_document<PageValue>(
@@ -1695,6 +1690,7 @@ impl CdpConnection {
         expected: &StablePageNavigationCommitTarget,
         navigation: ResponseCommitReady,
         permit: PreparedDocumentPageCommitPermit,
+        configuration: PreparedDocumentPageCommitConfiguration,
     ) -> Result<LoadedNavigation<StablePageNavigationCommitTarget>, RendererPageReplacementError>
     {
         if self
@@ -1720,7 +1716,9 @@ impl CdpConnection {
                 "navigation's Page was removed"
             ))
         })?;
-        navigation.commit_page_replacement(permit, page).await
+        navigation
+            .commit_page_replacement(permit, page, configuration)
+            .await
     }
 
     fn claim_background_navigation(
@@ -2382,11 +2380,8 @@ impl CdpConnection {
                     owner,
                     navigation.final_url(),
                 )?;
-                navigation
-                    .update_commit_configuration(configuration)
-                    .await?;
                 let permit = navigation.issue_commit_permit();
-                navigation.commit(permit).await
+                navigation.commit(permit, configuration).await
             }
             NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
             NavigationLoadOutcome::Download(_) => {

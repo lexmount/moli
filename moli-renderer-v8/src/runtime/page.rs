@@ -755,6 +755,7 @@ impl PreparedRendererDocument {
     pub fn start_commit(
         mut self,
         permit: RendererDocumentCommitPermit,
+        configuration: Option<super::RendererPreparedDocumentCommitConfiguration>,
     ) -> Result<
         impl std::future::Future<
             Output = Result<(
@@ -777,6 +778,7 @@ impl PreparedRendererDocument {
             .renderer_owner
             .enqueue_command_with_reply(RendererOwnerCommand::CommitPreparedRendererDocument {
                 permit,
+                configuration: configuration.map(Box::new),
             })?;
         Ok(async move {
             let reply = reply_rx
@@ -801,7 +803,7 @@ impl PreparedRendererDocument {
         RendererPageCreationArtifacts,
         Option<RendererPendingDownloadActivation>,
     )> {
-        self.start_commit(permit)?.await
+        self.start_commit(permit, None)?.await
     }
 
     /// Commits a response into the Page that issued this replacement reservation.
@@ -809,6 +811,7 @@ impl PreparedRendererDocument {
     pub fn start_commit_page_replacement(
         self,
         permit: RendererDocumentCommitPermit,
+        configuration: Option<super::RendererPreparedDocumentCommitConfiguration>,
     ) -> std::result::Result<PendingRendererPageReplacement, super::RendererPageReplacementError>
     {
         use super::RendererPageReplacementError;
@@ -829,6 +832,7 @@ impl PreparedRendererDocument {
             .renderer_owner
             .enqueue_command_with_reply(RendererOwnerCommand::CommitPreparedPageReplacement {
                 permit,
+                configuration: configuration.map(Box::new),
             })
             .map_err(RendererPageReplacementError::from_dispatch_error)?;
         Ok(PendingRendererPageReplacement {
@@ -844,7 +848,9 @@ impl PreparedRendererDocument {
         super::RendererPageReplacementCommit,
         super::RendererPageReplacementError,
     > {
-        self.start_commit_page_replacement(permit)?.wait().await
+        self.start_commit_page_replacement(permit, None)?
+            .wait()
+            .await
     }
 
     pub async fn cancel(mut self) -> Result<()> {

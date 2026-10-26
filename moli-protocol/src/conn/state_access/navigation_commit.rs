@@ -4,7 +4,6 @@ use moli_core::{
     page::RendererPageReplacementError,
     runtime::{
         BuiltDocumentPage, CompletedDocumentPageReplacement, PendingDocumentPageReplacement,
-        PreparedDocumentPageCommitConfiguration,
     },
 };
 
@@ -46,6 +45,7 @@ impl ProtocolWorkflowState<'_> {
         owner: &CommandOwnerScope,
         token: &DocumentNavigationToken,
         mut navigation: ResponseCommitReady,
+        web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
         transaction_slot: &AttachmentTransaction,
     ) -> Result<(ResponseCommitReady, NativeDocumentCommit), RendererPageReplacementError> {
         let conn = self.connection;
@@ -54,6 +54,14 @@ impl ProtocolWorkflowState<'_> {
                 anyhow::anyhow!("NavigationRequestNotCurrent"),
             ));
         }
+        // Configuration and native admission share this synchronous state
+        // operation. An update accepted before admission belongs to this
+        // Document; there is no configuration-ACK window to replay a stale
+        // snapshot over another session's later policy.
+        let mut configuration = conn
+            .prepared_document_commit_configuration_for_owner(owner, navigation.final_url())
+            .map_err(RendererPageReplacementError::document_preserved)?;
+        configuration.web_mcp_invocation = web_mcp_invocation;
         let expected = navigation.stable_page_target().cloned();
         let renderer_page = navigation.renderer_page_residence_identity();
         let candidate = conn
@@ -99,11 +107,15 @@ impl ProtocolWorkflowState<'_> {
                         "navigation's Page was removed"
                     ))
                 })?;
-                NativeDocumentCommit::Replacement(navigation.start_page_replacement(permit, page)?)
+                NativeDocumentCommit::Replacement(navigation.start_page_replacement(
+                    permit,
+                    page,
+                    configuration,
+                )?)
             }
             None => NativeDocumentCommit::New(Box::pin(
                 navigation
-                    .start_new_document_commit(permit)
+                    .start_new_document_commit(permit, configuration)
                     .map_err(RendererPageReplacementError::document_preserved)?,
             )),
         };
@@ -156,13 +168,9 @@ async fn commit_prepared_document(
     owner: CommandOwnerScope,
     token: DocumentNavigationToken,
     navigation: ResponseCommitReady,
-    configuration: PreparedDocumentPageCommitConfiguration,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     transaction: AttachmentTransaction,
 ) -> Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError> {
-    navigation
-        .update_commit_configuration(configuration)
-        .await
-        .map_err(RendererPageReplacementError::document_preserved)?;
     let admission_owner = owner.clone();
     let admission_token = token.clone();
     let admission_transaction = transaction.clone();
@@ -172,6 +180,7 @@ async fn commit_prepared_document(
                 &admission_owner,
                 &admission_token,
                 navigation,
+                web_mcp_invocation,
                 &admission_transaction,
             )
         })
@@ -245,12 +254,7 @@ impl CdpConnection {
         let sender = self
             .background_navigation_completion_sender_for_owner(&state.owner)
             .expect("background navigation retains its completion channel");
-        let configuration = self
-            .prepared_document_commit_configuration_for_owner(&state.owner, navigation.final_url())
-            .map(|mut configuration| {
-                configuration.web_mcp_invocation = state.web_mcp_invocation.clone();
-                configuration
-            });
+        let web_mcp_invocation = state.web_mcp_invocation.clone();
         let expected = navigation.stable_page_target().cloned();
         let transaction = AttachmentTransaction::default();
         let wait_transaction = transaction.clone();
@@ -260,14 +264,12 @@ impl CdpConnection {
         let task_owner = state.owner.clone();
         let task = spawn_owned_protocol_wait(
             async move {
-                let configuration =
-                    configuration.map_err(RendererPageReplacementError::document_preserved)?;
                 commit_prepared_document(
                     access,
                     wait_owner,
                     wait_token,
                     navigation,
-                    configuration,
+                    web_mcp_invocation,
                     wait_transaction,
                 )
                 .await

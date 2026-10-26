@@ -961,8 +961,12 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
         panic!("network failure must prepare an error document commit");
     };
     let permit = prepared.issue_commit_permit();
+    let configuration = ctx
+        .conn
+        .prepared_document_commit_configuration_for_owner(&navigation.owner, prepared.final_url())
+        .unwrap();
     let loaded = prepared
-        .commit(permit)
+        .commit(permit, configuration)
         .await
         .expect("error document should commit");
     assert_eq!(loaded.requested_url, unreachable_url);
