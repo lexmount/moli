@@ -274,7 +274,10 @@ fn protocol_output_loose_response_split_ignores_typed_runtime_response() {
     };
     assert_eq!(command_id, 7);
     let message = event.into_protocol_message();
-    assert_eq!(message["id"], json!(7));
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["id"],
+        json!(7)
+    );
     let Some((typed_prefix, response)) = prefix.split_next_runtime_response_ready() else {
         panic!("typed runtime response should stay in the prefix for typed routing");
     };
@@ -433,7 +436,7 @@ fn output_request_ids(output: ProtocolOutputSequence) -> Vec<String> {
                 automation_event.is_some(),
                 "deferred background events must preserve typed sidecars"
             );
-            message["params"]["requestId"]
+            message.as_json().expect("scalar protocol fixture")["params"]["requestId"]
                 .as_str()
                 .expect("network event request id")
                 .to_owned()
@@ -1615,8 +1618,14 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
         .map(BackgroundProtocolEvent::into_protocol_message)
         .map(|message| {
             (
-                message["method"].as_str().unwrap().to_owned(),
-                message["params"]["requestId"].as_str().unwrap().to_owned(),
+                message.as_json().expect("scalar protocol fixture")["method"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                message.as_json().expect("scalar protocol fixture")["params"]["requestId"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
             )
         })
         .collect::<Vec<_>>();
@@ -1761,7 +1770,12 @@ fn navigation_gate_release_precedes_later_renderer_boundary_network_output() {
         .into_background_events()
         .into_iter()
         .map(BackgroundProtocolEvent::into_protocol_message)
-        .map(|message| message["method"].as_str().unwrap().to_owned())
+        .map(|message| {
+            message.as_json().expect("scalar protocol fixture")["method"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         methods,

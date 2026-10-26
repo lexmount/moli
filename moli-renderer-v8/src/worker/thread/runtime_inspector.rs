@@ -1,3 +1,4 @@
+use moli_protocol_cdp::CdpMessage;
 use std::{
     cell::{Cell, OnceCell, RefCell, UnsafeCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -48,8 +49,8 @@ impl InspectorSessionOutput for WorkerInspectorSessionOutput<'_> {
         let mut response = None;
         for message in scope.finish() {
             let value = message.into_v8_inspector_message();
-            if value.get("id").and_then(Value::as_i64) == Some(i64::from(call_id)) {
-                response = Some(value);
+            if value.signed_id() == Some(i64::from(call_id)) {
+                response = value.into_json().ok();
             } else {
                 self.outbound.push_value(self.session_key, value);
             }
@@ -119,7 +120,7 @@ impl WorkerInspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
+        match CdpMessage::parse(&moli_v8_util::inspector_protocol_message_json(&view)) {
             Ok(value) => self.push_value(session_key, value),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
@@ -135,7 +136,7 @@ impl WorkerInspectorOutbound {
         }
     }
 
-    fn push_value(&self, session_key: &str, value: Value) {
+    fn push_value(&self, session_key: &str, value: impl Into<CdpMessage>) {
         let message = RendererRuntimeInspectorMessage::from_v8_inspector_message(value);
         let mut guard = self.0.borrow_mut();
         if let Some(scope) = guard
@@ -166,7 +167,7 @@ impl WorkerInspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
+        match CdpMessage::parse(&moli_v8_util::inspector_protocol_message_json(&view)) {
             Ok(value) => self.push_response_value(session_key, call_id, value),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
@@ -182,7 +183,8 @@ impl WorkerInspectorOutbound {
         }
     }
 
-    fn push_response_value(&self, session_key: &str, call_id: i32, value: Value) {
+    fn push_response_value(&self, session_key: &str, call_id: i32, value: impl Into<CdpMessage>) {
+        let value = value.into();
         let mut guard = self.0.borrow_mut();
         if let Some(scope) = guard.active_dispatch_scopes.last_mut().filter(|scope| {
             scope.session_key == session_key && scope.internal_call_id == Some(call_id)
@@ -924,9 +926,21 @@ mod tests {
             .iter()
             .find_map(|message| match message {
                 RendererRuntimeInspectorMessage::Protocol(message)
-                    if message.value().get("id").and_then(Value::as_i64) == Some(call_id) =>
+                    if message
+                        .value()
+                        .as_json()
+                        .expect("scalar protocol fixture")
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        == Some(call_id) =>
                 {
-                    Some(message.value().clone())
+                    Some(
+                        message
+                            .value()
+                            .as_json()
+                            .expect("scalar protocol fixture")
+                            .clone(),
+                    )
                 }
                 _ => None,
             })
@@ -1186,7 +1200,12 @@ mod tests {
                         .dispatch_protocol_message(scope, None, request)
                         .expect("worker Inspector dispatch")
                         .into_iter()
-                        .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                        .map(|event| {
+                            event
+                                .into_v8_inspector_message()
+                                .into_json()
+                                .expect("scalar protocol fixture")
+                        })
                         .collect()
                 });
             }
@@ -1245,6 +1264,8 @@ mod tests {
             messages.iter().all(|message| match message {
                 RendererRuntimeInspectorMessage::Protocol(message) => message
                     .value()
+                    .as_json()
+                    .expect("scalar protocol fixture")
                     .get("id")
                     .and_then(Value::as_i64)
                     .is_none_or(|call_id| call_id >= 0),
@@ -1269,6 +1290,7 @@ mod tests {
             completion
                 .output
                 .protocol_response(-1)
+                .map(|value| value.as_json().expect("scalar protocol fixture"))
                 .expect("response ID -1")["result"]["result"]["value"],
             json!(7)
         );
@@ -1294,7 +1316,12 @@ mod tests {
                 .dispatch_protocol_message(scope, None, request)
                 .expect("Worker Inspector dispatch")
                 .into_iter()
-                .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                .map(|event| {
+                    event
+                        .into_v8_inspector_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect()
         });
         inspector
@@ -1305,7 +1332,12 @@ mod tests {
                 .dispatch_protocol_message(scope, Some(session), request)
                 .expect("Worker Inspector session dispatch")
                 .into_iter()
-                .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                .map(|event| {
+                    event
+                        .into_v8_inspector_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect()
         });
     }
@@ -1347,7 +1379,8 @@ mod tests {
                 .try_recv()
                 .expect("peer callback must not be intercepted")
                 .output
-                .protocol_response(-1),
+                .protocol_response(-1)
+                .map(|value| value.as_json().expect("scalar protocol fixture")),
             Some(&json!({"id": -1, "result": "peer"}))
         );
         assert!(matches!(
@@ -1359,7 +1392,10 @@ mod tests {
             .try_recv()
             .expect("frontend callback must remain registered");
         assert_eq!(
-            completion.output.protocol_response(-1),
+            completion
+                .output
+                .protocol_response(-1)
+                .map(|value| value.as_json().expect("scalar protocol fixture")),
             Some(&json!({"id": -1, "result": "frontend"}))
         );
         assert_eq!(
@@ -1412,7 +1448,10 @@ mod tests {
         let completion = first_rx.try_recv().expect("first deferred response");
         assert_eq!(completion.call_id, 7);
         assert_eq!(
-            completion.output.protocol_response(7),
+            completion
+                .output
+                .protocol_response(7)
+                .map(|value| value.as_json().expect("scalar protocol fixture")),
             Some(&json!({"id": 7, "result": "first"}))
         );
         assert!(matches!(
@@ -1446,13 +1485,19 @@ mod tests {
         let first_completion = first_rx.try_recv().expect("first session response");
         assert_eq!(first_completion.call_id, 7);
         assert_eq!(
-            first_completion.output.protocol_response(7),
+            first_completion
+                .output
+                .protocol_response(7)
+                .map(|value| value.as_json().expect("scalar protocol fixture")),
             Some(&json!({"id": 7, "result": "first"}))
         );
         let second_completion = second_rx.try_recv().expect("second session response");
         assert_eq!(second_completion.call_id, 7);
         assert_eq!(
-            second_completion.output.protocol_response(7),
+            second_completion
+                .output
+                .protocol_response(7)
+                .map(|value| value.as_json().expect("scalar protocol fixture")),
             Some(&json!({"id": 7, "result": "second"}))
         );
     }

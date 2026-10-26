@@ -14,6 +14,7 @@ use anyhow::Result;
 use moli_page_types::{
     DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorResponseDelivery,
 };
+use moli_protocol_cdp::CdpMessage;
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -41,7 +42,7 @@ struct InspectorOutboundMessageState {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct InspectorOutboundMessage {
     pub(super) agent_token: RendererDevToolsAgentToken,
-    pub(super) value: Value,
+    pub(super) value: CdpMessage,
 }
 
 #[derive(Default)]
@@ -87,6 +88,7 @@ impl InspectorSessionOutput for InspectorOutbound {
             dispatch();
         }
         self.take_response_for_call_id_after(snapshot, i64::from(call_id))
+            .and_then(|message| message.into_json().ok())
     }
 }
 
@@ -181,7 +183,7 @@ impl InspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
+        match CdpMessage::parse(&moli_v8_util::inspector_protocol_message_json(&view)) {
             Ok(value) => self.push_value(value),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
@@ -203,7 +205,7 @@ impl InspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
+        match CdpMessage::parse(&moli_v8_util::inspector_protocol_message_json(&view)) {
             Ok(value) => self.push_response_value(call_id, value),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
@@ -214,7 +216,8 @@ impl InspectorOutbound {
         }
     }
 
-    pub(super) fn push_value(&self, value: Value) {
+    pub(super) fn push_value(&self, value: impl Into<CdpMessage>) {
+        let value = value.into();
         if let Some(session_route) = self.session_route.borrow().clone() {
             match session_route.route_notification(&value) {
                 RendererInspectorPauseNotificationRoute::OrdinaryTurn => {
@@ -244,7 +247,7 @@ impl InspectorOutbound {
         &self,
         mut preface: Vec<RendererRuntimeInspectorMessage>,
         command_output: Option<crate::devtools::pause::RendererInspectorPauseCommandOutputRoute>,
-        value: Option<Value>,
+        value: Option<CdpMessage>,
     ) {
         let session = self
             .session
@@ -316,7 +319,7 @@ impl InspectorOutbound {
             .and_then(|route| route.stage_pause_preface(messages))
     }
 
-    fn push_local_value(&self, value: Value) {
+    fn push_local_value(&self, value: CdpMessage) {
         let (runtime_command_output, command_turn_output, dispatch_is_active) = {
             let routing = self.response_routing.borrow();
             if routing.runtime_command_output_suppression_depth == 0 {
@@ -362,7 +365,7 @@ impl InspectorOutbound {
         self.queue_local_value(value);
     }
 
-    fn queue_local_value(&self, value: Value) {
+    fn queue_local_value(&self, value: CdpMessage) {
         self.state()
             .borrow_mut()
             .messages
@@ -372,7 +375,8 @@ impl InspectorOutbound {
             });
     }
 
-    pub(super) fn push_response_value(&self, call_id: i32, value: Value) {
+    pub(super) fn push_response_value(&self, call_id: i32, value: impl Into<CdpMessage>) {
+        let value = value.into();
         let mut guard = self.response_routing.borrow_mut();
         if guard
             .internal_dispatch_response_call_ids
@@ -384,7 +388,7 @@ impl InspectorOutbound {
             return;
         }
         if let Some(session_route) = self.session_route.borrow().as_ref() {
-            session_route.mark_command_response(call_id, value.get("error").is_none());
+            session_route.mark_command_response(call_id, !value.has_field("error"));
         }
         let callback = guard.pending_response_callbacks.remove(&call_id);
         if let Some(callback) = callback {
@@ -462,7 +466,7 @@ impl InspectorOutbound {
     pub(in crate::script_vm) fn publish_frontend_response(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
-        message: Value,
+        message: impl Into<CdpMessage>,
     ) {
         let callback = self.route_frontend_response(callback);
         let _ = callback.send(message);
@@ -504,7 +508,7 @@ impl InspectorOutbound {
         self.state().borrow().messages.len()
     }
 
-    pub(in crate::script_vm) fn take_messages_after(&self, snapshot_len: usize) -> Vec<Value> {
+    pub(in crate::script_vm) fn take_messages_after(&self, snapshot_len: usize) -> Vec<CdpMessage> {
         let state = self.state();
         let mut guard = state.borrow_mut();
         if snapshot_len >= guard.messages.len() {
@@ -568,7 +572,7 @@ impl InspectorOutbound {
         &self,
         snapshot_len: usize,
         call_id: i64,
-    ) -> Option<Value> {
+    ) -> Option<CdpMessage> {
         let state = self.state();
         let mut guard = state.borrow_mut();
         let position = guard
@@ -577,7 +581,7 @@ impl InspectorOutbound {
             .enumerate()
             .skip(snapshot_len)
             .find_map(|(index, message)| {
-                (message.value.get("id").and_then(Value::as_i64) == Some(call_id)).then_some(index)
+                (message.value.signed_id() == Some(call_id)).then_some(index)
             });
         position
             .and_then(|position| guard.messages.remove(position))
@@ -599,12 +603,15 @@ impl InspectorOutbound {
                     .contains(&call_id)
         };
         routing_available
-            && !self.state().borrow().messages.iter().any(|message| {
-                message.value.get("id").and_then(Value::as_i64) == Some(i64::from(call_id))
-            })
+            && !self
+                .state()
+                .borrow()
+                .messages
+                .iter()
+                .any(|message| message.value.signed_id() == Some(i64::from(call_id)))
     }
 
-    pub(super) fn values_after(&self, snapshot_len: usize) -> Vec<Value> {
+    pub(super) fn values_after(&self, snapshot_len: usize) -> Vec<CdpMessage> {
         let state = self.state();
         let guard = state.borrow();
         if snapshot_len >= guard.messages.len() {
@@ -618,7 +625,7 @@ impl InspectorOutbound {
             .collect()
     }
 
-    pub(in crate::script_vm) fn take_pending_messages(&self) -> Vec<Value> {
+    pub(in crate::script_vm) fn take_pending_messages(&self) -> Vec<CdpMessage> {
         let state = self.state();
         let mut guard = state.borrow_mut();
         guard
@@ -837,9 +844,12 @@ mod tests {
             .borrow()
             .clone()
             .expect("frontend route");
-        route.route_notification(&serde_json::json!({
-            "method": "Debugger.paused", "params": {"callFrames": []}
-        }));
+        route.route_notification(
+            &serde_json::json!({
+                "method": "Debugger.paused", "params": {"callFrames": []}
+            })
+            .into(),
+        );
         assert!(bridge.enter_pause().is_some());
         let dispatch = bridge.begin_command_dispatch(
             1,
@@ -866,7 +876,7 @@ mod tests {
         assert!(
             matches!(
                 route.route_notification(
-                    &serde_json::json!({"method": "Debugger.resumed", "params": {}})
+                    &serde_json::json!({"method": "Debugger.resumed", "params": {}}).into()
                 ),
                 RendererInspectorPauseNotificationRoute::PublishImmediately {
                     command_output: None,
@@ -941,7 +951,7 @@ mod tests {
                 if batch.messages.iter().any(|message| matches!(
                     message,
                     RendererRuntimeInspectorMessage::Protocol(value)
-                        if value["method"] == "Runtime.consoleAPICalled"
+                        if value.as_json().expect("scalar protocol fixture")["method"] == "Runtime.consoleAPICalled"
                 ))
         ));
         assert_eq!(
@@ -977,7 +987,7 @@ mod tests {
                 if batch.messages.iter().any(|message| matches!(
                     message,
                     RendererRuntimeInspectorMessage::Protocol(value)
-                        if value["method"] == "Runtime.consoleAPICalled"
+                        if value.as_json().expect("scalar protocol fixture")["method"] == "Runtime.consoleAPICalled"
                 ))
         ));
     }

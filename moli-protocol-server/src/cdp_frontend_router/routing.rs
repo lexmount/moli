@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_protocol_cdp::CdpMessage;
 use serde_json::{Value, json};
 
 use crate::cdp_writer::CdpSocketSink;
@@ -20,7 +21,7 @@ impl CdpRoutedFrontend {
         self.frontend_id
     }
 
-    pub(super) fn enqueue_message(self, message: Value) -> bool {
+    pub(super) fn enqueue_message(self, message: impl Into<CdpMessage>) -> bool {
         self.sink.enqueue_owned_message(message)
     }
 
@@ -92,18 +93,12 @@ impl CdpFrontendRoutingState {
     }
 }
 
-fn remove_top_level_session_id(message: &mut Value) {
-    if let Some(object) = message.as_object_mut() {
-        object.remove("sessionId");
-    }
+fn remove_top_level_session_id(message: &mut CdpMessage) {
+    message.set_session_id(None);
 }
 
-fn set_top_level_session_id(message: &mut Value, session_id: Option<&str>) {
-    if let Some(session_id) = session_id {
-        message["sessionId"] = json!(session_id);
-    } else {
-        remove_top_level_session_id(message);
-    }
+fn set_top_level_session_id(message: &mut CdpMessage, session_id: Option<&str>) {
+    message.set_session_id(session_id);
 }
 
 fn cdp_error_response(id: Option<u64>, code: i32, message: &str) -> Value {

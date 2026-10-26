@@ -406,7 +406,12 @@ mod tests {
         let messages = command_context
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             messages,
@@ -490,7 +495,12 @@ mod tests {
         let cancellations = cancellations
             .into_iter()
             .chain(claimed)
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             cancellations.len(),

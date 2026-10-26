@@ -45,7 +45,7 @@ fn inspector_protocol_message_has_typed_and_consistent_response_id() {
         Some(moli_page_types::RendererCallId::new(0))
     );
     {
-        let mut value = response.value_mut();
+        let mut value = response.value_mut().expect("scalar protocol fixture");
         value["id"] = json!(-7);
     }
     assert_eq!(
@@ -131,7 +131,10 @@ fn inspector_outbound_registered_response_callback_wins_over_dispatch_capture() 
     let completion = rx.try_recv().expect("deferred response completion");
     assert_eq!(completion.call_id, 7);
     assert_eq!(
-        completion.output.protocol_response(7),
+        completion
+            .output
+            .protocol_response(7)
+            .map(|value| value.as_json().expect("scalar protocol fixture")),
         Some(&json!({"id": 7, "result": "deferred"}))
     );
     assert!(
@@ -162,7 +165,10 @@ fn deferred_inspector_response_preserves_protocol_attachment() {
         Some(attachment_id)
     );
     assert_eq!(
-        completion.output.protocol_response(7),
+        completion
+            .output
+            .protocol_response(7)
+            .map(|value| value.as_json().expect("scalar protocol fixture")),
         Some(&json!({"id": 7, "result": "attached"}))
     );
 }
@@ -186,7 +192,10 @@ fn runtime_command_output_only_parks_its_own_response_callback() {
         .try_recv()
         .expect("an unrelated callback should keep its own response route");
     assert_eq!(
-        other.output.protocol_response(7),
+        other
+            .output
+            .protocol_response(7)
+            .map(|value| value.as_json().expect("scalar protocol fixture")),
         Some(&json!({"id": 7, "result": "other"}))
     );
     assert!(matches!(
@@ -203,10 +212,12 @@ fn runtime_command_output_only_parks_its_own_response_callback() {
     assert!(matches!(
         &current.messages()[0],
         crate::runtime::RendererRuntimeInspectorMessage::Protocol(message)
-            if message["method"] == json!("Runtime.consoleAPICalled")
+            if message.as_json().expect("scalar protocol fixture")["method"] == json!("Runtime.consoleAPICalled")
     ));
     assert_eq!(
-        current.protocol_response(8),
+        current
+            .protocol_response(8)
+            .map(|value| value.as_json().expect("scalar protocol fixture")),
         Some(&json!({"id": 8, "result": "current"}))
     );
 }
@@ -299,7 +310,10 @@ fn internal_dispatch_response_does_not_consume_same_id_deferred_frontend_callbac
         .try_recv()
         .expect("the later frontend response should still own its deferred callback");
     assert_eq!(
-        completion.output.protocol_response(900_100_000),
+        completion
+            .output
+            .protocol_response(900_100_000)
+            .map(|value| value.as_json().expect("scalar protocol fixture")),
         Some(&json!({"id": 900_100_000, "result": {"frontend": true}}))
     );
 }

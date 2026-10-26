@@ -177,7 +177,9 @@ fn runtime_inspector_frontend_response(
         let RendererRuntimeInspectorMessage::Protocol(message) = message else {
             return None;
         };
-        (message.get("id").and_then(Value::as_u64) == Some(command_id)).then(|| message.value())
+        (message.id() == Some(command_id))
+            .then(|| message.value().as_json())
+            .flatten()
     })
 }
 
@@ -234,7 +236,7 @@ pub(crate) struct OwnerRuntimeResponse {
     command_id: u64,
     owner: CommandOwnerScope,
     object_group: Option<String>,
-    message: Value,
+    message: moli_protocol_cdp::CdpMessage,
     bidi_channel_listener: Option<BidiChannelListenerResidence>,
 }
 
@@ -284,7 +286,7 @@ impl OwnerRuntimeResponse {
         command_id: u64,
         entry: PendingInspectorAwait,
         owner: &CommandOwnerScope,
-        message: Value,
+        message: moli_protocol_cdp::CdpMessage,
     ) -> Self {
         Self {
             command_id,
@@ -311,7 +313,7 @@ impl OwnerRuntimeResponse {
         self.bidi_channel_listener.as_ref()
     }
 
-    fn into_protocol_message(self) -> Value {
+    fn into_protocol_message(self) -> moli_protocol_cdp::CdpMessage {
         self.message
     }
 }

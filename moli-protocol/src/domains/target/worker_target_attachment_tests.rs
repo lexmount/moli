@@ -87,7 +87,12 @@ async fn drain(
 fn protocol_messages(events: Vec<crate::conn::BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect()
 }
 

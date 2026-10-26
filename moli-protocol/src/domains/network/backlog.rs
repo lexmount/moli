@@ -1110,6 +1110,7 @@ mod tests {
             "a successful XHR terminal must stay behind the same navigation gate as its start and response"
         );
         let (message, automation_event) = terminal.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Network.loadingFinished");
         assert!(message["params"].get("type").is_none());
         assert!(matches!(

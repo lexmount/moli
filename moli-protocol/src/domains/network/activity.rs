@@ -625,7 +625,12 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["method"], json!("Fetch.requestPaused"));
@@ -756,7 +761,12 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
@@ -806,7 +816,12 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["method"], json!("Fetch.requestPaused"));

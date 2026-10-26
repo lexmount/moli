@@ -214,11 +214,12 @@ impl ObservableActivityEmissionPlan {
     fn emit(self, conn: &mut CdpConnection, out: &mut Vec<Value>, session_id: Option<&str>) {
         let mut events = Vec::new();
         self.emit_background_events(conn, &mut events, session_id);
-        out.extend(
-            events
-                .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
-        );
+        out.extend(events.into_iter().map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        }));
     }
 
     #[cfg(test)]
@@ -346,10 +347,7 @@ mod tests {
     };
     use serde_json::json;
 
-    use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, PageTargetHost, TargetIdentityState,
-        TargetPageSlot,
-    };
+    use crate::conn::{BrowserContext, PageTargetHost, TargetIdentityState, TargetPageSlot};
     use crate::domains::observable_output::{
         ObservablePreparedOutputSlot, TargetRuntimeObservableSourceSummary,
         observable_backlog_activity_outputs_for_session_owner as observable_backlog_activity_outputs,
@@ -576,7 +574,12 @@ mod tests {
         .await;
         let out = out
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
 
         let console_events = out

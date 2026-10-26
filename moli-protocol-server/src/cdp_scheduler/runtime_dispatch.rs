@@ -725,8 +725,14 @@ mod tests {
             .expect("runtime deferred output should contain the raw event")
             .into_parts();
 
-        assert_eq!(message["method"], json!("Page.fileChooserOpened"));
-        assert_eq!(message["sessionId"], json!("SID-runtime"));
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["method"],
+            json!("Page.fileChooserOpened")
+        );
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["sessionId"],
+            json!("SID-runtime")
+        );
         assert!(matches!(
             automation_event,
             Some(AutomationEvent::PageFileChooserOpened(event))

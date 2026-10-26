@@ -293,7 +293,7 @@ impl DocumentInspectorBinding {
     pub(super) fn take_outbound_messages_for_session(
         &self,
         inspector_session_id: Option<&str>,
-    ) -> Vec<Value> {
+    ) -> Vec<moli_protocol_cdp::CdpMessage> {
         let session_key = inspector_session_key(inspector_session_id);
         self.observable_outbound_routes()
             .into_iter()
@@ -504,13 +504,18 @@ impl DocumentInspectorBinding {
 
     pub(super) fn record_execution_context_state(
         &mut self,
-        messages: &[Value],
+        messages: &[moli_protocol_cdp::CdpMessage],
         root_frame_id: Option<&str>,
     ) {
-        self.backend
-            .borrow_mut()
-            .runtime_realms
-            .record_execution_context_state(messages, root_frame_id);
+        let mut backend = self.backend.borrow_mut();
+        for value in messages
+            .iter()
+            .filter_map(moli_protocol_cdp::CdpMessage::as_json)
+        {
+            backend
+                .runtime_realms
+                .record_execution_context_state(std::slice::from_ref(value), root_frame_id);
+        }
     }
 
     fn outbound_snapshots(&self) -> HashMap<DevToolsSessionKey, usize> {
@@ -523,7 +528,7 @@ impl DocumentInspectorBinding {
     fn outbound_after_snapshots(
         &self,
         snapshots: &HashMap<DevToolsSessionKey, usize>,
-    ) -> Vec<Value> {
+    ) -> Vec<moli_protocol_cdp::CdpMessage> {
         let mut messages = Vec::new();
         for (key, outbound) in self.observable_outbound_routes() {
             let snapshot_len = snapshots.get(&key).copied().unwrap_or_default();
@@ -550,9 +555,12 @@ fn inspector_execution_context_origin(url: &Url) -> String {
     }
 }
 
-fn reported_execution_context_created(messages: &[Value]) -> Option<ReportedExecutionContext> {
+fn reported_execution_context_created(
+    messages: &[moli_protocol_cdp::CdpMessage],
+) -> Option<ReportedExecutionContext> {
     let context = messages
         .iter()
+        .filter_map(moli_protocol_cdp::CdpMessage::as_json)
         .find(|message| message["method"] == json!("Runtime.executionContextCreated"))
         .map(|message| &message["params"]["context"])?;
     Some(ReportedExecutionContext {

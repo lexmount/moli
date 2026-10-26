@@ -430,11 +430,12 @@ impl MainDocumentNavigationActivity {
         );
         output.drain_progress();
         let mut out = Vec::new();
-        out.extend(
-            background_events
-                .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
-        );
+        out.extend(background_events.into_iter().map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        }));
         if navigate_id.is_some() {
             crate::domains::command_output::CommandOutputPlan::error(-32000, message).emit_into(
                 &mut out,

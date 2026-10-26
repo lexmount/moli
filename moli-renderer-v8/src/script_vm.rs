@@ -1334,10 +1334,10 @@ impl ScriptVm {
         raw_json: &str,
     ) -> Result<Vec<Value>> {
         self.dispatch_inspector_protocol_message_for_session(None, raw_json)
-            .map(|messages| {
+            .and_then(|messages| {
                 messages
                     .into_iter()
-                    .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                    .map(|message| message.into_v8_inspector_message().into_json().map_err(|_|anyhow!("test helper requires Unicode scalar JSON; use the session API for raw UTF-16")))
                     .collect()
             })
     }
@@ -1685,8 +1685,8 @@ impl ScriptVm {
                                 .ok_or_else(|| {
                                     anyhow!("{method} restore produced no inspector response")
                                 })?;
-                            if let Some(error) = response.get("error") {
-                                return Err(anyhow!("{method} restore failed: {error}"));
+                            if response.has_field("error") {
+                                return Err(anyhow!("{method} restore failed: {response}"));
                             }
                             outbound.append_messages_after_to_output_journal(restore_snapshot)?;
                         }
@@ -1856,7 +1856,10 @@ impl ScriptVm {
                 let messages = page_inspector.with_session_and_outbound(
                     inspector,
                     target,
-                    |session, outbound, runtime_bindings_to_replay| -> Result<Vec<Value>> {
+                    |session,
+                     outbound,
+                     runtime_bindings_to_replay|
+                     -> Result<Vec<moli_protocol_cdp::CdpMessage>> {
                         let replay_global_snapshots =
                             capture_runtime_binding_replay_global_snapshots(
                                 scope,

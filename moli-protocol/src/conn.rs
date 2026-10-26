@@ -2733,7 +2733,12 @@ impl CdpConnection {
     pub(crate) fn drain_navigation_background_events(&mut self) -> Vec<serde_json::Value> {
         self.drain_navigation_background_protocol_events()
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect()
     }
 
@@ -2799,11 +2804,12 @@ impl CdpConnection {
         events.extend(before_renderer_output);
         events.extend(after_renderer_output);
         events.extend(command_context.take_post_response_events());
-        out.extend(
-            events
-                .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
-        );
+        out.extend(events.into_iter().map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        }));
     }
 
     pub(crate) async fn drain_materialized_navigation_completion_into_buffer(

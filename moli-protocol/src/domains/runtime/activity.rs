@@ -808,7 +808,12 @@ mod tests {
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, None)
             .await
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1, "retired notifications must be discarded");
@@ -894,7 +899,12 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(out.len(), 1);
@@ -951,7 +961,12 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);
@@ -1007,6 +1022,7 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         let (message, automation_event) = events.into_iter().next().unwrap().into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], json!("Runtime.consoleAPICalled"));
         assert_eq!(message["sessionId"], json!("SID-1"));
         assert_eq!(message["params"]["executionContextId"], json!(7));
@@ -1102,7 +1118,12 @@ mod tests {
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-1"))
             .await
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);
@@ -1144,7 +1165,12 @@ mod tests {
             drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-unrelated-drain"))
                 .await
                 .into_iter()
-                .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);

@@ -414,17 +414,32 @@ mod tests {
         })
         .into_iter();
         let (event, sidecar) = events.next().unwrap().into_parts();
-        assert_eq!(event["method"], "DOM.setChildNodes");
-        assert_eq!(event["sessionId"], "SID-native");
+        assert_eq!(
+            event.as_json().expect("scalar protocol fixture")["method"],
+            "DOM.setChildNodes"
+        );
+        assert_eq!(
+            event.as_json().expect("scalar protocol fixture")["sessionId"],
+            "SID-native"
+        );
         let Some(crate::automation::AutomationEvent::DomSetChildNodes(sidecar)) = sidecar else {
             panic!("native DOM notifications retain their typed automation event");
         };
         assert_eq!(sidecar.parent_node_id, 3);
         assert_eq!(sidecar.nodes, nodes);
         let (terminal, _) = events.next().unwrap().into_parts();
-        assert_eq!(terminal["id"], 42);
-        assert_eq!(terminal["sessionId"], "SID-native");
-        assert_eq!(terminal["result"]["nodeId"], 7);
+        assert_eq!(
+            terminal.as_json().expect("scalar protocol fixture")["id"],
+            42
+        );
+        assert_eq!(
+            terminal.as_json().expect("scalar protocol fixture")["sessionId"],
+            "SID-native"
+        );
+        assert_eq!(
+            terminal.as_json().expect("scalar protocol fixture")["result"]["nodeId"],
+            7
+        );
         assert!(events.next().is_none());
     }
 }

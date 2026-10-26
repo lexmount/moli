@@ -1484,11 +1484,12 @@ impl TestContext {
                 .iter()
                 .position(|event| event.as_runtime_inspector_response_ready().is_some())
             {
-                self.sent.extend(
-                    events
-                        .drain(..position)
-                        .map(BackgroundProtocolEvent::into_protocol_message),
-                );
+                self.sent.extend(events.drain(..position).map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                }));
                 let response = events
                     .remove(0)
                     .take_runtime_inspector_response_ready()
@@ -1501,11 +1502,12 @@ impl TestContext {
             }
             let pending_ids = self.pending_runtime_deferred_reply_command_ids();
             if pending_ids.is_empty() {
-                self.sent.extend(
-                    events
-                        .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
-                );
+                self.sent.extend(events.into_iter().map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                }));
                 return;
             }
             let Some(position) = events.iter().position(|event| {
@@ -1515,19 +1517,25 @@ impl TestContext {
                     .and_then(Value::as_u64)
                     .is_some_and(|id| pending_ids.contains(&id))
             }) else {
-                self.sent.extend(
-                    events
-                        .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
-                );
+                self.sent.extend(events.into_iter().map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                }));
                 return;
             };
-            self.sent.extend(
-                events
-                    .drain(..position)
-                    .map(BackgroundProtocolEvent::into_protocol_message),
-            );
-            let message = events.remove(0).into_protocol_message();
+            self.sent.extend(events.drain(..position).map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            }));
+            let message = events
+                .remove(0)
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture");
             let Some(command_id) = message.get("id").and_then(Value::as_u64) else {
                 self.sent.push(message);
                 continue;
@@ -1711,11 +1719,12 @@ impl TestContext {
             if !background_events.is_empty() {
                 work.push_front(TestSchedulerWork::ProtocolEvents(background_events));
             }
-            self.sent.extend(
-                response_events
-                    .into_iter()
-                    .map(BackgroundProtocolEvent::into_protocol_message),
-            );
+            self.sent.extend(response_events.into_iter().map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            }));
             if !suffix_events.is_empty() {
                 work.push_front(TestSchedulerWork::ProtocolEvents(suffix_events));
             }
@@ -1914,7 +1923,12 @@ impl TestContext {
 fn protocol_events_into_messages(events: Vec<BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect()
 }
 
@@ -1924,7 +1938,13 @@ pub(crate) fn protocol_events_into_internal_messages(
 ) -> Vec<Value> {
     events
         .into_iter()
-        .map(|event| event.into_parts().0)
+        .map(|event| {
+            event
+                .into_parts()
+                .0
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect()
 }
 
@@ -1934,12 +1954,12 @@ pub(crate) async fn drain_scheduler_events_like_scheduler(
     out: &mut Vec<Value>,
     scheduler_events: Vec<CdpSchedulerEvent>,
 ) {
-    drain_scheduler_events_like_scheduler_with_materializer(
-        conn,
-        out,
-        scheduler_events,
-        BackgroundProtocolEvent::into_protocol_message,
-    )
+    drain_scheduler_events_like_scheduler_with_materializer(conn, out, scheduler_events, |event| {
+        event
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture")
+    })
     .await;
 }
 
@@ -1984,7 +2004,11 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
 
 #[cfg(test)]
 fn protocol_event_into_internal_message(event: BackgroundProtocolEvent) -> Value {
-    event.into_parts().0
+    event
+        .into_parts()
+        .0
+        .into_json()
+        .expect("scalar protocol fixture")
 }
 
 #[cfg(test)]

@@ -59,7 +59,12 @@ impl CdpConnection {
                 )
                 .await?
                 .into_iter()
-                .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                .map(|event| {
+                    event
+                        .into_v8_inspector_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect());
         }
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
@@ -74,7 +79,12 @@ impl CdpConnection {
             .await
             .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?
             .into_iter()
-            .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+            .map(|event| {
+                event
+                    .into_v8_inspector_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>()
         };
         if let Some(started) = timing_started {

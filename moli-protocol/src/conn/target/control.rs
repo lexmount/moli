@@ -621,7 +621,13 @@ mod tests {
         assert_eq!(events.len(), 2);
         let messages = events
             .into_iter()
-            .map(|event| event.into_parts().0)
+            .map(|event| {
+                event
+                    .into_parts()
+                    .0
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         for message in &messages {
             assert_eq!(message["method"], "Target.targetCrashed");

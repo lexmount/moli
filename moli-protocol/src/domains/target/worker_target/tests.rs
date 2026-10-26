@@ -184,7 +184,12 @@ fn protocol_messages(events: &[BackgroundProtocolEvent]) -> Vec<Value> {
     events
         .iter()
         .cloned()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect()
 }
 
@@ -284,7 +289,12 @@ fn lifecycle_protocol_message(
         | WorkerTargetLifecycleOutput::ServiceWorkerRuntimeEvents { events, .. } => events
             .iter()
             .cloned()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .find(|message| message["method"].as_str() == Some(method)),
         _ => None,
     })
@@ -1369,6 +1379,7 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
     let mut sidecars = Vec::new();
     for event in events {
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         match automation_event {
             Some(crate::automation::AutomationEvent::TargetCreated(event)) => {
                 assert_eq!(message["method"], json!("Target.targetCreated"));
@@ -1440,7 +1451,12 @@ async fn shared_worker_target_lifecycle_drain_routes_discovery_events_to_owner_s
     let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
         .await
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
 
     assert!(
@@ -1932,7 +1948,12 @@ fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
             WorkerTargetLifecycleOutput::ServiceWorkerRuntimeEvents { events, .. } => events
                 .iter()
                 .cloned()
-                .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .find(|message| message["id"] == json!(917)),
             _ => None,
         })
@@ -1953,7 +1974,10 @@ fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
         })
         .expect("service worker stop should clear reported Runtime contexts");
     let (runtime_cleared, runtime_cleared_sidecar) = runtime_cleared_event.into_parts();
-    assert_eq!(runtime_cleared["sessionId"], attached_session_id);
+    assert_eq!(
+        runtime_cleared.as_json().expect("scalar protocol fixture")["sessionId"],
+        attached_session_id
+    );
     assert!(matches!(
         runtime_cleared_sidecar,
         Some(crate::automation::AutomationEvent::RuntimeExecutionContextsCleared(_))
@@ -2091,7 +2115,12 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
     let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
         .await
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     assert!(
         out.iter().any(|message| {
@@ -2143,7 +2172,12 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
     let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
         .await
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
 
     let lifecycle_methods: Vec<_> = out
@@ -2324,7 +2358,12 @@ async fn retired_run_output_never_replays_into_the_restarted_worker() {
     let messages = drain_target_lifecycle_events_for_test(&mut conn, new_output)
         .await
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["method"], "Console.messageAdded");
@@ -2723,6 +2762,7 @@ fn service_worker_exception_messages_emit_runtime_exception_thrown_shape() {
 
     assert_eq!(out.len(), 1);
     let (message, automation_event) = out.into_iter().next().unwrap().into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     assert_eq!(message["sessionId"], json!("SID-worker"));
     assert_eq!(message["method"], json!("Runtime.exceptionThrown"));
     let details = &message["params"]["exceptionDetails"];
@@ -2859,7 +2899,11 @@ fn service_worker_fetch_diagnostics_emit_network_event_shape() {
 
     let methods = out
         .iter()
-        .map(|message| message["method"].as_str().unwrap())
+        .map(|message| {
+            message.as_json().expect("scalar protocol fixture")["method"]
+                .as_str()
+                .unwrap()
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         methods,
@@ -2874,46 +2918,75 @@ fn service_worker_fetch_diagnostics_emit_network_event_shape() {
             "Network.loadingFailed",
         ]
     );
-    assert!(
-        out.iter()
-            .all(|message| message["sessionId"] == "SID-worker")
-    );
+    assert!(out.iter().all(
+        |message| message.as_json().expect("scalar protocol fixture")["sessionId"] == "SID-worker"
+    ));
     assert_eq!(
-        out[0]["params"]["requestId"],
+        out[0].as_json().expect("scalar protocol fixture")["params"]["requestId"],
         json!("TID-service-worker.sw-fetch.101.4")
     );
-    assert_eq!(out[0]["params"]["request"]["method"], json!("POST"));
-    assert_eq!(out[0]["params"]["request"]["postData"], json!("hello"));
-    assert_eq!(out[0]["params"]["type"], json!("Fetch"));
-    assert_eq!(out[1]["params"]["response"]["status"], json!(201));
     assert_eq!(
-        out[1]["params"]["response"]["fromServiceWorker"],
+        out[0].as_json().expect("scalar protocol fixture")["params"]["request"]["method"],
+        json!("POST")
+    );
+    assert_eq!(
+        out[0].as_json().expect("scalar protocol fixture")["params"]["request"]["postData"],
+        json!("hello")
+    );
+    assert_eq!(
+        out[0].as_json().expect("scalar protocol fixture")["params"]["type"],
+        json!("Fetch")
+    );
+    assert_eq!(
+        out[1].as_json().expect("scalar protocol fixture")["params"]["response"]["status"],
+        json!(201)
+    );
+    assert_eq!(
+        out[1].as_json().expect("scalar protocol fixture")["params"]["response"]["fromServiceWorker"],
         json!(true)
     );
-    assert_eq!(out[2]["params"]["dataLength"], json!(2));
-    assert_eq!(out[2]["params"]["encodedDataLength"], json!(2));
-    assert_eq!(out[3]["params"]["encodedDataLength"], json!(2));
     assert_eq!(
-        out[4]["params"]["requestId"],
+        out[2].as_json().expect("scalar protocol fixture")["params"]["dataLength"],
+        json!(2)
+    );
+    assert_eq!(
+        out[2].as_json().expect("scalar protocol fixture")["params"]["encodedDataLength"],
+        json!(2)
+    );
+    assert_eq!(
+        out[3].as_json().expect("scalar protocol fixture")["params"]["encodedDataLength"],
+        json!(2)
+    );
+    assert_eq!(
+        out[4].as_json().expect("scalar protocol fixture")["params"]["requestId"],
         json!("TID-service-worker.sw-fetch.102.5")
     );
-    assert_eq!(out[4]["params"]["type"], json!("Script"));
     assert_eq!(
-        out[5]["params"]["errorText"],
+        out[4].as_json().expect("scalar protocol fixture")["params"]["type"],
+        json!("Script")
+    );
+    assert_eq!(
+        out[5].as_json().expect("scalar protocol fixture")["params"]["errorText"],
         json!("ServiceWorkerFallback")
     );
-    assert_eq!(out[6]["params"]["type"], json!("Image"));
-    assert_eq!(out[7]["params"]["errorText"], json!("network down"));
     assert_eq!(
-        out[7]["params"]["__moliServiceWorkerFetchResult"],
+        out[6].as_json().expect("scalar protocol fixture")["params"]["type"],
+        json!("Image")
+    );
+    assert_eq!(
+        out[7].as_json().expect("scalar protocol fixture")["params"]["errorText"],
+        json!("network down")
+    );
+    assert_eq!(
+        out[7].as_json().expect("scalar protocol fixture")["params"]["__moliServiceWorkerFetchResult"],
         json!("failure")
     );
     assert_eq!(
-        out[2]["params"]["__moliServiceWorkerFetchResult"],
+        out[2].as_json().expect("scalar protocol fixture")["params"]["__moliServiceWorkerFetchResult"],
         json!("response")
     );
     assert_eq!(
-        out[3]["params"]["__moliServiceWorkerFetchResult"],
+        out[3].as_json().expect("scalar protocol fixture")["params"]["__moliServiceWorkerFetchResult"],
         json!("response")
     );
     assert!(matches!(
@@ -2978,11 +3051,20 @@ fn service_worker_fetch_diagnostic_aborted_failure_sets_loading_failed_canceled(
     }
 
     assert_eq!(out.len(), 2);
-    assert_eq!(out[1]["method"], json!("Network.loadingFailed"));
-    assert_eq!(out[1]["params"]["errorText"], json!("net::ERR_ABORTED"));
-    assert_eq!(out[1]["params"]["canceled"], json!(true));
     assert_eq!(
-        out[1]["params"]["__moliServiceWorkerFetchResult"],
+        out[1].as_json().expect("scalar protocol fixture")["method"],
+        json!("Network.loadingFailed")
+    );
+    assert_eq!(
+        out[1].as_json().expect("scalar protocol fixture")["params"]["errorText"],
+        json!("net::ERR_ABORTED")
+    );
+    assert_eq!(
+        out[1].as_json().expect("scalar protocol fixture")["params"]["canceled"],
+        json!(true)
+    );
+    assert_eq!(
+        out[1].as_json().expect("scalar protocol fixture")["params"]["__moliServiceWorkerFetchResult"],
         json!("failure")
     );
     assert!(matches!(
@@ -3169,7 +3251,12 @@ async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
             events
                 .iter()
                 .cloned()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect::<Vec<_>>()
         }
         _ => panic!("target destruction should fail renderer calls before detach"),
@@ -3208,7 +3295,9 @@ async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
         terminal
             .output
             .protocol_response(terminal.call_id)
-            .expect("terminal renderer response")["error"]["message"],
+            .expect("terminal renderer response")
+            .as_json()
+            .expect("scalar protocol fixture")["error"]["message"],
         json!("Target closed")
     );
     let (retirement, cleanup_plan) = shared_worker_detached_output(&outputs[1])
@@ -3374,12 +3463,17 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
         .iter()
         .find_map(|event| {
             let (message, sidecar) = event.clone().into_parts();
-            (message["method"] == json!("Console.messageAdded")).then_some((message, sidecar))
+            (message.as_json().expect("scalar protocol fixture")["method"]
+                == json!("Console.messageAdded"))
+            .then_some((message, sidecar))
         })
         .expect("Console.messageAdded should be emitted for enabled shared worker target");
-    assert_eq!(console_event["sessionId"], "SID-shared-worker");
     assert_eq!(
-        console_event["params"]["message"]["text"],
+        console_event.as_json().expect("scalar protocol fixture")["sessionId"],
+        "SID-shared-worker"
+    );
+    assert_eq!(
+        console_event.as_json().expect("scalar protocol fixture")["params"]["message"]["text"],
         "from shared worker"
     );
     assert!(matches!(
@@ -3397,11 +3491,20 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
             .then(|| event.clone().into_parts())
         })
         .expect("Runtime.consoleAPICalled should be emitted for enabled shared worker target");
-    assert_eq!(runtime_event["sessionId"], "SID-shared-worker");
-    assert_eq!(runtime_event["params"]["type"], "warning");
-    assert_eq!(runtime_event["params"]["executionContextId"], json!(90_017));
     assert_eq!(
-        runtime_event["params"]["args"],
+        runtime_event.as_json().expect("scalar protocol fixture")["sessionId"],
+        "SID-shared-worker"
+    );
+    assert_eq!(
+        runtime_event.as_json().expect("scalar protocol fixture")["params"]["type"],
+        "warning"
+    );
+    assert_eq!(
+        runtime_event.as_json().expect("scalar protocol fixture")["params"]["executionContextId"],
+        json!(90_017)
+    );
+    assert_eq!(
+        runtime_event.as_json().expect("scalar protocol fixture")["params"]["args"],
         json!([{
             "type": "string",
             "value": "from shared worker"

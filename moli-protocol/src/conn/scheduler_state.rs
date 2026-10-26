@@ -139,7 +139,12 @@ impl CdpTurnOutcome {
         (
             protocol_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect(),
             self.scheduler_events,
         )
@@ -338,7 +343,13 @@ mod tests {
         assert!(scheduler_events.is_empty());
         let [(message, automation_event)] = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
+            .map(|event| {
+                let (message, automation_event) = event.into_parts();
+                (
+                    message.into_json().expect("scalar protocol fixture"),
+                    automation_event,
+                )
+            })
             .collect::<Vec<_>>()
             .try_into()
             .expect("expected one protocol event");

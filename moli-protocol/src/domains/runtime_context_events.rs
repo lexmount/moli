@@ -682,6 +682,7 @@ mod tests {
         assert!(out[0].protocol_message().is_none());
         assert!(out[0].has_protocol_wire_message());
         let (message, automation_event) = out.pop().expect("event").into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         let Some(AutomationEvent::RuntimeExecutionContextCreated(event)) = automation_event else {
             panic!("expected RuntimeExecutionContextCreated sidecar");
         };
@@ -768,6 +769,7 @@ mod tests {
         assert!(out[0].protocol_message().is_none());
         assert!(out[0].has_protocol_wire_message());
         let (message, automation_event) = out.pop().expect("event").into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         let Some(AutomationEvent::RuntimeExecutionContextDestroyed(_event)) = automation_event
         else {
             panic!("expected RuntimeExecutionContextDestroyed sidecar");
@@ -800,6 +802,7 @@ mod tests {
         assert!(out[0].protocol_message().is_none());
         assert!(out[0].has_protocol_wire_message());
         let (message, automation_event) = out.pop().expect("event").into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         let Some(AutomationEvent::RuntimeExecutionContextsCleared(_event)) = automation_event
         else {
             panic!("expected RuntimeExecutionContextsCleared sidecar");

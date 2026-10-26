@@ -251,6 +251,11 @@ impl ScriptVm {
             .output
             .into_protocol_response(call_id)
             .ok_or_else(|| anyhow!("internal Runtime.evaluate `{call_id}` returned no response"))?;
+        let response = response.into_json().map_err(|_| {
+            anyhow!(
+                "internal Runtime.evaluate `{call_id}` returned a non-scalar UTF-16 JSON payload"
+            )
+        })?;
         if let Some(error) = response.get("error") {
             let message = error
                 .get("message")

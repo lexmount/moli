@@ -2033,7 +2033,12 @@ async fn run_cdp_fetch_then_bidi_network_auth_required_terminal_credentials_comp
     );
     let mut continue_output = continue_protocol_events
         .into_iter()
-        .map(|event| event.into_protocol_message())
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     drain_scheduler_events_like_scheduler(
         &mut ctx.conn,

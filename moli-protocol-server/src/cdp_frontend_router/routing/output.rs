@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use moli_protocol_cdp::CdpMessage;
 
 use super::{
     CdpFrontendRoutingState, CdpRoutedFrontend,
@@ -10,10 +10,11 @@ use super::{
 impl CdpFrontendRoutingState {
     pub(in crate::cdp_frontend_router) fn route_message(
         &mut self,
-        message: Value,
+        message: impl Into<CdpMessage>,
         wire_session_id: Option<&str>,
-    ) -> Option<(CdpRoutedFrontend, Value)> {
-        if let Some(internal_command_id) = message.get("id").and_then(Value::as_u64) {
+    ) -> Option<(CdpRoutedFrontend, CdpMessage)> {
+        let message = message.into();
+        if let Some(internal_command_id) = message.id() {
             return self.route_response(message, internal_command_id);
         }
         self.route_event(message, wire_session_id)
@@ -21,24 +22,30 @@ impl CdpFrontendRoutingState {
 
     fn route_response(
         &mut self,
-        mut message: Value,
+        mut message: CdpMessage,
         internal_command_id: u64,
-    ) -> Option<(CdpRoutedFrontend, Value)> {
+    ) -> Option<(CdpRoutedFrontend, CdpMessage)> {
         let pending = self.pending_commands.take(internal_command_id)?;
-        message["id"] = json!(pending.client_command_id);
+        message.set_id(pending.client_command_id);
         let CdpCommandFrontend {
             frontend_id,
             dispatch_session_id,
             client_session_id,
         } = pending.frontend;
         let sink = self.frontends.frontend_sink(frontend_id)?;
-        if message.get("error").is_none() {
+        if !message.has_field("error") {
             match pending.effect {
                 PendingCommandEffect::AttachToTarget { target_id } => {
+                    #[derive(serde::Deserialize)]
+                    struct AttachResult {
+                        #[serde(rename = "sessionId")]
+                        session_id: String,
+                    }
                     if let Some(child_session_id) = message
-                        .pointer("/result/sessionId")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
+                        .field::<AttachResult>("result")
+                        .ok()
+                        .flatten()
+                        .map(|value| value.session_id)
                     {
                         self.register_child_session(
                             frontend_id,
@@ -57,31 +64,42 @@ impl CdpFrontendRoutingState {
 
     fn route_event(
         &mut self,
-        mut message: Value,
+        mut message: CdpMessage,
         wire_session_id: Option<&str>,
-    ) -> Option<(CdpRoutedFrontend, Value)> {
-        let method = message
-            .get("method")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let encoded_session_id = message
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+    ) -> Option<(CdpRoutedFrontend, CdpMessage)> {
+        let method = message.method().map(str::to_owned);
+        let encoded_session_id = message.session_id().map(str::to_owned);
         debug_assert_eq!(
             encoded_session_id.as_deref(),
             wire_session_id,
             "the frozen delivery route must match the encoded wire session"
         );
         let parent_session_id = wire_session_id.map(str::to_owned);
-        let target_event_session_id = message
-            .pointer("/params/sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let target_event_target_id = message
-            .pointer("/params/targetInfo/targetId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        #[derive(serde::Deserialize, Default)]
+        #[serde(rename_all = "camelCase")]
+        struct TargetEventParams {
+            session_id: Option<String>,
+            target_info: Option<TargetInfo>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TargetInfo {
+            target_id: Option<String>,
+        }
+        let target = if matches!(
+            method.as_deref(),
+            Some("Target.attachedToTarget" | "Target.detachedFromTarget")
+        ) {
+            message
+                .field::<TargetEventParams>("params")
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        } else {
+            TargetEventParams::default()
+        };
+        let target_event_session_id = target.session_id;
+        let target_event_target_id = target.target_info.and_then(|target| target.target_id);
         if method.as_deref() == Some("Target.attachedToTarget")
             && let Some(child_session_id) = target_event_session_id.as_deref()
         {

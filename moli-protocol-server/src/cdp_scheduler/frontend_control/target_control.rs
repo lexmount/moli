@@ -239,6 +239,7 @@ impl CdpFrontendTargetControl {
         if method == "Target.attachToBrowserTarget"
             && let Some(session_id) = response
                 .as_ref()
+                .and_then(moli_protocol_cdp::CdpMessage::as_json)
                 .and_then(|message| message.pointer("/result/sessionId"))
                 .and_then(Value::as_str)
         {
@@ -253,7 +254,17 @@ impl CdpFrontendTargetControl {
     }
 }
 
-fn control_command_result(response: Option<Value>, method: &str) -> Result<Value> {
+fn control_command_result(
+    response: Option<moli_protocol_cdp::CdpMessage>,
+    method: &str,
+) -> Result<Value> {
+    let response = response
+        .map(|message| {
+            message.into_json().map_err(|_| {
+                anyhow::anyhow!("{method} returned non-scalar JSON to a private control adapter")
+            })
+        })
+        .transpose()?;
     let response = response.with_context(|| format!("{method} returned no response"))?;
     if let Some(error) = response.get("error") {
         let message = error

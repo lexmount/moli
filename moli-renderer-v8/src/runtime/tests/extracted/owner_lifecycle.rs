@@ -3860,7 +3860,9 @@ async fn runtime_document_close_completion_parks_lifecycle_until_capability_rele
         completion
             .runtime_inspector_output()
             .and_then(|output| output.protocol_response(call_id))
-            .expect("Runtime command completion should retain the response")["result"]["result"]["value"],
+            .expect("Runtime command completion should retain the response")
+            .as_json()
+            .expect("scalar protocol fixture")["result"]["result"]["value"],
         serde_json::json!("done")
     );
     let (reply, _, continuation) = completion.into_parts();

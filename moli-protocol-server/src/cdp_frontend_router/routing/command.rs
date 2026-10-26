@@ -7,7 +7,6 @@ use super::{
     CdpFrontendRoutingState, cdp_error_response,
     frontend_registry::DirectChildLookupError,
     pending_commands::{CdpCommandFrontend, PendingCommandEffect, PendingCommandRoute},
-    set_top_level_session_id,
 };
 use crate::cdp_frontend_router::CdpPreparedFrontendCommand;
 
@@ -19,7 +18,9 @@ fn immediate_error_response(
     error_message: &str,
 ) -> CdpPreparedFrontendCommand {
     let mut message = cdp_error_response(command_id, code, error_message);
-    set_top_level_session_id(&mut message, client_session_id);
+    if let Some(session_id) = client_session_id {
+        message["sessionId"] = Value::from(session_id);
+    }
     CdpPreparedFrontendCommand::ImmediateResponse {
         frontend_id,
         message,

@@ -120,8 +120,17 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
         )
         .expect("route browser response");
     assert_eq!(browser_frontend.frontend_id, 5);
-    assert_eq!(browser_response["id"], json!(7));
-    assert!(browser_response.get("sessionId").is_none());
+    assert_eq!(
+        browser_response.as_json().expect("scalar protocol fixture")["id"],
+        json!(7)
+    );
+    assert!(
+        browser_response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 
     let (page_frontend, page_response) = routing
         .route_message(
@@ -134,8 +143,17 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
         )
         .expect("route page response");
     assert_eq!(page_frontend.frontend_id, 10);
-    assert_eq!(page_response["id"], json!(7));
-    assert!(page_response.get("sessionId").is_none());
+    assert_eq!(
+        page_response.as_json().expect("scalar protocol fixture")["id"],
+        json!(7)
+    );
+    assert!(
+        page_response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 }
 
 #[test]
@@ -179,9 +197,21 @@ fn browser_frontends_with_the_same_client_command_id_route_independently() {
         )
         .expect("route second response");
     assert_eq!(frontend.frontend_id(), 6);
-    assert_eq!(response["id"], json!(7));
-    assert_eq!(response["result"]["product"], json!("second"));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["id"],
+        json!(7)
+    );
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["result"]["product"],
+        json!("second")
+    );
+    assert!(
+        response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 
     let (frontend, response) = routing
         .route_message(
@@ -194,9 +224,21 @@ fn browser_frontends_with_the_same_client_command_id_route_independently() {
         )
         .expect("route first response");
     assert_eq!(frontend.frontend_id(), 5);
-    assert_eq!(response["id"], json!(7));
-    assert_eq!(response["result"]["product"], json!("first"));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["id"],
+        json!(7)
+    );
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["result"]["product"],
+        json!("first")
+    );
+    assert!(
+        response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 }
 
 #[test]
@@ -220,7 +262,13 @@ fn browser_base_session_events_are_private_and_frontend_scoped() {
         )
         .expect("route first browser event");
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
+    assert!(
+        event
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 
     assert!(
         routing
@@ -261,7 +309,13 @@ fn root_detach_with_a_known_child_routes_to_its_exact_frontend() {
         )
         .expect("route owner-qualified root detach");
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
+    assert!(
+        event
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 
     assert!(matches!(
         routing.prepare_command(
@@ -319,7 +373,10 @@ fn root_detach_restores_visible_parent_for_nested_child() {
             None,
         )
         .expect("route nested root detach");
-    assert_eq!(event["sessionId"], json!("SID-child"));
+    assert_eq!(
+        event.as_json().expect("scalar protocol fixture")["sessionId"],
+        json!("SID-child")
+    );
 }
 
 #[test]
@@ -381,7 +438,10 @@ fn unregistering_one_browser_drops_only_its_pending_commands() {
         )
         .expect("second browser response remains routable");
     assert_eq!(frontend.frontend_id(), 6);
-    assert_eq!(response["id"], json!(1));
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["id"],
+        json!(1)
+    );
 }
 
 #[test]
@@ -426,7 +486,10 @@ fn browser_child_session_is_preserved_on_browser_frontend() {
             Some("SID-client-child"),
         )
         .expect("route child response");
-    assert_eq!(response["sessionId"], json!("SID-client-child"));
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["sessionId"],
+        json!("SID-client-child")
+    );
 }
 
 #[test]
@@ -734,8 +797,17 @@ fn attached_event_registers_child_before_attach_response() {
         )
         .expect("route attached event");
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
-    assert_eq!(event["params"]["sessionId"], json!("SID-child"));
+    assert!(
+        event
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
+    assert_eq!(
+        event.as_json().expect("scalar protocol fixture")["params"]["sessionId"],
+        json!("SID-child")
+    );
 
     let child_command = expect_prepared_command(
         routing.prepare_command(
@@ -767,8 +839,17 @@ fn attached_event_registers_child_before_attach_response() {
             Some("SID-browser"),
         )
         .expect("route attach response");
-    assert_eq!(response["id"], json!(30));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["id"],
+        json!(30)
+    );
+    assert!(
+        response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 }
 
 #[test]
@@ -800,8 +881,17 @@ fn browser_frontend_hides_base_session_on_wire() {
             Some("SID-browser"),
         )
         .expect("route browser response");
-    assert_eq!(response["id"], json!(9));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["id"],
+        json!(9)
+    );
+    assert!(
+        response
+            .as_json()
+            .expect("scalar protocol fixture")
+            .get("sessionId")
+            .is_none()
+    );
 }
 
 #[test]
@@ -925,7 +1015,10 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
         )
         .expect("route browser-owned target detach");
     assert_eq!(frontend.frontend_id, 5);
-    assert_eq!(message["params"]["sessionId"], json!("SID-browser-child"));
+    assert_eq!(
+        message.as_json().expect("scalar protocol fixture")["params"]["sessionId"],
+        json!("SID-browser-child")
+    );
 }
 
 #[test]
@@ -1164,5 +1257,71 @@ fn orphaned_responses_and_unknown_session_events_do_not_fall_back_to_browser() {
                 Some("SID-stale")
             )
             .is_none()
+    );
+}
+
+#[test]
+fn raw_utf16_replies_restore_large_ids_for_their_own_frontend_once() {
+    let mut routing = CdpFrontendRoutingState::default();
+    for (frontend, session) in [(5, "browser-a"), (6, "browser-b")] {
+        routing
+            .register_browser_frontend(frontend, session.into(), test_sink())
+            .unwrap();
+    }
+    for client_id in [7, u64::MAX] {
+        let pending: Vec<_> = [(5, "browser-a"), (6, "browser-b")]
+            .into_iter()
+            .map(|(frontend, session)| {
+                let command = expect_prepared_command(
+                routing.prepare_command(frontend, parsed_command(json!({
+                    "id": client_id, "method": "Runtime.evaluate", "params": {"expression": "0"}
+                }).to_string())), "raw UTF-16",
+            );
+                (frontend, session, command.request().id())
+            })
+            .collect();
+        for (frontend, session, internal_id) in pending.into_iter().rev() {
+            let raw = format!(
+                r#"{{"id":{internal_id},"sessionId":"{session}","result":{{"result":{{"type":"string","value":"\ud800"}}}}}}"#
+            );
+            let response = CdpMessage::parse(&raw).unwrap();
+            let (owner, message) = routing
+                .route_message(response.clone(), Some(session))
+                .unwrap();
+            assert_eq!(owner.frontend_id(), frontend);
+            assert_eq!(message.id(), Some(client_id));
+            assert_eq!(message.session_id(), None);
+            assert!(
+                serde_json::to_string(&message)
+                    .unwrap()
+                    .contains(r#""value":"\ud800""#)
+            );
+            assert!(routing.route_message(response, Some(session)).is_none());
+        }
+    }
+}
+
+#[test]
+fn raw_utf16_target_titles_do_not_break_child_session_ownership() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "browser".into(), test_sink())
+        .unwrap();
+    let attached = CdpMessage::parse(r#"{"method":"Target.attachedToTarget","sessionId":"browser","params":{"sessionId":"child","targetInfo":{"targetId":"worker","title":"\ud800"}}}"#).unwrap();
+    let (owner, attached) = routing.route_message(attached, Some("browser")).unwrap();
+    assert_eq!(owner.frontend_id(), 5);
+    assert!(
+        serde_json::to_string(&attached)
+            .unwrap()
+            .contains(r#""title":"\ud800""#)
+    );
+    let notification = CdpMessage::parse(r#"{"method":"Runtime.consoleAPICalled","sessionId":"child","params":{"args":[{"value":"\udc00"}]}}"#).unwrap();
+    let (owner, notification) = routing.route_message(notification, Some("child")).unwrap();
+    assert_eq!(owner.frontend_id(), 5);
+    assert_eq!(notification.session_id(), Some("child"));
+    assert!(
+        serde_json::to_string(&notification)
+            .unwrap()
+            .contains(r#""value":"\udc00""#)
     );
 }

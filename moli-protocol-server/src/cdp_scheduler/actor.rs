@@ -1026,10 +1026,7 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
     let pending = pending_runtime_deferred_replies
         .remove(index)
         .expect("pending runtime deferred reply index came from position()");
-    let event_message = event
-        .protocol_message()
-        .cloned()
-        .unwrap_or_else(|| event.clone().into_protocol_message());
+    let event_message = event.clone().into_protocol_message();
     tracing::warn!(
         command_id,
         message = ?event_message,

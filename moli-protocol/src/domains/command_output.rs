@@ -1,4 +1,5 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use moli_protocol_cdp::CdpMessage;
 use serde_json::{Value, json};
 
 use crate::automation::{
@@ -49,6 +50,7 @@ enum CommandOutput {
 
 #[derive(Debug)]
 enum CommandResponseOutput {
+    Inspector(CdpMessage),
     Success(CommandResponseResult),
     Error {
         code: i32,
@@ -336,7 +338,7 @@ impl CommandOutputPlan {
 
     pub(crate) fn push_runtime_inspector_protocol_response(
         &mut self,
-        message: Value,
+        message: impl Into<CdpMessage>,
         command_id: Option<u64>,
     ) -> bool {
         let Some(response) =
@@ -358,7 +360,12 @@ impl CommandOutputPlan {
         out.extend(
             self.into_background_events(command_id, session_id)
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                }),
         );
     }
 
@@ -477,7 +484,7 @@ impl CommandOutputPlan {
         self,
         command_id: u64,
         session_id: Option<&str>,
-    ) -> (Option<Value>, Vec<BackgroundProtocolEvent>) {
+    ) -> (Option<CdpMessage>, Vec<BackgroundProtocolEvent>) {
         let mut response = None;
         let mut out = Vec::new();
         for output in self.outputs {
@@ -570,7 +577,7 @@ fn record_command_status(
     }
 }
 
-fn record_runtime_inspector_response(current: &mut Option<Value>, next: Value) {
+fn record_runtime_inspector_response(current: &mut Option<CdpMessage>, next: CdpMessage) {
     if current.is_none() {
         *current = Some(next);
     } else {
@@ -578,7 +585,9 @@ fn record_runtime_inspector_response(current: &mut Option<Value>, next: Value) {
     }
 }
 
-pub(crate) fn protocol_message_background_event(message: Value) -> BackgroundProtocolEvent {
+pub(crate) fn protocol_message_background_event(
+    message: impl Into<moli_protocol_cdp::CdpMessage>,
+) -> BackgroundProtocolEvent {
     protocol_message_background_event_for_target(message, None)
 }
 
@@ -589,9 +598,17 @@ pub(crate) fn protocol_message_background_event(message: Value) -> BackgroundPro
 /// later, after an implicit owner route has been restored, so it must not leave
 /// its target empty and let BiDi infer it from the then-active tab.
 pub(crate) fn protocol_message_background_event_for_target(
-    message: Value,
+    message: impl Into<moli_protocol_cdp::CdpMessage>,
     target_id: Option<&str>,
 ) -> BackgroundProtocolEvent {
+    let message = match message.into().into_json() {
+        Ok(value) => value,
+        Err(raw) => {
+            return BackgroundProtocolEvent::immediate(moli_protocol_cdp::CdpMessage::Raw(
+                Box::new(raw),
+            ));
+        }
+    };
     if let Some(mut event) = automation_event_from_protocol_message(&message) {
         if let Some(target_id) = target_id {
             qualify_automation_event_target(&mut event, DevToolsTargetId::from(target_id));
@@ -2036,10 +2053,18 @@ pub(crate) fn devtools_error_from_cdp_error_parts(
 
 impl CommandResponseOutput {
     fn from_runtime_inspector_protocol_message(
-        mut message: Value,
+        message: impl Into<CdpMessage>,
         command_id: Option<u64>,
     ) -> Option<Self> {
         let command_id = command_id?;
+        let message = message.into();
+        if message.id() != Some(command_id) {
+            return None;
+        }
+        let mut message = match message.into_json() {
+            Ok(message) => message,
+            Err(raw) => return Some(Self::Inspector(CdpMessage::Raw(Box::new(raw)))),
+        };
         if message.get("id").and_then(Value::as_u64) != Some(command_id) {
             return None;
         }
@@ -2073,6 +2098,16 @@ impl CommandResponseOutput {
 
     fn status(&self) -> Result<(), DevToolsError> {
         match self {
+            Self::Inspector(message) => {
+                if message.has_field("error") {
+                    Err(DevToolsError::new(
+                        DevToolsErrorKind::Internal,
+                        "Runtime inspector command failed",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
             Self::Success(_) => Ok(()),
             Self::Error { code, message, .. } => Err(devtools_error_from_cdp_error_parts(
                 Some(i64::from(*code)),
@@ -2081,14 +2116,26 @@ impl CommandResponseOutput {
         }
     }
 
-    fn into_protocol_message(self, command_id: Option<u64>, session_id: Option<&str>) -> Value {
+    fn into_protocol_message(
+        self,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+    ) -> CdpMessage {
         let mut message = match self {
+            Self::Inspector(mut message) => {
+                if let Some(id) = command_id {
+                    message.set_id(id);
+                }
+                message.set_session_id(session_id);
+                return message;
+            }
             Self::Success(result) => {
                 return build_command_success_response(
                     command_id,
                     result.into_value(),
                     session_id.map(str::to_owned),
-                );
+                )
+                .into();
             }
             Self::Error {
                 code,
@@ -2105,7 +2152,7 @@ impl CommandResponseOutput {
         if let Some(session_id) = session_id {
             message["sessionId"] = json!(session_id);
         }
-        message
+        message.into()
     }
 
     fn into_background_event(
@@ -2114,6 +2161,11 @@ impl CommandResponseOutput {
         session_id: Option<&str>,
     ) -> BackgroundProtocolEvent {
         match self {
+            Self::Inspector(message) => BackgroundProtocolEvent::command_response(
+                command_id,
+                session_id,
+                crate::conn::BackgroundCommandResponsePayload::Inspector(message),
+            ),
             Self::Success(result) => BackgroundProtocolEvent::command_success(
                 command_id,
                 session_id,
@@ -2743,8 +2795,14 @@ mod tests {
             .expect("page lifecycle event should be emitted")
             .into_parts();
 
-        assert_eq!(message["method"], "Page.lifecycleEvent");
-        assert_eq!(message["sessionId"], "SID-page");
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["method"],
+            "Page.lifecycleEvent"
+        );
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["sessionId"],
+            "SID-page"
+        );
         assert!(matches!(
             automation_event,
             Some(AutomationEvent::PageLifecycle(event))
@@ -2791,6 +2849,7 @@ mod tests {
         );
         assert_eq!(events.len(), 1);
         let (message, automation_event) = events.into_iter().next().unwrap().into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Runtime.consoleAPICalled");
         assert_eq!(message["sessionId"], "SID-runtime");
         assert!(matches!(
@@ -2836,6 +2895,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], "Page.frameNavigated");
         assert_eq!(message["sessionId"], "SID-page");
@@ -2866,6 +2926,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], "Page.navigatedWithinDocument");
         assert_eq!(message["sessionId"], "SID-page");
@@ -2894,6 +2955,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], "Page.javascriptDialogOpening");
         assert_eq!(message["sessionId"], "SID-dialog");
@@ -2922,6 +2984,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Page.fileChooserOpened");
         assert_eq!(message["sessionId"], "SID-file");
         assert!(matches!(
@@ -2950,6 +3013,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Log.entryAdded");
         assert_eq!(message["sessionId"], "SID-log");
         assert!(matches!(
@@ -2980,6 +3044,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Console.messageAdded");
         assert_eq!(message["sessionId"], "SID-console");
         assert!(matches!(
@@ -3023,6 +3088,7 @@ mod tests {
         assert!(event.protocol_message().is_none());
         assert_eq!(event.protocol_method(), Some("Runtime.consoleAPICalled"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Runtime.consoleAPICalled");
         assert_eq!(message["sessionId"], "SID-runtime");
         assert!(matches!(
@@ -3081,6 +3147,7 @@ mod tests {
         assert!(event.protocol_message().is_none());
         assert_eq!(event.protocol_method(), Some("Runtime.exceptionThrown"));
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Runtime.exceptionThrown");
         assert_eq!(message["sessionId"], "SID-runtime");
         assert_eq!(
@@ -3149,6 +3216,7 @@ mod tests {
         }));
 
         let (message, automation_event) = event.into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
         assert_eq!(message["method"], "Network.requestWillBeSent");
         assert!(matches!(
             automation_event,

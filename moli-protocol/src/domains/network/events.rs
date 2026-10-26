@@ -1318,7 +1318,12 @@ mod tests {
     ) -> Vec<Value> {
         events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect()
     }
 
@@ -1387,18 +1392,42 @@ mod tests {
         let out = [message];
 
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["sessionId"], json!("SID-1"));
-        assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
-        assert_eq!(out[0]["params"]["requestId"], json!("REQ-42"));
-        assert_eq!(out[0]["params"]["frameId"], json!("FRAME-1"));
-        assert_eq!(out[0]["params"]["loaderId"], json!("LOADER-1"));
         assert_eq!(
-            out[0]["params"]["request"]["url"],
+            out[0].as_json().expect("scalar protocol fixture")["sessionId"],
+            json!("SID-1")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["method"],
+            json!("Network.requestWillBeSent")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["requestId"],
+            json!("REQ-42")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["frameId"],
+            json!("FRAME-1")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["loaderId"],
+            json!("LOADER-1")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["request"]["url"],
             json!("https://example.test/api")
         );
-        assert_eq!(out[0]["params"]["request"]["method"], json!("POST"));
-        assert_eq!(out[0]["params"]["request"]["postData"], json!("body"));
-        assert_eq!(out[0]["params"]["type"], json!("Fetch"));
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["request"]["method"],
+            json!("POST")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["request"]["postData"],
+            json!("body")
+        );
+        assert_eq!(
+            out[0].as_json().expect("scalar protocol fixture")["params"]["type"],
+            json!("Fetch")
+        );
         assert!(matches!(
             sidecar.as_ref(),
             Some(AutomationEvent::NetworkBeforeRequestSent(event))
@@ -1504,8 +1533,14 @@ mod tests {
         assert!(cached_sidecar.is_none());
 
         let (response, response_sidecar) = events.remove(0).into_parts();
-        assert_eq!(response["method"], json!("Network.responseReceived"));
-        assert_eq!(response["params"]["response"]["fromDiskCache"], json!(true));
+        assert_eq!(
+            response.as_json().expect("scalar protocol fixture")["method"],
+            json!("Network.responseReceived")
+        );
+        assert_eq!(
+            response.as_json().expect("scalar protocol fixture")["params"]["response"]["fromDiskCache"],
+            json!(true)
+        );
         assert!(matches!(
             response_sidecar,
             Some(AutomationEvent::NetworkResponseStarted(event))
@@ -1559,13 +1594,16 @@ mod tests {
         assert!(cached_sidecar.is_none());
 
         let (request, request_sidecar) = events.remove(0).into_parts();
-        assert_eq!(request["method"], json!("Network.requestWillBeSent"));
         assert_eq!(
-            request["params"]["redirectResponse"]["fromDiskCache"],
+            request.as_json().expect("scalar protocol fixture")["method"],
+            json!("Network.requestWillBeSent")
+        );
+        assert_eq!(
+            request.as_json().expect("scalar protocol fixture")["params"]["redirectResponse"]["fromDiskCache"],
             json!(true)
         );
         assert_eq!(
-            request["params"]["redirectResponse"]["protocol"],
+            request.as_json().expect("scalar protocol fixture")["params"]["redirectResponse"]["protocol"],
             json!("h2")
         );
         assert!(matches!(
@@ -1657,7 +1695,10 @@ mod tests {
                     == vec![DevToolsNetworkInterceptId::from("intercept-response")]
         ));
 
-        let wire_message = event.into_protocol_message();
+        let wire_message = event
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture");
         assert_eq!(wire_message["method"], json!("Network.responseReceived"));
         assert_eq!(wire_message["params"]["requestId"], json!("REQ-42"));
         assert!(wire_message["params"]["__moliBlockedInterceptors"].is_null());

@@ -154,7 +154,9 @@ fn failed_initial_transport_emits_request_extra_info_from_observed_headers() {
     let event = receiver
         .try_recv()
         .expect("failed request ExtraInfo should be emitted")
-        .into_protocol_message();
+        .into_protocol_message()
+        .into_json()
+        .expect("scalar protocol fixture");
     assert_eq!(event["method"], json!("Network.requestWillBeSentExtraInfo"));
     assert_eq!(event["params"]["requestId"], json!("REQ-1"));
     assert_eq!(event["params"]["headers"]["Host"], json!("example.test"));
@@ -215,7 +217,12 @@ fn failed_redirect_transport_emits_completed_hop_and_final_request_extra_info() 
     );
 
     let messages = std::iter::from_fn(|| receiver.try_recv().ok())
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         messages
@@ -255,7 +262,12 @@ fn protocol_messages_from_background_events(
 ) -> Vec<Value> {
     events
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect()
 }
 
@@ -349,9 +361,12 @@ fn response_progress_preserves_computed_mime_separately_from_raw_headers() {
     assert_eq!(events.len(), 2);
     for event in events {
         let (message, automation) = event.into_parts();
-        assert_eq!(message["params"]["response"]["mimeType"], "image/png");
         assert_eq!(
-            message["params"]["response"]["headers"]["Content-Type"],
+            message.as_json().expect("scalar protocol fixture")["params"]["response"]["mimeType"],
+            "image/png"
+        );
+        assert_eq!(
+            message.as_json().expect("scalar protocol fixture")["params"]["response"]["headers"]["Content-Type"],
             "text/html"
         );
         let Some(AutomationEvent::NetworkResponseStarted(network)) = automation else {
@@ -412,14 +427,23 @@ fn progress_output_target_serializes_background_targets_consistently() {
         Some(AutomationEvent::NetworkResponseStarted(_))
     ));
     assert_eq!(
-        background_out[0]["method"],
+        background_out[0]
+            .as_json()
+            .expect("scalar protocol fixture")["method"],
         json!("Network.responseReceived")
     );
     assert_eq!(
-        background_out[0]["params"]["response"]["encodedDataLength"],
+        background_out[0]
+            .as_json()
+            .expect("scalar protocol fixture")["params"]["response"]["encodedDataLength"],
         json!(29)
     );
-    assert_eq!(background_out[1]["sessionId"], json!("SID-2"));
+    assert_eq!(
+        background_out[1]
+            .as_json()
+            .expect("scalar protocol fixture")["sessionId"],
+        json!("SID-2")
+    );
 }
 
 #[test]
@@ -454,6 +478,7 @@ fn progress_output_target_background_raw_events_stay_sidecar_free_without_classi
         .try_recv()
         .expect("background extraInfo event should be sent");
     let (message, automation_event) = event.into_parts();
+    let message = message.into_json().expect("scalar protocol fixture");
     let (background_event_message, background_event_sidecar) = background_events
         .pop()
         .expect("background event target should collect extraInfo event")
@@ -545,7 +570,9 @@ fn live_progress_source_serializes_through_progress_emissions() {
     let (initial_request_extra, initial_request_extra_sidecar) = initial_request_extra.into_parts();
     assert!(initial_request_extra_sidecar.is_none());
     assert_eq!(
-        initial_request_extra["method"],
+        initial_request_extra
+            .as_json()
+            .expect("scalar protocol fixture")["method"],
         json!("Network.requestWillBeSentExtraInfo")
     );
 
@@ -556,16 +583,20 @@ fn live_progress_source_serializes_through_progress_emissions() {
         Some(AutomationEvent::NetworkBeforeRequestSent(_))
     ));
     assert_eq!(
-        redirect_request["method"],
+        redirect_request.as_json().expect("scalar protocol fixture")["method"],
         json!("Network.requestWillBeSent")
     );
-    assert_eq!(redirect_request["params"]["requestId"], json!("REQ-1"));
     assert_eq!(
-        redirect_request["params"]["redirectResponse"]["status"],
+        redirect_request.as_json().expect("scalar protocol fixture")["params"]["requestId"],
+        json!("REQ-1")
+    );
+    assert_eq!(
+        redirect_request.as_json().expect("scalar protocol fixture")["params"]["redirectResponse"]
+            ["status"],
         json!(302)
     );
     assert_eq!(
-        redirect_request["params"]["redirectHasExtraInfo"],
+        redirect_request.as_json().expect("scalar protocol fixture")["params"]["redirectHasExtraInfo"],
         json!(true)
     );
 
@@ -574,16 +605,25 @@ fn live_progress_source_serializes_through_progress_emissions() {
         redirect_extra_info.into_parts();
     assert!(redirect_extra_info_automation_event.is_none());
     assert_eq!(
-        redirect_extra_info["method"],
+        redirect_extra_info
+            .as_json()
+            .expect("scalar protocol fixture")["method"],
         json!("Network.responseReceivedExtraInfo")
     );
-    assert_eq!(redirect_extra_info["params"]["statusCode"], json!(302));
+    assert_eq!(
+        redirect_extra_info
+            .as_json()
+            .expect("scalar protocol fixture")["params"]["statusCode"],
+        json!(302)
+    );
 
     let final_request_extra = receiver.try_recv().expect("final request extra info event");
     let (final_request_extra, final_request_extra_sidecar) = final_request_extra.into_parts();
     assert!(final_request_extra_sidecar.is_none());
     assert_eq!(
-        final_request_extra["method"],
+        final_request_extra
+            .as_json()
+            .expect("scalar protocol fixture")["method"],
         json!("Network.requestWillBeSentExtraInfo")
     );
 
@@ -593,10 +633,13 @@ fn live_progress_source_serializes_through_progress_emissions() {
     let (response_extra, response_extra_sidecar) = response_extra.into_parts();
     assert!(response_extra_sidecar.is_none());
     assert_eq!(
-        response_extra["method"],
+        response_extra.as_json().expect("scalar protocol fixture")["method"],
         json!("Network.responseReceivedExtraInfo")
     );
-    assert_eq!(response_extra["params"]["statusCode"], json!(200));
+    assert_eq!(
+        response_extra.as_json().expect("scalar protocol fixture")["params"]["statusCode"],
+        json!(200)
+    );
 
     let response = receiver.try_recv().expect("response event");
     let (response, response_automation_event) = response.into_parts();
@@ -604,20 +647,38 @@ fn live_progress_source_serializes_through_progress_emissions() {
         response_automation_event,
         Some(AutomationEvent::NetworkResponseStarted(_))
     ));
-    assert_eq!(response["method"], json!("Network.responseReceived"));
-    assert_eq!(response["params"]["hasExtraInfo"], json!(true));
     assert_eq!(
-        response["params"]["response"]["url"],
+        response.as_json().expect("scalar protocol fixture")["method"],
+        json!("Network.responseReceived")
+    );
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["params"]["hasExtraInfo"],
+        json!(true)
+    );
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["params"]["response"]["url"],
         json!(final_url.as_str())
     );
 
     let data = receiver.try_recv().expect("data received event");
     let (data, data_automation_event) = data.into_parts();
     assert!(data_automation_event.is_none());
-    assert_eq!(data["method"], json!("Network.dataReceived"));
-    assert_eq!(data["params"]["requestId"], json!("REQ-1"));
-    assert_eq!(data["params"]["dataLength"], json!(17));
-    assert_eq!(data["params"]["encodedDataLength"], json!(17));
+    assert_eq!(
+        data.as_json().expect("scalar protocol fixture")["method"],
+        json!("Network.dataReceived")
+    );
+    assert_eq!(
+        data.as_json().expect("scalar protocol fixture")["params"]["requestId"],
+        json!("REQ-1")
+    );
+    assert_eq!(
+        data.as_json().expect("scalar protocol fixture")["params"]["dataLength"],
+        json!(17)
+    );
+    assert_eq!(
+        data.as_json().expect("scalar protocol fixture")["params"]["encodedDataLength"],
+        json!(17)
+    );
 
     let finished = receiver.try_recv().expect("loading finished event");
     let (finished, finished_automation_event) = finished.into_parts();
@@ -627,8 +688,14 @@ fn live_progress_source_serializes_through_progress_emissions() {
             if event.request_id.as_str() == "REQ-1"
                 && event.encoded_data_length == Some(17)
     ));
-    assert_eq!(finished["method"], json!("Network.loadingFinished"));
-    assert_eq!(finished["params"]["encodedDataLength"], json!(17));
+    assert_eq!(
+        finished.as_json().expect("scalar protocol fixture")["method"],
+        json!("Network.loadingFinished")
+    );
+    assert_eq!(
+        finished.as_json().expect("scalar protocol fixture")["params"]["encodedDataLength"],
+        json!(17)
+    );
 }
 
 #[test]
@@ -1162,8 +1229,14 @@ fn cached_completed_body_emits_served_from_cache_before_response() {
     assert!(cached_sidecar.is_none());
 
     let (response, response_sidecar) = response_events.remove(0).into_parts();
-    assert_eq!(response["method"], json!("Network.responseReceived"));
-    assert_eq!(response["params"]["response"]["fromDiskCache"], json!(true));
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["method"],
+        json!("Network.responseReceived")
+    );
+    assert_eq!(
+        response.as_json().expect("scalar protocol fixture")["params"]["response"]["fromDiskCache"],
+        json!(true)
+    );
     assert!(matches!(
         response_sidecar,
         Some(AutomationEvent::NetworkResponseStarted(event))
@@ -1303,7 +1376,13 @@ fn progress_output_queue_buffers_body_finished_until_response_received() {
     let out = drain_into_background_events(&mut drain);
     let parts = out
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_parts)
+        .map(|event| {
+            let (message, automation_event) = event.into_parts();
+            (
+                message.into_json().expect("scalar protocol fixture"),
+                automation_event,
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(parts.len(), 4);
     assert_eq!(parts[0].0["method"], json!("Network.responseReceived"));
@@ -1508,9 +1587,12 @@ fn failed_navigation_progress_drain_prequeues_loading_failed() {
                 && event.resource_type == Some(DevToolsNetworkResourceType::Document)
                 && event.error_text.as_deref() == Some("net::ERR_FAILED")
     ));
-    assert_eq!(failed["method"], json!("Network.loadingFailed"));
     assert_eq!(
-        failed["params"],
+        failed.as_json().expect("scalar protocol fixture")["method"],
+        json!("Network.loadingFailed")
+    );
+    assert_eq!(
+        failed.as_json().expect("scalar protocol fixture")["params"],
         json!({
             "requestId": "REQ-1",
             "timestamp": 12.5,

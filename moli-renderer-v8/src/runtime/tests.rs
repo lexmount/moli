@@ -1096,7 +1096,12 @@ async fn dispatch_runtime_protocol_with_output_for_test(
         .messages()
         .iter()
         .cloned()
-        .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+        .map(|event| {
+            event
+                .into_v8_inspector_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect();
     Ok((messages, output))
 }
@@ -1120,7 +1125,12 @@ async fn dispatch_runtime_protocol_with_context_resolution_for_test(
         RendererPageReply::RuntimeInspectorProtocolMessages(messages) => Ok(messages
             .into_messages()
             .into_iter()
-            .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+            .map(|event| {
+                event
+                    .into_v8_inspector_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect()),
         _ => Err(anyhow::anyhow!(
             "expected Runtime protocol dispatch with context resolution to return inspector protocol messages"
@@ -1168,7 +1178,10 @@ fn runtime_inspector_message_protocol_message_for_test(
     message: RendererRuntimeInspectorMessage,
 ) -> serde_json::Value {
     match message {
-        RendererRuntimeInspectorMessage::Protocol(message) => message.into_value(),
+        RendererRuntimeInspectorMessage::Protocol(message) => message
+            .into_value()
+            .into_json()
+            .expect("scalar protocol fixture"),
         RendererRuntimeInspectorMessage::RuntimeContext(event) => {
             runtime_context_restore_event_protocol_message_for_test(event)
         }

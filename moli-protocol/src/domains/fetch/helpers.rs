@@ -158,11 +158,12 @@ fn emit_navigation_auth_required(
     );
     let mut events = Vec::new();
     network::emit_cdp_network_automation_event(&mut events, event, session_id);
-    out.extend(
-        events
-            .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message),
-    );
+    out.extend(events.into_iter().map(|event| {
+        event
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture")
+    }));
 }
 
 fn pending_fetch_auth_navigation_required_parts(

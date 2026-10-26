@@ -397,7 +397,12 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     );
     let emitted = emitted_events
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
 
     let request = emitted

@@ -3484,7 +3484,9 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
         .find(|event| event.protocol_message_id() == Some(247))
         .cloned()
         .expect("Page.close command response")
-        .into_protocol_message();
+        .into_protocol_message()
+        .into_json()
+        .expect("scalar protocol fixture");
     assert_eq!(response["result"], json!({}));
     assert_eq!(response["sessionId"], "SID-typed-close");
 
@@ -3492,6 +3494,7 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
         .into_iter()
         .find_map(|event| {
             let (message, automation_event) = event.into_parts();
+            let message = message.into_json().expect("scalar protocol fixture");
             (message["method"] == json!("Target.detachedFromTarget"))
                 .then_some((message, automation_event))
         })
@@ -3781,22 +3784,35 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
         panic!("renderer capture should materialize a frame event");
     };
     let (frame, automation_event) = frame.into_parts();
-    assert_eq!(frame["method"], json!("Page.screencastFrame"));
-    assert_eq!(frame["sessionId"], json!("SID-screencast-frame"));
-    assert_eq!(frame["params"]["sessionId"], json!(1));
+    assert_eq!(
+        frame.as_json().expect("scalar protocol fixture")["method"],
+        json!("Page.screencastFrame")
+    );
+    assert_eq!(
+        frame.as_json().expect("scalar protocol fixture")["sessionId"],
+        json!("SID-screencast-frame")
+    );
+    assert_eq!(
+        frame.as_json().expect("scalar protocol fixture")["params"]["sessionId"],
+        json!(1)
+    );
     assert!(
-        frame["params"]["metadata"]["deviceWidth"]
+        frame.as_json().expect("scalar protocol fixture")["params"]["metadata"]["deviceWidth"]
             .as_f64()
             .is_some_and(|width| width > 0.0)
     );
     assert!(
-        frame["params"]["metadata"]["deviceHeight"]
+        frame.as_json().expect("scalar protocol fixture")["params"]["metadata"]["deviceHeight"]
             .as_f64()
             .is_some_and(|height| height > 0.0)
     );
     assert_eq!(automation_event, None);
     let encoded = BASE64_STANDARD
-        .decode(frame["params"]["data"].as_str().expect("frame data"))
+        .decode(
+            frame.as_json().expect("scalar protocol fixture")["params"]["data"]
+                .as_str()
+                .expect("frame data"),
+        )
         .expect("frame data should be base64");
     assert_eq!(&encoded[..2], &[0xff, 0xd8]);
     assert_eq!(&encoded[encoded.len() - 2..], &[0xff, 0xd9]);
@@ -3867,7 +3883,11 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
     assert_ne!(changed_state, visual_state);
     let (event, _) = event.into_parts();
     let bytes = BASE64_STANDARD
-        .decode(event["params"]["data"].as_str().unwrap())
+        .decode(
+            event.as_json().expect("scalar protocol fixture")["params"]["data"]
+                .as_str()
+                .unwrap(),
+        )
         .unwrap();
     let decoded = moli_image::decode_jpeg(&bytes).unwrap();
     assert!(
@@ -3952,11 +3972,19 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
         panic!("attached first capture must emit a frame");
     };
     assert_eq!(
-        primary_event.into_parts().0["sessionId"],
+        primary_event
+            .into_parts()
+            .0
+            .into_json()
+            .expect("scalar protocol fixture")["sessionId"],
         json!("SID-screencast-primary")
     );
     assert_eq!(
-        attached_event.into_parts().0["sessionId"],
+        attached_event
+            .into_parts()
+            .0
+            .into_json()
+            .expect("scalar protocol fixture")["sessionId"],
         json!("SID-screencast-attached")
     );
     assert_eq!(
@@ -4020,7 +4048,11 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
         panic!("attached session must receive the mutation after the primary session did");
     };
     assert_eq!(
-        event.into_parts().0["sessionId"],
+        event
+            .into_parts()
+            .0
+            .into_json()
+            .expect("scalar protocol fixture")["sessionId"],
         json!("SID-screencast-attached")
     );
     assert_eq!(
