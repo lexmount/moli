@@ -104,38 +104,55 @@ fn try_start_binding(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCo
         RendererPageCommand::runtime_binding_events(inspector_session, binding.clone(), remove),
         move |reply| match reply {
             Ok(RendererPageReply::RuntimeInspectorProtocolMessages(output)) => {
-                if let Some(error) = output.messages().iter().find_map(|message| match message {
-                    RendererRuntimeInspectorMessage::Protocol(message)
-                        if message.payload().has_field("error") =>
-                    {
-                        message.value().get("error")
-                    }
-                    _ => None,
-                }) {
-                    return RendererNativeProtocolResponse::error(
-                        error["code"]
-                            .as_i64()
-                            .and_then(|code| i32::try_from(code).ok())
-                            .unwrap_or(-32000),
-                        error["message"]
-                            .as_str()
-                            .unwrap_or("Runtime binding command failed"),
-                    );
-                }
-                let mut response = RendererNativeProtocolResponse::success(json!({}));
-                response
-                    .state_updates
-                    .push(RendererNativeProtocolStateUpdate::RuntimeBinding {
-                        binding,
-                        remove,
-                        output: Box::new(output),
-                    });
-                response
+                runtime_binding_command_response(binding, remove, output)
             }
             Err(error) => RendererNativeProtocolResponse::error(-32000, error.to_string()),
             _ => unreachable!("Runtime binding commands must return frozen inspector output"),
         },
     ))
+}
+
+fn runtime_binding_command_response(
+    binding: RuntimeBindingRegistration,
+    remove: bool,
+    output: RendererRuntimeCommandOutput,
+) -> RendererNativeProtocolResponse {
+    if let Some(message) = output.messages().iter().find_map(|message| match message {
+        RendererRuntimeInspectorMessage::Protocol(message)
+            if message.payload().has_field("error") =>
+        {
+            Some(message.payload())
+        }
+        _ => None,
+    }) {
+        #[derive(serde::Deserialize)]
+        struct ErrorText {
+            message: String,
+        }
+        let text = message
+            .deserialize_field::<ErrorText>("error")
+            .ok()
+            .flatten();
+        let error = &message.value()["error"];
+        return RendererNativeProtocolResponse::error(
+            error["code"]
+                .as_i64()
+                .and_then(|code| i32::try_from(code).ok())
+                .unwrap_or(-32000),
+            text.as_ref()
+                .map(|text| text.message.as_str())
+                .unwrap_or("Runtime binding command failed"),
+        );
+    }
+    let mut response = RendererNativeProtocolResponse::success(json!({}));
+    response
+        .state_updates
+        .push(RendererNativeProtocolStateUpdate::RuntimeBinding {
+            binding,
+            remove,
+            output: Box::new(output),
+        });
+    response
 }
 
 pub(in crate::domains) fn project_binding_terminal(
@@ -252,6 +269,45 @@ pub(super) fn apply_runtime_disable_projection_after_success_for_owner(
         }
         SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
             Err(RuntimeInspectorError::DisableProjectionOwnerDisappeared.into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn binding_error_with_unpaired_utf16_never_installs_a_success_state_update() {
+        for (wire, expected_text) in [
+            (
+                r#"{"id":7,"error":{"code":-32042,"message":"native error"}}"#,
+                "native error",
+            ),
+            (
+                r#"{"id":7,"error":{"code":-32042,"message":"\ud800"}}"#,
+                "Runtime binding command failed",
+            ),
+        ] {
+            let output = RendererRuntimeCommandOutput::from_messages(vec![
+                RendererRuntimeInspectorMessage::protocol(
+                    moli_inspector_json::InspectorJson::from_slice((wire).as_bytes()).unwrap(),
+                ),
+            ]);
+            let response = runtime_binding_command_response(
+                RuntimeBindingRegistration {
+                    devtools_session: None,
+                    name: "binding".into(),
+                    execution_context_name: None,
+                },
+                false,
+                output,
+            );
+            assert!(response.state_updates.is_empty());
+            let error = response
+                .result
+                .expect_err("native binding error must remain an error");
+            assert_eq!(error.code, -32042);
+            assert_eq!(error.message, expected_text);
         }
     }
 }
