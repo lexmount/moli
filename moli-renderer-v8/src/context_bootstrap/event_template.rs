@@ -376,6 +376,9 @@ struct PointerEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::EventTarget, enumerable, receiver)]
 struct EventTargetTemplateMethodsDeclaration {
+    #[webapi(method, length = 1, callback = crate::observable::event_target_when)]
+    when: (),
+
     #[webapi(
         method = "addEventListener",
         length = 2,
