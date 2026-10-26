@@ -2813,7 +2813,11 @@ fn service_worker_console_messages_bind_the_exact_run_and_enabled_sessions() {
     )
     .worker_target_lifecycle_outputs;
 
-    assert_eq!(outputs.len(), 2);
+    assert_eq!(
+        outputs.len(),
+        1,
+        "Rust console snapshots must not synthesize Runtime events"
+    );
     let WorkerTargetLifecycleOutput::ServiceWorkerConsoleMessages {
         runtime,
         messages,
@@ -2835,17 +2839,6 @@ fn service_worker_console_messages_bind_the_exact_run_and_enabled_sessions() {
             stack: None,
         }]
     );
-    let WorkerTargetLifecycleOutput::ServiceWorkerRuntimeConsoleMessages {
-        runtime,
-        messages,
-        console_end,
-    } = &outputs[1]
-    else {
-        panic!("Runtime output must retain its exact ServiceWorker run");
-    };
-    assert_eq!(runtime.session_id(), "SID-second");
-    assert_eq!(*console_end, 1);
-    assert_eq!(messages.len(), 1);
 }
 
 #[test]
@@ -3287,7 +3280,6 @@ fn service_worker_runtime_inspector_messages_bind_and_prepare_the_exact_run() {
         runtime,
         background_events,
         response_events,
-        pending_runtime_console,
         pending_runtime_exceptions,
     } = &outputs[0]
     else {
@@ -3296,7 +3288,6 @@ fn service_worker_runtime_inspector_messages_bind_and_prepare_the_exact_run() {
     assert_eq!(runtime.target_id(), "TID-service-worker");
     assert_eq!(runtime.session_id(), "SID-second");
     assert!(response_events.is_empty());
-    assert!(pending_runtime_console.is_none());
     assert!(pending_runtime_exceptions.is_none());
     assert!(
         background_events
@@ -3676,40 +3667,12 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
                 && event.text == "from shared worker"
                 && event.execution_context_id.is_none()
     ));
-    let (runtime_event, runtime_sidecar) = events
-        .iter()
-        .find_map(|event| {
-            (event.protocol_message().is_none()
-                && event.protocol_method() == Some("Runtime.consoleAPICalled"))
-            .then(|| event.clone().into_parts())
-        })
-        .expect("Runtime.consoleAPICalled should be emitted for enabled shared worker target");
-    assert_eq!(
-        runtime_event.as_json().expect("scalar protocol fixture")["sessionId"],
-        "SID-shared-worker"
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.protocol_method() == Some("Runtime.consoleAPICalled")),
+        "Rust snapshots are Console-domain output; native Inspector owns Runtime notifications"
     );
-    assert_eq!(
-        runtime_event.as_json().expect("scalar protocol fixture")["params"]["type"],
-        "warning"
-    );
-    assert_eq!(
-        runtime_event.as_json().expect("scalar protocol fixture")["params"]["executionContextId"],
-        json!(90_017)
-    );
-    assert_eq!(
-        runtime_event.as_json().expect("scalar protocol fixture")["params"]["args"],
-        json!([{
-            "type": "string",
-            "value": "from shared worker"
-        }])
-    );
-    assert!(matches!(
-        runtime_sidecar,
-        Some(crate::automation::AutomationEvent::RuntimeConsoleApiCalled(event))
-            if event.console_type == "warning"
-                && event.text == "from shared worker"
-                && event.execution_context_id == Some(90_017)
-    ));
 
     ctx.with_fixture(|conn| {
         let target = {
@@ -3724,12 +3687,63 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
                 .pending_console_domain_messages("SID-shared-worker")
                 .is_empty()
         );
-        assert!(
-            target
-                .pending_runtime_console_messages("SID-shared-worker")
-                .is_empty()
-        );
     });
+}
+
+#[tokio::test]
+async fn native_worker_console_packets_preserve_utf16_and_session_owned_handles() {
+    let mut conn = CdpConnection::default();
+    let mut context = BrowserContext::new("BID-native-console".to_owned());
+    let mut target = SharedWorkerTargetState::new(
+        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+        SharedWorkerInstanceId::from_u64(17),
+        "TID-native-console".to_owned(),
+        None,
+        "https://example.test/shared.js".to_owned(),
+        "worker".to_owned(),
+    );
+    target.attach_session("SID-first".to_owned());
+    target.attach_session("SID-second".to_owned());
+    target.set_runtime_frontend_enabled("SID-first", true);
+    target.record_runtime_execution_context_created_event(&worker_context_created_event(
+        90_017, "worker",
+    ));
+    context.insert_shared_worker_target(target);
+    conn.install_browser_context_fixture_for_test(context);
+    let payload = moli_protocol_cdp::CdpMessage::parse(
+        r#"{"method":"Runtime.consoleAPICalled","params":{"type":"log","executionContextId":90017,"timestamp":0,"args":[{"type":"string","value":"\ud800"},{"type":"object","description":"\ud801","objectId":"native-console-object"}]}}"#,
+    ).unwrap();
+    let outputs = record_shared_worker_target_runtime_inspector_messages(
+        &mut conn,
+        "BID-native-console",
+        SharedWorkerInstanceId::from_u64(17),
+        Some("SID-first".to_owned()),
+        vec![RendererRuntimeInspectorMessage::protocol(payload)],
+    );
+    let mut prepared =
+        ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
+    let mut command = crate::conn::CommandDispatchContext::default();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    let projection = WorkerTargetOutputProjection::take(&mut prepared).unwrap();
+    ctx.run_fixture_projection(&mut command, move |driver, context| {
+        Box::pin(projection.run(driver, context))
+    }).await;
+    let events = command.take_protocol_events();
+    assert_eq!(events.len(), 1);
+    let message = events.into_iter().next().unwrap().into_protocol_message();
+    assert_eq!(message.method(), Some("Runtime.consoleAPICalled"));
+    assert_eq!(message.session_id(), Some("SID-first"));
+    let wire = serde_json::to_string(&message).unwrap();
+    assert!(wire.contains(r#""value":"\ud800""#));
+    assert!(wire.contains(r#""description":"\ud801""#));
+    assert!(ctx.with_fixture(|conn| conn.runtime_remote_object_id_known_for_session_owner(
+        Some("SID-first"),
+        "native-console-object"
+    )));
+    assert!(!ctx.with_fixture(|conn| conn.runtime_remote_object_id_known_for_session_owner(
+        Some("SID-second"),
+        "native-console-object"
+    )));
 }
 
 mod retirement_workflow;
