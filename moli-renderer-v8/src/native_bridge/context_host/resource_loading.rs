@@ -2915,6 +2915,36 @@ impl JsContextHost {
         retirement
     }
 
+    pub(crate) fn register_window_xhr_lifecycle_observer(
+        &mut self,
+        realm_token: super::RuntimeObservableContextToken,
+        observer: crate::network_host::WindowXhrLifecycleObserver,
+    ) {
+        self.window_xhr_lifecycle_observers
+            .insert(realm_token, observer);
+    }
+
+    /// Dispose every realm's XHR state at the synchronous LocalWindow boundary,
+    /// before caller microtasks can observe a partially retired object. Realm
+    /// handle destruction and native transport cancellation keep their owners.
+    pub(crate) fn retire_window_xhr_instances_for_owner(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
+        owner: super::WindowExecutionContextOwner,
+    ) {
+        // SAFETY: retirement callers retain this live host in the entered
+        // isolate and release their host borrow before calling this helper.
+        let observers = unsafe { &mut *host_ptr }
+            .window_xhr_lifecycle_observers
+            .extract_if(|_, observer| observer.owner() == owner)
+            .map(|(_, observer)| observer)
+            .collect::<Vec<_>>();
+        // Release the host borrow before entering any of the captured realms.
+        for observer in observers {
+            observer.retire(scope);
+        }
+    }
+
     pub(crate) fn retire_window_xhrs_for_execution_context_owner(
         &mut self,
         owner: super::WindowExecutionContextOwner,
@@ -2937,6 +2967,7 @@ impl JsContextHost {
         &mut self,
         context_token: super::RuntimeObservableContextToken,
     ) -> usize {
+        self.window_xhr_lifecycle_observers.remove(&context_token);
         let retired = self.retire_window_subresources_matching(
             PendingSubresourceContinuation::is_window_xhr,
             |execution_context| execution_context.realm_token() == Some(context_token),
