@@ -170,6 +170,7 @@ pub(crate) struct FetchRuntimeHandle {
 #[derive(Debug)]
 struct FetchRuntimeInner {
     websocket_connector: crate::CurlWebSocketConnector,
+    webtransport_connector: crate::WebTransportConnector,
     request_tx: Sender<RuntimeCommand>,
     shutdown_requested: Arc<AtomicBool>,
     #[cfg(test)]
@@ -404,8 +405,23 @@ impl FetchRuntimeOwner {
         let websocket_connector = curl_runtime
             .websocket_connector()
             .with_network_address_policy(config.network_address_policy());
+        let connect_timeout_ms = config
+            .http_connect_timeout_ms()
+            .unwrap_or(config.request_timeout_ms());
+        let webtransport_owner = moli_webtransport::Owner::new(moli_webtransport::Config {
+            tls: config.tls_config().clone(),
+            address_policy: config.network_address_policy(),
+            host_resolve: config.http_host_resolve().to_vec(),
+            proxy: config.http_proxy().map(str::to_owned),
+            no_proxy: config.http_no_proxy().map(str::to_owned),
+            connect_timeout: (connect_timeout_ms != 0)
+                .then_some(Duration::from_millis(connect_timeout_ms)),
+            ..Default::default()
+        });
+        let webtransport_connector = webtransport_owner.connector();
         let curl_http = curl_runtime.http_sender();
         let owner = RuntimeOwner {
+            _webtransport_owner: webtransport_owner,
             config: config.clone(),
             cookie_store,
             client_hint_preferences,
@@ -442,6 +458,7 @@ impl FetchRuntimeOwner {
         let handle = FetchRuntimeHandle {
             inner: Arc::new(FetchRuntimeInner {
                 websocket_connector,
+                webtransport_connector,
                 request_tx,
                 shutdown_requested,
                 #[cfg(test)]
@@ -556,6 +573,10 @@ fn panic_report(
 impl FetchRuntimeHandle {
     pub(crate) fn websocket_connector(&self) -> crate::CurlWebSocketConnector {
         self.inner.websocket_connector.clone()
+    }
+
+    pub(crate) fn webtransport_connector(&self) -> crate::WebTransportConnector {
+        self.inner.webtransport_connector.clone()
     }
 
     #[cfg(test)]
@@ -709,6 +730,7 @@ impl FetchRuntimeHandle {
     }
 
     pub(crate) fn request_shutdown(&self) {
+        self.inner.webtransport_connector.request_shutdown();
         let first_shutdown = !self.inner.shutdown_requested.swap(true, Ordering::SeqCst);
         if first_shutdown {
             let _ = self.inner.request_tx.send(RuntimeCommand::Shutdown);
@@ -717,6 +739,9 @@ impl FetchRuntimeHandle {
 }
 
 struct RuntimeOwner {
+    // Dropping the semantic owner, including unwinding, retires QUIC work even
+    // when cloneable request capabilities remain resident in renderer contexts.
+    _webtransport_owner: moli_webtransport::Owner,
     config: FetchConfig,
     cookie_store: SharedBrowserCookieStore,
     client_hint_preferences: SharedClientHintPreferences,

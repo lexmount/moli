@@ -1578,6 +1578,10 @@ impl ResourceRequestClient {
         self.resource_runtime.client().websocket_connector()
     }
 
+    pub fn webtransport_connector(&self) -> moli_fetch::WebTransportConnector {
+        self.resource_runtime.client().webtransport_connector()
+    }
+
     pub fn tls_config(&self) -> &moli_fetch::CurlTlsConfig {
         self.resource_runtime.client().tls_config()
     }

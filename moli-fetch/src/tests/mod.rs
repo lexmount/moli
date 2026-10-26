@@ -18,6 +18,7 @@ mod support;
 mod tls_credentials;
 mod upload;
 mod websocket_transport;
+mod webtransport_transport;
 
 use anyhow::{Context, Result};
 use curl::easy::Handler;
