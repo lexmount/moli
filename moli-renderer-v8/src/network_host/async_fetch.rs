@@ -774,10 +774,10 @@ pub(crate) fn observe_async_xhr_upload(
         && let Some(body) = request.body.as_ref()
     {
         let upload_tx = completion_tx.clone();
-        let observer = moli_fetch::UploadObserver::new(body.len() as u64, move |event| {
+        let observer = moli_fetch::UploadObserver::new_browser(body.len() as u64, move |report| {
             let _ = upload_tx.send_async_subresource_event(AsyncSubresourceFetchEvent::Upload {
                 internal_id,
-                event,
+                report,
             });
         });
         request = request.with_upload_observer(observer);
@@ -2716,9 +2716,12 @@ mod tests {
     ) -> anyhow::Result<()> {
         loop {
             match next_async_subresource_event(queue).await? {
-                AsyncSubresourceFetchEvent::Upload { internal_id, event } => {
+                AsyncSubresourceFetchEvent::Upload {
+                    internal_id,
+                    report,
+                } => {
                     assert_eq!(internal_id, expected_id);
-                    match event {
+                    match report.event {
                         moli_fetch::UploadEvent::Progress { loaded, total } => {
                             assert_eq!(total, 7);
                             assert!(loaded > 0 && loaded <= total);

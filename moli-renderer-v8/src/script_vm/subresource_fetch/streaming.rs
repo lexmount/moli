@@ -440,8 +440,13 @@ impl ScriptVm {
                 report_context,
                 violation,
             } => self.report_async_fetch_csp_violation(&report_context, &violation),
-            AsyncSubresourceFetchEvent::Upload { internal_id, event } => {
-                self.apply_async_xhr_upload_event(internal_id, event)
+            AsyncSubresourceFetchEvent::Upload {
+                internal_id,
+                report,
+            } => {
+                let result = self.apply_async_xhr_upload_event(internal_id, &report);
+                drop(report);
+                result
             }
             AsyncSubresourceFetchEvent::Completion(completion) => {
                 self.complete_async_subresource_fetch_body(*completion)
@@ -584,7 +589,7 @@ impl ScriptVm {
     fn apply_async_xhr_upload_event(
         &mut self,
         internal_id: u64,
-        event: moli_fetch::UploadEvent,
+        report: &moli_fetch::UploadReport,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let context_host = self._context_host.clone();
         self.renderer_document_isolate
@@ -615,8 +620,12 @@ impl ScriptVm {
                 let dispatch_scope = execution.dispatch_scope();
                 let previous =
                     enter_subresource_owner_async_scope(&context_host, scope, dispatch_scope);
-                let current =
-                    crate::network_host::apply_xhr_upload_event(scope, xhr, internal_id, event);
+                let current = crate::network_host::apply_xhr_upload_event(
+                    scope,
+                    xhr,
+                    internal_id,
+                    report.event,
+                );
                 defer_subresource_owner_async_scope(&context_host, scope, dispatch_scope, previous);
                 if !current {
                     let _ = context_host

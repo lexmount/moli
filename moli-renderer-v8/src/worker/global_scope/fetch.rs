@@ -716,9 +716,10 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
                 .with_use_cors_preflight(use_cors_preflight);
             if let Some(body) = request.body.as_ref() {
                 let upload_tx = completion_tx.clone();
-                let observer = moli_fetch::UploadObserver::new(body.len() as u64, move |event| {
-                    let _ = upload_tx.send(WorkerXhrEvent::Upload { xhr_id, event });
-                });
+                let observer =
+                    moli_fetch::UploadObserver::new_browser(body.len() as u64, move |report| {
+                        let _ = upload_tx.send(WorkerXhrEvent::Upload { xhr_id, report });
+                    });
                 request = request.with_upload_observer(observer);
             }
             if let Some(referrer_policy) = referrer_policy {
