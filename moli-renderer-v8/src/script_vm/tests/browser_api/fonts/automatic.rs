@@ -614,6 +614,46 @@ fn failed_faces_allow_lower_priority_font_resources_to_load() {
 }
 
 #[test]
+fn font_set_ready_waits_for_all_synchronous_fallback_failures() {
+    let (_, wide) = order_font_data();
+    for failures in [2, 3] {
+        let mut vm = automatic_vm();
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        vm.eval(&format!(r#"
+            globalThis.fallback=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');
+            globalThis.missing=Array.from({{length:{failures}}},(_,index)=>
+                new FontFace('OrderFace',`local("MoliDefinitelyNotAFont-Ready-${{index}}")`));
+            document.fonts.add(fallback);
+            for(const face of missing) document.fonts.add(face);
+            globalThis.events=[];
+            document.fonts.addEventListener('loading',()=>events.push('loading'));
+            document.fonts.addEventListener('loadingdone',event=>
+                events.push(['done',event.fontfaces.length,event.fontfaces[0]===fallback]));
+            document.fonts.addEventListener('loadingerror',event=>
+                events.push(['error',event.fontfaces.length,event.fontfaces.every(face=>missing.includes(face))]));
+            globalThis.readyStates=[];
+            globalThis.ready=document.fonts.ready;
+            ready.then(()=>readyStates.push([...missing].reverse().map(face=>face.status).concat(fallback.status)));
+        "#)).unwrap();
+        assert_eq!(vm.eval("JSON.stringify(readyStates)").unwrap(), "[]");
+        run_font_tasks(&mut vm);
+        let mut expected = vec!["error"; failures];
+        expected.push("loaded");
+        assert_eq!(
+            vm.eval("JSON.stringify(readyStates)").unwrap(),
+            serde_json::to_string(&[expected]).unwrap(),
+            "{failures} synchronous failures",
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(events)").unwrap(),
+            format!(r#"["loading",["done",1,true],["error",{failures},true]]"#),
+        );
+        assert_eq!(vm.eval("ready===document.fonts.ready").unwrap(), "true");
+        assert_eq!(vm.layout_pass_observability_for_test().1, 0);
+    }
+}
+
+#[test]
 fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
     for retirement in ["before-demand", "after-queue", "live"] {
         let mut vm = automatic_vm();

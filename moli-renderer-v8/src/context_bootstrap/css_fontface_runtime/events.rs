@@ -407,9 +407,12 @@ fn finish_font_set_task<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'
     // glyph or a load error). Settle resource selection before resolving ready.
     super::automatic::discover_requests(scope);
     super::loading::start_queued_font_set_loads(scope, owner);
-    // Another font may have started between queuing this task and running it.
-    // Keep its ready promise pending and let its completion queue a new task.
-    if !font_set_is_loading_and_idle(scope, owner) {
+    // A synchronously completed fallback can queue another finish task and
+    // expose more demand without leaving a face Loading. Let that task settle
+    // selection before resolving the same ready promise and loading cycle.
+    if !font_set_is_loading_and_idle(scope, owner)
+        || get_private_value(scope, owner, FINISH_QUEUED).is_some_and(|value| value.is_true())
+    {
         return;
     }
     let events = [
