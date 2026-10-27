@@ -67,6 +67,18 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
+  Ten `storage.deleteCookies` scenarios cover value, compound attribute, size,
+  and exact-path filters, no matches, and empty/omitted filters that clear all
+  cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
+  and two CHIPS cookies via real HTTP `Set-Cookie` responses (including a cross-site
+  iframe), all sharing the same name/domain/path. It also seeds a different path
+  and an unrelated name, then verifies every survivor and another user context
+  remain unchanged. These scenarios run in the default `bidi-storage` group,
+  with separate failure records under `--continue-on-failure`.
+  The identical ten scenarios passed against Chrome for Testing and ChromeDriver
+  156.0.8078.47 on 2026-10-28. The returned partition key is checked for consistency
+  between `getCookies` and `deleteCookies`; its supported fields can vary by engine
+  under the [WebDriver BiDi storage contract](https://www.w3.org/TR/webdriver-bidi/#module-storage).
 - Selenium Python Remote WebDriver session creation, Selenium BiDi facade
   `webSocketUrl` attachment with `browsing_context` create/navigate/get_tree/
   locate_nodes, browsing context fragment/history event handlers, `script`
@@ -139,10 +151,10 @@ uv sync
 uv run moli-webdriver-smoke
 ```
 
-With no `--group`, both local and CI runs execute all seven Moli groups:
+With no `--group`, both local and CI runs execute all eight Moli groups:
 
 ```text
-classic,bidi,selenium,semantics,url-policy,navigation-errors,script-interrupt
+classic,bidi,bidi-storage,selenium,semantics,url-policy,navigation-errors,script-interrupt
 ```
 
 CI adds `--continue-on-failure` so one failing group does not hide later smoke
@@ -160,6 +172,7 @@ Run focused groups:
 ```bash
 uv run moli-webdriver-smoke --group classic
 uv run moli-webdriver-smoke --group bidi
+uv run moli-webdriver-smoke --group bidi-storage
 uv run moli-webdriver-smoke --group selenium
 uv run moli-webdriver-smoke --group semantics --continue-on-failure
 uv run moli-webdriver-smoke --group url-policy --continue-on-failure
@@ -187,6 +200,24 @@ uv run moli-webdriver-smoke \
   --browser-binary ~/chromium/src/out/Default/chrome \
   --group semantics --continue-on-failure
 ```
+
+Run the same BiDi cookie deletion scenarios against ChromeDriver:
+
+```bash
+/path/to/chromedriver --port=9515
+
+uv run moli-webdriver-smoke \
+  --endpoint http://127.0.0.1:9515 \
+  --browser-name chrome \
+  --browser-binary /path/to/chrome \
+  --group bidi-storage --continue-on-failure
+```
+
+Use matching Chrome and ChromeDriver versions. The fixture uses `127.0.0.1`
+and `localhost` as distinct top-level sites and waits for the iframe load
+before checking the seeded cookies. No persistent browser profile is needed.
+Validate additions or expectation changes against real Chrome with this same
+group and record the browser/driver versions before adopting them as contracts.
 
 Run the bounded ChromeDriver script-timeout oracle against the local Chromium
 147 pair:

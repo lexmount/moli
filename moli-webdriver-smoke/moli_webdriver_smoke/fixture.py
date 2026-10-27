@@ -49,6 +49,19 @@ class FixtureServer:
                 if route == "/webdriver/frame":
                     self._send_html("<!doctype html><title>Frame</title><main id='inside-frame'>frame ready</main>")
                     return
+                if route in ("/webdriver/partitioned-cookie-top", "/webdriver/partitioned-cookie-frame"):
+                    value = "part-a" if route.endswith("-top") else "part-b"
+                    http_only = "; HttpOnly" if route.endswith("-top") else ""
+                    self._send_html(
+                        "<!doctype html><title>Partitioned Cookie</title><main>cookie ready</main>",
+                        headers={
+                            "Set-Cookie": (
+                                f"bidiDeleteSmoke={value}; Path=/; Secure; SameSite=None; Partitioned{http_only}"
+                            ),
+                            "Cache-Control": "no-store",
+                        },
+                    )
+                    return
                 if route == "/webdriver/nested-frames":
                     self._send_html(self._nested_frames_page())
                     return
@@ -157,11 +170,19 @@ class FixtureServer:
                     return
                 self.send_error(HTTPStatus.NOT_FOUND, "fixture route not found")
 
-            def _send_html(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+            def _send_html(
+                self,
+                body: str,
+                status: HTTPStatus = HTTPStatus.OK,
+                *,
+                headers: dict[str, str] | None = None,
+            ) -> None:
                 payload = body.encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(payload)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(payload)
 
