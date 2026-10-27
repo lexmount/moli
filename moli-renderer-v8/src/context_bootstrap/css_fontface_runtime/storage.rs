@@ -279,8 +279,8 @@ fn sync_font_face_set_matching_order<'s>(
     };
     let connected = font_face_set_connected_faces_array(scope, fonts);
     let manual = font_face_set_manual_faces_array(scope, fonts);
-    let mut slots = |faces: Option<v8::Local<'s, v8::Array>>| {
-        let mut slots = Vec::new();
+    let mut project = |faces: Option<v8::Local<'s, v8::Array>>| {
+        let mut loads = Vec::new();
         if let Some(faces) = faces {
             for index in 0..faces.length() {
                 if let Some(face) = faces
@@ -288,14 +288,22 @@ fn sync_font_face_set_matching_order<'s>(
                     .and_then(|face| v8::Local::<v8::Object>::try_from(face).ok())
                     && let Some(load) = super::state::get(scope, face)
                 {
-                    slots.push(load.borrow().slot().to_owned());
+                    loads.push(load);
                 }
             }
         }
-        slots
+        loads
     };
-    let mut connected = slots(connected);
-    let manual = slots(manual);
+    let mut connected = project(connected);
+    let mut manual = project(manual);
+    // Preserve the combined public array's last-handle-wins mapping for
+    // duplicate slots before reordering CSS candidates for native matching.
+    let mut by_slot = std::collections::HashMap::new();
+    for load in connected.iter_mut().chain(manual.iter_mut()).rev() {
+        let slot = load.borrow().slot().to_owned();
+        let canonical = by_slot.entry(slot).or_insert_with(|| load.clone());
+        *load = canonical.clone();
+    }
     // SAFETY: the native font service cannot call V8 while borrowed.
     let host = unsafe { &*host_ptr };
     if !connected.is_empty()
@@ -315,19 +323,27 @@ fn sync_font_face_set_matching_order<'s>(
             .collect::<std::collections::HashMap<_, _>>();
         // Only native matching uses cascade order. FontFaceSet's public array
         // above retains document order, followed by manual insertion order.
-        connected.sort_by_key(|slot| {
+        connected.sort_by_key(|load| {
             cascade_order
-                .get(slot.as_str())
+                .get(load.borrow().slot())
                 .copied()
                 .unwrap_or(usize::MAX)
         });
     }
-    super::automatic::update_sources(scope, fonts, host_ptr, document, &connected, &manual);
+    let slots = |loads: &[crate::font_loading::FontFaceLoad]| {
+        loads
+            .iter()
+            .map(|load| load.borrow().slot().to_owned())
+            .collect::<Vec<_>>()
+    };
     if host.with_font_services(document, |services| {
-        services.set_web_font_order(&connected, &manual)
+        services.set_web_font_order(&slots(&connected), &slots(&manual))
     }) {
         host.invalidate_document_font_layout(document);
     }
+    let manual_start = connected.len();
+    let ordered = connected.into_iter().chain(manual).collect();
+    super::automatic::update_sources(scope, fonts, host_ptr, document, ordered, manual_start);
 }
 
 pub(super) fn font_face_set_owner_snapshot<'s>(

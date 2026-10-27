@@ -90,13 +90,13 @@ pub(super) fn update_sources<'s>(
     fonts: v8::Local<'s, v8::Object>,
     host_ptr: *mut JsContextHost,
     document: DomHandle,
-    connected: &[String],
-    manual: &[String],
+    ordered: Vec<FontFaceLoad>,
+    manual_start: usize,
 ) {
     let existing = get_private_value(scope, fonts, SOURCES_ID)
         .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
         .map(|value| value.u64_value().0);
-    if manual.is_empty() && existing.is_none() {
+    if manual_start == ordered.len() && existing.is_none() {
         return;
     }
     let host = unsafe { &*host_ptr };
@@ -106,28 +106,6 @@ pub(super) fn update_sources<'s>(
     let Some(owner) = host.current_window_execution_context_owner(dispatch) else {
         return;
     };
-    let Some(faces) = super::storage::font_face_set_faces_array(scope, fonts) else {
-        return;
-    };
-    let mut by_slot = HashMap::new();
-    for index in 0..faces.length() {
-        if let Some(face) = faces
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            && let Some(load) = super::state::get(scope, face)
-        {
-            by_slot.insert(load.borrow().slot().to_owned(), load.clone());
-        }
-    }
-    let ordered = connected
-        .iter()
-        .chain(manual)
-        .filter_map(|slot| by_slot.get(slot).cloned())
-        .collect::<Vec<_>>();
-    let manual_start = connected
-        .iter()
-        .filter(|slot| by_slot.contains_key(*slot))
-        .count();
     let store = if let Some(store) = scope.get_slot::<Store>() {
         store.clone()
     } else {
