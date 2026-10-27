@@ -1,6 +1,105 @@
 use super::*;
 
 #[test]
+fn web_audio_listener_parameters_are_owned_by_the_context_and_follow_legacy_setters() {
+    let mut vm = new_storage_html_test_vm("https://audio-listener.test/");
+    let result = vm.eval(r#"
+(() => {
+  const assert = (ok, message) => { if (!ok) throw new Error(message); };
+  document.body.innerHTML = '<iframe></iframe>';
+  const other = document.querySelector('iframe').contentWindow;
+  const names = ['positionX','positionY','positionZ','forwardX','forwardY','forwardZ','upX','upY','upZ'];
+  const defaults = [0,0,0,0,0,-1,0,1,0];
+  const borrowed = Object.getOwnPropertyDescriptor(other.BaseAudioContext.prototype, 'listener').get;
+  const contexts = [new AudioContext(), new OfflineAudioContext(1,64,44100), new other.AudioContext()];
+  for (const context of contexts) {
+    const realm = context instanceof AudioContext || context instanceof OfflineAudioContext ? window : other;
+    const listener = borrowed.call(context);
+    assert(listener === context.listener, 'stable listener identity');
+    assert(Object.getPrototypeOf(listener) === realm.AudioListener.prototype, 'listener creation realm');
+    assert(!Object.hasOwn(context, 'listener'), 'shared BaseAudioContext getter');
+    assert(Reflect.set(context, 'listener', {}) === false, 'readonly context listener');
+    for (let i=0;i<names.length;++i) {
+      const name=names[i], param=listener[name];
+      assert(Object.getPrototypeOf(param) === realm.AudioParam.prototype, 'parameter realm '+name);
+      assert(param === listener[name] && param.value === defaults[i] && param.defaultValue === defaults[i], 'parameter default '+name);
+      assert(param.minValue === -3.4028234663852886e38 && param.maxValue === 3.4028234663852886e38, 'float bounds '+name);
+      assert(!Object.hasOwn(listener,name) && Reflect.set(listener,name,{}) === false, 'readonly parameter '+name);
+    }
+    assert(listener.setPosition.length === 3 && listener.setOrientation.length === 6, 'method arity');
+    assert(listener.setPosition(0.1,640,-600) === undefined, 'position return value');
+    assert(listener.positionX.value === Math.fround(0.1) && listener.positionY.value === 640 && listener.positionZ.value === -600, 'position values');
+    assert(listener.setOrientation(0,0,1,0,-1,0) === undefined, 'orientation return value');
+    assert(listener.forwardZ.value === 1 && listener.upY.value === -1, 'orientation values');
+    listener.positionX.setValueAtTime(17,0);
+    assert(listener.positionX.value === 17 && listener.positionX.defaultValue === 0, 'shared AudioParam state');
+    const nativeParam=listener.positionX, fake={value:55};
+    Object.defineProperty(listener,'positionX',{value:fake});
+    listener.setPosition(2,3,4);
+    assert(nativeParam.value === 2 && fake.value === 55, 'setter uses native parameter');
+  }
+  assert(contexts[0].listener !== contexts[1].listener, 'per-context listener');
+  assert(new AudioContext().listener.positionX.value === 0, 'independent parameter state');
+  let illegal;
+  try { new AudioListener(); } catch(e) { illegal=e; }
+  assert(illegal instanceof TypeError, 'illegal public constructor');
+  return 'ok';
+})()
+"#).expect("AudioListener defaults, ownership and setters should evaluate");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn web_audio_listener_validates_receivers_and_all_arguments_before_mutation() {
+    let mut vm = new_storage_html_test_vm("https://audio-listener-arguments.test/");
+    let result = vm.eval(r#"
+(() => {
+  const assert = (ok, message) => { if (!ok) throw new Error(message); };
+  document.body.innerHTML = '<iframe></iframe>';
+  const other = document.querySelector('iframe').contentWindow;
+  const listener = new AudioContext().listener;
+  const names=['positionX','positionY','positionZ','forwardX','forwardY','forwardZ','upX','upY','upZ'];
+  const values=() => JSON.stringify(names.map(name=>listener[name].value));
+  for (const [name,args] of [['setPosition',[1,2,3]],['setOrientation',[1,2,3,4,5,6]]]) {
+    for (const bad of [undefined,NaN,Infinity,-Infinity,1e100,Symbol(),1n]) {
+      const input=args.slice();input[input.length-1]=bad;
+      const before=values();let caught;
+      try { listener[name](...input); } catch(e) { caught=e; }
+      assert(caught instanceof TypeError && values() === before, 'atomic argument conversion '+name);
+    }
+    let caught;const marker={};const input=args.slice();
+    input[input.length-1]={valueOf(){throw marker;}};
+    try { listener[name](...input); } catch(e) { caught=e; }
+    assert(caught === marker, 'original conversion exception');
+    caught=undefined;
+    try { listener[name](...args.slice(1)); } catch(e) { caught=e; }
+    assert(caught instanceof TypeError, 'required arguments');
+  }
+  let conversions=0,traps=0;
+  const poison={valueOf(){++conversions;return 0;}};
+  const proxy=new Proxy(listener,{get(){++traps;throw 0;},getPrototypeOf(){++traps;throw 0;}});
+  for (const realm of [window,other]) {
+    const operations=[
+      [Object.getOwnPropertyDescriptor(realm.BaseAudioContext.prototype,'listener').get,[],[{},Object.create(new AudioContext())]],
+      ...names.map(name=>[Object.getOwnPropertyDescriptor(realm.AudioListener.prototype,name).get,[],[{},Object.create(listener),proxy]]),
+      [realm.AudioListener.prototype.setPosition,[poison,poison,poison],[{},Object.create(listener),proxy]],
+      [realm.AudioListener.prototype.setOrientation,[poison,poison,poison,poison,poison,poison],[{},Object.create(listener),proxy]]
+    ];
+    for (const [operation,args,receivers] of operations) {
+      for (const receiver of receivers) {
+        let caught;try { operation.apply(receiver,args); } catch(e) { caught=e; }
+        assert(caught && Object.getPrototypeOf(caught) === realm.TypeError.prototype,'callee-realm receiver error');
+      }
+    }
+  }
+  assert(conversions === 0 && traps === 0, 'receiver validation must precede author code');
+  return 'ok';
+})()
+"#).expect("AudioListener should reject invalid arguments and forged receivers");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn web_audio_factories_are_shared_by_realtime_and_offline_contexts() {
     let mut vm = new_storage_test_vm("https://audio-factories.test/");
     let result = vm
