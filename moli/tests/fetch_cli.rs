@@ -71,6 +71,8 @@ mod subprocess;
 mod timing;
 #[path = "fetch_cli/web_security.rs"]
 mod web_security;
+#[path = "fetch_cli/xhr_timeout.rs"]
+mod xhr_timeout;
 
 struct Output {
     status: OutputStatus,

@@ -181,8 +181,12 @@ fn xhr_timeout_callback(
         return;
     }
 
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let _ = unsafe { &mut *host_ptr }.abort_subresource_fetch(active_internal_id);
+    set_xhr_state_number(scope, xhr, XHR_TIMEOUT_TIMER_SLOT, 0.0);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && !unsafe { &mut *host_ptr }.cancel_xhr_fetch_for_timeout(active_internal_id)
+    {
+        rv.set_undefined();
+        return;
     }
     apply_xhr_timeout(scope, xhr);
     rv.set_undefined();
