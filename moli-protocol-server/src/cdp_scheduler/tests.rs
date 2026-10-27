@@ -590,6 +590,127 @@ fn renderer_output_publication_waits_for_its_exact_load_predecessors() {
 }
 
 #[test]
+fn pending_renderer_projection_keeps_its_load_window_while_peer_work_advances() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let candidate = future_load_candidate(&publication);
+    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    scheduler.queues.enqueue_pending_renderer_output_projection(
+        cursor,
+        Vec::new(),
+        Some(candidate),
+    );
+    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+        work: root_frame_stopped_loading_work(1, "FRAME-peer"),
+    }]);
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(1));
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    let snapshot = scheduler.queues.take_external_load_wait_snapshot();
+    assert_eq!(snapshot.len(), 1, "peer work may leave the queue");
+    assert_eq!(
+        scheduler.queues.renderer_output_order(cursor),
+        Some((Vec::new(), Some(candidate)))
+    );
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![json!({"method": "Page.loadEventFired"})]),
+    ));
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(cursor)
+            .is_none()
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence
+    );
+}
+
+#[test]
+fn renderer_owner_work_waits_for_its_original_projection_and_exact_load() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let load = deferred_main_document_load_observation_id(1);
+    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(cursor, vec![load], None);
+    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+        work: moli_protocol::test_support::protocol_work_from_renderer_output(
+            root_frame_stopped_loading_work(1, "FRAME-source"),
+            cursor,
+        ),
+    }]);
+    let Some(ProtocolSchedulerResidence::ProtocolWork {
+        load_predecessors, ..
+    }) = scheduler.queues.protocol_residences.get(1)
+    else {
+        panic!("the original owner work stays queued");
+    };
+    assert_eq!(load_predecessors, &[load]);
+    scheduler.queues.close_future_load_predecessor_window();
+    assert!(scheduler.queues.take_command_followup_snapshot().is_empty());
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), None);
+    scheduler.queues.satisfy_load_predecessor(load);
+    assert_eq!(
+        scheduler.next_ungated_protocol_residence_index(),
+        None,
+        "load completion alone cannot release unfinished source work"
+    );
+    assert!(
+        scheduler
+            .queues
+            .complete_renderer_output_projection(cursor, ProtocolOutputSequence::empty())
+    );
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(cursor)
+            .is_some()
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+}
+
+#[test]
+fn renderer_output_handoff_keeps_before_and_after_response_order() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let mut queues = SchedulerQueues::default();
+    queues.enqueue_pending_renderer_output_projection(cursor, Vec::new(), None);
+    queues
+        .append_renderer_output_projection(
+            cursor,
+            ProtocolOutputSequence::from_messages(vec![json!({"method": "Moli.afterResponse"})]),
+        )
+        .unwrap();
+    assert!(queues.take_unconstrained_renderer_output(cursor).is_none());
+    assert!(queues.complete_renderer_output_projection(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![json!({"method": "Debugger.paused"})])
+    ));
+    assert_eq!(
+        queues
+            .take_unconstrained_renderer_output(cursor)
+            .unwrap()
+            .into_messages(),
+        vec![
+            json!({"method": "Debugger.paused"}),
+            json!({"method": "Moli.afterResponse"})
+        ]
+    );
+    assert_eq!(queues.protocol_residence_len(), 0);
+}
+
+#[test]
 fn concrete_renderer_output_precedes_work_published_by_the_same_ingress() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);

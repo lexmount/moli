@@ -399,29 +399,26 @@ impl CdpConnection {
         body_artifact: CompletedDownloadBodyArtifact,
         command_context: &mut CommandDispatchContext,
     ) -> Result<()> {
-        let Some(prepared) = self.prepare_navigation_download(state, final_url, body_artifact)?
-        else {
-            return Ok(());
-        };
-
-        if let Some(sender) = self.background_event_sender() {
-            let response_flush = command_context.response_flush().receiver();
-            tokio::spawn(async move {
-                if !wait_for_command_response_flush(response_flush).await {
-                    return;
-                }
-                for event in complete_navigation_download_async(prepared).await {
-                    let _ = sender.send(event);
-                }
-            });
-            return Ok(());
+        if let Some(prepared) =
+            self.prepare_navigation_download_delivery(state, final_url, body_artifact)?
+        {
+            prepared.run(out, command_context).await;
         }
-
-        for event in complete_navigation_download_async(prepared).await {
-            out.push(event);
-        }
-
         Ok(())
+    }
+
+    pub(crate) fn prepare_navigation_download_delivery(
+        &mut self,
+        state: &NavigationDispatchState,
+        final_url: Url,
+        body_artifact: CompletedDownloadBodyArtifact,
+    ) -> Result<Option<PreparedDownloadActivationDelivery>> {
+        Ok(self
+            .prepare_navigation_download(state, final_url, body_artifact)?
+            .map(|prepared| PreparedDownloadActivationDelivery {
+                kind: PreparedDownloadDeliveryKind::Prefetched(Box::new(prepared)),
+                sender: self.background_event_sender(),
+            }))
     }
 
     fn prepare_pending_download_activation(

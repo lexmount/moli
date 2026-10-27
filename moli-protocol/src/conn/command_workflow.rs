@@ -209,6 +209,9 @@ impl CommandWorkflowContext {
         target.append_renderer_fenced_protocol_events(events, boundary, after_boundary);
         super::dispatch::append_command_output_plan(&mut Vec::new(), target, plan, None, None);
         target.extend_post_response_events(local.take_post_response_events());
+        for permit in local.take_runtime_output_projection_permits() {
+            target.retain_runtime_output_projection_permit(permit);
+        }
         if let Some(predecessor) = local.take_renderer_output_predecessor() {
             target.set_renderer_output_predecessor(predecessor);
         }
@@ -266,6 +269,19 @@ impl CommandWorkflowContext {
 
     pub(crate) fn retain_output(&mut self, plan: CommandOutputPlan) {
         self.retained_output.extend(plan);
+    }
+
+    /// Keep completed projection slots in their original event order before
+    /// the next slot writes directly into the same command context.
+    pub(crate) fn materialize_projection_output(&mut self) {
+        let output = std::mem::take(&mut self.retained_output);
+        super::dispatch::append_command_output_plan(
+            &mut Vec::new(),
+            self.context_mut(),
+            output,
+            None,
+            None,
+        );
     }
 
     /// A terminal built by state remains durable before the reply channel

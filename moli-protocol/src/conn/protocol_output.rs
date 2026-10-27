@@ -1,4 +1,3 @@
-use futures_util::FutureExt as _;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use super::{CdpConnection, CdpTurnOutcome};
@@ -13,6 +12,7 @@ pub use navigation::BackgroundNavigationProtocolReady;
 pub(crate) use navigation::PendingBackgroundNavigationProtocol;
 mod renderer;
 mod task;
+mod workflow;
 pub use task::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
 
 impl CdpConnection {
@@ -56,7 +56,26 @@ impl CdpConnection {
         let work = crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
             sequence,
             events,
-            predecessor,
+            vec![predecessor],
+            target_id,
+        );
+        self.scheduler_state
+            .push_scheduler_event(super::CdpSchedulerEvent::ProtocolWorkPublished { work });
+    }
+
+    pub(crate) fn publish_renderer_fenced_protocol_output_after(
+        &mut self,
+        events: Vec<super::BackgroundProtocolEvent>,
+        predecessors: Vec<moli_core::RendererOutputFence>,
+        target_id: Option<String>,
+    ) {
+        let sequence = self
+            .scheduler_state
+            .allocate_protocol_work_publish_sequence();
+        let work = crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
+            sequence,
+            events,
+            predecessors,
             target_id,
         );
         self.scheduler_state
@@ -91,11 +110,13 @@ impl CdpConnection {
                 last_published_sequence,
                 ..
             } => {
-                self.scheduler_state
+                let retired = self
+                    .scheduler_state
                     .renderer_output_ingress
                     .close(stream, last_published_sequence);
-                if let Some(renderer_page) =
-                    super::RendererPageResidenceIdentity::from_residence(stream.residence())
+                if retired
+                    && let Some(renderer_page) =
+                        super::RendererPageResidenceIdentity::from_residence(stream.residence())
                 {
                     self.finish_renderer_page_output_retirement(renderer_page);
                 }
@@ -183,15 +204,30 @@ impl CdpConnection {
         &mut self,
         cursor: moli_core::RendererOutputCursor,
     ) -> crate::domains::activity::RendererOutputIngressAdmission {
-        let ready = self
+        let (ready, retired) = self
             .scheduler_state
             .renderer_output_ingress
             .complete_projection(cursor);
+        if retired
+            && let Some(renderer_page) =
+                super::RendererPageResidenceIdentity::from_residence(cursor.stream().residence())
+        {
+            self.finish_renderer_page_output_retirement(renderer_page);
+        }
         if ready.is_empty() {
             crate::domains::activity::RendererOutputIngressAdmission::Buffered
         } else {
             crate::domains::activity::RendererOutputIngressAdmission::Ready(ready)
         }
+    }
+
+    pub fn renderer_output_cursor_is_outstanding(
+        &self,
+        cursor: moli_core::RendererOutputCursor,
+    ) -> bool {
+        self.scheduler_state
+            .renderer_output_ingress
+            .is_projection_outstanding(cursor)
     }
 
     pub fn renderer_output_cursor_is_projected(
@@ -219,7 +255,10 @@ impl CdpConnection {
             }
             ReadyProtocolSchedulerWork::RendererFencedOutput(output) => {
                 assert!(
-                    self.renderer_output_cursor_is_projected(output.predecessor.cursor()),
+                    output
+                        .predecessors
+                        .iter()
+                        .all(|fence| self.renderer_output_cursor_is_projected(fence.cursor())),
                     "materialized protocol output cannot cross its concrete renderer predecessor"
                 );
                 CdpTurnOutcome::new_with_protocol_events(
@@ -252,10 +291,13 @@ impl CdpConnection {
                     self.take_scheduler_events(),
                 )
             }
-            ReadyProtocolSchedulerWork::TopLevelLocationNavigationOwnerAction(action) => {
+            ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action) => {
                 let (owner_scope, page_owner, navigation) = action.into_parts();
                 let mut protocol_events = Vec::new();
-                crate::domains::page::navigate_page_owned_top_level_location_background_events_async(
+                if self.target_page_residence_identity_is_current(&page_owner) {
+                    match navigation {
+                        super::TopLevelNavigationRequest::Location(navigation) => {
+                            crate::domains::page::navigate_page_owned_top_level_location_background_events_async(
                     self,
                     &mut protocol_events,
                     &owner_scope,
@@ -263,6 +305,14 @@ impl CdpConnection {
                     navigation,
                 )
                 .await;
+                        }
+                        super::TopLevelNavigationRequest::History(traversal) => {
+                            crate::domains::page::traverse_session_owner_history_from_renderer_background_events_async(
+                                self, &mut protocol_events, &owner_scope, traversal.delta,
+                            ).await;
+                        }
+                    }
+                }
                 CdpTurnOutcome::new_with_protocol_events(
                     protocol_events,
                     self.take_scheduler_events(),
@@ -297,20 +347,12 @@ impl CdpConnection {
         publication: RendererOutputTransportMessage,
     ) -> CdpTurnOutcome {
         let mut command_context = super::CommandDispatchContext::default();
-        let mut barriers =
-            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
-        let result = AssertUnwindSafe(
-            crate::domains::activity::ingest_renderer_output_transport_async(
-                self,
-                publication,
-                &mut barriers,
-                &mut command_context,
-            ),
+        let protocol_events = crate::domains::activity::ingest_renderer_output_transport_async(
+            self,
+            publication,
+            &mut command_context,
         )
-        .catch_unwind()
         .await;
-        self.scheduler_state.runtime_command_output_barriers = barriers;
-        let protocol_events = result.unwrap_or_else(|payload| resume_unwind(payload));
         CdpTurnOutcome::new_with_protocol_and_post_response_events(
             protocol_events,
             command_context.take_post_response_events(),
@@ -337,40 +379,85 @@ impl CdpConnection {
         )
     }
 
+    pub(crate) fn finish_runtime_output_projection_permits(
+        &mut self,
+        permits: Vec<crate::domains::activity::RuntimeCommandOutputProjectionPermit>,
+    ) {
+        let ready = self.with_runtime_command_output_barriers(move |_, barriers| {
+            permits
+                .into_iter()
+                .flat_map(|permit| barriers.complete_output_projection(permit))
+                .collect::<Vec<_>>()
+        });
+        if !ready.is_empty() {
+            let access = self
+                .protocol_state_access()
+                .expect("owned output handoff retains its protocol owner");
+            self.schedule_runtime_output_projections(ready, access);
+        }
+    }
+
+    pub(crate) fn schedule_runtime_output_projections(
+        &mut self,
+        ready: Vec<crate::domains::activity::ReadyRuntimeCommandOutputProjection>,
+        access: super::ProtocolStateAccess,
+    ) {
+        for projection in ready {
+            let target_id = projection.target_id(self);
+            let pending = PendingProtocolSchedulerWork::for_output_projection(
+                projection,
+                access.clone(),
+                target_id,
+            );
+            self.scheduler_state.push_scheduler_event(
+                super::CdpSchedulerEvent::RendererOutputProjectionPrepared { pending },
+            );
+        }
+    }
+
     pub async fn release_runtime_command_output_barrier_turn_async(
         &mut self,
         permit: RuntimeCommandOutputBarrierPermit,
     ) -> RuntimeCommandOutputBarrierCompletion {
-        let mut command_context = super::CommandDispatchContext::default();
-        let mut barriers =
-            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
-        let result = AssertUnwindSafe(barriers.release(self, permit, &mut command_context))
-            .catch_unwind()
-            .await;
-        self.scheduler_state.runtime_command_output_barriers = barriers;
-        let terminal = result.unwrap_or_else(|payload| resume_unwind(payload));
-        RuntimeCommandOutputBarrierCompletion::new(
-            terminal,
-            CdpTurnOutcome::new_with_protocol_and_post_response_events(
-                command_context.take_protocol_events(),
-                command_context.take_post_response_events(),
-                self.take_scheduler_events(),
-            ),
-        )
+        self.complete_runtime_command_output_barrier_turn(permit, false)
+            .await
     }
 
     pub async fn cancel_runtime_command_output_barrier_turn_async(
         &mut self,
         permit: RuntimeCommandOutputBarrierPermit,
     ) -> RuntimeCommandOutputBarrierCompletion {
+        self.complete_runtime_command_output_barrier_turn(permit, true)
+            .await
+    }
+
+    async fn complete_runtime_command_output_barrier_turn(
+        &mut self,
+        permit: RuntimeCommandOutputBarrierPermit,
+        canceled: bool,
+    ) -> RuntimeCommandOutputBarrierCompletion {
+        let (terminal, ready) = self.with_runtime_command_output_barriers(move |conn, barriers| {
+            barriers.prepare_completion(conn, permit, canceled)
+        });
         let mut command_context = super::CommandDispatchContext::default();
-        let mut barriers =
-            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
-        let result = AssertUnwindSafe(barriers.cancel(self, permit, &mut command_context))
-            .catch_unwind()
-            .await;
-        self.scheduler_state.runtime_command_output_barriers = barriers;
-        let terminal = result.unwrap_or_else(|payload| resume_unwind(payload));
+        if !ready.is_empty() {
+            if let Some(access) = self.protocol_state_access() {
+                self.schedule_runtime_output_projections(ready, access);
+            } else {
+                let mut local = super::CommandDispatchContext::default();
+                let (mut context, _scope) =
+                    super::CommandWorkflowContext::take_from(&mut local, None, None);
+                let result =
+                    crate::domains::activity::ReadyRuntimeCommandOutputProjection::run_ready(
+                        ready,
+                        &mut super::ProtocolWorkflowDriver::inline(self),
+                        &mut context,
+                    )
+                    .await;
+                context.finish_projection_inline(self, &mut command_context);
+                result.expect("inline barrier completion retains its protocol owner");
+            }
+        }
         RuntimeCommandOutputBarrierCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(

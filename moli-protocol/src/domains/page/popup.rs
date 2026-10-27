@@ -1,3 +1,4 @@
+use anyhow::Result;
 use moli_core::page::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupActivationSource,
     RendererWindowDocumentSource,
@@ -77,33 +78,85 @@ pub(super) fn emit_window_open_events(
     }
 }
 
+pub(crate) struct PreparedPopupOutputProjection(Vec<PagePreparedPopupActivation>);
+
+impl PreparedPopupOutputProjection {
+    pub(in crate::domains) fn take(
+        payloads: &mut crate::domains::activity::ProtocolOutputPayloads,
+    ) -> Option<Self> {
+        payloads.page_mut()?.take_popup_activations().map(Self)
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        for activation in self.0 {
+            let (browser_context_id, popup_id, prepared, events) = driver
+                .with_state(move |state| state.prepare_popup_output(activation))
+                .await?;
+            context.context_mut().protocol_events_mut().extend(events);
+            let target_id = if let Some(prepared) = prepared {
+                prepared
+                    .run_using(driver, context.context_mut().protocol_events_mut())
+                    .await?
+            } else {
+                None
+            };
+            let events = driver
+                .with_state(move |state| {
+                    state.settle_popup_output(browser_context_id, popup_id, target_id)
+                })
+                .await?;
+            context.context_mut().protocol_events_mut().extend(events);
+        }
+        Ok(())
+    }
+}
+
+impl PagePreparedPopupActivation {
+    pub(crate) fn prepare_output(
+        self,
+        conn: &mut CdpConnection,
+    ) -> (
+        String,
+        Option<u64>,
+        Option<crate::domains::target::PreparedPopupTarget>,
+        Vec<BackgroundProtocolEvent>,
+    ) {
+        let Self {
+            page_owner,
+            activation,
+        } = self;
+        let popup_id = activation.popup_id();
+        let opener = resolve_devtools_opener(conn, &page_owner, activation.source());
+        let browser_context_id = page_owner.browser_context_id().to_owned();
+        let creation = PopupTargetCreation::new(browser_context_id.clone(), activation, opener);
+        let mut events = Vec::new();
+        let prepared = crate::domains::target::prepare_popup_target(conn, &mut events, creation);
+        (browser_context_id, popup_id, prepared, events)
+    }
+}
+
+#[cfg(test)]
 pub(super) async fn emit_prepared(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     activations: Vec<PagePreparedPopupActivation>,
 ) {
-    for prepared in activations {
-        let PagePreparedPopupActivation {
-            page_owner,
-            activation,
-        } = prepared;
-        let popup_id = activation.popup_id();
-        let opener = resolve_devtools_opener(conn, &page_owner, activation.source());
-        let browser_context_id = page_owner.browser_context_id().to_owned();
-        let creation = PopupTargetCreation::new(browser_context_id.clone(), activation, opener);
-        let target_id =
-            crate::domains::target::create_popup_target_from_renderer_output_background_events_async(
-                conn, out, creation,
-            )
-            .await;
-        super::javascript_dialog::settle_pending_popup_dialogs(
-            conn,
-            out,
-            &browser_context_id,
-            popup_id,
-            target_id.as_deref(),
-        );
-    }
+    let mut local = crate::conn::CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
+    PreparedPopupOutputProjection(activations)
+        .run(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+            &mut context,
+        )
+        .await
+        .expect("inline popup projection retains its owner");
+    context.finish_projection_inline(conn, &mut local);
+    out.extend(local.take_protocol_events());
 }
 
 fn resolve_devtools_opener(

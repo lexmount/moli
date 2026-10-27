@@ -1031,7 +1031,7 @@ impl BrowserContext {
     pub(crate) fn assert_target_materialized_initial_empty_document_has_page(
         &self,
         target_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), TargetInitialEmptyDocumentMissingPage> {
         let Some(target) = self.page_target(target_id) else {
             return Ok(());
         };
@@ -1749,17 +1749,24 @@ impl BrowserContext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
+)]
+pub(crate) struct TargetInitialEmptyDocumentMissingPage {
+    target_id: String,
+}
+
 fn materialized_initial_empty_document_missing_page_error(
     target_id: &str,
     owner_state: &TargetOwnerState,
     has_loaded_page: bool,
-) -> Option<String> {
-    if owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page {
-        return Some(format!(
-            "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
-        ));
-    }
-    None
+) -> Option<TargetInitialEmptyDocumentMissingPage> {
+    (owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page).then(|| {
+        TargetInitialEmptyDocumentMissingPage {
+            target_id: target_id.to_owned(),
+        }
+    })
 }
 
 pub(crate) fn seed_initial_cookies(

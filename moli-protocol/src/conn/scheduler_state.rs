@@ -276,6 +276,22 @@ impl CdpConnectionSchedulerState {
         self.scheduler_events.extend(events);
     }
 
+    pub(super) fn scheduler_event_count(&self) -> usize {
+        self.scheduler_events.len()
+    }
+
+    pub(super) fn bind_renderer_output_source_since(
+        &mut self,
+        start: usize,
+        source: moli_core::RendererOutputCursor,
+    ) {
+        for event in &mut self.scheduler_events[start..] {
+            if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
+                work.bind_renderer_output_source(source);
+            }
+        }
+    }
+
     pub(super) fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {
         std::mem::take(&mut self.scheduler_events)
     }

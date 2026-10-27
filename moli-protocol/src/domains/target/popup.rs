@@ -2,6 +2,7 @@ use crate::conn::{
     CdpSessionRoute, CommandOwnerScope, PopupTargetActivationAction, PopupTargetNavigationKind,
     PopupTargetNavigationOwnerAction, PreparedTargetAttach, TargetAttachSessionCommit,
 };
+use anyhow::Result;
 
 use super::creation::{
     push_target_created_events, top_level_page_auto_attach_owner_sessions,
@@ -51,11 +52,84 @@ impl PopupTargetCreation {
     }
 }
 
-pub(crate) async fn create_popup_target_from_renderer_output_background_events_async(
+pub(crate) enum PreparedPopupTarget {
+    Existing(String),
+    New(NewPopupTarget),
+}
+
+pub(crate) struct NewPopupTarget {
+    browser_context_id: String,
+    target_id: String,
+    tab_target_id: String,
+    auto_attached_tab_sessions: Vec<(Option<String>, String, CdpSessionRoute)>,
+    auto_attached_page_sessions: Vec<(Option<String>, String, CdpSessionRoute)>,
+    requested_url: String,
+    disposition: moli_core::page::RendererPopupDisposition,
+}
+
+impl PreparedPopupTarget {
+    pub(crate) async fn run_using(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Result<Option<String>> {
+        let Self::New(prepared) = self else {
+            let Self::Existing(target_id) = self else {
+                unreachable!()
+            };
+            return Ok(Some(target_id));
+        };
+        let target_id = prepared.target_id.clone();
+        let browser_context_id = prepared.browser_context_id.clone();
+        let ensure_target = target_id.clone();
+        let start = driver
+            .with_state(move |state| state.start_popup_initial_document(ensure_target))
+            .await?;
+        let ensured = match start {
+            Some(Some(pending)) => match pending.wait().await {
+                Ok(completed) => match completed.install_using(driver).await {
+                    Ok(_) => true,
+                    Err(error) => {
+                        tracing::debug!(%error, %target_id, "failed to install popup initial document");
+                        false
+                    }
+                },
+                Err(failed) => {
+                    driver
+                        .with_state(move |state| state.fail_popup_initial_document(failed))
+                        .await?;
+                    false
+                }
+            },
+            Some(None) => true,
+            None => false,
+        };
+        let target = if ensured {
+            let (target, events) = driver
+                .with_state(move |state| state.finish_popup_target(prepared))
+                .await?;
+            out.extend(events);
+            target
+        } else {
+            None
+        };
+        if target.is_none() {
+            let pending = driver
+                .with_state(move |state| {
+                    state.prepare_popup_rollback(browser_context_id, target_id)
+                })
+                .await?;
+            pending.run_using(driver).await?;
+        }
+        Ok(target)
+    }
+}
+
+pub(crate) fn prepare_popup_target(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     creation: PopupTargetCreation,
-) -> Option<String> {
+) -> Option<PreparedPopupTarget> {
     let PopupTargetCreation {
         browser_context_id,
         activation,
@@ -120,7 +194,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
             {
                 conn.publish_popup_target_activation_action(activation);
             }
-            return Some(existing_target_id);
+            return Some(PreparedPopupTarget::Existing(existing_target_id));
         }
         // Compare the current Document before publishing the requested URL.
         // A same-origin caller navigating a named Window to its current URL
@@ -182,7 +256,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
                 conn.publish_popup_target_activation_action(activation);
             }
         }
-        return target_url_updated.then_some(existing_target_id);
+        return target_url_updated.then_some(PreparedPopupTarget::Existing(existing_target_id));
     }
 
     if browsing_context_name.is_some() && auxiliary_window.is_none() {
@@ -329,22 +403,35 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         })
         .collect::<Vec<_>>();
 
-    if !ensure_popup_initial_document_page_async(conn, &target_id).await {
-        rollback_incomplete_popup_target_async(conn, Some(&browser_context_id), &target_id).await;
-        return None;
-    }
+    Some(PreparedPopupTarget::New(NewPopupTarget {
+        browser_context_id,
+        target_id,
+        tab_target_id,
+        auto_attached_tab_sessions,
+        auto_attached_page_sessions,
+        requested_url,
+        disposition,
+    }))
+}
 
-    let Some(target_info) = conn
+pub(crate) fn finish_popup_target(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    prepared: NewPopupTarget,
+) -> Option<String> {
+    let NewPopupTarget {
+        browser_context_id,
+        target_id,
+        tab_target_id,
+        auto_attached_tab_sessions,
+        auto_attached_page_sessions,
+        requested_url,
+        disposition,
+    } = prepared;
+    let target_info = conn
         .browser_context_by_id(&browser_context_id)
-        .and_then(|browser_context| browser_context.devtools_target_info(&target_id))
-    else {
-        rollback_incomplete_popup_target_async(conn, Some(&browser_context_id), &target_id).await;
-        return None;
-    };
-    let Some(tab_target_info) = conn.tab_target_info(&tab_target_id) else {
-        rollback_incomplete_popup_target_async(conn, Some(&browser_context_id), &target_id).await;
-        return None;
-    };
+        .and_then(|browser_context| browser_context.devtools_target_info(&target_id))?;
+    let tab_target_info = conn.tab_target_info(&tab_target_id)?;
     if conn.has_any_target_discovery() {
         push_target_created_events(conn, out, &target_id);
     } else {
@@ -393,55 +480,6 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
     Some(target_id)
 }
 
-async fn ensure_popup_initial_document_page_async(
-    conn: &mut CdpConnection,
-    target_id: &str,
-) -> bool {
-    let Some(route) = conn.target_session_route_for_target_id(target_id) else {
-        return false;
-    };
-    let owner = CommandOwnerScope::for_route(route);
-    {
-        let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
-            Ok(pending) => pending,
-            Err(message) => {
-                tracing::debug!(
-                    target_id,
-                    ?message,
-                    "failed to start popup initial document page ensure"
-                );
-                return false;
-            }
-        };
-        if let Some(pending) = pending {
-            let completed = match pending.wait().await {
-                Ok(completed) => completed,
-                Err(failed) => {
-                    let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
-                    tracing::debug!(
-                        target_id,
-                        ?message,
-                        "failed to await popup initial document page ensure"
-                    );
-                    return false;
-                }
-            };
-            if let Err(message) = conn
-                .complete_initial_document_page_build_for_owner(completed)
-                .await
-            {
-                tracing::debug!(
-                    target_id,
-                    ?message,
-                    "failed to complete popup initial document page ensure"
-                );
-                return false;
-            }
-        }
-    }
-    true
-}
-
 fn push_committed_auto_attached_session_events(
     conn: &mut CdpConnection,
     out: &mut impl events::CdpTargetAutomationEventSink,
@@ -470,6 +508,7 @@ fn push_committed_auto_attached_session_events(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn rollback_incomplete_popup_target_async(
     conn: &mut CdpConnection,
     browser_context_id: Option<&str>,

@@ -710,6 +710,21 @@ impl TargetFetchState {
         Some(pending)
     }
 
+    pub(crate) fn rollback_in_flight_subresource_fetch_request(
+        &mut self,
+        internal_id: u64,
+        network_request_id: &str,
+    ) {
+        if self
+            .in_flight_subresource_fetches
+            .get(&internal_id)
+            .is_some_and(|request| request.pending.network_request_id == network_request_id)
+        {
+            self.in_flight_subresource_fetches.remove(&internal_id);
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn take_in_flight_subresource_fetch_request(
         &mut self,
         internal_id: u64,
@@ -2035,6 +2050,16 @@ impl TargetFetchOwner {
             .take_pending_subresource_fetch_response_request(request_id, session_id)
     }
 
+    pub(crate) fn rollback_in_flight_subresource_fetch_request(
+        &mut self,
+        internal_id: u64,
+        network_request_id: &str,
+    ) {
+        self.pending
+            .rollback_in_flight_subresource_fetch_request(internal_id, network_request_id);
+    }
+
+    #[cfg(test)]
     pub(crate) fn take_in_flight_subresource_fetch_request(
         &mut self,
         internal_id: u64,

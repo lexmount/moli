@@ -118,7 +118,7 @@ pub(crate) use bidi_channel_work::{
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
     ClosedPageTarget, CompletedPageTargetClose, PageLifecycleEventsEnableResult,
-    PendingPageTargetClose, SessionOwnerInspectorEnableResult,
+    PendingPageTargetClose, PreparedPopupTargetRollback, SessionOwnerInspectorEnableResult,
     SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
     TargetNavigationLoadInputs,
 };
@@ -420,6 +420,8 @@ pub struct CommandDispatchContext {
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     command_failure_cleanup: Rc<RefCell<Option<CommandFailureCleanup>>>,
     deferred_command_events: Vec<BackgroundProtocolEvent>,
+    runtime_output_projection_permits:
+        Rc<RefCell<Vec<crate::domains::activity::RuntimeCommandOutputProjectionPermit>>>,
 }
 
 impl CommandDispatchContext {
@@ -434,7 +436,23 @@ impl CommandDispatchContext {
             renderer_output_predecessor: None,
             command_failure_cleanup: Rc::default(),
             deferred_command_events: Vec::new(),
+            runtime_output_projection_permits: Rc::default(),
         }
+    }
+
+    pub(crate) fn retain_runtime_output_projection_permit(
+        &mut self,
+        permit: crate::domains::activity::RuntimeCommandOutputProjectionPermit,
+    ) {
+        self.runtime_output_projection_permits
+            .borrow_mut()
+            .push(permit);
+    }
+
+    pub(crate) fn take_runtime_output_projection_permits(
+        &mut self,
+    ) -> Vec<crate::domains::activity::RuntimeCommandOutputProjectionPermit> {
+        std::mem::take(&mut *self.runtime_output_projection_permits.borrow_mut())
     }
 
     pub(crate) fn defer_command_events(&mut self, events: Vec<BackgroundProtocolEvent>) {
@@ -482,10 +500,6 @@ impl CommandDispatchContext {
         } else {
             &mut self.protocol_events
         }
-    }
-
-    pub(crate) fn protocol_events_len(&self) -> usize {
-        self.protocol_events.len() + self.post_renderer_output_events.len()
     }
 
     pub(crate) fn take_protocol_events(&mut self) -> Vec<BackgroundProtocolEvent> {
@@ -684,7 +698,9 @@ pub(crate) use target::{
 use target::{
     TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
 };
-pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
+pub(crate) use top_level_navigation_work::{
+    TopLevelNavigationOwnerAction, TopLevelNavigationRequest,
+};
 
 pub struct PendingDeferredMainDocumentLoadCompletion {
     inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
@@ -2760,29 +2776,26 @@ impl CdpConnection {
     /// producer's owner scope. This boundary deliberately performs no
     /// navigation: the returned scheduler work is the sole execution
     /// authority.
-    pub(crate) fn publish_prepared_top_level_location_navigation_owner_action(
+    pub(crate) fn publish_prepared_top_level_navigation_owner_action(
         &mut self,
         owner: &CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
         navigation: moli_core::page::RendererDocumentSourcedTopLevelLocationNavigation,
     ) {
-        let action = TopLevelLocationNavigationOwnerAction::from_prepared(
-            owner.clone(),
-            page_owner,
-            navigation,
-        );
-        self.publish_top_level_location_navigation_owner_action(action);
+        let action =
+            TopLevelNavigationOwnerAction::from_prepared(owner.clone(), page_owner, navigation);
+        self.publish_top_level_navigation_owner_action(action);
     }
 
-    fn publish_top_level_location_navigation_owner_action(
+    pub(crate) fn publish_top_level_navigation_owner_action(
         &mut self,
-        action: TopLevelLocationNavigationOwnerAction,
+        action: TopLevelNavigationOwnerAction,
     ) {
         let publish_sequence = self
             .scheduler_state
             .allocate_protocol_work_publish_sequence();
         let work =
-            crate::domains::activity::ProtocolSchedulerWork::top_level_location_navigation_owner_action(
+            crate::domains::activity::ProtocolSchedulerWork::top_level_navigation_owner_action(
                 publish_sequence,
                 action,
             );

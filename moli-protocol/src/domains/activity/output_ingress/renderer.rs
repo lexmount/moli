@@ -1,17 +1,13 @@
-use moli_core::{RendererOutputItem, RendererOutputPublication, RendererOutputTransportMessage};
-use serde_json::json;
+use moli_core::RendererOutputTransportMessage;
 use std::collections::VecDeque;
 
-use super::super::publication_route::RendererPublicationOwner;
-use super::super::publication_route::RendererPublicationProjection;
-use super::super::publication_route::RendererPublicationRoute;
-use super::super::runtime_command_barrier::RuntimeCommandOutputBarriers;
-use super::prepared_outputs::PreparedProtocolOutputs;
+use super::projection::RendererOutputProjection;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
+    CommandWorkflowContext, ProtocolWorkflowDriver,
 };
 
-fn renderer_owner_action_owner(
+pub(super) fn renderer_owner_action_owner(
     conn: &CdpConnection,
     publication_owner: &CommandOwnerScope,
     renderer_cause: Option<&moli_core::RendererRuntimeCommandCausalIdentity>,
@@ -42,17 +38,11 @@ fn renderer_owner_action_owner(
         .unwrap_or_else(|| publication_owner.clone())
 }
 
-/// Ingests one renderer transport message against only the exact Runtime
-/// command identity carried by its records.
-///
-/// Matching routes use the full arbitrary-Runtime capability ceiling, then
-/// split the concrete batch at the barrier. Nonmatching routes keep their
-/// source-specific ceiling. This avoids the old global mode where one pending
-/// command narrowed output for unrelated sessions.
+/// Compatibility callers run the same publication workflow with exclusive
+/// state access. Production ingress supervises that workflow outside the actor.
 pub(crate) async fn ingest_renderer_output_transport_async(
     conn: &mut CdpConnection,
     publication: RendererOutputTransportMessage,
-    barriers: &mut RuntimeCommandOutputBarriers,
     command_context: &mut CommandDispatchContext,
 ) -> Vec<BackgroundProtocolEvent> {
     match publication {
@@ -83,8 +73,16 @@ pub(crate) async fn ingest_renderer_output_transport_async(
             while let Some(output) = ready.pop_front() {
                 let (output, owner) = output.into_parts();
                 let cursor = output.cursor();
-                ingest_renderer_output_publication(conn, output, owner, barriers, command_context)
+                let projection = RendererOutputProjection::new(conn, output, owner);
+                let (mut context, _scope) =
+                    CommandWorkflowContext::take_from(command_context, None, None);
+                let result = projection
+                    .run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
                     .await;
+                context.finish_projection_inline(conn, command_context);
+                if let Err(error) = result {
+                    tracing::warn!(error = ?error, ?cursor, "renderer output projection completed with cleanup failure");
+                }
                 match conn.complete_renderer_output_projection(cursor) {
                     super::RendererOutputIngressAdmission::Ready(next) => ready.extend(next),
                     super::RendererOutputIngressAdmission::Buffered => {}
@@ -96,192 +94,6 @@ pub(crate) async fn ingest_renderer_output_transport_async(
         }
     }
     command_context.take_protocol_events()
-}
-
-async fn ingest_renderer_output_publication(
-    conn: &mut CdpConnection,
-    publication: RendererOutputPublication,
-    owner: RendererPublicationOwner,
-    barriers: &mut RuntimeCommandOutputBarriers,
-    command_context: &mut CommandDispatchContext,
-) {
-    let cursor = publication.cursor();
-    let stream = publication.cursor().stream();
-    let route = owner.resolve(conn);
-    if conn.scheduler_activity_trace_enabled() {
-        conn.record_scheduler_activity_trace(json!({
-            "kind": "concrete_renderer_output_ingress",
-            "streamEpoch": stream.epoch().get(),
-            "streamSequence": publication.cursor().sequence(),
-            "recordCount": publication.records().len(),
-            "routeCurrent": route.is_some(),
-        }));
-    }
-    let Some(route) = route else {
-        // The stream was bound to exactly one owner when it opened. If that
-        // owner has since retired, the cursor is still admitted so response
-        // fences cannot hang, but its historical records must not be projected
-        // into a replacement target or browser context.
-        // Native terminals are replies to frozen frontend calls, not live
-        // Page observations. Retirement may discard historical events but
-        // must still settle replies committed before this stream closed.
-        for record in publication.into_records() {
-            if let RendererOutputItem::NativeTerminal(terminal) = record.into_parts().1 {
-                command_context.protocol_events_mut().extend(
-                    crate::domains::native::project_terminal_for_owner(conn, None, terminal),
-                );
-            }
-        }
-        return;
-    };
-    let records = publication.into_records();
-    match route {
-        RendererPublicationRoute::AttachedSession {
-            session_id,
-            projection,
-        } => {
-            let owner = CommandOwnerScope::for_session(&session_id);
-            project_renderer_output_records_for_owner(
-                conn,
-                &owner,
-                records,
-                cursor,
-                projection,
-                barriers,
-                command_context,
-            )
-            .await;
-        }
-        RendererPublicationRoute::UnattachedOwner {
-            owner_route,
-            projection,
-        } => {
-            let owner = CommandOwnerScope::for_route(owner_route);
-            project_renderer_output_records_for_owner(
-                conn,
-                &owner,
-                records,
-                cursor,
-                projection,
-                barriers,
-                command_context,
-            )
-            .await;
-        }
-    }
-}
-
-async fn project_renderer_output_records_for_owner(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    records: Vec<moli_core::RendererOutputRecord>,
-    cursor: moli_core::RendererOutputCursor,
-    projection: RendererPublicationProjection,
-    barriers: &mut RuntimeCommandOutputBarriers,
-    command_context: &mut CommandDispatchContext,
-) {
-    for record in records {
-        let (renderer_cause, mut item) = record.into_parts();
-        if !projection.admit_record(&mut item) {
-            continue;
-        }
-        match item {
-            RendererOutputItem::NativeTerminal(terminal) => {
-                command_context.protocol_events_mut().extend(
-                    crate::domains::native::project_terminal_for_owner(
-                        conn,
-                        (projection != RendererPublicationProjection::RetiringNetworkAndResponses)
-                            .then_some(owner),
-                        terminal,
-                    ),
-                );
-            }
-            RendererOutputItem::OwnerAction(action) => {
-                // A Page stream can remain bound to its implicit primary owner while a
-                // Runtime command arrives through an attached DevTools session. Owner
-                // actions caused by that command (notably modal dialogs) belong to the
-                // exact inspector attachment, not merely to the stream's base route.
-                // Asynchronous actions have no command cause; an unbound stream then
-                // selects the target's stable concrete Page attachment.
-                let action_owner =
-                    renderer_owner_action_owner(conn, owner, renderer_cause.as_ref());
-                let outputs = PreparedProtocolOutputs::from_renderer_owner_action(
-                    conn,
-                    &action_owner,
-                    action,
-                )
-                .await;
-                barriers
-                    .route_publication_outputs(
-                        conn,
-                        &action_owner,
-                        renderer_cause.as_ref(),
-                        Some(cursor),
-                        outputs,
-                        command_context,
-                    )
-                    .await;
-            }
-            RendererOutputItem::Observation(observation) => {
-                if let moli_core::RendererProtocolObservation::DocumentLifecycle(event) =
-                    &observation
-                    && matches!(
-                        event.kind,
-                        moli_core::page::RendererDocumentLifecycleEventKind::Started { .. }
-                    )
-                    && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
-                {
-                    slot.observe_renderer_output_document_start(
-                        moli_core::RendererDocumentLifecycleIdentity {
-                            frame: event.frame,
-                            document: event.document,
-                            epoch: event.epoch,
-                        },
-                    );
-                }
-                let outputs = if let moli_core::RendererProtocolObservation::Network {
-                    source_document,
-                    item,
-                } = &observation
-                {
-                    let Some(outputs) = PreparedProtocolOutputs::from_renderer_network_observation(
-                        conn,
-                        owner,
-                        crate::conn::RendererPageResidenceIdentity::from_residence(
-                            cursor.stream().residence(),
-                        ),
-                        *source_document,
-                        item,
-                    ) else {
-                        continue;
-                    };
-                    outputs
-                } else {
-                    PreparedProtocolOutputs::from_renderer_observation(
-                        conn,
-                        owner,
-                        cursor.stream().residence(),
-                        &observation,
-                    )
-                };
-                barriers
-                    .route_publication_outputs(
-                        conn,
-                        owner,
-                        renderer_cause.as_ref(),
-                        Some(cursor),
-                        outputs,
-                        command_context,
-                    )
-                    .await;
-            }
-        }
-    }
-    if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
-        // Do not release predecessor correlations halfway through a batch:
-        // prepared Network deliveries from that batch still need projection.
-        slot.finish_retiring_document_output_projection();
-    }
 }
 
 #[cfg(test)]
@@ -303,10 +115,38 @@ mod tests {
         RendererCommandDescriptor,
     };
 
-    use super::{
-        RendererPublicationProjection, RuntimeCommandOutputBarriers,
-        project_renderer_output_records_for_owner, renderer_owner_action_owner,
-    };
+    use super::renderer_owner_action_owner;
+    use crate::conn::{CommandWorkflowContext, ProtocolWorkflowDriver};
+    use crate::domains::activity::RendererOutputProjection;
+    use crate::domains::activity::publication_route::RendererPublicationProjection;
+
+    async fn project_renderer_output_records_for_owner(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        records: Vec<RendererOutputRecord>,
+        cursor: RendererOutputCursor,
+        projection: RendererPublicationProjection,
+        command_context: &mut CommandDispatchContext,
+    ) {
+        let (mut context, _scope) = CommandWorkflowContext::take_from(command_context, None, None);
+        for record in records {
+            let prepared = RendererOutputProjection::prepare_record_for_route(
+                conn,
+                Some(owner.clone()),
+                projection,
+                cursor,
+                record,
+                &mut context,
+            );
+            if let Some(prepared) = prepared {
+                prepared
+                    .run_using(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
+                    .await
+                    .expect("retired output projection retains its owner");
+            }
+        }
+        context.finish_projection_inline(conn, command_context);
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn retiring_page_ingress_preserves_only_correlated_inspector_responses() {
@@ -367,7 +207,6 @@ mod tests {
             ))
         };
         let owner = CommandOwnerScope::for_session("SID-retiring-output");
-        let mut barriers = RuntimeCommandOutputBarriers::default();
         let mut command_context = CommandDispatchContext::default();
 
         project_renderer_output_records_for_owner(
@@ -379,7 +218,6 @@ mod tests {
             ],
             RendererOutputCursor::new_for_test(stream, 1),
             RendererPublicationProjection::RetiringNetworkAndResponses,
-            &mut barriers,
             &mut command_context,
         )
         .await;
@@ -405,7 +243,6 @@ mod tests {
             ],
             RendererOutputCursor::new_for_test(stream, 2),
             RendererPublicationProjection::RetiringNetworkAndResponses,
-            &mut barriers,
             &mut command_context,
         )
         .await;
@@ -443,7 +280,6 @@ mod tests {
             vec![terminal],
             RendererOutputCursor::new_for_test(stream, 3),
             RendererPublicationProjection::RetiringNetworkAndResponses,
-            &mut barriers,
             &mut command_context,
         )
         .await;
@@ -475,7 +311,6 @@ mod tests {
             vec![response(retired_attachment, renderer_call_id)],
             RendererOutputCursor::new_for_test(stream, 4),
             RendererPublicationProjection::RetiringNetworkAndResponses,
-            &mut barriers,
             &mut command_context,
         )
         .await;
@@ -514,7 +349,6 @@ mod tests {
             ],
             RendererOutputCursor::new_for_test(stream, 5),
             RendererPublicationProjection::RetiringNetworkAndResponses,
-            &mut barriers,
             &mut command_context,
         )
         .await;

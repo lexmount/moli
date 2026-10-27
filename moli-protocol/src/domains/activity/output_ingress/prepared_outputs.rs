@@ -27,19 +27,90 @@ pub(crate) struct PreparedProtocolOutputs {
     emit_root_network_idle_after_projection: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ProtocolOutputProjectionMode {
+    All,
+    BeforeResponse,
+    OwnerActions,
+}
+
+impl ProtocolOutputProjectionMode {
+    fn admits(self, slot: ProtocolOutputSlot) -> bool {
+        match self {
+            Self::All => true,
+            Self::BeforeResponse => {
+                slot.command_response_order() == ProtocolOutputResponseOrder::BeforeResponse
+            }
+            Self::OwnerActions => slot.delivery() == ProtocolOutputDelivery::OwnerAction,
+        }
+    }
+}
+
 impl PreparedProtocolOutputs {
     pub(crate) async fn project_using(
-        mut self,
+        self,
         driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
         owner: CommandOwnerScope,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
+        let (_, error) = self
+            .project_selected_using(driver, owner, context, ProtocolOutputProjectionMode::All)
+            .await?;
+        error.map_or(Ok(()), Err)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn project_before_using(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<(Self, Option<anyhow::Error>)> {
+        self.project_selected_using(
+            driver,
+            owner,
+            context,
+            ProtocolOutputProjectionMode::BeforeResponse,
+        )
+        .await
+    }
+
+    pub(crate) async fn project_owner_actions_using(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        let (_, error) = self
+            .project_selected_using(
+                driver,
+                owner,
+                context,
+                ProtocolOutputProjectionMode::OwnerActions,
+            )
+            .await?;
+        error.map_or(Ok(()), Err)
+    }
+
+    async fn project_selected_using(
+        mut self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+        mode: ProtocolOutputProjectionMode,
+    ) -> Result<(Self, Option<anyhow::Error>)> {
         let mut first_error = None;
-        while !self.ordered_slots.is_empty() {
+        context.materialize_projection_output();
+        while self
+            .ordered_slots
+            .iter()
+            .copied()
+            .any(|slot| mode.admits(slot))
+        {
             let step_owner = owner.clone();
             let (remaining, pending) = context
                 .with_state(driver, move |state, context| {
-                    state.prepare_protocol_output_projection_step(self, step_owner, context)
+                    state.prepare_protocol_output_projection_step(self, step_owner, context, mode)
                 })
                 .await?;
             self = remaining;
@@ -48,13 +119,14 @@ impl PreparedProtocolOutputs {
             {
                 first_error.get_or_insert(error);
             }
+            context.materialize_projection_output();
         }
-        context
+        self = context
             .with_state(driver, move |state, context| {
-                state.finish_protocol_output_projection(self, owner, context);
+                state.finish_protocol_output_projection(self, owner, context, mode)
             })
             .await?;
-        first_error.map_or(Ok(()), Err)
+        Ok((self, first_error))
     }
 
     pub(crate) fn prepare_next_projection_step(
@@ -62,24 +134,35 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: CommandOwnerScope,
         context: &mut crate::conn::CommandWorkflowContext,
+        mode: ProtocolOutputProjectionMode,
     ) -> (
         Self,
         Option<super::super::output_slot::PreparedProtocolOutputWait>,
     ) {
-        let slot = self.ordered_slots.remove(0);
-        let pending = if slot
-            .project_finite(
-                conn,
-                &mut ProtocolOutputProjectionContext::new(&owner, context.context_mut()),
-                &mut self.payloads,
-            )
-            .is_ok()
+        while let Some(index) = self
+            .ordered_slots
+            .iter()
+            .position(|slot| mode.admits(*slot))
         {
-            None
-        } else {
-            slot.prepare_wait(conn, &owner, &mut self.payloads)
-        };
-        (self, pending)
+            let slot = self.ordered_slots.remove(index);
+            let pending = if slot
+                .project_finite(
+                    conn,
+                    &mut ProtocolOutputProjectionContext::new(&owner, context.context_mut()),
+                    &mut self.payloads,
+                )
+                .is_ok()
+            {
+                None
+            } else {
+                slot.prepare_wait(conn, &owner, &mut self.payloads, context)
+            };
+            context.materialize_projection_output();
+            if pending.is_some() {
+                return (self, pending);
+            }
+        }
+        (self, None)
     }
 
     pub(crate) fn finish_projection(
@@ -87,8 +170,12 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: CommandOwnerScope,
         context: &mut crate::conn::CommandWorkflowContext,
-    ) {
-        self.emit_root_network_idle_if_ready(conn, &owner, context.context_mut());
+        mode: ProtocolOutputProjectionMode,
+    ) -> Self {
+        if !matches!(mode, ProtocolOutputProjectionMode::OwnerActions) {
+            self.emit_root_network_idle_if_ready(conn, &owner, context.context_mut());
+        }
+        self
     }
 
     pub(in crate::domains::activity) fn has_after_response_slots(&self) -> bool {
@@ -273,7 +360,7 @@ impl PreparedProtocolOutputs {
         outputs
     }
 
-    pub(in crate::domains::activity) async fn from_renderer_owner_action(
+    pub(in crate::domains::activity) fn from_renderer_owner_action(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
@@ -400,7 +487,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::TopLevelHistoryTraversal(traversal) => {
                 crate::domains::page::PagePreparedOutputs::
-                    from_renderer_top_level_history_traversal(traversal)
+                    from_renderer_top_level_history_traversal(conn, owner, traversal)
                     .append_to_top_level_history_traversal_output_sink(&mut prepared);
             }
             RendererOwnerAction::SubresourceFetchPause {
@@ -408,13 +495,12 @@ impl PreparedProtocolOutputs {
                 info,
             } => {
                 crate::domains::fetch::
-                    subresource_fetch_pause_prepared_outputs_for_renderer_record_async(
+                    subresource_fetch_pause_prepared_outputs_for_renderer_record(
                         conn,
                         owner,
                         source_document,
                         *info,
                     )
-                    .await
                     .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::SubresourceContinue {
@@ -436,14 +522,13 @@ impl PreparedProtocolOutputs {
                 continuation,
             } => {
                 crate::domains::fetch::
-                    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async(
+                    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record(
                         conn,
                         owner,
                         source_document,
                         *info,
                         continuation,
                     )
-                    .await
                     .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
@@ -529,45 +614,6 @@ impl PreparedProtocolOutputs {
         })
     }
 
-    async fn project_slots_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        command_context: &mut CommandDispatchContext,
-        slots: Vec<ProtocolOutputSlot>,
-    ) {
-        let session_id = owner.session_id();
-        for slot in slots {
-            let trace_started =
-                moli_trace::cdp_runtime_trace_enabled().then(std::time::Instant::now);
-            let before_events = command_context.protocol_events_len();
-            if trace_started.is_some() {
-                tracing::info!(
-                    target: "moli_cdp_runtime",
-                    stage = "protocol_output_projection_start",
-                    session_id = ?session_id,
-                    slot = ?slot,
-                );
-            }
-            slot.project_async(
-                conn,
-                &mut ProtocolOutputProjectionContext::new(owner, command_context),
-                &mut self.payloads,
-            )
-            .await;
-            if let Some(started) = trace_started {
-                tracing::info!(
-                    target: "moli_cdp_runtime",
-                    stage = "protocol_output_projection_done",
-                    session_id = ?session_id,
-                    slot = ?slot,
-                    events_added = command_context.protocol_events_len().saturating_sub(before_events),
-                    elapsed_us = %started.elapsed().as_micros(),
-                );
-            }
-        }
-    }
-
     fn emit_root_network_idle_if_ready(
         &mut self,
         conn: &mut CdpConnection,
@@ -580,62 +626,69 @@ impl PreparedProtocolOutputs {
     }
 
     pub(in crate::domains::activity) async fn project_async(
-        mut self,
+        self,
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) {
-        let slots = std::mem::take(&mut self.ordered_slots);
-        self.project_slots_async(conn, owner, command_context, slots)
+        let mut local = CommandDispatchContext::new(command_context.response_flush().clone());
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
+        let result = self
+            .project_using(
+                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+                owner.clone(),
+                &mut context,
+            )
             .await;
-        self.emit_root_network_idle_if_ready(conn, owner, command_context);
+        context.finish_projection_inline(conn, command_context);
+        result.expect("inline projection retains its protocol owner");
     }
 
-    /// Projects output explicitly allowed before a Runtime command response
-    /// and returns the remaining concrete prepared output as a held batch.
-    ///
-    /// The payload container is shared across the two phases: each
-    /// before-response projection consumes only its own typed fields, leaving
-    /// after-response fields in the returned batch. This avoids cloning
-    /// one-shot owner actions or recapturing current target state.
+    #[cfg(test)]
     pub(in crate::domains::activity) async fn project_before_command_response_and_hold_after(
-        mut self,
+        self,
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) -> Option<Self> {
-        let mut before_response = Vec::new();
-        let mut after_response = Vec::new();
-        for slot in std::mem::take(&mut self.ordered_slots) {
-            match slot.command_response_order() {
-                ProtocolOutputResponseOrder::BeforeResponse => before_response.push(slot),
-                ProtocolOutputResponseOrder::AfterResponse => after_response.push(slot),
-            }
+        let mut local = CommandDispatchContext::new(command_context.response_flush().clone());
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
+        let (remaining, error) = self
+            .project_before_using(
+                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+                owner.clone(),
+                &mut context,
+            )
+            .await
+            .expect("inline projection retains its protocol owner");
+        context.finish_projection_inline(conn, command_context);
+        if let Some(error) = error {
+            tracing::warn!(error = ?error, "before-response projection failed");
         }
-        self.project_slots_async(conn, owner, command_context, before_response)
-            .await;
-        // A concrete body-finished fact can make the exact committed Document
-        // idle. Emit that derived lifecycle event after the corresponding
-        // Network output and at the same pre-response boundary.
-        self.emit_root_network_idle_if_ready(conn, owner, command_context);
-        self.ordered_slots = after_response;
-        (!self.ordered_slots.is_empty()).then_some(self)
+        (!remaining.ordered_slots.is_empty()).then_some(remaining)
     }
 
-    /// Completes browser-owner cleanup for a canceled or superseded barrier
-    /// without projecting protocol-only observations from the stale command.
+    #[cfg(test)]
     pub(in crate::domains::activity) async fn project_owner_actions_async(
-        mut self,
+        self,
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) {
-        let owner_actions = std::mem::take(&mut self.ordered_slots)
-            .into_iter()
-            .filter(|slot| slot.delivery() == ProtocolOutputDelivery::OwnerAction)
-            .collect();
-        self.project_slots_async(conn, owner, command_context, owner_actions)
+        let mut local = CommandDispatchContext::new(command_context.response_flush().clone());
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
+        let result = self
+            .project_owner_actions_using(
+                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+                owner.clone(),
+                &mut context,
+            )
             .await;
+        context.finish_projection_inline(conn, command_context);
+        result.expect("inline projection retains its protocol owner");
     }
 
     fn push_output_slot(&mut self, slot: ProtocolOutputSlot) {

@@ -2145,7 +2145,7 @@ async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_paus
     let resumed_position = stepped
         .iter()
         .position(|message| message["method"] == json!("Debugger.resumed"))
-        .expect("stepOut should emit Debugger.resumed");
+        .unwrap_or_else(|| panic!("stepOut should emit Debugger.resumed: {stepped:#?}"));
     let caller_pause_position = stepped
         .iter()
         .position(|message| {

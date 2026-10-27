@@ -1,62 +1,61 @@
-use std::{cell::RefCell, rc::Rc};
-
-use anyhow::Result;
-
-use futures_util::{
-    FutureExt as _,
-    future::{LocalBoxFuture, Shared},
-};
-use moli_core::{
-    RendererOutputCursor, RendererOutputResidenceIdentity, RendererOutputTransportMessage,
-};
-
+use super::workflow::{PendingProtocolWorkflow, SharedProtocolWorkflowResult};
 use crate::conn::{
-    CdpConnection, CdpSchedulerEvent, CdpTurnOutcome, CommandDispatchContext,
-    CompletedCommandWorkflow, PreparedCommandWorkflow, ProtocolStateAccess, ProtocolWorkflowDriver,
+    CdpConnection, CdpSchedulerEvent, CdpTurnOutcome, PreparedCommandWorkflow, ProtocolStateAccess,
+    ProtocolWorkflowDriver,
 };
 use crate::domains::{
     activity::{
-        AdmittedRendererOutputPublication, RendererOutputIngressAdmission, WorkerRendererProjection,
+        AdmittedRendererOutputPublication, RendererOutputIngressAdmission, RendererOutputProjection,
     },
     command_output::CommandOutputPlan,
 };
+use anyhow::Result;
+use moli_core::{RendererOutputCursor, RendererOutputTransportMessage};
 
-pub(super) type SharedRendererProjectionResult = Rc<RefCell<Option<CompletedCommandWorkflow>>>;
+pub(super) type SharedRendererProjectionResult = SharedProtocolWorkflowResult;
 
 #[derive(Clone)]
-pub(super) struct PendingWorkerRendererProjection {
-    pending: Shared<LocalBoxFuture<'static, SharedRendererProjectionResult>>,
-    context: Rc<RefCell<CommandDispatchContext>>,
+pub(super) struct PendingRendererOutputProjection {
+    workflow: PendingProtocolWorkflow,
     cursor: RendererOutputCursor,
 }
 
-impl PendingWorkerRendererProjection {
-    fn prepare(admitted: AdmittedRendererOutputPublication, access: ProtocolStateAccess) -> Self {
+impl PendingRendererOutputProjection {
+    fn prepare(
+        conn: &mut CdpConnection,
+        admitted: AdmittedRendererOutputPublication,
+        access: ProtocolStateAccess,
+    ) -> Self {
         let (publication, owner) = admitted.into_parts();
         let cursor = publication.cursor();
-        let projection = WorkerRendererProjection::new(publication, owner);
+        let target_id = match &owner {
+            crate::domains::activity::RendererPublicationOwner::PageTarget {
+                target_id, ..
+            } => target_id.clone(),
+            crate::domains::activity::RendererPublicationOwner::BrowserContext { .. } => None,
+        };
+        let projection = RendererOutputProjection::new(conn, publication, owner);
         let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
-            if let Err(error) = projection
-                .run(&mut ProtocolWorkflowDriver::owned(access), &mut context)
-                .await
-            {
-                tracing::warn!(%error, ?cursor, "Worker output projection completed with cleanup failure");
+            let mut driver = ProtocolWorkflowDriver::owned(access);
+            driver.replace_renderer_output_source(Some(cursor));
+            if let Err(error) = projection.run(&mut driver, &mut context).await {
+                tracing::warn!(error = ?error, ?cursor, "renderer output projection completed with cleanup failure");
             }
             context.complete(CommandOutputPlan::default())
         });
-        let mut context = CommandDispatchContext::default();
-        let pending = workflow.start(&mut context, None, None);
         Self {
-            pending: async move { Rc::new(RefCell::new(Some(pending.wait().await))) }
-                .boxed_local()
-                .shared(),
-            context: Rc::new(RefCell::new(context)),
+            workflow: PendingProtocolWorkflow::prepare(workflow, target_id)
+                .with_renderer_source(Some(cursor)),
             cursor,
         }
     }
 
+    pub(super) fn cursor(&self) -> RendererOutputCursor {
+        self.cursor
+    }
+
     pub(super) async fn wait(&self) -> SharedRendererProjectionResult {
-        self.pending.clone().await
+        self.workflow.wait().await
     }
 
     pub(super) fn finish(
@@ -64,83 +63,86 @@ impl PendingWorkerRendererProjection {
         conn: &mut CdpConnection,
         result: SharedRendererProjectionResult,
     ) -> CdpTurnOutcome {
-        let Some(completed) = result.borrow_mut().take() else {
+        if result.borrow().is_none() {
             return CdpTurnOutcome::new_with_protocol_events(
                 Vec::new(),
                 conn.take_scheduler_events(),
             );
-        };
-        let mut context = std::mem::take(&mut *self.context.borrow_mut());
-        let plan = completed.finish(conn, &mut context);
-        super::super::dispatch::append_command_output_plan(
-            &mut Vec::new(),
-            &mut context,
-            plan,
-            None,
-            None,
-        );
-        let (mut events, boundary, after) = context.take_renderer_fenced_protocol_events();
+        }
+        let outcome = self.workflow.finish(conn, result);
+        let (events, after_renderer, boundary, after_response, mut scheduler) =
+            outcome.into_command_turn_parts();
         assert!(
             boundary.is_none(),
-            "Worker projection has no nested Page output boundary"
+            "nested output is handed to the original renderer fence before cursor release"
         );
-        assert!(
-            context.take_renderer_output_predecessor().is_none(),
-            "Worker projection has no Page commit predecessor"
-        );
-        events.extend(after);
-        // Output is materialized before releasing the same-stream cursor.
-        // A successor can be polled only after this owner turn is published.
         let ready = conn.complete_renderer_output_projection(self.cursor);
-        conn.publish_admitted_worker_renderer_projections(ready);
+        conn.publish_admitted_renderer_projections(ready);
+        scheduler.extend(conn.take_scheduler_events());
+        let mut events = events;
+        events.extend(after_renderer);
         CdpTurnOutcome::new_with_protocol_and_post_response_events(
             events,
-            context.take_post_response_events(),
-            conn.take_scheduler_events(),
+            after_response,
+            scheduler,
         )
     }
 }
 
 impl CdpConnection {
-    /// Finite production ingress for the two independent Worker stream kinds.
-    /// Page publications keep their existing driver during the remaining
-    /// Page/Fetch migration.
-    pub fn try_start_owned_worker_renderer_output(
+    /// All concrete renderer publications leave the actor before Native waits.
+    /// Stream controls and leases remain finite owner operations.
+    pub fn try_start_owned_renderer_output(
         &mut self,
         message: RendererOutputTransportMessage,
     ) -> Result<CdpTurnOutcome, Box<RendererOutputTransportMessage>> {
-        if !matches!(
-            &message,
-            RendererOutputTransportMessage::Publication(publication)
-                if matches!(publication.cursor().stream().residence(),
-                    RendererOutputResidenceIdentity::SharedWorker { .. }
-                    | RendererOutputResidenceIdentity::ServiceWorker { .. })
-        ) || self.protocol_state_access().is_none()
-        {
+        if self.protocol_state_access().is_none() {
             return Err(Box::new(message));
         }
-        let RendererOutputTransportMessage::Publication(publication) = message else {
-            unreachable!("the checked transport carries a Worker publication");
+        let publication = match message {
+            RendererOutputTransportMessage::Publication(publication) => Some(publication),
+            RendererOutputTransportMessage::StreamControl(control) => {
+                self.apply_renderer_output_stream_control(control);
+                None
+            }
+            RendererOutputTransportMessage::PageReservationReleased {
+                owner_local_host_id,
+                page_id,
+            } => {
+                self.release_renderer_page_output_owner_reservation(owner_local_host_id, page_id);
+                None
+            }
+            RendererOutputTransportMessage::CursorLeaseDeclared { cursor, lease_id } => {
+                self.declare_renderer_output_cursor_lease(cursor, lease_id);
+                None
+            }
+            RendererOutputTransportMessage::CursorLeaseReleased { stream, lease_id } => {
+                self.release_renderer_output_cursor_lease(stream, lease_id);
+                None
+            }
+        };
+        let Some(publication) = publication else {
+            return Ok(CdpTurnOutcome::new_with_protocol_events(
+                Vec::new(),
+                self.take_scheduler_events(),
+            ));
         };
         let ready = self.admit_renderer_output_publication(publication);
-        self.publish_admitted_worker_renderer_projections(ready);
+        self.publish_admitted_renderer_projections(ready);
         Ok(CdpTurnOutcome::new_with_protocol_events(
             Vec::new(),
             self.take_scheduler_events(),
         ))
     }
 
-    fn publish_admitted_worker_renderer_projections(
-        &mut self,
-        ready: RendererOutputIngressAdmission,
-    ) {
+    fn publish_admitted_renderer_projections(&mut self, ready: RendererOutputIngressAdmission) {
         if let RendererOutputIngressAdmission::Ready(ready) = ready {
             let access = self
                 .protocol_state_access()
                 .expect("owned Worker ingress retains its state owner");
             for admitted in ready {
-                let pending = super::PendingProtocolSchedulerWork::for_worker_renderer_projection(
-                    PendingWorkerRendererProjection::prepare(admitted, access.clone()),
+                let pending = super::PendingProtocolSchedulerWork::for_renderer_output_projection(
+                    PendingRendererOutputProjection::prepare(self, admitted, access.clone()),
                     access.clone(),
                 );
                 self.scheduler_state.push_scheduler_event(

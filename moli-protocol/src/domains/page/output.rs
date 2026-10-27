@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Result;
 
 impl PagePreparedOutputs {
     pub(crate) fn from_renderer_auxiliary_window_navigation(
@@ -180,10 +181,21 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_top_level_history_traversal(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
         traversal: RendererPendingTopLevelHistoryTraversal,
     ) -> Self {
+        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
         Self {
-            top_level_history_traversal: Some(traversal),
+            top_level_history_traversal: Some(Box::new(
+                crate::conn::TopLevelNavigationOwnerAction::history(
+                    owner.clone(),
+                    page_owner,
+                    traversal,
+                ),
+            )),
             ..Self::default()
         }
     }
@@ -735,8 +747,11 @@ impl PagePreparedOutputSlot {
 
     pub(crate) fn take_top_level_history_traversal(
         &mut self,
-    ) -> Option<RendererPendingTopLevelHistoryTraversal> {
-        self.outputs.top_level_history_traversal.take()
+    ) -> Option<crate::conn::TopLevelNavigationOwnerAction> {
+        self.outputs
+            .top_level_history_traversal
+            .take()
+            .map(|action| *action)
     }
 }
 
@@ -858,82 +873,49 @@ pub(in crate::domains) fn project_page_output_finite(
             }
         }
         ProtocolOutputSlot::TopLevelLocationNavigation => {
-            publish_prepared_top_level_location_navigation_owner_action(
+            publish_prepared_top_level_navigation_owner_action(conn, &owner, prepared_outputs);
+        }
+        ProtocolOutputSlot::SameDocumentNavigation => {
+            let mut events = Vec::new();
+            emit_same_document_navigation_activity_background_events(
                 conn,
+                &mut events,
                 &owner,
                 prepared_outputs,
             );
+            context.command.protocol_events_mut().extend(events);
+        }
+        ProtocolOutputSlot::TopLevelHistoryTraversal => {
+            publish_prepared_top_level_history_traversal_owner_action(conn, prepared_outputs);
         }
         _ => return Err(output),
     }
     Ok(())
 }
 
-pub(in crate::domains) async fn project_page_output_async(
-    output: ProtocolOutputSlot,
-    conn: &mut CdpConnection,
-    context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: &mut ProtocolOutputPayloads,
-) {
-    if project_page_output_finite(output, conn, context, prepared_outputs).is_ok() {
-        return;
+pub(crate) struct PreparedPageOutputClose(Vec<(String, moli_core::page::RendererAuxiliaryWindow)>);
+
+impl PreparedPageOutputClose {
+    pub(in crate::domains) fn take(payloads: &mut ProtocolOutputPayloads) -> Option<Self> {
+        let closes = std::mem::take(&mut payloads.page_mut()?.outputs.auxiliary_window_closes);
+        (!closes.is_empty()).then_some(Self(closes))
     }
-    let owner = context.owner().clone();
-    match output {
-        ProtocolOutputSlot::Popup => {
-            let mut events = Vec::new();
-            emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs).await;
-            context.command.protocol_events_mut().extend(events);
-        }
-        ProtocolOutputSlot::CloseAuxiliaryWindow => {
-            if let Some(slot) = prepared_outputs.page_mut() {
-                for (browser_context_id, window) in
-                    std::mem::take(&mut slot.outputs.auxiliary_window_closes)
-                {
-                    let target_id = conn
-                        .browser_context_by_id(&browser_context_id)
-                        .and_then(|context| context.target_id_for_popup_id(window.id()))
-                        .map(str::to_owned);
-                    let Some(target_id) = target_id else {
-                        continue;
-                    };
-                    let Some(route) = conn.target_session_route_for_target_id(&target_id) else {
-                        continue;
-                    };
-                    let owner = CommandOwnerScope::for_route(route);
-                    let events = termination::prepare_page_target_termination_async(
-                        conn,
-                        &owner,
-                        target_id,
-                        context.command,
-                    )
-                    .await;
-                    context.command.protocol_events_mut().extend(events);
-                }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        for (browser_context_id, window) in self.0 {
+            let pending = context
+                .with_state(driver, move |state, context| {
+                    state.prepare_page_output_close(browser_context_id, window, context)
+                })
+                .await?;
+            if let Some(pending) = pending {
+                pending.run(driver, context).await?;
             }
         }
-        ProtocolOutputSlot::SameDocumentNavigation => {
-            let mut events = Vec::new();
-            emit_same_document_navigation_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
-        ProtocolOutputSlot::TopLevelHistoryTraversal => {
-            let mut events = Vec::new();
-            emit_top_level_history_traversal_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
-        _ => panic!("non-Page output routed through the Page projector: {output:?}"),
+        Ok(())
     }
 }

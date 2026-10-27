@@ -114,7 +114,7 @@ fn take_top_level_location_navigation_work_for_test(
     let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
         panic!("prepared navigation must not publish a source-shaped scheduler event");
     };
-    assert!(work.is_top_level_location_navigation_owner_action());
+    assert!(work.is_top_level_navigation_owner_action());
     work
 }
 
@@ -1227,7 +1227,7 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
             matches!(
                 event,
                 crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if work.is_top_level_location_navigation_owner_action()
+                    if work.is_top_level_navigation_owner_action()
             )
         }),
         "executing the concrete navigation must not republish its own owner action"
@@ -2110,13 +2110,13 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-    super::output::project_page_output_async(
+    super::output::project_page_output_finite(
         ProtocolOutputSlot::ChildFrameActivity,
         &mut conn,
         &mut context,
         &mut prepared,
     )
-    .await;
+    .unwrap();
 
     let events = context
         .command
@@ -2401,13 +2401,13 @@ async fn child_frame_activity_drain_requires_prepared_output() {
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-    super::output::project_page_output_async(
+    super::output::project_page_output_finite(
         ProtocolOutputSlot::ChildFrameActivity,
         &mut conn,
         &mut context,
         &mut ProtocolOutputPayloads::default(),
     )
-    .await;
+    .unwrap();
 
     assert!(
         context.command.take_protocol_events().is_empty(),
@@ -2588,17 +2588,14 @@ async fn emit_committed_history_and_navigation_for_test(
     }
     let mut command = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(owner, &mut command);
-    super::output::project_page_output_async(
+    super::output::project_page_output_finite(
         ProtocolOutputSlot::SessionHistoryUpdate,
         conn,
         &mut context,
         prepared,
     )
-    .await;
-    super::emit_same_document_navigation_activity_background_events_async(
-        conn, out, owner, prepared,
-    )
-    .await;
+    .unwrap();
+    super::emit_same_document_navigation_activity_background_events(conn, out, owner, prepared);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2790,7 +2787,7 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
             ),
         ));
 
-    super::publish_prepared_top_level_location_navigation_owner_action(
+    super::publish_prepared_top_level_navigation_owner_action(
         &mut conn,
         &CommandOwnerScope::for_session("SID-location"),
         &mut prepared,
@@ -2815,7 +2812,7 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
         matches!(
             event,
             crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.is_top_level_location_navigation_owner_action()
+                if work.is_top_level_navigation_owner_action()
         )
     }));
     let events = events
@@ -2868,7 +2865,7 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
                 )),
             ),
         ));
-    super::publish_prepared_top_level_location_navigation_owner_action(
+    super::publish_prepared_top_level_navigation_owner_action(
         &mut conn,
         &CommandOwnerScope::for_session("SID-document-open-location"),
         &mut prepared,
@@ -2882,7 +2879,7 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
         matches!(
             event,
             crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.is_top_level_location_navigation_owner_action()
+                if work.is_top_level_navigation_owner_action()
         )
     }));
 
@@ -2931,7 +2928,7 @@ async fn stale_page_residence_top_level_navigation_cannot_replace_current_page()
                 )),
             ),
         ));
-    super::publish_prepared_top_level_location_navigation_owner_action(
+    super::publish_prepared_top_level_navigation_owner_action(
         &mut conn,
         &CommandOwnerScope::for_session("SID-stale-page-location"),
         &mut prepared,

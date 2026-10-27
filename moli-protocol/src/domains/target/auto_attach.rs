@@ -1185,7 +1185,7 @@ async fn ensure_initial_document_for_attached_page_targets_async(
 fn warn_target_protocol_side_effect_failure(
     target_id: &str,
     operation: &'static str,
-    message: &str,
+    message: &impl std::fmt::Display,
 ) {
     tracing::warn!(
         target_id,

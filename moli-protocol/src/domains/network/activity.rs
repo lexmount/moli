@@ -1,11 +1,12 @@
 use crate::conn::{CdpConnection, CommandOwnerScope};
+use crate::conn::{CommandWorkflowContext, ProtocolWorkflowDriver};
 use crate::domains::activity::{
     PreparedSubresourceContinueAction, ProtocolOutputPayloads, ProtocolOutputProjectionContext,
     ProtocolOutputSink, ProtocolOutputSlot,
-    flush_prepared_subresource_continue_actions_background_events_async,
     prepare_subresource_continue_action_for_renderer_record,
 };
 use crate::domains::fetch;
+use anyhow::Result;
 
 use super::TargetSubresourceFetchPauseOutput;
 use super::output_queue::TargetNetworkBacklogPreparedDelivery;
@@ -24,6 +25,7 @@ pub(crate) enum NetworkActivityOutput {
 #[derive(Debug, Default)]
 pub(crate) struct NetworkPreparedOutputs {
     pending_subresource_continue_actions: Vec<PreparedSubresourceContinueAction>,
+    automatic_subresource_continuations: Vec<fetch::PreparedSubresourceAutoContinue>,
     renderer_live: TargetNetworkBacklogPreparedDelivery,
     backlog: TargetNetworkBacklogPreparedDelivery,
     subresource_fetch_pauses: Vec<TargetSubresourceFetchPauseOutput>,
@@ -34,11 +36,79 @@ pub(crate) struct NetworkPreparedOutputSlot {
     outputs: NetworkPreparedOutputs,
 }
 
+pub(crate) struct PreparedSubresourceProjection {
+    automatic: Vec<fetch::PreparedSubresourceAutoContinue>,
+    actions: std::vec::IntoIter<PreparedSubresourceContinueAction>,
+    pending: Option<Box<crate::domains::activity::PreparedSubresourceContinueWait>>,
+    owner: CommandOwnerScope,
+}
+
+impl PreparedSubresourceProjection {
+    pub(in crate::domains) fn take(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        payloads: &mut ProtocolOutputPayloads,
+        context: &mut CommandWorkflowContext,
+    ) -> Option<Self> {
+        let outputs = &mut payloads.network_mut()?.outputs;
+        let mut projection = Self {
+            automatic: std::mem::take(&mut outputs.automatic_subresource_continuations),
+            actions: std::mem::take(&mut outputs.pending_subresource_continue_actions).into_iter(),
+            pending: None,
+            owner: owner.clone(),
+        };
+        if !projection.automatic.is_empty() {
+            return Some(projection);
+        }
+        for action in projection.actions.by_ref() {
+            if let Some(pending) = crate::domains::activity::prepare_subresource_continue_action(
+                conn,
+                context.context_mut().protocol_events_mut(),
+                owner,
+                action,
+            ) {
+                projection.pending = Some(Box::new(pending));
+                return Some(projection);
+            }
+        }
+        None
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        for pending in self.automatic {
+            pending.run(driver).await?;
+        }
+        if let Some(pending) = self.pending {
+            let events = pending.run(driver).await?;
+            context.context_mut().protocol_events_mut().extend(events);
+        }
+        for action in self.actions {
+            let owner = self.owner.clone();
+            let (events, pending) = driver
+                .with_state(move |state| state.prepare_subresource_continue_action(owner, action))
+                .await?;
+            context.context_mut().protocol_events_mut().extend(events);
+            if let Some(pending) = pending {
+                context
+                    .context_mut()
+                    .protocol_events_mut()
+                    .extend(pending.run(driver).await?);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl NetworkPreparedOutputs {
     pub(crate) fn from_renderer_live_delivery(
         renderer_live: TargetNetworkBacklogPreparedDelivery,
     ) -> Self {
         Self {
+            automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: Vec::new(),
             renderer_live,
             backlog: TargetNetworkBacklogPreparedDelivery::default(),
@@ -64,10 +134,21 @@ impl NetworkPreparedOutputs {
         subresource_fetch_pauses: Vec<TargetSubresourceFetchPauseOutput>,
     ) -> Self {
         Self {
+            automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: Vec::new(),
             renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
             backlog: TargetNetworkBacklogPreparedDelivery::default(),
             subresource_fetch_pauses,
+        }
+    }
+
+    pub(crate) fn from_subresource_fetch_pauses_and_continuations(
+        pauses: Vec<TargetSubresourceFetchPauseOutput>,
+        automatic_subresource_continuations: Vec<fetch::PreparedSubresourceAutoContinue>,
+    ) -> Self {
+        Self {
+            automatic_subresource_continuations,
+            ..Self::from_subresource_fetch_pauses(pauses)
         }
     }
 
@@ -78,6 +159,7 @@ impl NetworkPreparedOutputs {
         event: moli_core::page::PendingSubresourceContinueEvent,
     ) -> Self {
         Self {
+            automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions:
                 prepare_subresource_continue_action_for_renderer_record(
                     conn,
@@ -94,6 +176,8 @@ impl NetworkPreparedOutputs {
     }
 
     pub(crate) fn extend(&mut self, other: Self) {
+        self.automatic_subresource_continuations
+            .extend(other.automatic_subresource_continuations);
         self.pending_subresource_continue_actions
             .extend(other.pending_subresource_continue_actions);
         self.renderer_live.extend(other.renderer_live);
@@ -103,7 +187,8 @@ impl NetworkPreparedOutputs {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.pending_subresource_continue_actions.is_empty()
+        self.automatic_subresource_continuations.is_empty()
+            && self.pending_subresource_continue_actions.is_empty()
             && !self.renderer_live.has_delivery_output()
             && !self.backlog.has_delivery_output()
             && self.subresource_fetch_pauses.is_empty()
@@ -111,7 +196,9 @@ impl NetworkPreparedOutputs {
 
     pub(crate) fn outputs(&self) -> Vec<NetworkActivityOutput> {
         let mut outputs = Vec::new();
-        if !self.pending_subresource_continue_actions.is_empty() {
+        if !self.pending_subresource_continue_actions.is_empty()
+            || !self.automatic_subresource_continuations.is_empty()
+        {
             outputs.push(NetworkActivityOutput::PendingSubresourceContinueEvents);
         }
         if self.renderer_live.has_delivery_output() {
@@ -151,13 +238,6 @@ impl NetworkPreparedOutputs {
         }
     }
 
-    pub(crate) fn take_pending_subresource_continue_actions(
-        &mut self,
-    ) -> Option<Vec<PreparedSubresourceContinueAction>> {
-        (!self.pending_subresource_continue_actions.is_empty())
-            .then(|| std::mem::take(&mut self.pending_subresource_continue_actions))
-    }
-
     pub(crate) fn take_subresource_fetch_pauses(
         &mut self,
     ) -> Option<Vec<TargetSubresourceFetchPauseOutput>> {
@@ -170,6 +250,7 @@ impl NetworkPreparedOutputs {
         actions: Vec<PreparedSubresourceContinueAction>,
     ) -> Self {
         Self {
+            automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: actions,
             renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
             backlog: TargetNetworkBacklogPreparedDelivery::default(),
@@ -266,12 +347,6 @@ impl NetworkPreparedOutputSlot {
         self.outputs.extend(other.outputs);
     }
 
-    pub(crate) fn take_pending_subresource_continue_actions(
-        &mut self,
-    ) -> Option<Vec<PreparedSubresourceContinueAction>> {
-        self.outputs.take_pending_subresource_continue_actions()
-    }
-
     pub(crate) fn take_subresource_fetch_pauses(
         &mut self,
     ) -> Option<Vec<TargetSubresourceFetchPauseOutput>> {
@@ -292,20 +367,6 @@ impl NetworkPreparedOutputSlot {
             contextual_subresource_request_id,
             Some(&mut self.outputs),
         )
-    }
-
-    pub(crate) async fn emit_pending_subresource_continue_background_events(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
-    ) {
-        if let Some(actions) = self.take_pending_subresource_continue_actions() {
-            flush_prepared_subresource_continue_actions_background_events_async(
-                conn, out, owner, actions,
-            )
-            .await;
-        }
     }
 
     pub(crate) fn emit_backlog_activity_background_events(
@@ -353,20 +414,26 @@ pub(in crate::domains) const SLOT_NETWORK_BACKLOG: ProtocolOutputSlot =
 pub(in crate::domains) const SLOT_SUBRESOURCE_FETCH_INTERCEPTION: ProtocolOutputSlot =
     ProtocolOutputSlot::SubresourceFetchInterception;
 
-pub(in crate::domains) async fn project_pending_subresource_continue_async(
+#[cfg(test)]
+async fn project_pending_subresource_continue_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: &mut ProtocolOutputPayloads,
+    payloads: &mut ProtocolOutputPayloads,
 ) {
-    let owner = context.owner().clone();
-    if let Some(slot) = prepared_outputs.network_mut() {
-        slot.emit_pending_subresource_continue_background_events(
-            conn,
-            context.command.protocol_events_mut(),
-            &owner,
-        )
-        .await;
-    }
+    let mut local =
+        crate::conn::CommandDispatchContext::new(context.command.response_flush().clone());
+    let (mut output, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
+    let result = if let Some(pending) =
+        PreparedSubresourceProjection::take(conn, context.owner(), payloads, &mut output)
+    {
+        pending
+            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
+            .await
+    } else {
+        Ok(())
+    };
+    output.finish_projection_inline(conn, context.command);
+    result.expect("inline projection retains its connection");
 }
 
 pub(in crate::domains) fn project_network_backlog(
@@ -440,6 +507,7 @@ pub(in crate::domains) fn network_backlog_prepared_outputs_for_owner(
         preferred_request_id,
     ) {
         outputs.extend(NetworkPreparedOutputs {
+            automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: Vec::new(),
             renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
             backlog,

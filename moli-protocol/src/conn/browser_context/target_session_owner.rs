@@ -1474,27 +1474,32 @@ impl CdpConnection {
         Some(InitialDocumentPageOwner {
             browser_context_id,
             target_id: target_id?,
+            page_owner: None,
         })
     }
 
-    pub(crate) async fn install_initial_loaded_page_for_page_owner_async(
+    pub(crate) fn install_initial_loaded_page_for_page_owner(
         &mut self,
         owner: &InitialDocumentPageOwner,
         page: Page,
         page_creation_artifacts: RendererPageCreationArtifacts,
-    ) -> Result<InitialDocumentPageInstallResult, String> {
+    ) -> (Result<InitialDocumentPageInstallResult>, Option<Page>) {
         let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id)
         else {
-            let _ = page.close_async().await;
-            return Ok(InitialDocumentPageInstallResult::Stale);
+            return (Ok(InitialDocumentPageInstallResult::Stale), Some(page));
         };
-        if !browser_context.can_install_current_initial_empty_document_page(&owner.target_id) {
-            let _ = page.close_async().await;
-            return Ok(InitialDocumentPageInstallResult::Stale);
+        if !browser_context.can_install_current_initial_empty_document_page(&owner.target_id)
+            || owner.page_owner.as_ref().is_some_and(|expected| {
+                browser_context
+                    .page_target(&owner.target_id)
+                    .and_then(|target| target.runtime_slot.pending_page_attachment_id())
+                    != Some(expected.page_attachment_id())
+            })
+        {
+            return (Ok(InitialDocumentPageInstallResult::Stale), Some(page));
         }
         let Some(target) = browser_context.page_target_mut(&owner.target_id) else {
-            let _ = page.close_async().await;
-            return Err("TargetNotLoaded".to_owned());
+            return (Err(crate::conn::NoDocumentLoaded.into()), Some(page));
         };
         let loader_id = target
             .owner_state
@@ -1521,12 +1526,11 @@ impl CdpConnection {
                     loader_id,
                 );
         }
-        browser_context
-            .assert_target_materialized_initial_empty_document_has_page(&owner.target_id)?;
-        if let Some(page) = previous {
-            let _ = page.close_async().await;
-        }
-        Ok(InitialDocumentPageInstallResult::Installed)
+        let result = browser_context
+            .assert_target_materialized_initial_empty_document_has_page(&owner.target_id)
+            .map(|()| InitialDocumentPageInstallResult::Installed)
+            .map_err(Into::into);
+        (result, previous)
     }
 
     pub(crate) fn clear_pending_navigation_history_update_for_owner(
@@ -1730,11 +1734,11 @@ impl CdpConnection {
         Some(closed)
     }
 
-    pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
+    pub(crate) fn prepare_popup_target_rollback(
         &mut self,
         browser_context_id: Option<&str>,
         target_id: &str,
-    ) {
+    ) -> PreparedPopupTargetRollback {
         self.rollback_top_level_target_tab_sessions_without_event(target_id);
 
         let browser_context_id = browser_context_id.map(str::to_owned).or_else(|| {
@@ -1747,11 +1751,12 @@ impl CdpConnection {
         });
 
         let mut page_session_ids = Vec::new();
+        let mut retired = None;
         if let Some(browser_context_id) = browser_context_id {
             let target = self
                 .browser_context_by_id_mut(&browser_context_id)
                 .and_then(|browser_context| browser_context.take_page_target_for_close(target_id));
-            if let Some(mut target) = target {
+            if let Some(target) = target {
                 page_session_ids.extend(
                     target
                         .devtools_sessions
@@ -1761,13 +1766,26 @@ impl CdpConnection {
                 if let Some(session_id) = target.session_id() {
                     page_session_ids.push(session_id.to_owned());
                 }
-                target.close_page_async().await;
+                retired = Some(target);
             }
         }
 
-        for session_id in page_session_ids {
-            self.rollback_attached_session_without_event(&session_id);
+        PreparedPopupTargetRollback {
+            target: retired,
+            session_ids: page_session_ids,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
+        &mut self,
+        browser_context_id: Option<&str>,
+        target_id: &str,
+    ) {
+        self.prepare_popup_target_rollback(browser_context_id, target_id)
+            .run_using(&mut crate::conn::ProtocolWorkflowDriver::inline(self))
+            .await
+            .expect("inline popup rollback retains its protocol owner");
     }
 
     pub(crate) fn target_session_owner_aggregate_fetch_config_for_owner(
@@ -2814,6 +2832,25 @@ impl CdpConnection {
         f: impl FnOnce(TargetSessionOwnerMut<'_>) -> R,
     ) -> Option<R> {
         self.target_session_owner_mut_for_owner(owner).map(f)
+    }
+}
+
+pub(crate) struct PreparedPopupTargetRollback {
+    target: Option<PageTargetHost>,
+    session_ids: Vec<String>,
+}
+
+impl PreparedPopupTargetRollback {
+    pub(crate) async fn run_using(
+        mut self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    ) -> Result<()> {
+        if let Some(target) = self.target.as_mut() {
+            target.close_page_async().await;
+        }
+        driver
+            .with_state(move |state| state.finish_popup_rollback(self.session_ids))
+            .await
     }
 }
 

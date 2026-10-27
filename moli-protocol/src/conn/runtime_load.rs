@@ -212,6 +212,7 @@ async fn prepare_network_error_page_navigation_with_engine_async(
 
 #[derive(Clone, Debug)]
 pub(crate) struct InitialDocumentPageOwner {
+    pub(crate) page_owner: Option<TargetPageResidenceIdentity>,
     pub(crate) browser_context_id: String,
     pub(crate) target_id: String,
 }
@@ -241,6 +242,75 @@ pub(crate) enum CompletedInitialDocumentPageBuild {
         built: Box<moli_core::runtime::BuiltDocumentPage>,
     },
     Joined,
+}
+
+impl CompletedInitialDocumentPageBuild {
+    pub(crate) async fn install_using(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+    ) -> Result<LoadedPageCreationDiagnosticsParts> {
+        let Self::Built {
+            owner,
+            load_inputs,
+            override_mode,
+            built,
+        } = self
+        else {
+            return Ok(LoadedPageCreationDiagnosticsParts::default());
+        };
+        let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
+        let artifacts = built.page_creation_artifacts;
+        let mut page = built.page;
+        let check = owner.clone();
+        if !driver
+            .with_state(move |state| state.initial_document_page_can_install(check))
+            .await?
+        {
+            let _ = page.close_async().await;
+            driver
+                .with_state(move |state| state.complete_initial_document_page_build(owner))
+                .await?;
+            return Ok(LoadedPageCreationDiagnosticsParts::default());
+        }
+        if let Err(error) =
+            apply_navigation_load_input_overrides_async(&mut page, &load_inputs, override_mode)
+                .await
+        {
+            let message = format!("{error:#}");
+            driver
+                .with_state(move |state| state.fail_initial_document_page_build(owner, message))
+                .await?;
+            let _ = page.close_async().await;
+            return Err(error);
+        }
+        let install_owner = owner.clone();
+        let (result, retired) = driver
+            .with_state(move |state| {
+                state.install_initial_document_page(install_owner, page, artifacts)
+            })
+            .await?;
+        if let Some(retired) = retired {
+            let _ = retired.close_async().await;
+        }
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                let message = format!("{error:#}");
+                driver
+                    .with_state(move |state| state.fail_initial_document_page_build(owner, message))
+                    .await?;
+                return Err(error);
+            }
+        };
+        driver
+            .with_state(move |state| state.complete_initial_document_page_build(owner))
+            .await?;
+        Ok(if result == InitialDocumentPageInstallResult::Installed {
+            diagnostics
+        } else {
+            LoadedPageCreationDiagnosticsParts::default()
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1010,9 +1080,6 @@ impl BackgroundNavigationLoadJob {
     ) -> bool {
         let is_successful_document = match navigation {
             Ok(NavigationLoadOutcome::ResponseCommitReady(navigation)) => {
-                navigation.network_error_page.is_none()
-            }
-            Ok(NavigationLoadOutcome::Loaded(navigation)) => {
                 navigation.network_error_page.is_none()
             }
             _ => false,
@@ -2108,7 +2175,11 @@ impl CdpConnection {
         let renderer_page_owner = self
             .pending_target_page_residence_identity_for_owner(owner)
             .ok_or_else(|| "initial document Page reservation lost its target owner".to_owned())?;
-        self.bind_renderer_page_output_owner(renderer_page, renderer_page_owner);
+        self.bind_renderer_page_output_owner(renderer_page, renderer_page_owner.clone());
+        let page_owner = InitialDocumentPageOwner {
+            page_owner: Some(renderer_page_owner),
+            ..page_owner
+        };
         let pending = engine
             .start_build_html_page_from_response_with_storage_and_inspector_session_restores(
                 page_reservation,
@@ -2168,6 +2239,12 @@ impl CdpConnection {
         &mut self,
         failed: FailedInitialDocumentPageBuild,
     ) -> String {
+        if failed
+            .build_owner()
+            .is_some_and(|owner| !self.initial_document_page_build_owner_is_current(owner))
+        {
+            return failed.into_message();
+        }
         let message = failed.message().to_owned();
         if let Some(owner) = failed.build_owner()
             && let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id)
@@ -2220,10 +2297,13 @@ impl CdpConnection {
             .filter(moli_url::is_about_blank)
     }
 
-    fn complete_initial_document_page_build_for_page_owner(
+    pub(crate) fn complete_initial_document_page_build_for_page_owner(
         &mut self,
         owner: &InitialDocumentPageOwner,
     ) {
+        if !self.initial_document_page_build_owner_is_current(owner) {
+            return;
+        }
         if let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id) {
             if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
                 browser_context
@@ -2236,28 +2316,43 @@ impl CdpConnection {
         }
     }
 
-    fn complete_stale_initial_document_page_build_for_page_owner(
-        &mut self,
-        owner: &InitialDocumentPageOwner,
-    ) {
-        self.complete_initial_document_page_build_for_page_owner(owner);
-    }
-
-    fn initial_document_page_owner_can_install_current_page(
+    pub(crate) fn initial_document_page_build_owner_is_current(
         &self,
         owner: &InitialDocumentPageOwner,
     ) -> bool {
-        self.browser_context_by_id(&owner.browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.can_install_current_initial_empty_document_page(&owner.target_id)
-            })
+        owner.page_owner.as_ref().is_none_or(|expected| {
+            self.browser_context_by_id(&owner.browser_context_id)
+                .and_then(|context| context.page_target(&owner.target_id))
+                .is_some_and(|target| {
+                    target.runtime_slot.pending_page_attachment_id()
+                        == Some(expected.page_attachment_id())
+                        || target.runtime_slot.page_attachment_id()
+                            == Some(expected.page_attachment_id())
+                })
+        })
     }
 
-    fn fail_initial_document_page_build_for_owner(
+    pub(crate) fn initial_document_page_owner_can_install_current_page(
+        &self,
+        owner: &InitialDocumentPageOwner,
+    ) -> bool {
+        self.initial_document_page_build_owner_is_current(owner)
+            && self
+                .browser_context_by_id(&owner.browser_context_id)
+                .is_some_and(|browser_context| {
+                    browser_context
+                        .can_install_current_initial_empty_document_page(&owner.target_id)
+                })
+    }
+
+    pub(crate) fn fail_initial_document_page_build_for_owner(
         &mut self,
         owner: &InitialDocumentPageOwner,
         message: String,
     ) {
+        if !self.initial_document_page_build_owner_is_current(owner) {
+            return;
+        }
         if let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id) {
             if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
                 let runtime_slot = &mut browser_context.active_page_target_mut().runtime_slot;
@@ -2282,7 +2377,7 @@ impl CdpConnection {
     pub(crate) async fn complete_initial_document_page_build_for_owner(
         &mut self,
         completed: CompletedInitialDocumentPageBuild,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         self.complete_initial_document_page_build_for_owner_with_creation_diagnostics(completed)
             .await
             .map(|_| ())
@@ -2291,44 +2386,10 @@ impl CdpConnection {
     pub(crate) async fn complete_initial_document_page_build_for_owner_with_creation_diagnostics(
         &mut self,
         completed: CompletedInitialDocumentPageBuild,
-    ) -> Result<LoadedPageCreationDiagnosticsParts, String> {
-        let CompletedInitialDocumentPageBuild::Built {
-            owner,
-            load_inputs,
-            override_mode,
-            built,
-        } = completed
-        else {
-            return Ok(LoadedPageCreationDiagnosticsParts::default());
-        };
-        let load_inputs = *load_inputs;
-        let built = *built;
-        let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
-        let page_creation_artifacts = built.page_creation_artifacts;
-        let mut page = built.page;
-        if !self.initial_document_page_owner_can_install_current_page(&owner) {
-            let _ = page.close_async().await;
-            self.complete_stale_initial_document_page_build_for_page_owner(&owner);
-            return Ok(LoadedPageCreationDiagnosticsParts::default());
-        }
-        apply_navigation_load_input_overrides_async(&mut page, &load_inputs, override_mode)
+    ) -> Result<LoadedPageCreationDiagnosticsParts> {
+        completed
+            .install_using(&mut ProtocolWorkflowDriver::inline(self))
             .await
-            .map_err(|error| format!("{error:#}"))
-            .inspect_err(|message| {
-                self.fail_initial_document_page_build_for_owner(&owner, message.clone());
-            })?;
-        let install_result = self
-            .install_initial_loaded_page_for_page_owner_async(&owner, page, page_creation_artifacts)
-            .await
-            .inspect_err(|message| {
-                self.fail_initial_document_page_build_for_owner(&owner, message.clone());
-            })?;
-        if install_result == InitialDocumentPageInstallResult::Stale {
-            self.complete_stale_initial_document_page_build_for_page_owner(&owner);
-            return Ok(LoadedPageCreationDiagnosticsParts::default());
-        }
-        self.complete_initial_document_page_build_for_page_owner(&owner);
-        Ok(diagnostics)
     }
 
     pub async fn load_navigation_via_runtime_async(
@@ -2398,7 +2459,6 @@ impl CdpConnection {
                 let permit = navigation.issue_commit_permit();
                 navigation.commit(permit, configuration).await
             }
-            NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
             NavigationLoadOutcome::Download(_) => {
                 Err(anyhow::anyhow!("navigation resolved to a download"))
             }

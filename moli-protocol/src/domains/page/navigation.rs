@@ -52,10 +52,10 @@ use super::{
 };
 
 pub(super) struct PendingNavigateLoadCommand {
-    prefix_events: Vec<BackgroundProtocolEvent>,
-    token: DocumentNavigationToken,
-    state: NavigationDispatchState,
-    job: BackgroundNavigationLoadJob,
+    pub(super) prefix_events: Vec<BackgroundProtocolEvent>,
+    pub(super) token: DocumentNavigationToken,
+    pub(super) state: NavigationDispatchState,
+    pub(super) job: BackgroundNavigationLoadJob,
 }
 
 pub(super) struct CompletedNavigateLoadCommand {
@@ -77,8 +77,8 @@ pub(super) struct PendingChildFrameNavigateCommand {
 }
 
 pub(super) struct PendingSameDocumentNavigateCommand {
-    pending: PendingPageCommand,
-    result_payload: Value,
+    pub(super) pending: PendingPageCommand,
+    pub(super) result_payload: Value,
 }
 
 pub(super) struct ChildFrameNavigationInput {
@@ -112,8 +112,8 @@ pub(super) struct CompletedSameDocumentNavigateCommand {
 }
 
 pub(super) struct PendingContinueNavigationWithoutRequestPauseCommand {
-    prefix_events: Vec<BackgroundProtocolEvent>,
-    pending: PendingFetchNavigation,
+    pub(super) prefix_events: Vec<BackgroundProtocolEvent>,
+    pub(super) pending: PendingFetchNavigation,
 }
 
 pub(super) struct CompletedContinueNavigationWithoutRequestPauseCommand {
@@ -3676,18 +3676,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                 }
             }
         }
-        network::MaterializedNavigationLoadOutcome::Loaded(navigation) => {
-            commit_loaded_navigation_async(
-                conn,
-                out,
-                Some(&token),
-                state,
-                *navigation,
-                None,
-                command_context,
-            )
-            .await;
-        }
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
             if let Some(id) = state.web_mcp_invocation.as_ref() {
                 out.extend_background_events_after_messages(
@@ -3775,7 +3763,7 @@ fn emit_same_document_navigation_background_event(
     }
 }
 
-pub(crate) async fn emit_same_document_navigation_background_events_async(
+pub(crate) fn emit_same_document_navigation_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,

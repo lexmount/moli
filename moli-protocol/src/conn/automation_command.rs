@@ -313,12 +313,14 @@ impl CdpConnection {
             | AutomationCommand::DispatchTouchEvent(_)
             | AutomationCommand::DispatchDragEvent(_)
             | AutomationCommand::SynthesizeTapGesture(_)) => {
-                Box::pin(
+                let (result, protocol_events, predecessor) = Box::pin(
                     crate::domains::input::execute_devtools_input_command_async_with_protocol_events(
                         self, command,
                     ),
                 )
-                .await
+                .await;
+                renderer_output_predecessor = predecessor;
+                (result, protocol_events)
             }
             command @ (AutomationCommand::QuerySelector(_)
             | AutomationCommand::GetAttributes(_)

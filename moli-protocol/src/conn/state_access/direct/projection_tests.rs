@@ -84,7 +84,7 @@ fn admit(
         .with_state(|state| {
             let outcome = state
                 .connection
-                .try_start_owned_worker_renderer_output(publication(stream, sequence, events))
+                .try_start_owned_renderer_output(publication(stream, sequence, events))
                 .unwrap_or_else(|_| {
                     panic!("the production Worker ingress must accept this stream")
                 });
@@ -283,7 +283,7 @@ async fn natural_worker_mailbox_rejoins_the_original_projection_after_waiter_and
         let (mut conn, streams) = connection();
         let mut requests = conn.take_protocol_state_requests().unwrap();
         let outcome = conn
-            .try_start_owned_worker_renderer_output(publication(streams[0], 1, vec![created(11)]))
+            .try_start_owned_renderer_output(publication(streams[0], 1, vec![created(11)]))
             .unwrap_or_else(|_| panic!("Worker ingress is finite with the production actor owner"));
         let pending = take_work(outcome.into_protocol_event_parts().1)
             .pop()
@@ -388,7 +388,7 @@ async fn natural_worker_inspector_observation_after_session_retirement_settles_w
         .with_state(|state| {
             let outcome = state
                 .connection
-                .try_start_owned_worker_renderer_output(publication)
+                .try_start_owned_renderer_output(publication)
                 .unwrap_or_else(|_| panic!("Native Worker observations use the original stream"));
             take_work(outcome.into_protocol_event_parts().1)
                 .pop()

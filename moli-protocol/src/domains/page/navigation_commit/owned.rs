@@ -263,6 +263,31 @@ impl PreparedNavigationProtocolCompletion {
         }
     }
 
+    pub(crate) async fn run_into_context(
+        mut self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        let cleanup = NavigationProtocolCleanup::default();
+        let completed = match self.run_inner(driver, context, cleanup.clone()).await {
+            Ok(completed) => completed,
+            Err(error) => {
+                cleanup.recover(driver, context).await;
+                return Err(error);
+            }
+        };
+        let output = context
+            .with_state(driver, move |state, context| {
+                state.publish_prepared_navigation_protocol_completion(
+                    completed,
+                    context.context_mut(),
+                )
+            })
+            .await?;
+        context.retain_output(output);
+        Ok(())
+    }
+
     async fn run_inner(
         &mut self,
         driver: &mut ProtocolWorkflowDriver<'_>,

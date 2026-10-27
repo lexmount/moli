@@ -52,11 +52,10 @@ mod tests;
 use super::actions::NetworkAction;
 use super::command_output::CommandOutputPlan;
 pub(crate) use activity::NetworkPreparedOutputSlot;
-pub(crate) use activity::NetworkPreparedOutputs;
+pub(crate) use activity::{NetworkPreparedOutputs, PreparedSubresourceProjection};
 pub(in crate::domains) use activity::{
     network_backlog_prepared_outputs_for_owner, project_network_backlog,
-    project_pending_subresource_continue_async, project_renderer_network_live,
-    project_subresource_fetch_interception,
+    project_renderer_network_live, project_subresource_fetch_interception,
 };
 pub use agent::IoStreamState;
 pub(crate) use agent::TargetIoStreamRead;

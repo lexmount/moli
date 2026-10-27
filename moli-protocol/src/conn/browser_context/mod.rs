@@ -19,5 +19,6 @@ pub(crate) use runtime_owner::{
     SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
 };
 pub(crate) use target_session_owner::{
-    ClosedPageTarget, CompletedPageTargetClose, PendingPageTargetClose, TargetNavigationLoadInputs,
+    ClosedPageTarget, CompletedPageTargetClose, PendingPageTargetClose,
+    PreparedPopupTargetRollback, TargetNavigationLoadInputs,
 };

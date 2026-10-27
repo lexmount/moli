@@ -66,7 +66,7 @@ pub(crate) mod native;
 mod navigation;
 mod output;
 use capture::*;
-pub(in crate::domains) use output::{project_page_output_async, project_page_output_finite};
+pub(in crate::domains) use output::project_page_output_finite;
 mod navigation_commit;
 pub(crate) use navigation_commit::{
     CompletedNavigationProtocolCompletion, NavigationProtocolCleanup,
@@ -496,7 +496,7 @@ pub(crate) struct PagePreparedOutputs {
         moli_page_types::SessionHistoryUpdate,
     )>,
     top_level_location_navigation: Option<PagePreparedTopLevelLocationNavigation>,
-    top_level_history_traversal: Option<RendererPendingTopLevelHistoryTraversal>,
+    top_level_history_traversal: Option<Box<crate::conn::TopLevelNavigationOwnerAction>>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1206,6 +1206,7 @@ fn page_screencast_subscription_status_for_owner(
     }
 }
 
+#[cfg(test)]
 pub(in crate::domains) async fn emit_popup_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -1224,7 +1225,7 @@ pub(in crate::domains) async fn emit_popup_activity_background_events_async(
 /// Preparing the output already claimed the renderer value. This projection
 /// must only publish its concrete owner action; executing navigation here
 /// would let network/download side effects bypass scheduler predecessors.
-pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_action(
+pub(in crate::domains) fn publish_prepared_top_level_navigation_owner_action(
     conn: &mut CdpConnection,
     command_owner: &CommandOwnerScope,
     prepared_outputs: &mut ProtocolOutputPayloads,
@@ -1234,31 +1235,19 @@ pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_a
         .and_then(PagePreparedOutputSlot::take_top_level_location_navigation)
     {
         let (owner, navigation) = navigation.into_parts();
-        conn.publish_prepared_top_level_location_navigation_owner_action(
-            command_owner,
-            owner,
-            navigation,
-        );
+        conn.publish_prepared_top_level_navigation_owner_action(command_owner, owner, navigation);
     }
 }
 
-pub(in crate::domains) async fn emit_top_level_history_traversal_activity_background_events_async(
+pub(in crate::domains) fn publish_prepared_top_level_history_traversal_owner_action(
     conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
     prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    if let Some(traversal) = prepared_outputs
+    if let Some(action) = prepared_outputs
         .page_mut()
         .and_then(PagePreparedOutputSlot::take_top_level_history_traversal)
     {
-        traverse_session_owner_history_from_renderer_background_events_async(
-            conn,
-            out,
-            owner,
-            traversal.delta,
-        )
-        .await;
+        conn.publish_top_level_navigation_owner_action(action);
     }
 }
 
@@ -1458,7 +1447,7 @@ pub(crate) fn emit_page_window_open_background_events_for_owner(
     }
 }
 
-pub(in crate::domains) async fn emit_same_document_navigation_activity_background_events_async(
+pub(in crate::domains) fn emit_same_document_navigation_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
@@ -1468,13 +1457,7 @@ pub(in crate::domains) async fn emit_same_document_navigation_activity_backgroun
         .page_mut()
         .and_then(PagePreparedOutputSlot::take_same_document_navigations)
     {
-        navigation::emit_same_document_navigation_background_events_async(
-            conn,
-            out,
-            owner,
-            navigations,
-        )
-        .await;
+        navigation::emit_same_document_navigation_background_events(conn, out, owner, navigations);
     }
 }
 
@@ -2391,3 +2374,51 @@ pub(crate) async fn complete_pending_page_command(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+
+pub(crate) use popup::{PagePreparedPopupActivation, PreparedPopupOutputProjection};
+
+pub(crate) fn settle_popup_output(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    popup_id: Option<u64>,
+    target_id: Option<&str>,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut events = Vec::new();
+    javascript_dialog::settle_pending_popup_dialogs(
+        conn,
+        &mut events,
+        browser_context_id,
+        popup_id,
+        target_id,
+    );
+    events
+}
+
+pub(crate) use termination::PreparedPageTargetTermination;
+
+pub(crate) fn prepare_page_output_close(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    window: moli_core::page::RendererAuxiliaryWindow,
+    context: &mut crate::conn::CommandWorkflowContext,
+) -> Option<PreparedPageTargetTermination> {
+    let target_id = conn
+        .browser_context_by_id(browser_context_id)?
+        .target_id_for_popup_id(window.id())?
+        .to_owned();
+    let route = conn.target_session_route_for_target_id(&target_id)?;
+    let owner = CommandOwnerScope::for_route(route);
+    Some(PreparedPageTargetTermination::prepare(
+        conn,
+        &owner,
+        target_id,
+        context.context_mut(),
+    ))
+}
+
+pub(crate) use output::PreparedPageOutputClose;
+
+mod renderer_navigation;
+pub(crate) use renderer_navigation::{
+    PreparedRendererNavigation, PreparedRendererNavigationResult,
+};

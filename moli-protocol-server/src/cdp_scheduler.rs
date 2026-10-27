@@ -1851,7 +1851,9 @@ impl CdpScheduler {
             let has_pending_target_predecessor = target_ids
                 .iter()
                 .any(|target_id| blocked_target_ids.contains(target_id));
-            let has_pending_scheduler_predecessor = !residence.is_ready_to_complete(&self.conn);
+            let has_pending_scheduler_predecessor = !self
+                .queues
+                .residence_is_ready_to_complete(&residence, &self.conn);
             let pending_load_observation = matches!(
                 &residence,
                 ProtocolSchedulerResidence::ProtocolWork { work, .. }
@@ -2002,7 +2004,10 @@ impl CdpScheduler {
             }
             self.queues
                 .satisfy_checked_out_client_turn_predecessor(&mut residence);
-            if !residence.is_ready_to_complete(&self.conn) {
+            if !self
+                .queues
+                .residence_is_ready_to_complete(&residence, &self.conn)
+            {
                 if target_ids.is_empty() {
                     retained.push_back(residence);
                     retained.append(&mut snapshot);
@@ -2078,6 +2083,9 @@ impl CdpScheduler {
         // NavigationRequest ownership.
         let mut blocked_target_ids = Vec::new();
         for (index, residence) in self.queues.protocol_residences.iter().enumerate() {
+            if self.queues.renderer_output_source_is_pending(residence) {
+                continue;
+            }
             let target_ids = self.protocol_residence_navigation_gate_target_ids(residence);
             if self.protocol_residence_waits_for_navigation(
                 residence,
@@ -2091,7 +2099,9 @@ impl CdpScheduler {
                 continue;
             }
             if !residence.should_yield_to_client_turn()
-                && !residence.is_ready_to_complete(&self.conn)
+                && !self
+                    .queues
+                    .residence_is_ready_to_complete(residence, &self.conn)
             {
                 if target_ids.is_empty() {
                     return None;
@@ -2162,15 +2172,61 @@ impl CdpScheduler {
         let completed = self
             .protocol_tasks
             .as_mut()
-            .expect("only an installed supervisor publishes task completions")
+            .expect("installed owner-work supervisor")
             .complete(completion)?;
-        Ok(match completed {
-            Some(completed) => {
-                let outcome = self.conn.complete_owned_protocol_scheduler_work(completed);
-                self.apply_protocol_only_turn_outcome(outcome)
-            }
-            None => ProtocolOutputSequence::empty(),
-        })
+        let Some(completed) = completed else {
+            return Ok(ProtocolOutputSequence::empty());
+        };
+        let source = completed.renderer_output_source();
+        let projection = completed.renderer_projection_cursor();
+        let outcome = self.conn.complete_owned_protocol_scheduler_work(completed);
+        let Some(source) = source else {
+            return Ok(self.apply_protocol_only_turn_outcome(outcome));
+        };
+        let (load_predecessors, future_load_predecessor) = self
+            .queues
+            .renderer_output_order(source)
+            .unwrap_or_default();
+        let (mut events, after_renderer, boundary, after_response, scheduler) =
+            outcome.into_command_turn_parts();
+        assert!(
+            boundary.is_none(),
+            "owned output retains its concrete native fence"
+        );
+        events.extend(after_renderer);
+        events.extend(after_response);
+        let output = ProtocolOutputSequence::from_background_events(events);
+        let (mut immediate, resident) =
+            if !load_predecessors.is_empty() || future_load_predecessor.is_some() {
+                output.split_network_observations()
+            } else {
+                (ProtocolOutputSequence::empty(), output)
+            };
+        if projection.is_some() {
+            assert!(
+                self.queues
+                    .complete_renderer_output_projection(source, resident),
+                "the producing publication retains its scheduler residence"
+            );
+        } else if let Err(resident) = self
+            .queues
+            .append_renderer_output_projection(source, resident)
+        {
+            immediate.append(resident);
+        }
+        if let Some(output) = self.queues.take_unconstrained_renderer_output(source) {
+            // The producing Native turn already authorizes this output. In
+            // particular, Debugger.paused must reach the client while ordinary
+            // adapter work is suspended by that very pause.
+            immediate.append(output);
+        }
+        self.apply_scheduler_events_with_load_predecessors(
+            scheduler,
+            &load_predecessors,
+            future_load_predecessor,
+        );
+        Ok(self
+            .route_background_events_around_inflight_navigation(immediate.into_background_events()))
     }
 
     fn take_protocol_work_tasks(&mut self) -> Vec<command_task::CommandWaitTask> {
@@ -2352,6 +2408,13 @@ impl CdpScheduler {
             }
             match event {
                 CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                    if let Some(cursor) = pending.renderer_projection_cursor() {
+                        self.queues.enqueue_pending_renderer_output_projection(
+                            cursor,
+                            load_predecessors.to_vec(),
+                            future_load_predecessor,
+                        );
+                    }
                     self.protocol_tasks
                         .as_mut()
                         .expect("owned renderer ingress uses the installed task supervisor")
@@ -2532,19 +2595,13 @@ impl CdpScheduler {
             );
         }
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let worker_publication = matches!(
-            &publication,
-            RendererOutputTransportMessage::Publication(output)
-                if matches!(output.cursor().stream().residence(),
-                    moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
-                    | moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. })
-        );
-        let outcome = if worker_publication && self.protocol_tasks.is_some() {
-            match self
-                .conn
-                .try_start_owned_worker_renderer_output(publication)
-            {
-                Ok(outcome) => outcome,
+        let mut owned_renderer_input = false;
+        let outcome = if self.protocol_tasks.is_some() {
+            match self.conn.try_start_owned_renderer_output(publication) {
+                Ok(outcome) => {
+                    owned_renderer_input = true;
+                    outcome
+                }
                 Err(publication) => {
                     self.conn
                         .ingest_renderer_output_turn_async(*publication)
@@ -2556,6 +2613,16 @@ impl CdpScheduler {
                 .ingest_renderer_output_turn_async(publication)
                 .await
         };
+        if owned_renderer_input
+            && let Some(cursor) = renderer_output_cursor
+            && self.conn.renderer_output_cursor_is_outstanding(cursor)
+        {
+            self.queues.enqueue_pending_renderer_output_projection(
+                cursor,
+                load_predecessors.clone(),
+                future_load_predecessor,
+            );
+        }
         let (
             mut events,
             mut post_renderer_output_events,
@@ -2726,7 +2793,10 @@ impl CdpScheduler {
         if residence.should_yield_to_client_turn() {
             return ProtocolSchedulerStep::SatisfyClientTurnPredecessor;
         }
-        if residence.is_ready_to_complete(&self.conn) {
+        if self
+            .queues
+            .residence_is_ready_to_complete(residence, &self.conn)
+        {
             return ProtocolSchedulerStep::CompleteReadyResidence;
         }
         ProtocolSchedulerStep::Wait
@@ -3084,6 +3154,7 @@ impl CdpScheduler {
             self.complete_renderer_output_predecessor_before_runtime_response(&predecessor)
                 .await,
         );
+        self.append_navigation_gate_release_before_renderer_boundary(&mut output);
         output.append(completion_output);
         Ok(output)
     }

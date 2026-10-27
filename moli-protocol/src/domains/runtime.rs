@@ -138,7 +138,7 @@ pub(crate) fn detach_session_inspector(
 }
 
 pub(crate) use activity::{
-    PreparedRuntimeInspectorProjection, RuntimeInspectorMessageBatch,
+    PreparedRuntimeInspectorProjection,
     push_routed_renderer_runtime_inspector_message_batch_background_events,
 };
 pub(in crate::domains) use activity::{

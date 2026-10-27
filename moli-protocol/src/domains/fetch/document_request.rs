@@ -21,7 +21,7 @@ use super::{
 /// The paused navigation's request and retry budget leave shared state
 /// together. Network headers, Digest replay and challenge bodies are ordinary
 /// awaits; only interpreting the accepted response needs another state turn.
-pub(super) struct PreparedInterceptedNavigationRequest {
+pub(crate) struct PreparedInterceptedNavigationRequest {
     pending: PendingFetchNavigation,
     request: Option<Result<PreparedNavigationRequest>>,
     buffered: bool,
@@ -43,7 +43,7 @@ pub(crate) enum PreparedFetchNavigationResponse {
 }
 
 impl PreparedInterceptedNavigationRequest {
-    pub(super) fn new(
+    pub(crate) fn new(
         conn: &mut CdpConnection,
         mut pending: PendingFetchNavigation,
         auth: Option<SubresourceAuthCredentials>,
@@ -87,7 +87,7 @@ impl PreparedInterceptedNavigationRequest {
         }
     }
 
-    pub(super) async fn prepare(
+    pub(crate) async fn prepare(
         self,
         driver: &mut ProtocolWorkflowDriver<'_>,
     ) -> PreparedFetchNavigationResponse {

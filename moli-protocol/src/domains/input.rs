@@ -921,10 +921,11 @@ pub(crate) async fn execute_devtools_input_command_async_with_protocol_events(
 ) -> (
     Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
+    Option<moli_core::RendererOutputFence>,
 ) {
     let (target_id, command_session_id) = match devtools_input_command_route(&command) {
         Ok(route) => route,
-        Err(error) => return (Err(error), Vec::new()),
+        Err(error) => return (Err(error), Vec::new(), None),
     };
     if let Some(target_id) = target_id.as_deref() {
         let route = conn
@@ -932,7 +933,7 @@ pub(crate) async fn execute_devtools_input_command_async_with_protocol_events(
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"));
         let route = match route {
             Ok(route) => route,
-            Err(error) => return (Err(error), Vec::new()),
+            Err(error) => return (Err(error), Vec::new(), None),
         };
         let owner = CommandOwnerScope::for_route(route);
         return execute_devtools_input_command_for_owner_with_protocol_events(
@@ -981,25 +982,28 @@ async fn execute_devtools_input_command_for_owner_with_protocol_events(
 ) -> (
     Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
+    Option<moli_core::RendererOutputFence>,
 ) {
     let pending = match start_devtools_input_command_for_owner(conn, None, owner, command) {
         Ok(Some(pending)) => pending,
-        Ok(None) => return (Ok(AutomationResult::Empty), Vec::new()),
+        Ok(None) => return (Ok(AutomationResult::Empty), Vec::new(), None),
         Err(error) => {
             return (
                 Err(devtools_error_from_input_start_error(error)),
                 Vec::new(),
+                None,
             );
         }
     };
 
-    let completed = complete_pending_input_command(
-        conn,
-        pending.wait().await,
-        &mut CommandDispatchContext::default(),
+    let mut command_context = CommandDispatchContext::default();
+    let completed =
+        complete_pending_input_command(conn, pending.wait().await, &mut command_context).await;
+    (
+        completed.result,
+        completed.protocol_events,
+        command_context.take_renderer_output_predecessor(),
     )
-    .await;
-    (completed.result, completed.protocol_events)
 }
 
 fn devtools_error_from_input_start_error(error: PendingInputCommandStartError) -> DevToolsError {

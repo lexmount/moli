@@ -16,6 +16,7 @@ pub(super) struct PreparedSubresourceCorrelation {
     internal_id: u64,
     registered: bool,
     owner_scope: CommandOwnerScope,
+    network_request_id: String,
 }
 
 impl PreparedSubresourceCorrelation {
@@ -39,14 +40,16 @@ impl PreparedSubresourceCorrelation {
             internal_id: pending.internal_id,
             registered: should_register,
             owner_scope: owner.clone(),
+            network_request_id: pending.network_request_id.clone(),
         })
     }
 
     pub(super) fn rollback(self, conn: &mut CdpConnection) {
         if self.registered {
-            conn.take_in_flight_subresource_fetch_request_for_owner(
+            conn.rollback_in_flight_subresource_fetch_request_for_owner(
                 &self.owner_scope,
                 self.internal_id,
+                &self.network_request_id,
             );
         }
     }
@@ -68,7 +71,37 @@ impl PreparedSubresourceCorrelation {
             internal_id: pending.internal_id,
             registered: true,
             owner_scope: owner.clone(),
+            network_request_id: pending.network_request_id.clone(),
         })
+    }
+
+    pub(super) fn prepare_automatic(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        request_id: Option<String>,
+        pending: PendingSubresourceFetchRequest,
+        response: super::subresource_continuation::SubresourceResponseInterception,
+    ) -> Option<Self> {
+        use super::subresource_continuation::SubresourceResponseInterception;
+        let correlation = Self {
+            internal_id: pending.internal_id,
+            registered: true,
+            owner_scope: owner.clone(),
+            network_request_id: pending.network_request_id.clone(),
+        };
+        let registered = match response {
+            SubresourceResponseInterception::None => conn
+                .register_in_flight_subresource_fetch_request_for_owner(owner, request_id, pending),
+            SubresourceResponseInterception::Matched(intercepts) => conn
+                .register_in_flight_response_stage_subresource_fetch_request_for_owner(
+                    owner, request_id, pending, intercepts,
+                ),
+            SubresourceResponseInterception::Candidate => conn
+                .register_in_flight_deferred_response_stage_subresource_fetch_request_for_owner(
+                    owner, request_id, pending,
+                ),
+        };
+        registered.then_some(correlation)
     }
 }
 
@@ -198,4 +231,82 @@ pub(crate) fn mark_pending_subresource_response_body_taken_as_stream_for_action_
         action_session_id,
         request_id,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::{
+        BrowserContext, PendingSubresourceFetchOwnerKind, PendingSubresourceFetchResidence,
+    };
+    use moli_core::page::SubresourceResourceType;
+    use url::Url;
+
+    fn request(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        network_id: &str,
+    ) -> PendingSubresourceFetchRequest {
+        PendingSubresourceFetchRequest {
+            residence: PendingSubresourceFetchResidence::InstalledPage(
+                conn.target_page_residence_identity_for_owner(owner)
+                    .unwrap(),
+            ),
+            owner_session_id: None,
+            action_session_id: None,
+            owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
+            internal_id: 7,
+            network_request_id: network_id.to_owned(),
+            network_request_handle: None,
+            frame_id: "TID-correlation".to_owned(),
+            document_url: Url::parse("https://example.test/page").unwrap(),
+            resource_type: SubresourceResourceType::Fetch,
+            websocket_socket_id: None,
+            request_stage_chain: None,
+        }
+    }
+
+    #[test]
+    fn delayed_continuation_failure_keeps_new_request_with_reused_native_id() {
+        for attachment in [1, 2] {
+            let mut conn = CdpConnection::default();
+            let mut browser = BrowserContext::new("BID-correlation".into());
+            browser.set_active_target_id("TID-correlation");
+            browser.attach_active_session("SID-correlation");
+            browser
+                .active_page_target_mut()
+                .runtime_slot
+                .set_page_attachment_id_for_test(1);
+            conn.install_browser_context_fixture_for_test(browser);
+            let owner = CommandOwnerScope::for_session("SID-correlation");
+            let original_request = request(&conn, &owner, "NETWORK-original");
+            let original = PreparedSubresourceCorrelation::prepare_automatic(
+                &mut conn,
+                &owner,
+                Some("FETCH-original".into()),
+                original_request,
+                super::super::subresource_continuation::SubresourceResponseInterception::Candidate,
+            )
+            .unwrap();
+            conn.browser_context_by_id_mut("BID-correlation")
+                .unwrap()
+                .active_page_target_mut()
+                .runtime_slot
+                .set_page_attachment_id_for_test(attachment);
+            let replacement = request(&conn, &owner, "NETWORK-replacement");
+            assert!(conn.register_in_flight_subresource_fetch_request_for_owner(
+                &owner,
+                Some("FETCH-replacement".into()),
+                replacement,
+            ));
+
+            original.rollback(&mut conn);
+
+            assert_eq!(
+                conn.in_flight_subresource_fetch_request_id_for_owner(&owner, 7)
+                    .as_deref(),
+                Some("FETCH-replacement")
+            );
+        }
+    }
 }

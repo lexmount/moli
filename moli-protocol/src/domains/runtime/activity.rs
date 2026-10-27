@@ -187,11 +187,13 @@ pub(in crate::domains) async fn project_runtime_inspector_messages_async(
 }
 
 pub(crate) struct PreparedRuntimeInspectorProjection {
-    batches: Vec<RuntimeInspectorMessageBatch>,
+    preloads: Vec<super::PreparedBidiPreloadChannelListeners>,
 }
 
 impl PreparedRuntimeInspectorProjection {
     pub(in crate::domains) fn take(
+        conn: &mut CdpConnection,
+        context: &mut CommandWorkflowContext,
         slot: ProtocolOutputSlot,
         payloads: &mut ProtocolOutputPayloads,
     ) -> Option<Self> {
@@ -203,7 +205,11 @@ impl PreparedRuntimeInspectorProjection {
             }
             _ => unreachable!("only Runtime Inspector slots prepare these messages"),
         }?;
-        Some(Self { batches })
+        let preloads = batches
+            .into_iter()
+            .flat_map(|batch| Self::begin_batch(conn, batch, context))
+            .collect::<Vec<_>>();
+        (!preloads.is_empty()).then_some(Self { preloads })
     }
 
     pub(crate) async fn run(
@@ -211,19 +217,12 @@ impl PreparedRuntimeInspectorProjection {
         driver: &mut ProtocolWorkflowDriver<'_>,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
-        for batch in self.batches {
-            let preloads = context
-                .with_state(driver, move |state, context| {
-                    state.prepare_runtime_inspector_projection_batch(batch, context)
-                })
-                .await?;
-            for preload in preloads {
-                let mut events = Vec::new();
-                preload.run(driver, &mut events).await;
-                let mut output = CommandOutputPlan::default();
-                output.extend_background_events(events);
-                context.retain_output(output);
-            }
+        for preload in self.preloads {
+            let mut events = Vec::new();
+            preload.run(driver, &mut events).await;
+            let mut output = CommandOutputPlan::default();
+            output.extend_background_events(events);
+            context.retain_output(output);
         }
         Ok(())
     }
@@ -265,7 +264,11 @@ async fn project_inspector_message_batches(
     let mut local =
         crate::conn::CommandDispatchContext::new(context.command.response_flush().clone());
     let (mut output, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
-    let result = PreparedRuntimeInspectorProjection { batches }
+    let preloads = batches
+        .into_iter()
+        .flat_map(|batch| PreparedRuntimeInspectorProjection::begin_batch(conn, batch, &mut output))
+        .collect();
+    let result = PreparedRuntimeInspectorProjection { preloads }
         .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
         .await;
     output.finish_projection_inline(conn, context.command);

@@ -6,11 +6,11 @@ use crate::conn::{
     FetchAuthChallenge, NavigationDispatchState, NavigationLoadOutcome, PendingFetchNavigation,
     PendingStreamingDocumentResponseNavigation, PendingSubresourceFetchAuthStage,
     PendingSubresourceFetchAuthStageChain, PendingSubresourceFetchOwnerKind,
-    PendingSubresourceFetchRequest, decode_data_url_response,
+    decode_data_url_response,
 };
 use crate::domains::{command_output::CommandOutputBuffer, network, page};
 use moli_cookie_jar::StoredCookieQueryReport;
-use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceResourceType};
+use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme};
 use moli_fetch::{
     NetworkFetchResult, NetworkObservationJournal, RawResponse, ResponseHead, StreamingRawResponse,
 };
@@ -28,7 +28,7 @@ use super::{
 /// The response obligation moves with the operation taken out of Fetch's
 /// paused-request map. Cancelling that operation must still settle the source
 /// navigation, even when its session differs from the Fetch handler's session.
-pub(super) struct NavigationTermination {
+pub(crate) struct NavigationTermination {
     pub(super) wait_lifetime: Option<crate::conn::CommandWaitLifetime>,
     prepared_commit: Option<crate::conn::PreparedDocumentCommitState>,
     transferred: NavigationResponseTransfer,
@@ -42,7 +42,7 @@ pub(super) struct NavigationTermination {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct NavigationResponseTransfer(std::rc::Rc<std::cell::Cell<bool>>);
+pub(crate) struct NavigationResponseTransfer(std::rc::Rc<std::cell::Cell<bool>>);
 
 impl NavigationResponseTransfer {
     pub(super) fn mark_transferred(&self) {
@@ -51,7 +51,7 @@ impl NavigationResponseTransfer {
 }
 
 impl NavigationTermination {
-    pub(super) fn new(
+    pub(crate) fn new(
         conn: &CdpConnection,
         fetch_owner: &CommandOwnerScope,
         token: Option<&DocumentNavigationToken>,
@@ -69,15 +69,15 @@ impl NavigationTermination {
         })
     }
 
-    pub(super) fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         self.pending.take();
     }
 
-    pub(super) fn response_transfer(&self) -> NavigationResponseTransfer {
+    pub(crate) fn response_transfer(&self) -> NavigationResponseTransfer {
         self.transferred.clone()
     }
 
-    pub(super) fn prepare_document_commit(&mut self) -> crate::conn::PreparedDocumentCommitState {
+    pub(crate) fn prepare_document_commit(&mut self) -> crate::conn::PreparedDocumentCommitState {
         let commit = crate::conn::PreparedDocumentCommitState::new();
         self.prepared_commit = Some(commit.clone());
         commit
@@ -690,21 +690,6 @@ async fn complete_or_pause_response_stage_into_buffer_async(
     navigation: Result<NavigationLoadOutcome>,
 ) {
     match navigation {
-        Ok(NavigationLoadOutcome::Loaded(_)) if pending.intercept_response => {
-            debug_assert!(
-                false,
-                "response-stage document pause should register a body source before building a LoadedNavigation"
-            );
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn,
-                out,
-                pending,
-                Err(anyhow::anyhow!(
-                    "response-stage document pause reached unexpected loaded-navigation path"
-                )),
-            )
-            .await;
-        }
         navigation @ Ok(_) => {
             complete_pending_fetch_navigation_result_into_buffer_async(
                 conn, out, pending, navigation,
@@ -823,52 +808,6 @@ pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
         conn, out, pending, None, None,
     ))
     .await;
-}
-
-pub(crate) async fn continue_subresource_without_fetch_pause_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    request_id: Option<String>,
-    page_owner: crate::conn::TargetPageResidenceIdentity,
-    internal_id: u64,
-    network_request_id: String,
-    network_request_handle: Option<moli_core::page::SubresourceNetworkRequestHandle>,
-    frame_id: String,
-    document_url: Url,
-    resource_type: SubresourceResourceType,
-    handle_auth_requests: bool,
-    owner_kind: PendingSubresourceFetchOwnerKind,
-) {
-    let pending = PendingSubresourceFetchRequest {
-        residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
-        owner_session_id: None,
-        action_session_id: None,
-        owner_kind,
-        internal_id,
-        network_request_id,
-        network_request_handle,
-        frame_id,
-        document_url,
-        resource_type,
-        websocket_socket_id: None,
-        request_stage_chain: None,
-    };
-    if conn
-        .continue_pending_subresource_fetch_for_owner_async(
-            owner,
-            internal_id,
-            None,
-            None,
-            None,
-            None,
-            false,
-            handle_auth_requests,
-        )
-        .await
-        .is_ok()
-    {
-        conn.register_in_flight_subresource_fetch_request_for_owner(owner, request_id, pending);
-    }
 }
 
 fn navigation_auth_required_blocked_intercepts(
@@ -1032,74 +971,6 @@ pub(super) fn register_navigation_auth_required_event(
         &pending_auth,
         &auth_event_blocked_intercepts,
     )
-}
-
-pub(crate) async fn continue_subresource_for_response_stage_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    session_id: Option<&str>,
-    request_id: String,
-    pending: PendingSubresourceFetchRequest,
-    handle_auth_requests: bool,
-    response_stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
-) {
-    let action_owner = session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| owner.clone());
-    if conn
-        .continue_pending_subresource_fetch_for_owner_async(
-            &action_owner,
-            pending.internal_id,
-            None,
-            None,
-            None,
-            None,
-            true,
-            handle_auth_requests,
-        )
-        .await
-        .is_ok()
-    {
-        conn.register_in_flight_response_stage_subresource_fetch_request_for_owner(
-            &action_owner,
-            Some(request_id),
-            pending,
-            response_stage_blocked_intercepts,
-        );
-    }
-}
-
-pub(crate) async fn continue_subresource_for_deferred_response_stage_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    session_id: Option<&str>,
-    request_id: String,
-    pending: PendingSubresourceFetchRequest,
-    handle_auth_requests: bool,
-) {
-    let action_owner = session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| owner.clone());
-    if conn
-        .continue_pending_subresource_fetch_for_owner_async(
-            &action_owner,
-            pending.internal_id,
-            None,
-            None,
-            None,
-            None,
-            true,
-            handle_auth_requests,
-        )
-        .await
-        .is_ok()
-    {
-        conn.register_in_flight_deferred_response_stage_subresource_fetch_request_for_owner(
-            &action_owner,
-            Some(request_id),
-            pending,
-        );
-    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,10 @@ mod params;
 mod patterns;
 mod state;
 mod subresource;
+mod subresource_continuation;
+pub(crate) use subresource_continuation::{
+    PreparedSubresourceAutoContinue, SubresourceAutoContinueCompletion,
+};
 
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsAddNetworkInterceptCommand,
@@ -58,9 +62,9 @@ pub(crate) use navigation::continue_navigation_without_request_pause_into_buffer
 use params::EnableParams;
 use patterns::supported_pattern_config;
 pub(crate) use subresource::{
-    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async,
+    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record,
     emit_subresource_fetch_pause_outputs,
-    subresource_fetch_pause_prepared_outputs_for_renderer_record_async,
+    subresource_fetch_pause_prepared_outputs_for_renderer_record,
 };
 
 pub(in crate::domains) async fn dispose_owner_async(
@@ -103,6 +107,14 @@ pub(in crate::domains) fn prepare_target_close(
         "Target closed",
         false,
     ))
+}
+
+pub(in crate::domains) fn prepare_page_close(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    PreparedFetchCleanup::new(conn, owner, pending, None, "Page closed", true)
 }
 
 pub(crate) struct PendingFetchCommandDispatch {
@@ -938,3 +950,6 @@ fn start_disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchComman
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use document_request::PreparedInterceptedNavigationRequest;
+pub(crate) use navigation::NavigationTermination;

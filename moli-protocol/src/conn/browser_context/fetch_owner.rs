@@ -8,11 +8,10 @@ use crate::conn::state::{
 };
 use crate::conn::{
     CapturedBody, CommandOwnerScope, CompletedFetchResponseBodyStreamReadDispatch,
-    FetchInterceptionPattern, FetchRequestStage, InFlightSubresourceFetchRequest,
-    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadStart,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
+    FetchInterceptionPattern, FetchRequestStage, PausedDocumentTransfer,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
+    PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
 };
 use crate::domains::network::TargetIoStreamRead;
 
@@ -829,16 +828,17 @@ impl CdpConnection {
             .then_some(pending)
     }
 
-    pub(crate) fn take_in_flight_subresource_fetch_request_for_owner(
+    pub(crate) fn rollback_in_flight_subresource_fetch_request_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         internal_id: u64,
-    ) -> Option<InFlightSubresourceFetchRequest> {
-        let in_flight = self
-            .target_session_owner_mut_for_owner(owner)?
-            .take_in_flight_subresource_fetch_request(internal_id)?;
-        self.installed_subresource_fetch_request_is_current(&in_flight.pending)
-            .then_some(in_flight)
+        network_request_id: &str,
+    ) {
+        if let Some(mut owner) = self.target_session_owner_mut_for_owner(owner)
+            && let Some(mut fetch) = owner.pending_fetch_owner_mut()
+        {
+            fetch.rollback_in_flight_subresource_fetch_request(internal_id, network_request_id);
+        }
     }
 
     pub(crate) fn in_flight_subresource_fetch_request_id_for_owner(
@@ -1450,14 +1450,6 @@ impl TargetSessionOwnerMut<'_> {
     ) -> Option<PendingSubresourceFetchResponseRequest> {
         self.pending_fetch_owner_mut()?
             .take_pending_subresource_fetch_response_request(request_id, session_id)
-    }
-
-    fn take_in_flight_subresource_fetch_request(
-        &mut self,
-        internal_id: u64,
-    ) -> Option<InFlightSubresourceFetchRequest> {
-        self.pending_fetch_owner_mut()?
-            .take_in_flight_subresource_fetch_request(internal_id)
     }
 
     fn claim_subresource_continue_request(

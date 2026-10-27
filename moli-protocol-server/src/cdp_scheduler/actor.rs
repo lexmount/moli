@@ -861,6 +861,7 @@ async fn flush_background_completion_input(
         let mut renderer_prefix = scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&predecessor)
             .await;
+        scheduler.append_navigation_gate_release_before_renderer_boundary(&mut renderer_prefix);
         renderer_prefix.append(completion_output);
         completion_output = renderer_prefix;
     }

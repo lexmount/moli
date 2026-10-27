@@ -265,7 +265,6 @@ pub struct NoContentNavigation {
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
     NoContent(Box<NoContentNavigation>),
     NetworkFailure(String),

@@ -102,7 +102,6 @@ impl FailedNavigationDocumentPolicy {
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<MaterializedLoadedDocumentProgress>),
     Download(MaterializedDownloadDocumentProgress),
     Failed(MaterializedFailedDocumentProgress),
 }
@@ -364,11 +363,6 @@ fn materialize_navigation_load_outcome(
     match navigation {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
-        }
-        NavigationLoadOutcome::Loaded(navigation) => {
-            MaterializedNavigationLoadOutcome::Loaded(Box::new(
-                materialize_loaded_navigation_progress(conn, state, *navigation),
-            ))
         }
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),

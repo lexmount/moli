@@ -5,6 +5,7 @@ use crate::conn::{
     PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
 use crate::domains::{activity, network};
+use anyhow::Result;
 use moli_core::RendererOutputFence;
 
 use super::{PageCommandTaskStep, complete_materialized_navigation_into_buffer_async};
@@ -617,60 +618,77 @@ pub(super) async fn complete_close_command_dispatch(
     complete_success_with_background_events(out)
 }
 
+pub(crate) struct PreparedPageTargetTermination {
+    cleanup: crate::domains::fetch::PreparedFetchCleanup,
+    action: PageTargetTerminationOwnerAction,
+}
+
+impl PreparedPageTargetTermination {
+    pub(super) fn prepare(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        target_id: String,
+        command_context: &mut crate::conn::CommandDispatchContext,
+    ) -> Self {
+        let action = PageTargetTerminationOwnerAction::new(conn, owner.clone(), target_id);
+        conn.mark_page_target_closing(owner);
+        let pending = take_pending_fetch_state_for_owner(conn, owner);
+        let mut events = Vec::new();
+        conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+            &mut events,
+            command_context.protocol_events_mut(),
+            owner,
+            "Page closed",
+        );
+        command_context.protocol_events_mut().extend(events);
+        let cleanup = crate::domains::fetch::prepare_page_close(conn, owner, pending);
+        Self { cleanup, action }
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        let result = self
+            .cleanup
+            .run_using(driver)
+            .await
+            .into_disposal_output(context.context_mut().protocol_events_mut());
+        if let Some(predecessor) = result.predecessor {
+            context
+                .context_mut()
+                .set_renderer_output_predecessor(predecessor);
+        }
+        if let Some(error) = result.first_error {
+            tracing::warn!(%error, "Page close cleanup failed; retaining target retirement");
+        }
+        driver
+            .with_state(move |state| state.publish_page_output_close(self.action))
+            .await
+    }
+}
+
 pub(super) async fn prepare_page_target_termination_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     target_id: String,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> Vec<BackgroundProtocolEvent> {
-    let mut out = Vec::new();
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = take_pending_fetch_state_for_owner(conn, owner);
-
-    let mut pending_await_events = Vec::new();
-    conn.fail_pending_inspector_awaits_for_owner_background_events_into(
-        &mut pending_await_events,
-        command_context.protocol_events_mut(),
-        owner,
-        "Page closed",
-    );
-    out.extend(pending_await_events);
-
-    let renderer_output_predecessor = fail_pending_fetch_state_for_owner_background_events_async(
-        conn,
-        &mut out,
-        owner,
-        "Page closed",
-        "Page closed",
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    )
-    .await;
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
-
-    // Closing the target here would retire its session route before the
-    // separately transported final Page publication crosses protocol ingress.
-    // Publish a concrete protocol-owner continuation instead. The command
-    // fence first admits every renderer record produced above, then the
-    // scheduler sends the Page.close response and runs this teardown action.
-    conn.publish_page_target_termination_owner_action(PageTargetTerminationOwnerAction::new(
-        conn,
-        owner.clone(),
-        target_id,
-    ));
-    out
+    let prepared = PreparedPageTargetTermination::prepare(conn, owner, target_id, command_context);
+    let mut local =
+        crate::conn::CommandDispatchContext::new(command_context.response_flush().clone());
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
+    prepared
+        .run(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+            &mut context,
+        )
+        .await
+        .expect("inline Page close retains its protocol state");
+    context.finish_projection_inline(conn, command_context);
+    Vec::new()
 }
 
 pub(crate) async fn complete_page_target_termination_owner_action_async(

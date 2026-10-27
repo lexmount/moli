@@ -1032,7 +1032,7 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
     .await;
     ctx.sent.clear();
 
-    let (key_result, _scheduler_events, protocol_events) = ctx
+    let (key_result, scheduler_events, protocol_events, predecessor) = ctx
         .conn
         .execute_automation_command(AutomationCommand::DispatchKeyEvent(
             DevToolsDispatchKeyEventCommand {
@@ -1047,7 +1047,7 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
             },
         ))
         .await
-        .into_parts_with_protocol_events();
+        .into_complete_parts();
     assert_eq!(
         key_result.expect("key dispatch should succeed"),
         AutomationResult::Empty
@@ -1056,6 +1056,13 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
         protocol_events.is_empty(),
         "direct input key dispatch must not emit CDP-shaped sidecar messages: {protocol_events:?}"
     );
+
+    ctx.route_direct_command_renderer_predecessor_for_test(
+        predecessor.expect("native input retains its original renderer output fence"),
+    )
+    .await;
+    ctx.route_direct_command_output_for_test(protocol_events, scheduler_events)
+        .await;
 
     let value_result = ctx
         .execute_automation_command_through_renderer_fence_for_test(

@@ -18,7 +18,7 @@ pub(crate) use main_document::{
 };
 pub(crate) use output_ingress::{
     AdmittedRendererOutputPublication, OrderedRendererOutputIngress, PreparedProtocolOutputs,
-    PreparedWorkerRendererRecord, RendererOutputIngressAdmission, WorkerRendererProjection,
+    ProtocolOutputProjectionMode, RendererOutputIngressAdmission, RendererOutputProjection,
     ingest_renderer_output_transport_async, project_protocol_local_command_outputs,
 };
 pub(in crate::domains) use output_payloads::ProtocolOutputPayloads;
@@ -37,10 +37,11 @@ pub use scheduler_work::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
     ProtocolWorkPublishSequence,
 };
-pub(in crate::domains) use subresource::{
-    PreparedSubresourceContinueAction,
-    flush_prepared_subresource_continue_actions_background_events_async,
-    prepare_subresource_continue_action_for_renderer_record,
+pub(crate) use subresource::PreparedSubresourceContinueAction;
+pub(in crate::domains) use subresource::prepare_subresource_continue_action_for_renderer_record;
+pub(crate) use subresource::{
+    PreparedSubresourceContinueWait, SubresourceContinueCompletion,
+    prepare_subresource_continue_action,
 };
 pub(crate) use subresource::{
     flush_post_subresource_auth_activity_background_events,
@@ -49,4 +50,14 @@ pub(crate) use subresource::{
     flush_post_subresource_fetch_request_activity_for_owner_background_events,
     flush_post_subresource_response_activity_background_events,
     flush_post_subresource_response_activity_for_owner_background_events,
+};
+
+#[cfg(test)]
+pub(in crate::domains) use subresource::flush_prepared_subresource_continue_actions_background_events_async;
+
+pub(crate) use main_document::PreparedMainDocumentDownload;
+
+pub(crate) use runtime_command_barrier::{
+    PreparedPublicationOutputProjection, ReadyRuntimeCommandOutputProjection,
+    RuntimeCommandOutputProjectionPermit,
 };

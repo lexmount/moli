@@ -24,7 +24,8 @@ pub struct PendingProtocolSchedulerWork {
 
 #[derive(Clone)]
 enum PendingProtocolWork {
-    WorkerRendererProjection(super::renderer::PendingWorkerRendererProjection),
+    Workflow(super::workflow::PendingProtocolWorkflow),
+    RendererOutputProjection(super::renderer::PendingRendererOutputProjection),
     Termination(TargetTermination),
     PopupActivation(PendingPopupActivation),
     BidiChannel(PendingBidiChannel),
@@ -104,8 +105,12 @@ pub struct CompletedProtocolSchedulerWork {
 }
 
 enum CompletedProtocolWork {
-    WorkerRendererProjection(
-        super::renderer::PendingWorkerRendererProjection,
+    Workflow(
+        super::workflow::PendingProtocolWorkflow,
+        super::workflow::SharedProtocolWorkflowResult,
+    ),
+    RendererOutputProjection(
+        super::renderer::PendingRendererOutputProjection,
         super::renderer::SharedRendererProjectionResult,
     ),
     Termination(Box<CompletedTargetTermination>),
@@ -120,7 +125,8 @@ enum CompletedProtocolWork {
 impl std::fmt::Debug for PendingProtocolSchedulerWork {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = match &self.work {
-            PendingProtocolWork::WorkerRendererProjection(_) => "WorkerRendererProjection",
+            PendingProtocolWork::Workflow(_) => "Workflow",
+            PendingProtocolWork::RendererOutputProjection(_) => "RendererOutputProjection",
             PendingProtocolWork::Termination(_) => "Termination",
             PendingProtocolWork::PopupActivation(_) => "PopupActivation",
             PendingProtocolWork::BidiChannel(_) => "BidiChannel",
@@ -134,6 +140,25 @@ impl std::fmt::Debug for PendingProtocolSchedulerWork {
 }
 
 impl CompletedProtocolSchedulerWork {
+    pub fn renderer_projection_cursor(&self) -> Option<moli_core::RendererOutputCursor> {
+        match &self.work {
+            CompletedProtocolWork::RendererOutputProjection(projection, _) => {
+                Some(projection.cursor())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn renderer_output_source(&self) -> Option<moli_core::RendererOutputCursor> {
+        match &self.work {
+            CompletedProtocolWork::RendererOutputProjection(projection, _) => {
+                Some(projection.cursor())
+            }
+            CompletedProtocolWork::Workflow(workflow, _) => workflow.renderer_source(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn for_termination(completed: CompletedTargetTermination) -> Self {
         Self {
             work: CompletedProtocolWork::Termination(Box::new(completed)),
@@ -142,12 +167,48 @@ impl CompletedProtocolSchedulerWork {
 }
 
 impl PendingProtocolSchedulerWork {
-    pub(super) fn for_worker_renderer_projection(
-        pending: super::renderer::PendingWorkerRendererProjection,
+    pub fn renderer_projection_cursor(&self) -> Option<moli_core::RendererOutputCursor> {
+        match &self.work {
+            PendingProtocolWork::RendererOutputProjection(projection) => Some(projection.cursor()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn for_renderer_output_projection(
+        pending: super::renderer::PendingRendererOutputProjection,
         access: ProtocolStateAccess,
     ) -> Self {
         Self {
-            work: PendingProtocolWork::WorkerRendererProjection(pending),
+            work: PendingProtocolWork::RendererOutputProjection(pending),
+            access,
+        }
+    }
+
+    pub(super) fn for_output_projection(
+        ready: crate::domains::activity::ReadyRuntimeCommandOutputProjection,
+        access: ProtocolStateAccess,
+        target_id: Option<String>,
+    ) -> Self {
+        let workflow_access = access.clone();
+        let source = ready.renderer_source();
+        let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+            if let Err(error) =
+                crate::domains::activity::ReadyRuntimeCommandOutputProjection::run_ready(
+                    vec![ready],
+                    &mut ProtocolWorkflowDriver::owned(workflow_access),
+                    &mut context,
+                )
+                .await
+            {
+                tracing::warn!(error = ?error, "released Runtime output projection failed");
+            }
+            context.complete(crate::domains::command_output::CommandOutputPlan::default())
+        });
+        Self {
+            work: PendingProtocolWork::Workflow(
+                super::workflow::PendingProtocolWorkflow::prepare(workflow, target_id)
+                    .with_renderer_source(source),
+            ),
             access,
         }
     }
@@ -157,6 +218,7 @@ impl PendingProtocolSchedulerWork {
         matches!(
             kind,
             ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                | ProtocolSchedulerWorkKind::TopLevelNavigationOwnerAction
                 | ProtocolSchedulerWorkKind::PopupTargetActivationAction
                 | ProtocolSchedulerWorkKind::BidiChannelOwnerAction
                 | ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
@@ -165,10 +227,16 @@ impl PendingProtocolSchedulerWork {
 
     pub async fn wait(self) -> CompletedProtocolSchedulerWork {
         match self.work {
-            PendingProtocolWork::WorkerRendererProjection(projection) => {
+            PendingProtocolWork::Workflow(pending) => {
+                let completed = pending.wait().await;
+                CompletedProtocolSchedulerWork {
+                    work: CompletedProtocolWork::Workflow(pending, completed),
+                }
+            }
+            PendingProtocolWork::RendererOutputProjection(projection) => {
                 let result = projection.wait().await;
                 CompletedProtocolSchedulerWork {
-                    work: CompletedProtocolWork::WorkerRendererProjection(projection, result),
+                    work: CompletedProtocolWork::RendererOutputProjection(projection, result),
                 }
             }
             PendingProtocolWork::Navigation(navigation) => {
@@ -212,6 +280,19 @@ impl CdpConnection {
             return Err(Box::new(work));
         }
         let prepared = match work.into_ready() {
+            ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action) => {
+                let target_id = action.target_id().map(str::to_owned);
+                let navigation_access = access.clone();
+                crate::domains::page::PreparedRendererNavigation::prepare_owner_action(self, action).map(|prepared| {
+                    let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+                        if let Err(error) = prepared.run(&mut ProtocolWorkflowDriver::owned(navigation_access), &mut context).await {
+                            tracing::warn!(error = ?error, "renderer navigation owner workflow failed");
+                        }
+                        context.complete(crate::domains::command_output::CommandOutputPlan::default())
+                    });
+                    PendingProtocolWork::Workflow(super::workflow::PendingProtocolWorkflow::prepare(workflow, target_id))
+                })
+            }
             ReadyProtocolSchedulerWork::NavigationProtocolCompletion(work) => {
                 Some(PendingProtocolWork::Navigation(work))
             }
@@ -236,7 +317,8 @@ impl CdpConnection {
         completed: CompletedProtocolSchedulerWork,
     ) -> CdpTurnOutcome {
         match completed.work {
-            CompletedProtocolWork::WorkerRendererProjection(projection, result) => {
+            CompletedProtocolWork::Workflow(pending, completed) => pending.finish(self, completed),
+            CompletedProtocolWork::RendererOutputProjection(projection, result) => {
                 projection.finish(self, result)
             }
             CompletedProtocolWork::Navigation(navigation, ready) => {

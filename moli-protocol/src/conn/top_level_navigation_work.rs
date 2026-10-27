@@ -18,14 +18,20 @@ use super::{CommandOwnerScope, TargetPageResidenceIdentity};
 /// same-Page `document.open()` replacement therefore does not manufacture a
 /// new request, while replacement of the Page residence makes the action
 /// stale.
-#[derive(Debug)]
-pub(crate) struct TopLevelLocationNavigationOwnerAction {
+#[derive(Debug, PartialEq)]
+pub(crate) struct TopLevelNavigationOwnerAction {
     owner_scope: CommandOwnerScope,
     page_owner: TargetPageResidenceIdentity,
-    navigation: RendererDocumentSourcedTopLevelLocationNavigation,
+    navigation: TopLevelNavigationRequest,
 }
 
-impl TopLevelLocationNavigationOwnerAction {
+#[derive(Debug, PartialEq)]
+pub(crate) enum TopLevelNavigationRequest {
+    Location(RendererDocumentSourcedTopLevelLocationNavigation),
+    History(moli_core::page::RendererPendingTopLevelHistoryTraversal),
+}
+
+impl TopLevelNavigationOwnerAction {
     /// Wraps a navigation that has already been claimed while its exact
     /// protocol route is installed.
     ///
@@ -41,7 +47,19 @@ impl TopLevelLocationNavigationOwnerAction {
         Self {
             owner_scope,
             page_owner,
-            navigation,
+            navigation: TopLevelNavigationRequest::Location(navigation),
+        }
+    }
+
+    pub(crate) fn history(
+        owner_scope: CommandOwnerScope,
+        page_owner: TargetPageResidenceIdentity,
+        traversal: moli_core::page::RendererPendingTopLevelHistoryTraversal,
+    ) -> Self {
+        Self {
+            owner_scope,
+            page_owner,
+            navigation: TopLevelNavigationRequest::History(traversal),
         }
     }
 
@@ -53,12 +71,18 @@ impl TopLevelLocationNavigationOwnerAction {
         self.page_owner.target_id()
     }
 
-    pub(crate) fn source_document(&self) -> moli_core::RendererDocumentLifecycleIdentity {
-        self.navigation.source_document()
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        match &self.navigation {
+            TopLevelNavigationRequest::Location(navigation) => Some(navigation.source_document()),
+            TopLevelNavigationRequest::History(_) => None,
+        }
     }
 
-    pub(crate) fn url(&self) -> &str {
-        self.navigation.url()
+    pub(crate) fn url(&self) -> Option<&str> {
+        match &self.navigation {
+            TopLevelNavigationRequest::Location(navigation) => Some(navigation.url()),
+            TopLevelNavigationRequest::History(_) => None,
+        }
     }
 
     pub(crate) fn into_parts(
@@ -66,7 +90,7 @@ impl TopLevelLocationNavigationOwnerAction {
     ) -> (
         CommandOwnerScope,
         TargetPageResidenceIdentity,
-        RendererDocumentSourcedTopLevelLocationNavigation,
+        TopLevelNavigationRequest,
     ) {
         (self.owner_scope, self.page_owner, self.navigation)
     }

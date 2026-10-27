@@ -48,6 +48,7 @@ pub struct ProtocolWorkflowState<'a> {
 /// Remove the inline arm and mailbox at the actor's direct-sync cutover.
 pub(crate) struct ProtocolWorkflowDriver<'a> {
     access: ProtocolWorkflowAccess<'a>,
+    renderer_output_source: Option<moli_core::RendererOutputCursor>,
 }
 
 enum ProtocolWorkflowAccess<'a> {
@@ -59,13 +60,22 @@ impl<'a> ProtocolWorkflowDriver<'a> {
     pub(crate) fn inline(connection: &'a mut CdpConnection) -> Self {
         Self {
             access: ProtocolWorkflowAccess::Inline(connection),
+            renderer_output_source: None,
         }
     }
 
     pub(crate) fn owned(access: ProtocolStateAccess) -> ProtocolWorkflowDriver<'static> {
         ProtocolWorkflowDriver {
             access: ProtocolWorkflowAccess::Owned(access),
+            renderer_output_source: None,
         }
+    }
+
+    pub(crate) fn replace_renderer_output_source(
+        &mut self,
+        source: Option<moli_core::RendererOutputCursor>,
+    ) -> Option<moli_core::RendererOutputCursor> {
+        std::mem::replace(&mut self.renderer_output_source, source)
     }
 
     pub(crate) fn owned_access(&self) -> Option<ProtocolStateAccess> {
@@ -78,11 +88,17 @@ impl<'a> ProtocolWorkflowDriver<'a> {
         &mut self,
         operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
     ) -> Result<T> {
+        let source = self.renderer_output_source;
         match &mut self.access {
             ProtocolWorkflowAccess::Inline(connection) => {
-                Ok(operation(ProtocolWorkflowState { connection }))
+                Ok(ProtocolWorkflowState { connection }
+                    .in_renderer_output_source(source, operation))
             }
-            ProtocolWorkflowAccess::Owned(access) => access.with_state(operation).await,
+            ProtocolWorkflowAccess::Owned(access) => {
+                access
+                    .with_state(move |state| state.in_renderer_output_source(source, operation))
+                    .await
+            }
         }
     }
 }
@@ -90,6 +106,27 @@ impl<'a> ProtocolWorkflowDriver<'a> {
 impl<'a> ProtocolWorkflowState<'a> {
     pub(super) fn new(connection: &'a mut CdpConnection) -> Self {
         Self { connection }
+    }
+}
+
+impl<'state> ProtocolWorkflowState<'state> {
+    fn in_renderer_output_source<T>(
+        self,
+        source: Option<moli_core::RendererOutputCursor>,
+        operation: impl for<'operation> FnOnce(ProtocolWorkflowState<'operation>) -> T,
+    ) -> T {
+        let Some(source) = source else {
+            return operation(self);
+        };
+        let connection = self.connection;
+        let start = connection.scheduler_state.scheduler_event_count();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(ProtocolWorkflowState { connection })
+        }));
+        connection
+            .scheduler_state
+            .bind_renderer_output_source_since(start, source);
+        result.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
     }
 }
 
@@ -483,6 +520,11 @@ mod tests {
     }
 }
 
+mod initial_document;
 mod output_projection;
+mod popup;
+mod subresource;
 mod worker_projection;
 mod worker_runtime;
+
+mod renderer_navigation;

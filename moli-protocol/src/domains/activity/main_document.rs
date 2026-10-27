@@ -913,6 +913,56 @@ impl MainDocumentDownloadNavigationActivity {
     }
 }
 
+pub(crate) struct PreparedMainDocumentDownload {
+    pending: Option<crate::conn::PreparedDownloadActivationDelivery>,
+}
+
+impl PreparedMainDocumentDownload {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        state: NavigationDispatchState,
+        download: crate::domains::network::MaterializedDownloadDocumentProgress,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Self {
+        let mut activity = MainDocumentNavigationActivity::new(
+            state,
+            download.final_url,
+            download.progress_gate,
+            None,
+        );
+        let mut output = CommandOutputBuffer::default();
+        activity.emit_download_navigation_result_into_buffer(&mut output);
+        let mut events = Vec::new();
+        activity.emit_download_frame_stop_background_events(&mut events);
+        activity.flush_body_complete_activity_background_events(&mut events);
+        output.extend_background_events_after_messages(events);
+        let pending = match conn.prepare_navigation_download_delivery(
+            activity.state(),
+            activity.final_url.clone(),
+            download.body_artifact,
+        ) {
+            Ok(pending) => pending,
+            Err(error) => {
+                activity.emit_navigation_error_into_buffer(&mut output, &format!("{error:#}"));
+                None
+            }
+        };
+        context.retain_output(output.into_plan().into_background_event_plan(
+            activity.state.navigate_id,
+            activity.state.owner.session_id(),
+        ));
+        Self { pending }
+    }
+
+    pub(crate) async fn run(self, context: &mut crate::conn::CommandWorkflowContext) {
+        if let Some(pending) = self.pending {
+            let mut events = Vec::new();
+            pending.run(&mut events, context.context_mut()).await;
+            context.context_mut().protocol_events_mut().extend(events);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

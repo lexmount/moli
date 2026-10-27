@@ -1,6 +1,5 @@
-use std::{future::Future, pin::Pin};
-
 use anyhow::Result;
+use futures_util::{FutureExt as _, future::LocalBoxFuture};
 
 use crate::conn::{CdpConnection, CommandWorkflowContext, ProtocolWorkflowDriver};
 
@@ -202,7 +201,9 @@ impl ProtocolOutputSlot {
             | Self::ChildFrameActivity
             | Self::NavigateAuxiliaryWindow
             | Self::SessionHistoryUpdate
-            | Self::TopLevelLocationNavigation => {
+            | Self::TopLevelLocationNavigation
+            | Self::TopLevelHistoryTraversal
+            | Self::SameDocumentNavigation => {
                 return crate::domains::page::project_page_output_finite(
                     self, conn, context, payloads,
                 );
@@ -217,11 +218,26 @@ impl ProtocolOutputSlot {
         conn: &mut CdpConnection,
         owner: &crate::conn::CommandOwnerScope,
         payloads: &mut ProtocolOutputPayloads,
+        context: &mut CommandWorkflowContext,
     ) -> Option<PreparedProtocolOutputWait> {
         match self {
+            Self::CloseAuxiliaryWindow => {
+                crate::domains::page::PreparedPageOutputClose::take(payloads)
+                    .map(PreparedProtocolOutputWait::Close)
+            }
+            Self::Popup => crate::domains::page::PreparedPopupOutputProjection::take(payloads)
+                .map(PreparedProtocolOutputWait::Popup),
+            Self::PendingSubresourceContinueEvents => {
+                crate::domains::network::PreparedSubresourceProjection::take(
+                    conn, owner, payloads, context,
+                )
+                .map(PreparedProtocolOutputWait::Subresource)
+            }
             Self::RuntimeInspectorMessages | Self::RuntimeInspectorPostResponseMessages => {
-                crate::domains::runtime::PreparedRuntimeInspectorProjection::take(self, payloads)
-                    .map(PreparedProtocolOutputWait::Runtime)
+                crate::domains::runtime::PreparedRuntimeInspectorProjection::take(
+                    conn, context, self, payloads,
+                )
+                .map(PreparedProtocolOutputWait::Runtime)
             }
             Self::Download | Self::FileChooser => {
                 crate::domains::input::PreparedInputOutputProjection::take(
@@ -238,97 +254,62 @@ impl ProtocolOutputSlot {
             _ => unreachable!("finite projection selects the native output family"),
         }
     }
-
-    pub(in crate::domains) fn project_async<'a>(
+    #[cfg(test)]
+    pub(in crate::domains) async fn project_async(
         self,
-        conn: &'a mut CdpConnection,
-        context: &'a mut ProtocolOutputProjectionContext<'_>,
-        payloads: &'a mut ProtocolOutputPayloads,
-    ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
-        Box::pin(async move {
-            if self.project_finite(conn, context, payloads).is_ok() {
-                return;
+        conn: &mut CdpConnection,
+        context: &mut ProtocolOutputProjectionContext<'_>,
+        payloads: &mut ProtocolOutputPayloads,
+    ) {
+        if self.project_finite(conn, context, payloads).is_ok() {
+            return;
+        }
+        {
+            let mut local =
+                crate::conn::CommandDispatchContext::new(context.command.response_flush().clone());
+            let (mut output, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
+            if let Some(pending) = self.prepare_wait(conn, context.owner(), payloads, &mut output) {
+                pending
+                    .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
+                    .await
+                    .expect("inline test projection retains its owner");
             }
-            match self {
-                Self::PendingSubresourceContinueEvents => {
-                    crate::domains::network::project_pending_subresource_continue_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeInspectorMessages
-                | Self::RuntimeInspectorPostResponseMessages
-                | Self::Download
-                | Self::FileChooser
-                | Self::SharedWorkerTargetLifecycle
-                | Self::ServiceWorkerTargetLifecycle
-                | Self::DedicatedWorkerTargetLifecycle => {
-                    if let Some(wait) = self.prepare_wait(conn, context.owner(), payloads) {
-                        let mut local = crate::conn::CommandDispatchContext::new(
-                            context.command.response_flush().clone(),
-                        );
-                        let (mut output, _scope) =
-                            CommandWorkflowContext::take_from(&mut local, None, None);
-                        let result = wait
-                            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
-                            .await;
-                        output.finish_projection_inline(conn, context.command);
-                        result.expect("exclusive output projection retains its connection owner");
-                    }
-                }
-                Self::Popup
-                | Self::CloseAuxiliaryWindow
-                | Self::SameDocumentNavigation
-                | Self::TopLevelHistoryTraversal => {
-                    crate::domains::page::project_page_output_async(self, conn, context, payloads)
-                        .await;
-                }
-                Self::WebMcp
-                | Self::NetworkBacklog
-                | Self::RendererNetworkLive
-                | Self::SubresourceFetchInterception
-                | Self::RuntimeBindingCalls
-                | Self::Audits
-                | Self::Console
-                | Self::Log
-                | Self::RuntimeObservable
-                | Self::DomMutations
-                | Self::DomStorage
-                | Self::MainDocumentCommit
-                | Self::DocumentLifecycle
-                | Self::DocumentTitleChanged
-                | Self::JavascriptDialog
-                | Self::WindowOpen
-                | Self::ChildFrameActivity
-                | Self::NavigateAuxiliaryWindow
-                | Self::SessionHistoryUpdate
-                | Self::TopLevelLocationNavigation => {
-                    unreachable!("finite output slots have already been consumed")
-                }
-            }
-        })
+            output.finish_projection_inline(conn, context.command);
+        }
     }
 }
 
 pub(crate) enum PreparedProtocolOutputWait {
+    Close(crate::domains::page::PreparedPageOutputClose),
+    Popup(crate::domains::page::PreparedPopupOutputProjection),
+    Subresource(crate::domains::network::PreparedSubresourceProjection),
     Worker(crate::domains::target::WorkerTargetOutputProjection),
     Runtime(crate::domains::runtime::PreparedRuntimeInspectorProjection),
     Input(crate::domains::input::PreparedInputOutputProjection),
+    RuntimeOutputs(Vec<super::ReadyRuntimeCommandOutputProjection>),
 }
 
 impl PreparedProtocolOutputWait {
-    pub(in crate::domains::activity) async fn run(
+    pub(in crate::domains::activity) fn run<'a>(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
-        context: &mut CommandWorkflowContext,
-    ) -> Result<()> {
+        driver: &'a mut ProtocolWorkflowDriver<'_>,
+        context: &'a mut CommandWorkflowContext,
+    ) -> LocalBoxFuture<'a, Result<()>> {
         match self {
-            Self::Worker(projection) => projection.run(driver, context).await,
-            Self::Runtime(projection) => projection.run(driver, context).await,
-            Self::Input(projection) => {
+            Self::Close(projection) => projection.run(driver, context).boxed_local(),
+            Self::Popup(projection) => projection.run(driver, context).boxed_local(),
+            Self::Subresource(projection) => projection.run(driver, context).boxed_local(),
+            Self::Worker(projection) => projection.run(driver, context).boxed_local(),
+            Self::Runtime(projection) => projection.run(driver, context).boxed_local(),
+            Self::RuntimeOutputs(ready) => {
+                super::ReadyRuntimeCommandOutputProjection::run_ready(ready, driver, context)
+                    .boxed_local()
+            }
+            Self::Input(projection) => async move {
                 projection.run(driver, context).await;
                 Ok(())
             }
+            .boxed_local(),
         }
     }
 }
