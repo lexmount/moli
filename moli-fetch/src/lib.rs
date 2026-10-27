@@ -103,5 +103,5 @@ pub use runtime::{
     FetchRuntimeIdentity, FetchRuntimeJoinReport, FetchRuntimeJoinStatus, FetchRuntimePanicReport,
 };
 pub use streaming_response::{StreamingHtmlResponse, StreamingRawResponse};
-pub use upload::{UploadEvent, UploadObserver};
+pub use upload::{UploadEvent, UploadObserver, UploadReport};
 pub use url_pattern::url_pattern_matches;

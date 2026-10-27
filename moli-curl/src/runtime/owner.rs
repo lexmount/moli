@@ -45,6 +45,7 @@ pub(super) struct CurlRuntimeOwner<H: Handler, C> {
     shutdown_requested: Arc<AtomicBool>,
     closed: bool,
     poll_interval: Duration,
+    http_handler_poll: Option<fn(&mut H)>,
     diagnostics: Diagnostics,
     http: HttpRegistry<H, C>,
     websockets: WebSocketRegistry,
@@ -66,6 +67,7 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
         waker_tx: Sender<MultiWaker>,
         shutdown_requested: Arc<AtomicBool>,
         websocket_rx: Receiver<Submission>,
+        http_handler_poll: Option<fn(&mut H)>,
         #[cfg(test)] owner_started: Arc<AtomicBool>,
     ) {
         #[cfg(test)]
@@ -79,6 +81,7 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
             shutdown_requested,
             closed: false,
             poll_interval: config.poll_interval,
+            http_handler_poll,
             diagnostics: Diagnostics::from_env(),
             http: HttpRegistry::new(config, completion_tx),
             websockets: WebSocketRegistry::new(websocket_rx, owner_waker),
@@ -95,6 +98,9 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
             self.drain_commands();
             self.http.advance(&mut self.multi);
             self.process_completed_transfers();
+            if let Some(poll) = self.http_handler_poll {
+                self.http.poll_handlers(poll);
+            }
             if self.websocket_multi.is_none() && !self.websockets.submissions().is_empty() {
                 self.websocket_multi = Some(make_websocket_multi(self.max_websocket_connections));
             }
