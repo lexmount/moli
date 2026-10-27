@@ -13,7 +13,7 @@ async fn indexed_db_keys_preserve_types_order_and_binary_snapshots() -> Result<(
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            259,
+            288,
             "{target}: {result}"
         );
     }

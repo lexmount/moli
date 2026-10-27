@@ -74,6 +74,9 @@ fn parse_idb_key_value<'s>(
     let mut input = value;
     loop {
         let mut key = if let Ok(array) = v8::Local::<v8::Array>::try_from(input) {
+            if frames.len() >= moli_indexeddb::MAX_KEY_DEPTH {
+                return Err("IndexedDB array key exceeds the maximum nesting depth.");
+            }
             // Reject a cycle along the current path, while allowing an array
             // to supply the same subkey again in a later sibling.
             if !seen.insert(array) {

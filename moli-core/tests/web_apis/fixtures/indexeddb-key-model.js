@@ -56,6 +56,22 @@ async function keyModelProbe(name = 'key-model-' + Math.random()) {
   let nested = 1;
   for (let i = 0; i < 100; i++) nested = [nested];
   check('deep array key is valid', () => indexedDB.cmp(nested, nested) === 0);
+  let bounded = nested;
+  for (let i = 100; i < 256; i++) bounded = [bounded];
+  const tooDeep = [bounded];
+  check('maximum depth compares and clones', () => indexedDB.cmp(bounded, bounded) === 0);
+  check('maximum depth range materializes', () => {
+    let value = IDBKeyRange.only(bounded).lower, depth = 0;
+    while (Array.isArray(value)) { depth++; value = value[0]; }
+    return depth === 256 && value === 1;
+  });
+  let excessive = tooDeep;
+  for (let i = 257; i < 10000; i++) excessive = [excessive];
+  check('excessive depth range rejects safely', () => invalid(excessive));
+  check('excessive depth comparison rejects safely', () => {
+    try { indexedDB.cmp(excessive, 0); return false; }
+    catch (error) { return error.name === 'DataError'; }
+  });
   const allBytes = new Uint8Array([9,0,128,255,7]);
   check('typed array honors offset and length', () => same(IDBKeyRange.only(allBytes.subarray(1,4)).lower, new Uint8Array([0,128,255])));
   check('DataView honors offset and length', () => same(IDBKeyRange.only(new DataView(allBytes.buffer,2,2)).lower,new Uint8Array([128,255])));
@@ -82,6 +98,7 @@ async function keyModelProbe(name = 'key-model-' + Math.random()) {
     key=>IDBKeyRange.lowerBound(key), key=>IDBKeyRange.upperBound(key),
     key=>IDBKeyRange.bound(key,0), key=>IDBKeyRange.bound(0,key), key=>IDBKeyRange.only(0).includes(key)
   ];
+  staticConsumers.forEach((consume,i) => check('static conversion '+i+': depth boundary', () => namedError(() => consume(tooDeep), 'DataError')));
   for(const [i,error] of [undefined,17,{sentinel:true},new TypeError('original')].entries()) {
     staticConsumers.forEach((consume,j)=>{
       check('static conversion '+j+': exact exception '+i,()=>{
@@ -108,6 +125,7 @@ async function keyModelProbe(name = 'key-model-' + Math.random()) {
     ];
     consumers.forEach((consume,i)=>{
       check('operation '+i+': buffer TypeError',()=>namedError(()=>consume(resizable),'TypeError'));
+      check('operation '+i+': excessive depth DataError',()=>namedError(()=>consume(tooDeep),'DataError'));
       const sentinel={operation:i};
       const throwing=Object.defineProperty([],0,{get(){throw sentinel;}});
       check('operation '+i+': exact getter exception',()=>{try{consume(throwing);return false;}catch(error){return error===sentinel;}});

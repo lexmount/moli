@@ -2,6 +2,11 @@ use std::cmp::Ordering;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Maximum array nesting accepted by key conversion and persistent storage.
+/// Keep recursive comparison, cloning, dropping and JS materialization bounded.
+pub const MAX_KEY_DEPTH: usize = 256;
+const KEY_DEPTH_ERROR: &str = "IndexedDB array key exceeds the maximum nesting depth";
+
 /// A Number key cannot contain NaN. Preserve its bits for value roundtrips;
 /// equality and ordering treat positive and negative zero as the same key.
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +61,19 @@ impl Key {
     pub fn number(value: f64) -> Option<Self> {
         KeyNumber::new(value).map(Self::Number)
     }
+
+    fn validate_depth(&self) -> Result<(), &'static str> {
+        let mut pending = vec![(self, 0)];
+        while let Some((key, depth)) = pending.pop() {
+            if let Self::Array(keys) = key {
+                if depth >= MAX_KEY_DEPTH {
+                    return Err(KEY_DEPTH_ERROR);
+                }
+                pending.extend(keys.iter().map(|key| (key, depth + 1)));
+            }
+        }
+        Ok(())
+    }
 }
 
 // The original on-disk format used Integer and UTF-8 String variants. Continue
@@ -86,6 +104,7 @@ enum StoredKeyRef<'a> {
 
 impl Serialize for Key {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.validate_depth().map_err(serde::ser::Error::custom)?;
         match self {
             Self::Number(number) => StoredKeyRef::Number(number.0),
             Self::Date(ms) => StoredKeyRef::Date(*ms),
@@ -120,7 +139,10 @@ fn flat_key_parts(key: &Key) -> Vec<StoredKeyRef<'_>> {
 
 impl<'de> Deserialize<'de> for Key {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        decode_stored_key(StoredKey::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        let key = decode_stored_key(StoredKey::deserialize(deserializer)?)
+            .map_err(serde::de::Error::custom)?;
+        key.validate_depth().map_err(serde::de::Error::custom)?;
+        Ok(key)
     }
 }
 
@@ -154,6 +176,9 @@ fn decode_array_parts(parts: Vec<StoredKey>) -> Result<Key, &'static str> {
     for part in parts {
         if result.is_some() {
             return Err("trailing compound key parts");
+        }
+        if matches!(part, StoredKey::ArrayLength(_)) && frames.len() >= MAX_KEY_DEPTH {
+            return Err(KEY_DEPTH_ERROR);
         }
         let mut key = match part {
             StoredKey::ArrayLength(0) => Key::Array(Vec::new()),
@@ -256,7 +281,7 @@ impl From<&str> for KeyPath {
 
 #[cfg(test)]
 mod tests {
-    use super::{Key, KeyPath};
+    use super::{Key, KeyPath, MAX_KEY_DEPTH};
 
     #[test]
     fn key_order_and_json_roundtrip_preserve_all_key_types() {
@@ -314,6 +339,48 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<Key>(wire).is_err(), "{wire}");
         }
+    }
+
+    #[test]
+    fn compound_key_depth_is_bounded_for_flat_and_legacy_storage() {
+        let mut boundary = Key::from(1);
+        for _ in 0..MAX_KEY_DEPTH {
+            boundary = Key::Array(vec![boundary]);
+        }
+        let accepted = serde_json::to_string(&boundary).unwrap();
+        assert_eq!(serde_json::from_str::<Key>(&accepted).unwrap(), boundary);
+        let legacy_outer = format!(r#"{{"Array":[{accepted}]}}"#);
+        assert!(serde_json::from_str::<Key>(&legacy_outer).is_err());
+        assert!(serde_json::to_vec(&Key::Array(vec![boundary])).is_err());
+        for depth in [MAX_KEY_DEPTH + 1, 10_000] {
+            for terminal in [r#"{"Integer":1}"#, r#"{"ArrayLength":0}"#] {
+                let arrays = r#"{"ArrayLength":1},"#.repeat(depth);
+                let wire = format!(r#"{{"ArrayParts":[{arrays}{terminal}]}}"#);
+                let error = serde_json::from_str::<Key>(&wire).unwrap_err();
+                assert!(error.to_string().contains("maximum nesting depth"));
+            }
+        }
+    }
+
+    #[test]
+    fn maximum_depth_keys_fit_recursive_operations_on_a_bounded_native_stack() {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut key = Key::from(1);
+                for _ in 0..MAX_KEY_DEPTH {
+                    key = Key::Array(vec![key]);
+                }
+                let copy = key.clone();
+                assert_eq!(key.cmp(&copy), std::cmp::Ordering::Equal);
+                let wire = serde_json::to_vec(&key).unwrap();
+                assert_eq!(serde_json::from_slice::<Key>(&wire).unwrap(), copy);
+                drop(key);
+                drop(copy);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]
