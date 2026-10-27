@@ -78,6 +78,13 @@ async fn multipart_form_submission_uses_accept_charset_on_the_native_navigation_
             serde_json::to_string(value).unwrap()
         ))
         .unwrap();
+        assert!(
+            vm.run_one_dom_manipulation_body_for_test(
+                crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+            )
+            .await
+            .unwrap()
+        );
         let handle = vm
             ._context_host
             .borrow()
