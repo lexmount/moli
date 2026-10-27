@@ -2,7 +2,7 @@ use super::*;
 use crate::network_host::{
     CapturedBlobUrl, ResolveContextUrlError, blob_url_entry, local_url_response_with_blob_entry,
 };
-use crossbeam_channel::{after, bounded, never, select};
+use crossbeam_channel::{after, bounded, never};
 use moli_webapi_declare::WebApiObject;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -689,36 +689,44 @@ fn send_synchronous_worker_xhr(
         });
 
     let result = match spawn_result {
-        Ok(_) => select! {
-            recv(response_rx) -> result => result.unwrap_or_else(|_| {
-                Err("worker sync XHR fetch thread dropped response channel".to_owned())
-            }),
-            recv(timeout_rx) -> _ => {
-                let timeout = xhr_timeout.as_ref().expect("never channel should not fire without xhr timeout");
-                timing.abort(scope);
-                load.cancel();
-                record_worker_subresource_failure(
-                    &state.borrow(),
-                    timeout_document_url,
-                    timeout_request_url,
-                    timeout_request_method,
-                    timeout_request_headers,
-                    timeout_request_body,
-                    SubresourceResourceType::Xhr,
-                    format!(
-                        "Synchronous XMLHttpRequest timed out after {} ms",
-                        timeout.configured_timeout.as_millis()
-                    ),
-                );
-                throw_synchronous_xhr_failure(
-                    scope,
-                    xhr,
-                    &request_url_text,
-                    "TimeoutError",
-                );
-                return;
+        Ok(_) => {
+            let mut wait = crossbeam_channel::Select::new();
+            let response = wait.recv(&response_rx);
+            wait.recv(&timeout_rx);
+            let selected = {
+                let _native_wait =
+                    crate::v8_execution_watchdog::V8ExecutionWatchdog::pause_for_native_wait();
+                wait.select()
+            };
+            match selected.index() {
+                index if index == response => selected.recv(&response_rx).unwrap_or_else(|_| {
+                    Err("worker sync XHR fetch thread dropped response channel".to_owned())
+                }),
+                _ => {
+                    let _ = selected.recv(&timeout_rx);
+                    let timeout = xhr_timeout
+                        .as_ref()
+                        .expect("never channel should not fire without xhr timeout");
+                    timing.abort(scope);
+                    load.cancel();
+                    record_worker_subresource_failure(
+                        &state.borrow(),
+                        timeout_document_url,
+                        timeout_request_url,
+                        timeout_request_method,
+                        timeout_request_headers,
+                        timeout_request_body,
+                        SubresourceResourceType::Xhr,
+                        format!(
+                            "Synchronous XMLHttpRequest timed out after {} ms",
+                            timeout.configured_timeout.as_millis()
+                        ),
+                    );
+                    throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "TimeoutError");
+                    return;
+                }
             }
-        },
+        }
         Err(error) => Err(format!(
             "failed to spawn worker sync XHR fetch thread: {error}"
         )),
