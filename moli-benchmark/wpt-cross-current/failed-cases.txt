@@ -86,7 +86,6 @@ css/css-color/parsing/color-valid-hwb.html
 css/css-color/parsing/color-valid-lab.html
 css/css-color/parsing/color-valid-rgb.html
 css/css-color/parsing/opacity-valid.html
-css/css-color/system-color-consistency.html
 css/css-conditional/container-queries/container-computed.html
 css/css-conditional/container-queries/container-ident-function.html
 css/css-conditional/container-queries/container-inner-at-rules.html
@@ -2386,7 +2385,6 @@ domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html
 domparsing/DOMParser-parseFromString-url-pushstate.html
 domparsing/DOMParser-parseFromString-url.html
-domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-internal-subset.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/XMLSerializer-serializeToString.html
@@ -2569,8 +2567,6 @@ focus/activeelement-after-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-different-site-iframe.html
 focus/activeelement-after-focusing-same-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-same-site-iframe.html
-focus/activeelement-after-immediately-focusing-different-site-iframe-contentwindow.html
-focus/activeelement-after-immediately-focusing-same-site-iframe-contentwindow.html
 focus/focus-event-after-iframe-gets-focus.html
 focus/focus-restoration-in-different-site-iframes-window.html
 focus/focus-restoration-in-different-site-iframes.html
@@ -2860,6 +2856,7 @@ html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitiv
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
@@ -3000,7 +2997,6 @@ html/semantics/scripting-1/the-script-element/text-module/integrity.html
 html/semantics/scripting-1/the-script-element/text-module/module.html
 html/semantics/scripting-1/the-script-element/text-module/service-worker-test.https.html
 html/semantics/scripting-1/the-template-element/additions-to-the-steps-to-clone-a-node/templates-copy-document-owner.html
-html/semantics/scripting-1/the-template-element/definitions/template-contents-owner-document-type.html
 html/semantics/scripting-1/the-template-element/template-element/node-document-changes.html
 html/semantics/scripting-1/the-template-element/template-element/template-content-node-document.html
 html/semantics/sections/headingoffset-and-headingreset.html
@@ -3024,8 +3020,6 @@ html/syntax/parsing/cdata-in-integration-point-fragment.html
 html/syntax/parsing/html5lib_webkit02.html?run_type=uri
 html/syntax/parsing/html5lib_webkit02.html?run_type=write
 html/syntax/parsing/html5lib_webkit02.html?run_type=write_single
-html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-body-token.html
-html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-head-token.html
 html/syntax/parsing/template/creating-an-element-for-the-token/template-owner-document.html
 html/webappapis/dynamic-markup-insertion/document-write/module-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-static-import-delayed.html
@@ -3168,7 +3162,6 @@ requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
 resource-timing/cached-image-gets-single-entry.html
 resource-timing/document-domain-no-impact-opener.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/initiator-type/input.html
 resource-timing/initiator-type/link.html
 resource-timing/initiator-type/picture.html
@@ -3221,6 +3214,7 @@ service-workers/service-worker/ServiceWorkerGlobalScope/update.https.html
 service-workers/service-worker/active.https.html
 service-workers/service-worker/add-routes.https.html
 service-workers/service-worker/claim-affect-other-registration.https.html
+service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/claim-using-registration.https.html
 service-workers/service-worker/claim-worker-fetch.https.html
 service-workers/service-worker/client-navigate.https.html
@@ -3229,6 +3223,7 @@ service-workers/service-worker/clients-matchall-blob-url-worker.https.html
 service-workers/service-worker/clients-matchall-client-types.https.html
 service-workers/service-worker/clients-matchall-exact-controller.https.html
 service-workers/service-worker/clients-matchall-include-uncontrolled.https.html
+service-workers/service-worker/clients-matchall-order.https.html
 service-workers/service-worker/clients-matchall.https.html
 service-workers/service-worker/controlled-dedicatedworker-postMessage.https.html
 service-workers/service-worker/controlled-iframe-postMessage.https.html
@@ -3282,7 +3277,6 @@ service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
-service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/synced-state.https.html
 service-workers/service-worker/unregister-then-register-new-script.https.html
 service-workers/service-worker/unregister-then-register.https.html
@@ -3368,7 +3362,6 @@ svg/types/scripted/SVGGraphicsElement.getCTM-empty-viewBox.html
 svg/types/scripted/SVGGraphicsElement.getScreenCTM.html
 svg/types/scripted/SVGLength-cap.html
 svg/types/scripted/SVGLength-lh.html
-svg/types/scripted/SVGLength-px-with-context.html
 svg/types/scripted/SVGLength-px.html
 svg/types/scripted/SVGLength-rem.html
 svg/types/scripted/SVGLength-rlh.html
@@ -3443,10 +3436,8 @@ viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html
 wasm/jsapi/proto-from-ctor-realm.html
 webcodecs/videoFrame-canvasImageSource.html
-webidl/current-realm.html
 webidl/ecmascript-binding/constructors.html
 webidl/ecmascript-binding/default-toJSON-cross-realm.html
-webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html
 webidl/ecmascript-binding/window-named-properties-object.html
 webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
@@ -3462,11 +3453,7 @@ worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
-xhr/abort-event-order.htm
 xhr/data-uri.htm
-xhr/open-after-abort.htm
-xhr/open-during-abort-event.htm
-xhr/open-during-abort.htm
 xhr/open-method-bogus.htm
 xhr/open-method-insecure.htm
 xhr/open-url-multi-window-3.htm
@@ -3478,9 +3465,7 @@ xhr/responsetext-decoding.htm
 xhr/responsexml-document-properties.htm
 xhr/send-content-type-charset.htm
 xhr/send-content-type-string.htm
-xhr/send-data-unexpected-tostring.htm
 xhr/send-entity-body-document-bogus.htm
 xhr/send-entity-body-document.htm
 xhr/send-no-response-event-order.htm
 xhr/send-receive-utf16.htm
-xml/xml-prolog-accepted-versions.html

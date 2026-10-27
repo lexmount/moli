@@ -499,6 +499,7 @@ css/css-color/parsing/relative-color-out-of-gamut.html
 css/css-color/relative-color-with-zoom.html
 css/css-color/relative-currentcolor-visited-getcomputedstyle.html
 css/css-color/system-color-compute.html
+css/css-color/system-color-consistency.html
 css/css-color/system-color-support.html
 css/css-conditional/at-supports-whitespace.html
 css/css-conditional/container-queries/at-container-parsing.html
@@ -4276,6 +4277,7 @@ dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
 domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-stylesheets.html
+domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
 domparsing/createContextualFragment-in-detached-xml-document-crash.html
 domparsing/createContextualFragment.html
@@ -4352,6 +4354,7 @@ editing/crashtests/delete-to-join-inline-blocks.html
 editing/crashtests/deleteforward-from-before-meta-pre-line-container-containing-audio.html
 editing/crashtests/design-mode-textarea.html
 editing/crashtests/designMode-after-deleting-parent-of-contenteditable.html
+editing/crashtests/designMode-document-will-be-blurred-by-focus-event-listener.html
 editing/crashtests/designMode-on-of-lazy-loading-iframe.html
 editing/crashtests/editing-on-newline-should-not-crash.html
 editing/crashtests/empty-editable.html
@@ -5729,7 +5732,9 @@ fetch/content-length/content-length.html
 fetch/nosniff/importscripts.html
 fetch/security/dangling-markup/media.html
 focus/activeelement-after-focusing-different-site-iframe-then-immediately-focusing-back.html
+focus/activeelement-after-immediately-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-immediately-focusing-different-site-iframe.html
+focus/activeelement-after-immediately-focusing-same-site-iframe-contentwindow.html
 focus/activeelement-after-immediately-focusing-same-site-iframe.html
 focus/anchor-remove-href.html
 focus/focus-already-focused-iframe-deep-different-site.html
@@ -6269,8 +6274,11 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme-single-value-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
 html/semantics/document-metadata/the-meta-element/the-lang-attribute-012.html
 html/semantics/document-metadata/the-style-element/historical.html
@@ -6391,7 +6399,6 @@ html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -7133,6 +7140,7 @@ html/semantics/scripting-1/the-template-element/additions-to-parsing-xhtml-docum
 html/semantics/scripting-1/the-template-element/additions-to-parsing-xhtml-documents/template-child-nodes.html
 html/semantics/scripting-1/the-template-element/additions-to-serializing-xhtml-documents/outerhtml.html
 html/semantics/scripting-1/the-template-element/additions-to-the-steps-to-clone-a-node/template-clone-children.html
+html/semantics/scripting-1/the-template-element/definitions/template-contents-owner-document-type.html
 html/semantics/scripting-1/the-template-element/definitions/template-contents-owner-test-001.html
 html/semantics/scripting-1/the-template-element/definitions/template-contents-owner-test-002.html
 html/semantics/scripting-1/the-template-element/definitions/template-contents.html
@@ -7435,7 +7443,9 @@ html/syntax/parsing/quotes-in-meta.html
 html/syntax/parsing/template/additions-to-foster-parenting/template-is-a-foster-parent-element.html
 html/syntax/parsing/template/additions-to-foster-parenting/template-is-not-a-foster-parent-element.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/generating-of-implied-end-tags.html
+html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-body-token.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-frameset-token.html
+html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-head-token.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-html-token.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/start-tag-body.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/start-tag-html.html
@@ -8291,6 +8301,9 @@ resource-timing/initiator-type/img.html
 resource-timing/initiator-type/script.html
 resource-timing/internal-resources-not-counted.html
 resource-timing/link-sequence-of-events.html
+resource-timing/nested-context-navigations-embed.html
+resource-timing/nested-context-navigations-iframe.html
+resource-timing/nested-context-navigations-object.html
 resource-timing/queue-entry-regardless-buffer-size.html
 resource-timing/resource-ignore-data-url.html
 resource-timing/resource-timing-failed-fetch.html
@@ -8409,7 +8422,6 @@ service-workers/service-worker/activate-event-after-install-state-change.https.h
 service-workers/service-worker/activation-after-registration.https.html
 service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
-service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
@@ -8907,6 +8919,7 @@ svg/types/scripted/SVGGraphicsElement.getBBox-07.html
 svg/types/scripted/SVGGraphicsElement.getBBox-08.html
 svg/types/scripted/SVGLength-ch.html
 svg/types/scripted/SVGLength-ic.html
+svg/types/scripted/SVGLength-px-with-context.html
 svg/types/scripted/SVGLength-zoom.html
 svg/types/scripted/SVGLength.html
 svg/types/scripted/SVGLengthList-appendItem.html
@@ -9026,10 +9039,9 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
+trusted-types/trusted-types-navigation.html?01-05
 trusted-types/trusted-types-navigation.html?06-10
-trusted-types/trusted-types-navigation.html?11-15
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -9375,10 +9387,12 @@ web-nfc/nfc_insecure_context.html
 web-share/canShare-insecure.http.html
 web-share/share-securecontext.http.html
 webauthn/securecontext.http.html
+webidl/current-realm.html
 webidl/ecmascript-binding/allow-resizable.html
 webidl/ecmascript-binding/attributes-accessors-unique-function-objects.html
 webidl/ecmascript-binding/default-iterator-object.html
 webidl/ecmascript-binding/es-exceptions/exceptions.html
+webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html
 webidl/ecmascript-binding/has-instance.html
 webidl/ecmascript-binding/interface-object-set-receiver.html
 webidl/ecmascript-binding/interface-object.html
@@ -9700,6 +9714,7 @@ workers/shared-worker-parse-error-failure.html
 workers/shared-worker-runtime-error-is-not-parse-error.html
 workers/worker-request-animation-frame.html
 workers/worker-url-encoding.html
+xhr/abort-event-order.htm
 xhr/access-control-basic-non-cors-safelisted-content-type.htm
 xhr/access-control-expose-headers-on-redirect.html
 xhr/access-control-response-with-exposed-headers.htm
@@ -9726,7 +9741,11 @@ xhr/getresponseheader-special-characters.htm
 xhr/getresponseheader-unsent-opened-state.htm
 xhr/historical.html
 xhr/loadstart-and-state.html
+xhr/open-after-abort.htm
 xhr/open-after-setrequestheader.htm
+xhr/open-during-abort-event.htm
+xhr/open-during-abort-processing.htm
+xhr/open-during-abort.htm
 xhr/open-method-case-insensitive.htm
 xhr/open-method-case-sensitive.htm
 xhr/open-method-responsetype-set-sync.htm
@@ -9734,6 +9753,7 @@ xhr/open-open-send.htm
 xhr/open-open-sync-send.htm
 xhr/open-parameters-toString.htm
 xhr/open-referer.htm
+xhr/open-send-during-abort.htm
 xhr/open-send-open.htm
 xhr/open-sync-open-send.htm
 xhr/open-url-about-blank-window.htm
@@ -9776,6 +9796,7 @@ xhr/send-accept-language.htm
 xhr/send-after-setting-document-domain.htm
 xhr/send-blob-with-no-mime-type.html
 xhr/send-data-blob.htm
+xhr/send-data-unexpected-tostring.htm
 xhr/send-entity-body-basic.htm
 xhr/send-entity-body-empty.htm
 xhr/send-entity-body-get-head-async.htm
@@ -9864,6 +9885,7 @@ xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with same timeo
 xhr/xmlhttprequest-timeout-worker-twice.html?timeout fires normally with same timeout set twice
 xhr/xmlhttprequest-unsent.htm
 xml/xml-doc-innerHTML-crash.html
+xml/xml-prolog-accepted-versions.html
 xml/xslt/invalid-output-encoding-crash.html
 xml/xslt/svg/crashtests/xslt-in-img-001.html
 xml/xslt/svg/crashtests/xslt-in-img-002.html

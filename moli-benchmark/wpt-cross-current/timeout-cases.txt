@@ -52,7 +52,6 @@ dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
 editing/crashtests/designMode-caret-change.html
-editing/crashtests/designMode-document-will-be-blurred-by-focus-event-listener.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
 encrypted-media/media-element-event-handler-attributes.html
@@ -103,9 +102,6 @@ html/editing/the-hidden-attribute/hidden-until-found-and-details.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-empty.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-nonexistent.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-top.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_in_src.htm
@@ -182,6 +178,7 @@ page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
 print/crashtests/reload-crash.html
 requestidlecallback/callback-suspended.html
+resource-timing/iframe-sequence-of-events.html
 resource-timing/input-sequence-of-events.html
 resource-timing/tentative/initiator-url/post-message-shared-worker.html
 resource-timing/tentative/initiator-url/post-message-worker.html
@@ -220,6 +217,7 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
+service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
@@ -233,6 +231,4 @@ web-based-payment-handler/payment-request-event-constructor.https.serviceworker.
 webmessaging/broadcastchannel/cross-origin.html
 webstorage/event_local_window_open_oldvalue.html
 webusb/usb.serviceworker.https.html
-xhr/open-during-abort-processing.htm
-xhr/open-send-during-abort.htm
 xhr/open-url-multi-window-4.htm
