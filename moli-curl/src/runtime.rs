@@ -48,6 +48,22 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
     pub fn new(
         config: CurlMultiRuntimeConfig,
     ) -> Result<(Self, Receiver<CurlMultiCompletion<H, C>>)> {
+        Self::construct(config, None)
+    }
+
+    /// Polls active HTTP handlers on their existing owner between curl turns.
+    /// The callback must be nonblocking; it cannot enter a script engine.
+    pub fn new_with_http_handler_poll(
+        config: CurlMultiRuntimeConfig,
+        poll: fn(&mut H),
+    ) -> Result<(Self, Receiver<CurlMultiCompletion<H, C>>)> {
+        Self::construct(config, Some(poll))
+    }
+
+    fn construct(
+        config: CurlMultiRuntimeConfig,
+        http_handler_poll: Option<fn(&mut H)>,
+    ) -> Result<(Self, Receiver<CurlMultiCompletion<H, C>>)> {
         config.validate()?;
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (completion_tx, completion_rx) = crossbeam_channel::unbounded();
@@ -70,6 +86,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
                     waker_tx,
                     owner_shutdown,
                     websocket_rx,
+                    http_handler_poll,
                     #[cfg(test)]
                     started,
                 )

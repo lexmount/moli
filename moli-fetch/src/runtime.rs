@@ -400,8 +400,11 @@ impl FetchRuntimeOwner {
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         #[cfg(test)]
         let owner_started = Arc::new(AtomicBool::new(false));
-        let (curl_runtime, curl_completion_rx) = CurlMultiRuntime::new(curl_runtime_config(config))
-            .expect("failed to start fetch curl multi runtime");
+        let (curl_runtime, curl_completion_rx) = CurlMultiRuntime::new_with_http_handler_poll(
+            curl_runtime_config(config),
+            FetchTransferHandler::poll_upload_progress,
+        )
+        .expect("failed to start fetch curl multi runtime");
         let websocket_connector = curl_runtime
             .websocket_connector()
             .with_network_address_policy(config.network_address_policy());
@@ -1529,6 +1532,13 @@ impl RuntimeOwner {
         state: &mut OwnerState,
         mut completion: RuntimeCurlCompletion,
     ) {
+        if let Some(observer) = completion
+            .easy
+            .as_ref()
+            .and_then(|easy| easy.get_ref().upload_observer.as_ref())
+        {
+            observer.finish_reporting();
+        }
         completion
             .context
             .response_progress()
@@ -3022,6 +3032,8 @@ pub(crate) struct FetchTransferHandler {
     response_body_observed: bool,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     upload_observer: Option<crate::UploadObserver>,
+    upload_response_status: Option<u16>,
+    upload_request_is_connect: bool,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
     dictionary_response: Option<crate::compression_dictionary::DictionaryResponse>,
     http_authentication: Option<crate::http_authentication::HttpAuthenticationResponse>,
@@ -3077,6 +3089,8 @@ impl FetchTransferHandler {
             response_body_observed: false,
             network_observation_recorder: None,
             upload_observer: None,
+            upload_response_status: None,
+            upload_request_is_connect: false,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
             dictionary_response: None,
             http_authentication: None,
@@ -3135,9 +3149,20 @@ impl FetchTransferHandler {
     ) {
         self.response_body_observed = false;
         self.upload_observer = upload_observer;
+        self.upload_response_status = None;
+        self.upload_request_is_connect = false;
+        if let Some(observer) = &self.upload_observer {
+            observer.begin_transfer();
+        }
         self.network_observation_recorder = network_observation_recorder;
         self.proxy_connect_response_recorder
             .begin_transfer(capture_proxy_connect_response);
+    }
+
+    fn poll_upload_progress(&mut self) {
+        if let Some(observer) = &self.upload_observer {
+            observer.report_if_due();
+        }
     }
 
     pub(crate) fn begin_dictionary_response(&mut self, request: &Request, url: &Url) {
@@ -3317,6 +3342,18 @@ impl Handler for FetchTransferHandler {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
+        if let Some(status) = crate::response::parse_http_response_status_line(data) {
+            self.upload_response_status = Some(status.status);
+        } else if data.iter().all(|byte| matches!(*byte, b'\r' | b'\n'))
+            && self
+                .upload_response_status
+                .take()
+                .is_some_and(|status| status >= 200)
+            && !self.upload_request_is_connect
+            && let Some(observer) = &self.upload_observer
+        {
+            observer.finish_reporting();
+        }
         if let Some(recorder) = self.network_observation_recorder.as_ref() {
             recorder.record_response_header_line(data);
         }
@@ -3368,6 +3405,7 @@ impl Handler for FetchTransferHandler {
                 let is_proxy_connect = self
                     .proxy_connect_response_recorder
                     .record_outgoing_header_block(data);
+                self.upload_request_is_connect = is_proxy_connect;
                 if !is_proxy_connect && let Some(observer) = &self.upload_observer {
                     observer.request_headers_sent();
                 }
