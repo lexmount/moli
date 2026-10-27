@@ -302,7 +302,7 @@ pub(in crate::worker) enum WorkerXhrEvent {
     },
     Upload {
         xhr_id: u32,
-        event: moli_fetch::UploadEvent,
+        report: moli_fetch::UploadReport,
     },
     Completion(Box<WorkerXhrCompletion>),
 }

@@ -236,17 +236,14 @@ promise_test(async function () {
   assert_array_equals(
     result.uploadEvents,
     [
-      "loadstart:true:true:false:0:0",
-      "progress:true:true:false:0:0",
-      "load:true:true:false:0:0",
-      "loadend:true:true:false:0:0",
+      "loadstart:true:true:true:0:0",
     ],
-    "send(\"\") should dispatch upload completion events with zero-byte totals",
+    "send(\"\") should expose a known empty upload without completion notifications",
   );
   assert_array_equals(result.xhrEvents, ["load", "loadend"], "empty upload XHR should complete");
   assert_equals(result.xhr.status, 200, "empty upload POST status");
   assert_equals(result.xhr.response.body, "", "empty string body should be sent as a zero-byte body");
-}, "XMLHttpRequestUpload dispatches zero-byte upload events for an empty string request body");
+}, "XMLHttpRequestUpload reports only loadstart for an empty string request body");
 
 promise_test(async function () {
   const result = await abort_from_upload_event_case("loadstart");

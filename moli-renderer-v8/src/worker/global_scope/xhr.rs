@@ -68,6 +68,7 @@ pub(in crate::worker) fn schedule_worker_xhr_timeout<'s>(
     if xhr_id == 0 {
         return;
     }
+    let first_deadline = tokio::time::Instant::now() + Duration::from_millis(delay_ms);
 
     cancel_worker_xhr_timeout(scope, xhr);
 
@@ -95,6 +96,7 @@ pub(in crate::worker) fn schedule_worker_xhr_timeout<'s>(
             scope, callback,
         ),
         delay_ms,
+        first_deadline: Some(first_deadline),
         is_interval: false,
         extra_args: Vec::new(),
     };
@@ -1048,7 +1050,7 @@ pub(in crate::worker) fn drain_worker_xhr_event(
                 timing.publish(scope);
             }
         }
-        WorkerXhrEvent::Upload { xhr_id, event } => {
+        WorkerXhrEvent::Upload { xhr_id, report } => {
             let xhr = {
                 let state = state.borrow();
                 let Some(pending) = state.pending_xhrs.get(&xhr_id) else {
@@ -1056,12 +1058,13 @@ pub(in crate::worker) fn drain_worker_xhr_event(
                 };
                 v8::Local::new(scope, &pending.xhr)
             };
-            if !apply_xhr_upload_event(scope, xhr, u64::from(xhr_id), event)
+            if !apply_xhr_upload_event(scope, xhr, u64::from(xhr_id), report.event)
                 && let Some(pending) = state.borrow_mut().pending_xhrs.remove(&xhr_id)
             {
                 pending.timing.abort(scope);
                 pending.load.cancel();
             }
+            drop(report);
         }
         WorkerXhrEvent::Completion(completion) => {
             drain_worker_xhr_completion(scope, state, *completion)

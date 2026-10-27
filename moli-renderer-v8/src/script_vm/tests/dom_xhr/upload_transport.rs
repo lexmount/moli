@@ -45,7 +45,8 @@ async fn xhr_upload_completes_before_response_and_preserves_reentrant_event_step
                 b"payload".as_slice()
             };
             assert_eq!(body, expected);
-            // No response bytes can be available until JS observes upload end.
+            // Nonempty uploads finish before response bytes are released.
+            // Chromium reports no completion events for an empty body.
             release_rx.await.unwrap();
             if mode == "redirect" {
                 socket.write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
@@ -134,7 +135,7 @@ async fn xhr_upload_completes_before_response_and_preserves_reentrant_event_step
         let mut release = Some(release_tx);
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                if (mode == "absent"
+                if (matches!(mode, "absent" | "empty")
                     || vm.eval("events.some(e => e[0] === 'loadend')").unwrap() == "true")
                     && let Some(release) = release.take()
                 {
@@ -155,8 +156,13 @@ async fn xhr_upload_completes_before_response_and_preserves_reentrant_event_step
         })
         .await
         .unwrap_or_else(|_| panic!("upload stalled: {mode}"));
-        let has_body = mode != "absent";
-        let total = if mode == "empty" { 0 } else { 7 };
+        let reports_upload = !matches!(mode, "absent" | "empty");
+        if mode == "empty" {
+            assert_eq!(
+                vm.eval("JSON.stringify(events)").unwrap(),
+                "[[\"loadstart\",0,0,true]]"
+            );
+        }
         assert_eq!(
             vm.eval("String(result)").unwrap(),
             if mode == "abort-complete" { "0" } else { "200" },
@@ -165,13 +171,13 @@ async fn xhr_upload_completes_before_response_and_preserves_reentrant_event_step
         assert_eq!(
             vm.eval("events.filter(e => e[0] === 'load').length")
                 .unwrap(),
-            if has_body { "1" } else { "0" },
+            if reports_upload { "1" } else { "0" },
             "{mode}"
         );
         assert_eq!(
             vm.eval("events.filter(e => e[0] === 'loadend').length")
                 .unwrap(),
-            if has_body { "1" } else { "0" },
+            if reports_upload { "1" } else { "0" },
             "{mode}"
         );
         assert_eq!(
@@ -180,11 +186,11 @@ async fn xhr_upload_completes_before_response_and_preserves_reentrant_event_step
             "false",
             "{mode}"
         );
-        if has_body {
+        if reports_upload {
             assert_eq!(
                 vm.eval("JSON.stringify(events.find(e => e[0] === 'loadend').slice(1))")
                     .unwrap(),
-                format!("[{total},{total},{}]", total > 0),
+                "[7,7,true]",
                 "{mode}"
             );
         }
@@ -214,8 +220,8 @@ async fn xhr_partial_upload_abort_and_reopen_discard_old_network_events() {
             assert!(head.starts_with(b"POST /upload HTTP/1.1\r\n"));
             let mut bytes = 0;
             let mut chunk = [0; 65536];
-            // Upload progress is throttled to 50 ms. Open one bounded window
-            // after that interval, then keep backpressure until JS cancels.
+            // Open one bounded receive window after a reporting interval,
+            // then keep backpressure until JS cancels.
             tokio::time::sleep(Duration::from_millis(150)).await;
             if let Ok(count) = socket.read(&mut chunk).await {
                 bytes += count;

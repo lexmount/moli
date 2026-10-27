@@ -589,6 +589,7 @@ pub(crate) fn worker_abort_signal_timeout_callback<'s>(
         },
         callback: super::timer_callback::WorkerTimerCallback::browser_function(scope, callback),
         delay_ms: parsed.milliseconds,
+        first_deadline: None,
         is_interval: false,
         extra_args: Vec::new(),
     };

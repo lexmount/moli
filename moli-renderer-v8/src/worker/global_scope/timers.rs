@@ -1,5 +1,6 @@
 use super::super::timer_callback::WorkerTimerCallback;
 use super::*;
+use std::collections::HashSet;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DedicatedWorkerGlobalScope.requestAnimationFrame")]
@@ -49,6 +50,7 @@ pub(super) fn worker_set_timeout_callback<'s>(
             id: timer_id,
             callback,
             delay_ms,
+            first_deadline: None,
             is_interval: false,
             extra_args,
         };
@@ -96,6 +98,7 @@ pub(super) fn worker_set_interval_callback<'s>(
             id: timer_id,
             callback,
             delay_ms,
+            first_deadline: None,
             is_interval: true,
             extra_args,
         };
@@ -248,6 +251,7 @@ pub(super) fn worker_request_animation_frame_callback<'s>(
             target_timestamp,
         ),
         delay_ms: 16,
+        first_deadline: None,
         is_interval: false,
         extra_args: Vec::new(),
     };
@@ -310,12 +314,26 @@ impl WorkerIsolateTimerQueues {
         self.cancelled.borrow_mut().push(timer_id);
     }
 
+    pub(in crate::worker) fn is_cancelled(&self, timer_id: u32) -> bool {
+        self.cancelled.borrow().contains(&timer_id)
+    }
+
     pub(in crate::worker) fn drain_pending(&self) -> Vec<TimerInfo> {
         self.pending.borrow_mut().drain(..).collect()
     }
 
-    pub(in crate::worker) fn drain_cancelled(&self) -> Vec<u32> {
-        self.cancelled.borrow_mut().drain(..).collect()
+    pub(in crate::worker) fn drain_cancelled(&self) -> HashSet<u32> {
+        let cancelled = self
+            .cancelled
+            .borrow_mut()
+            .drain(..)
+            .collect::<HashSet<_>>();
+        if !cancelled.is_empty() {
+            self.pending
+                .borrow_mut()
+                .retain(|timer| !cancelled.contains(&timer.id));
+        }
+        cancelled
     }
 }
 
@@ -329,6 +347,10 @@ pub(in crate::worker) struct TimerInfo {
     pub(in crate::worker) id: u32,
     pub(in crate::worker) callback: crate::worker::timer_callback::WorkerTimerCallback,
     pub(in crate::worker) delay_ms: u64,
+    /// Browser algorithms such as XHR count from send(), including time spent
+    /// in the registering script task. Ordinary JS timers retain their existing
+    /// event-loop admission and interval scheduling.
+    pub(in crate::worker) first_deadline: Option<tokio::time::Instant>,
     pub(in crate::worker) is_interval: bool,
     pub(in crate::worker) extra_args: Vec<v8::Global<v8::Value>>,
 }

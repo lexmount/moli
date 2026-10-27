@@ -102,7 +102,7 @@ pub(crate) fn xhr_dispatch_upload_progress_events(
     };
     // The listener flag is tested once on entry to the event algorithm, even
     // when an earlier event reopens the XHR and resets its request state.
-    for event_type in event_types {
+    for &event_type in event_types {
         if scope.is_execution_terminating() {
             return;
         }
@@ -110,7 +110,7 @@ pub(crate) fn xhr_dispatch_upload_progress_events(
             scope,
             upload,
             event_type,
-            total > 0.0,
+            event_type == "loadstart" || total > 0.0,
             loaded,
             total,
         );

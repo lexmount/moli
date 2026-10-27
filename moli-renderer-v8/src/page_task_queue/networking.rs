@@ -3,7 +3,7 @@ use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource, OwnerTaskReady
 use crate::{
     page_resource_completion::{
         PageResourceCompletionTurnAction, RendererPageResourceCompletion,
-        RendererPageResourceCompletionOwner,
+        RendererPageResourceCompletionLocalOwner, RendererPageResourceCompletionOwner,
     },
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::PageOwnerTurnOutcome,
@@ -30,6 +30,17 @@ pub(crate) enum RendererPageNetworkingOwner {
     WorkerHostBridge(RendererPageWorkerHostBridgeOwner),
     WebRtc(super::RendererPageWebRtcOwner),
     WebTransport(super::RendererPageWebTransportOwner),
+}
+
+impl RendererPageNetworkingOwner {
+    /// Browser network notifications already posted to the owner precede a
+    /// delayed timer wake. Parser and DOM loading continuations retain their
+    /// ordinary task arbitration and their position in this source's FIFO.
+    pub(crate) fn precedes_delayed_timer(self) -> bool {
+        matches!(self, Self::ResourceCompletion(owner) if matches!(
+            owner.local_owner(), RendererPageResourceCompletionLocalOwner::AsyncSubresource(_)
+        ))
+    }
 }
 
 /// One concrete task in the Page-owned HTML networking source.
