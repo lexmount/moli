@@ -120,6 +120,7 @@ impl DocumentLayoutServices {
                         .collect(),
                     text: None,
                     transform: PaintTransform2D::IDENTITY,
+                    stroke: None,
                 });
             }
         }
