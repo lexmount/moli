@@ -54,8 +54,8 @@ fn complete_local_font_resources(
     completions: &mut RendererResourceCompletionTestHarness,
 ) {
     for _ in 0..16 {
+        run_font_tasks(vm);
         let Some(completion) = completions.pop_next_async_subresource_event() else {
-            run_font_tasks(vm);
             return;
         };
         let activity = vm

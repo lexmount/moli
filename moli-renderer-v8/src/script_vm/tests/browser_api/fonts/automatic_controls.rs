@@ -1,15 +1,18 @@
-use super::selection_order::{order_font_data, order_vm};
+use super::selection_order::{order_font_data, order_vm_with_resource_completions};
 use super::*;
 use crate::protocol_types::OptionalResourceFetchMask;
 
-pub(super) fn font_usage_vm() -> StandaloneScriptVmHarness {
-    let mut vm = order_vm();
+pub(super) fn font_usage_vm() -> (
+    StandaloneScriptVmHarness,
+    RendererResourceCompletionTestHarness,
+) {
+    let (mut vm, completions) = order_vm_with_resource_completions();
     vm.current_main_document_resource_loader()
         .unwrap()
         .request_client()
         .set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
-    vm
+    (vm, completions)
 }
 
 #[test]
@@ -80,7 +83,7 @@ fn automatic_fonts_select_labels_match_the_rendered_control_rows() {
             "unloaded",
         ),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, mut completions) = font_usage_vm();
         let markup = serde_json::to_string(&format!(
             "<select id='control' style='font-family:SelectFace' {attributes}>{options}</select>"
         ))
@@ -94,7 +97,7 @@ fn automatic_fonts_select_labels_match_the_rendered_control_rows() {
         vm.reconcile_document_font_resources();
         vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
             .unwrap();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("face.status").unwrap(),
             expected,
@@ -110,7 +113,7 @@ fn automatic_fonts_use_the_visible_placeholder_pseudo_style() {
     let (_, wide) = order_font_data();
     for tag in ["input", "textarea"] {
         for value in ["", "AAAA"] {
-            let mut vm = font_usage_vm();
+            let (mut vm, mut completions) = font_usage_vm();
             vm.eval(&format!(r#"
                 globalThis.placeholderFace=new FontFace('PlaceholderFace','url(data:font/ttf;base64,{wide})');
                 globalThis.valueFace=new FontFace('ValueFace','url(data:font/ttf;base64,{wide})');
@@ -125,7 +128,7 @@ fn automatic_fonts_use_the_visible_placeholder_pseudo_style() {
             vm.reconcile_document_font_resources();
             vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
                 .unwrap();
-            run_font_tasks(&mut vm);
+            complete_local_font_resources(&mut vm, &mut completions);
             assert_eq!(
                 vm.eval("[placeholderFace.status,valueFace.status].join(',')")
                     .unwrap(),
@@ -150,7 +153,7 @@ fn automatic_fonts_include_generated_list_marker_text() {
         ("block", "'A'", "unloaded"),
         ("list-item", "none", "unloaded"),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, mut completions) = font_usage_vm();
         let css = serde_json::to_string(&format!(
             "#marker {{display:{display}}} #marker::marker {{content:{content};font-family:MarkerFace}}"
         ))
@@ -163,7 +166,7 @@ fn automatic_fonts_include_generated_list_marker_text() {
             const item=document.createElement('div');item.id='marker';item.textContent='body';document.body.append(item);
         "#)).unwrap();
         vm.reconcile_document_font_resources();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("face.status").unwrap(),
             expected,
@@ -188,7 +191,7 @@ fn automatic_fonts_include_default_form_labels_and_skip_nontext_controls() {
         ("hidden", "AAAA", "U+0041", "unloaded"),
         ("image", "AAAA", "U+0041", "unloaded"),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, mut completions) = font_usage_vm();
         vm.eval(&format!(r#"
             globalThis.face=new FontFace('ControlFace','url(data:font/ttf;base64,{wide})',{{unicodeRange:'{range}'}});
             document.fonts.add(face);
@@ -196,7 +199,7 @@ fn automatic_fonts_include_default_form_labels_and_skip_nontext_controls() {
             control.style.fontFamily='ControlFace';document.body.append(control);
         "#)).unwrap();
         vm.reconcile_document_font_resources();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("face.status").unwrap(),
             expected,

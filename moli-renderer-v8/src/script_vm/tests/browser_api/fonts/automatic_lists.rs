@@ -109,7 +109,7 @@ fn automatic_fonts_default_markers_use_rendered_list_types_and_counters() {
             "unloaded",
         ),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, mut completions) = font_usage_vm();
         let markup = serde_json::to_string(markup).unwrap();
         let css = serde_json::to_string(&format!(".target::marker{{font-family:MarkerFace}}{css}"))
             .unwrap();
@@ -122,7 +122,7 @@ fn automatic_fonts_default_markers_use_rendered_list_types_and_counters() {
         vm.reconcile_document_font_resources();
         vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
             .unwrap();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("face.status").unwrap(),
             expected,
@@ -142,7 +142,7 @@ fn automatic_fonts_default_markers_use_rendered_list_types_and_counters() {
 
 #[test]
 fn automatic_fonts_default_markers_count_slotted_items_in_rendered_order() {
-    let mut vm = font_usage_vm();
+    let (mut vm, mut completions) = font_usage_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         const style=document.createElement('style');
@@ -156,13 +156,13 @@ fn automatic_fonts_default_markers_count_slotted_items_in_rendered_order() {
         document.fonts.add(face);
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
 }
 
 fn assert_automatic_marker_number(markup: &str, css: &str, expected: u8) {
-    let mut vm = font_usage_vm();
+    let (mut vm, mut completions) = font_usage_vm();
     let (_, wide) = order_font_data();
     let markup = serde_json::to_string(markup).unwrap();
     let css =
@@ -180,7 +180,7 @@ fn assert_automatic_marker_number(markup: &str, css: &str, expected: u8) {
     vm.reconcile_document_font_resources();
     vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
         .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     let expected_statuses = (1..=4)
         .map(|number| {
             if number == expected {

@@ -22,6 +22,20 @@ pub(super) fn order_vm() -> StandaloneScriptVmHarness {
     vm
 }
 
+pub(super) fn order_vm_with_resource_completions() -> (
+    StandaloneScriptVmHarness,
+    RendererResourceCompletionTestHarness,
+) {
+    let completions = RendererResourceCompletionTestHarness::new();
+    let mut vm = new_parsed_test_vm_with_completion_sender(
+        "https://font-selection-order.test/",
+        ORDER_DOCUMENT,
+        completions.sender(),
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    (vm, completions)
+}
+
 #[tokio::test]
 async fn detached_css_faces_can_be_registered_manually_before_or_after_native_cleanup() {
     let (_, wide) = order_font_data();

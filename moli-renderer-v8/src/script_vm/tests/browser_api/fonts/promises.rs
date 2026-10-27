@@ -1,3 +1,4 @@
+use super::super::promise_rejection::run_rejection_task;
 use super::*;
 
 #[test]
@@ -37,9 +38,10 @@ globalThis.event = new FontFaceSetLoadEvent('loadingerror', {fontfaces: faces});
     );
 }
 
-#[test]
-fn observed_font_face_errors_keep_promise_identity_and_rejection_notifications() {
-    let mut vm = new_storage_test_vm("https://font-promises.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observed_font_face_errors_keep_promise_identity_and_rejection_notifications() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://font-promises.test/", &loader);
     vm.eval(
         r#"
 globalThis.events = [];
@@ -56,6 +58,8 @@ addEventListener('rejectionhandled', event => {
     )
     .unwrap();
     vm.eval("0").unwrap();
+    assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
+    run_rejection_task(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"[["unhandledrejection",0,"SyntaxError"],["unhandledrejection",1,"SyntaxError"]]"#
@@ -70,6 +74,12 @@ addEventListener('rejectionhandled', event => {
     vm.eval("promises.forEach(promise => promise.catch(() => {}))")
         .unwrap();
     vm.eval("0").unwrap();
+    run_rejection_task(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events.slice(2))").unwrap(),
+        r#"[["rejectionhandled",0,"SyntaxError"]]"#
+    );
+    run_rejection_task(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("JSON.stringify(events.slice(2))").unwrap(),
         r#"[["rejectionhandled",0,"SyntaxError"],["rejectionhandled",1,"SyntaxError"]]"#

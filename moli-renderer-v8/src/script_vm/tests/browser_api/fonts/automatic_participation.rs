@@ -3,7 +3,7 @@ use super::selection_order::order_font_data;
 use super::*;
 
 fn assert_participating_text(markup: &str, range: &str, expected: &str) {
-    let mut vm = font_usage_vm();
+    let (mut vm, mut completions) = font_usage_vm();
     let (_, wide) = order_font_data();
     let markup = serde_json::to_string(markup).unwrap();
     vm.eval(&format!(r#"
@@ -16,11 +16,11 @@ fn assert_participating_text(markup: &str, range: &str, expected: &str) {
         container.innerHTML={markup};document.body.append(container);
     "#)).unwrap();
     vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), expected, "{markup}");
     vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
         .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("globalThis.ready===true").unwrap(), "true");
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
 }
@@ -242,7 +242,7 @@ fn font_usage_matches_retained_box_text_for_child_box_policy() {
         ("br", "block", "inline", ""),
         ("br", "contents", "inline", ""),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, _completions) = font_usage_vm();
         vm.eval(&format!(
             r#"
             const target=document.createElement('{tag}');
