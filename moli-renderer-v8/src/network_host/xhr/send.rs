@@ -381,11 +381,16 @@ fn send_synchronous_network_xhr(
         control,
         |_| {},
     );
-    let result = match wait_for_synchronous_load(
-        response_rx,
-        page_context_cancel_rx.wake_receiver(),
-        xhr_timeout,
-    ) {
+    let outcome = {
+        let _native_wait =
+            crate::v8_execution_watchdog::V8ExecutionWatchdog::pause_for_native_wait();
+        wait_for_synchronous_load(
+            response_rx,
+            page_context_cancel_rx.wake_receiver(),
+            xhr_timeout,
+        )
+    };
+    let result = match outcome {
         SynchronousLoadOutcome::Completed(result) => result,
         SynchronousLoadOutcome::TimedOut => {
             cancel_handle.cancel();
