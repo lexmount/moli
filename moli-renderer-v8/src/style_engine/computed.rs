@@ -22,6 +22,7 @@ use style::{
     servo_arc::Arc as ServoArc,
     stylesheets::{CssRuleType, UrlExtraData},
     stylist::RuleInclusion,
+    thread_state::{self, ThreadState},
     traversal::resolve_style,
     values::{
         AtomIdent, resolved,
@@ -73,6 +74,34 @@ pub(crate) struct StyloComputedStyleSnapshot {
     primary: ServoArc<ComputedValues>,
     before: Option<ServoArc<ComputedValues>>,
     after: Option<ServoArc<ComputedValues>>,
+}
+
+impl MoliStyleEngine {
+    /// The observation has already resolved the demanded element and its
+    /// ancestor path. Inspect those canonical styles without admitting new
+    /// computed-style cache entries for the ancestors.
+    pub(crate) fn is_rendered_after_style_observation(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> bool {
+        self.dom_adapter.with_bound_host(host, |adapter| {
+            let Some(mut element) = adapter.element(host, handle) else {
+                return false;
+            };
+            loop {
+                if element.borrow_data().is_none_or(|data| {
+                    !data.has_styles() || data.styles.primary().clone_display().is_none()
+                }) {
+                    return false;
+                }
+                let Some(parent) = element.traversal_parent() else {
+                    return true;
+                };
+                element = parent;
+            }
+        })
+    }
 }
 
 pub(crate) enum StyleObservationSnapshot {
@@ -156,7 +185,7 @@ pub(crate) struct ComputedRenderedStyleFacts {
 }
 
 impl StyloComputedStyleSnapshot {
-    fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
+    pub(crate) fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
         Self {
             primary,
             before: None,
@@ -1488,4 +1517,26 @@ fn inherited_style_parent(host: &DomHost, handle: DomHandle) -> Option<DomHandle
         return host.shadow_root_host(parent);
     }
     Some(parent)
+}
+
+pub(super) struct StyloLayoutThreadStateGuard {
+    entered: bool,
+}
+
+impl StyloLayoutThreadStateGuard {
+    pub(super) fn enter() -> Self {
+        let entered = !thread_state::get().contains(ThreadState::LAYOUT);
+        if entered {
+            thread_state::enter(ThreadState::LAYOUT);
+        }
+        Self { entered }
+    }
+}
+
+impl Drop for StyloLayoutThreadStateGuard {
+    fn drop(&mut self) {
+        if self.entered {
+            thread_state::exit(ThreadState::LAYOUT);
+        }
+    }
 }

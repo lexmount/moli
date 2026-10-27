@@ -15,7 +15,6 @@ use style::{
     shared_lock::StylesheetGuards,
     style_resolver::{PseudoElementResolution, StyleResolverForElement},
     stylist::RuleInclusion,
-    thread_state::{self, ThreadState},
     traversal_flags::TraversalFlags,
 };
 
@@ -23,7 +22,8 @@ use style::{
 use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
-    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
+    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, StyloLayoutThreadStateGuard,
+    clear_element_styles_for_resolution,
     document_quirks_mode, element_style_is_current, marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
     style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
@@ -400,27 +400,5 @@ struct EmptyRegisteredSpeculativePainters;
 impl RegisteredSpeculativePainters for EmptyRegisteredSpeculativePainters {
     fn get(&self, _name: &Atom) -> Option<&dyn RegisteredSpeculativePainter> {
         None
-    }
-}
-
-struct StyloLayoutThreadStateGuard {
-    entered: bool,
-}
-
-impl StyloLayoutThreadStateGuard {
-    fn enter() -> Self {
-        let entered = !thread_state::get().contains(ThreadState::LAYOUT);
-        if entered {
-            thread_state::enter(ThreadState::LAYOUT);
-        }
-        Self { entered }
-    }
-}
-
-impl Drop for StyloLayoutThreadStateGuard {
-    fn drop(&mut self) {
-        if self.entered {
-            thread_state::exit(ThreadState::LAYOUT);
-        }
     }
 }

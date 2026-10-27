@@ -12,7 +12,7 @@ use style::{
     font_face::{FontFaceRule, Source, SourceList},
     font_metrics::FontMetrics,
     moli_font_face::supports_font_source,
-    properties::{ComputedValues, style_structs::Font},
+    properties::{ComputedValues, PropertyDeclarationId, style_structs::Font},
     servo::media_features::PointerCapabilities,
     servo_arc::Arc as ServoArc,
     shared_lock::{Locked, SharedRwLock, ToCssWithGuard},
@@ -153,6 +153,8 @@ pub(in crate::style_engine) fn style_source_metadata_for_stylesheet(
     stylesheet: &ServoArc<Stylesheet>,
 ) -> StyleSourceMetadata {
     let guard = stylesheet.shared_lock.read();
+    let may_have_css_lifecycle =
+        css_rules_may_have_lifecycle(stylesheet.contents(&guard).rules(&guard), &guard);
     let quirks_mode = stylesheet.contents.read_with(&guard).quirks_mode;
     let stylist = new_stylist_with_viewport(
         StyleViewport::default(),
@@ -171,9 +173,47 @@ pub(in crate::style_engine) fn style_source_metadata_for_stylesheet(
         )
         .is_err()
     {
-        return StyleSourceMetadata::default();
+        return StyleSourceMetadata {
+            may_have_css_lifecycle,
+            ..Default::default()
+        };
     }
-    style_source_metadata_from_cascade_data(&cascade_data)
+    style_source_metadata_from_cascade_data(&cascade_data, may_have_css_lifecycle)
+}
+
+pub(in crate::style_engine) fn stylesheet_may_have_css_lifecycle(
+    stylesheet: &ServoArc<Stylesheet>,
+) -> bool {
+    let guard = stylesheet.shared_lock.read();
+    css_rules_may_have_lifecycle(stylesheet.contents(&guard).rules(&guard), &guard)
+}
+
+fn css_rules_may_have_lifecycle(
+    rules: &[CssRule],
+    guard: &style::shared_lock::SharedRwLockReadGuard<'_>,
+) -> bool {
+    let block_may_apply = |block: &style::properties::PropertyDeclarationBlock| {
+        block
+            .declarations()
+            .iter()
+            .any(|declaration| match declaration.id() {
+                PropertyDeclarationId::Longhand(id) => {
+                    id.name().starts_with("animation-") || id.name().starts_with("transition-")
+                }
+                PropertyDeclarationId::Custom(_) => false,
+            })
+    };
+    rules.iter().any(|rule| {
+        let applies = match rule {
+            CssRule::Import(_) | CssRule::Keyframes(_) => true,
+            CssRule::Style(rule) => block_may_apply(rule.read_with(guard).block.read_with(guard)),
+            CssRule::NestedDeclarations(rule) => {
+                block_may_apply(rule.read_with(guard).block.read_with(guard))
+            }
+            _ => false,
+        };
+        applies || css_rules_may_have_lifecycle(rule.children(guard), guard)
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -348,9 +388,13 @@ fn style_source_metadata_for_css_text_with_origin(
     style_source_metadata_for_stylesheet(&stylesheet)
 }
 
-fn style_source_metadata_from_cascade_data(cascade_data: &CascadeData) -> StyleSourceMetadata {
+fn style_source_metadata_from_cascade_data(
+    cascade_data: &CascadeData,
+    may_have_css_lifecycle: bool,
+) -> StyleSourceMetadata {
     StyleSourceMetadata {
         dependency_summary: StyloSourceDependencySummary::from_cascade_data(cascade_data),
+        may_have_css_lifecycle,
     }
 }
 

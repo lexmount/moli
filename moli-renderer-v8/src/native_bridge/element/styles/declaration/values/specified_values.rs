@@ -1,183 +1,139 @@
 use super::*;
 
-pub(crate) fn css_animation_start_applies(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    if !runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(|node| node.is_connected() && node.as_element().is_some())
-    {
-        return false;
+impl ComputedStyleRead<'_> {
+    pub(crate) fn css_lifecycle_is_rendered(&self) -> bool {
+        self.runtime.dom_host().is_connected(self.handle)
+            && self
+                .runtime
+                .is_rendered_after_style_observation(self.handle)
     }
-
-    ComputedStyleRead::new(runtime, handle).css_animation_start_applies()
 }
 
-impl ComputedStyleRead<'_> {
-    pub(in crate::native_bridge::element) fn css_animation_start_applies(&self) -> bool {
-        let resolution = self.resolution_context();
-        let names =
-            active_css_animation_names_with_resolution(self.runtime, self.handle, resolution);
-        if names.is_empty() {
-            return false;
-        }
-
-        let Some(document) = stylesheet_source_document_for_handle(self.runtime, self.handle)
-        else {
-            return false;
-        };
-        for source in effective_raw_stylesheet_sources(
-            self.runtime,
-            document,
-            false,
-            resolution.computation.viewport(),
-        ) {
-            let rules = source_keyframe_rule_snapshots(&source, &names);
-            if keyframe_rule_snapshots_have_supported_animation_values(&rules, &names, 0) {
-                return true;
+pub(crate) fn css_animation_effect_keyframes(
+    style: &ComputedStyleRead<'_>,
+    name: &str,
+    default_easing: &str,
+) -> Option<Vec<moli_animation::PropertyKeyframes>> {
+    fn collect(
+        rules: &[moli_css_parse::CssRuleSnapshot],
+        frames: &mut Vec<moli_animation::PropertyKeyframes>,
+        default_easing: &str,
+    ) -> bool {
+        let mut found = false;
+        for rule in rules {
+            if rule.rule_type != CssRuleType::Keyframes {
+                found |= collect(&rule.child_rules, frames, default_easing);
+                continue;
+            }
+            found = true;
+            frames.clear();
+            for keyframe in &rule.child_rules {
+                let Some(selectors) = keyframe
+                    .selector_text
+                    .as_deref()
+                    .and_then(moli_css_parse::normalize_keyframe_selector_text_with_stylo)
+                else {
+                    continue;
+                };
+                let offsets = selectors
+                    .split(',')
+                    .filter_map(|v| {
+                        v.trim()
+                            .strip_suffix('%')?
+                            .parse::<f64>()
+                            .ok()
+                            .map(|v| v / 100.0)
+                    })
+                    .collect::<Vec<_>>();
+                let Some(text) = keyframe.declaration_text.as_deref() else {
+                    continue;
+                };
+                let entries = parse_inline_css_text_with_base(text, None);
+                let easing = entries
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.name == "animation-timing-function" && !entry.priority)
+                    .map_or(default_easing, |entry| entry.value.as_str());
+                for entry in &entries {
+                    if entry.name.starts_with("animation-") || entry.priority {
+                        continue;
+                    }
+                    let index = frames
+                        .iter()
+                        .position(|frame| frame.property == entry.name)
+                        .unwrap_or_else(|| {
+                            frames.push(moli_animation::PropertyKeyframes {
+                                property: entry.name.clone(),
+                                values: Vec::new(),
+                            });
+                            frames.len() - 1
+                        });
+                    let value = if color_property_is_resolved_color(&entry.name) {
+                        normalize_computed_color(&entry.value)
+                    } else {
+                        entry.value.clone()
+                    };
+                    for &offset in &offsets {
+                        let mut frame = moli_animation::KeyframeValue::new(offset, value.clone());
+                        frame.easing = (easing != "linear").then(|| easing.to_owned());
+                        frames[index].values.push(frame);
+                    }
+                }
             }
         }
-        false
+        found
     }
-}
-
-pub(super) fn active_css_animation_midpoint_px_with_resolution(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    property: &str,
-    resolution: StyleResolutionContext<'_>,
-) -> Option<f64> {
-    let (from, to) = active_css_animation_property_values_with_resolution(
-        runtime, handle, property, resolution,
-    )?;
-    let from = moli_css_parse::parse_px_length(&from, moli_css_parse::UnitlessLength::ZeroOnly)?;
-    let to = moli_css_parse::parse_px_length(&to, moli_css_parse::UnitlessLength::ZeroOnly)?;
-    Some((from + to) / 2.0)
-}
-
-pub(super) fn active_registered_length_custom_property_animation_value(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    property: &str,
-    underlying_value: &str,
-    resolution: StyleResolutionContext<'_>,
-) -> Option<String> {
-    if !property.starts_with("--") {
+    let runtime = style.runtime;
+    let document = stylesheet_source_document_for_handle(runtime, style.handle)?;
+    let names = [name.to_owned()];
+    let mut frames = Vec::new();
+    let mut found = false;
+    for source in
+        effective_raw_stylesheet_sources(runtime, document, false, style.context.viewport())
+    {
+        found |= collect(
+            &source_keyframe_rule_snapshots(&source, &names),
+            &mut frames,
+            default_easing,
+        );
+    }
+    if !found {
         return None;
     }
-    let document = stylesheet_source_document_for_handle(runtime, handle)?;
-    let registration = runtime.registered_css_custom_property_registration(document, property)?;
-    if registration.syntax.trim() != "<length>" {
-        return None;
-    }
-    let (from, to) = active_css_animation_property_values_with_resolution(
-        runtime, handle, property, resolution,
-    )?;
-    let from = registered_length_keyframe_endpoint_px(&from, underlying_value)?;
-    let to = registered_length_keyframe_endpoint_px(&to, underlying_value)?;
-    Some(format!("{}px", (from + to) / 2.0))
-}
-
-fn registered_length_keyframe_endpoint_px(value: &str, underlying_value: &str) -> Option<f64> {
-    let value = if value.trim().eq_ignore_ascii_case("revert") {
-        underlying_value
-    } else {
-        value
-    };
-    moli_css_parse::parse_px_length(value, moli_css_parse::UnitlessLength::ZeroOnly)
-}
-
-fn active_css_animation_translate_x_with_resolution(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    resolution: StyleResolutionContext<'_>,
-) -> Option<f64> {
-    let (from, to) = active_css_animation_property_values_with_resolution(
-        runtime,
-        handle,
-        "transform",
-        resolution,
-    )?;
-    let from = transform_translate_x_px(&from)?;
-    let to = transform_translate_x_px(&to)?;
-    Some((from + to) / 2.0)
-}
-
-pub(crate) fn active_css_animation_transform_value(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-) -> Option<String> {
-    let read = ComputedStyleRead::new(runtime, handle);
-    active_css_animation_transform_value_with_resolution(runtime, handle, read.resolution_context())
-}
-
-pub(super) fn active_css_animation_transform_value_with_resolution(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    resolution: StyleResolutionContext<'_>,
-) -> Option<String> {
-    active_css_animation_translate_x_with_resolution(runtime, handle, resolution)
-        .map(|value| format!("translateX({value}px)"))
-}
-
-pub(super) fn active_css_animation_static_value(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    property: &str,
-    resolution: StyleResolutionContext<'_>,
-) -> Option<String> {
-    let (from, to) = active_css_animation_property_values_with_resolution(
-        runtime, handle, property, resolution,
-    )?;
-    (from.eq_ignore_ascii_case(&to)).then_some(from)
-}
-
-fn active_css_animation_property_values_with_resolution(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    property: &str,
-    resolution: StyleResolutionContext<'_>,
-) -> Option<(String, String)> {
-    let names = active_css_animation_names_with_resolution(runtime, handle, resolution);
-    if names.is_empty() {
-        return None;
-    }
-    let document = stylesheet_source_document_for_handle(runtime, handle)?;
-    for source in effective_raw_stylesheet_sources(
-        runtime,
-        document,
-        false,
-        resolution.computation.viewport(),
-    ) {
-        let rules = source_keyframe_rule_snapshots(&source, &names);
-        if let Some(values) = keyframe_rule_snapshots_property_values(&rules, &names, property, 0) {
-            return Some(values);
+    for property in &mut frames {
+        property
+            .values
+            .sort_by(|a, b| a.offset.total_cmp(&b.offset));
+        let underlying = || {
+            style
+                .style_snapshot()
+                .and_then(|style| style.property_value(&property.property))
+                .unwrap_or_default()
+        };
+        for keyframe in &mut property.values {
+            if keyframe
+                .value
+                .as_deref()
+                .is_some_and(|value| matches!(value.trim(), "revert" | "revert-layer"))
+            {
+                keyframe.value = Some(underlying());
+            }
+        }
+        if property.values.first().is_none_or(|v| v.offset != 0.0) {
+            let mut frame = moli_animation::KeyframeValue::underlying(0.0);
+            frame.easing = (default_easing != "linear").then(|| default_easing.to_owned());
+            property.values.insert(0, frame);
+        }
+        if property.values.last().is_none_or(|v| v.offset != 1.0) {
+            property
+                .values
+                .push(moli_animation::KeyframeValue::underlying(1.0));
         }
     }
-    None
+    Some(frames)
 }
 
-fn active_css_animation_names_with_resolution(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    resolution: StyleResolutionContext<'_>,
-) -> Vec<String> {
-    let animation_name = resolution.computed_property(runtime, handle, "animation-name");
-    let mut names = animation_name
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("none"))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    // A non-empty computed animation-name (including the initial `none`) is
-    // authoritative. Only use the legacy shorthand fallback when the
-    // longhand serializer itself is unavailable.
-    if names.is_empty() && animation_name.trim().is_empty() {
-        let animation = resolution.computed_property(runtime, handle, "animation");
-        names = animation_shorthand_names(&animation);
-    }
-    names
-}
-
+#[cfg(test)]
 pub(super) fn animation_shorthand_names(value: &str) -> Vec<String> {
     let input = value;
     let mut input = Parser::new(input);
@@ -206,6 +162,7 @@ pub(super) fn animation_shorthand_names(value: &str) -> Vec<String> {
     names
 }
 
+#[cfg(test)]
 fn ident_is_animation_shorthand_keyword(value: &str) -> bool {
     matches!(
         value.to_ascii_lowercase().as_str(),
@@ -312,6 +269,7 @@ pub(super) fn keyframe_has_supported_animation_values(
     keyframe_rule_snapshots_have_supported_animation_values(&rules, animation_names, 0)
 }
 
+#[cfg(test)]
 fn keyframe_rule_snapshots_property_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
     animation_names: &[String],
@@ -346,6 +304,7 @@ fn keyframe_rule_snapshots_property_values(
     None
 }
 
+#[cfg(test)]
 fn keyframe_rule_snapshots_have_supported_animation_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
     animation_names: &[String],
@@ -377,6 +336,7 @@ fn keyframe_rule_snapshots_have_supported_animation_values(
     false
 }
 
+#[cfg(test)]
 fn keyframe_rule_name_matches(
     rule: &moli_css_parse::CssRuleSnapshot,
     animation_names: &[String],
@@ -388,6 +348,7 @@ fn keyframe_rule_name_matches(
     })
 }
 
+#[cfg(test)]
 fn keyframe_child_rule_snapshots_have_supported_animation_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
 ) -> bool {
@@ -405,6 +366,7 @@ fn keyframe_child_rule_snapshots_have_supported_animation_values(
             .is_some_and(|(from, to)| from.eq_ignore_ascii_case(&to))
 }
 
+#[cfg(test)]
 fn keyframe_child_rule_snapshots_property_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
     property: &str,
@@ -443,6 +405,7 @@ fn keyframe_child_rule_snapshots_property_values(
     Some((from?, to?))
 }
 
+#[cfg(test)]
 fn keyframe_selector_text_contains_normalized_endpoint(
     selector_text: &str,
     endpoint: &str,
@@ -452,21 +415,13 @@ fn keyframe_selector_text_contains_normalized_endpoint(
         .any(|selector| selector.trim() == endpoint)
 }
 
+#[cfg(test)]
 fn transform_translate_x_px(value: &str) -> Option<f64> {
     let function = moli_css_parse::parse_transform_function_list(value)?
         .into_iter()
         .find(|function| matches!(function.name.as_str(), "translate" | "translatex"))?;
     let raw = function.arguments.first()?;
     moli_css_parse::parse_px_length(raw, moli_css_parse::UnitlessLength::ZeroOnly)
-}
-
-fn stylo_computed_style_value(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    property: &str,
-    context: StyleComputationContext,
-) -> Option<String> {
-    ComputedStyleRead::new_with_context(runtime, handle, context).raw_primary_property(property)
 }
 
 fn stylo_computed_pseudo_style_value(
@@ -479,16 +434,6 @@ fn stylo_computed_pseudo_style_value(
     let read = ComputedStyleRead::new_with_context(runtime, handle, context);
     let value = read.raw_pseudo_property(pseudo_element, property);
     (!value.is_empty()).then_some(value)
-}
-
-pub(super) fn normalized_stylo_computed_style_value(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    property: &str,
-    context: StyleComputationContext,
-) -> Option<String> {
-    let value = stylo_computed_style_value(runtime, handle, property, context)?;
-    normalize_stylo_computed_style_value(runtime, handle, property, &value, context)
 }
 
 pub(super) fn normalized_stylo_computed_style_value_with_inputs(

@@ -32,9 +32,8 @@ use declaration::{
     style_runtime_and_handle_from_object,
 };
 pub(crate) use declaration::{
-    StyleMode, active_css_animation_transform_value, css_animation_start_applies,
-    cssom_style_entry_is_pdb_supplemental_side_entry, cssom_style_entry_requires_structured_parser,
-    cssom_style_property_affected_names_with_pdb,
+    StyleMode, css_animation_effect_keyframes, cssom_style_entry_is_pdb_supplemental_side_entry,
+    cssom_style_entry_requires_structured_parser, cssom_style_property_affected_names_with_pdb,
     cssom_style_property_mutation_affected_names_with_pdb,
     cssom_style_property_mutation_cleanup_names_with_pdb,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,

@@ -41,6 +41,7 @@ selectors = "0.41"
 stylo = "0.22"
 stylo_static_prefs = "0.22"
 moli-action-window = { path = "../moli-action-window" }
+moli-animation = { path = "../moli-animation" }
 moli-broadcast-channel = { path = "../moli-broadcast-channel" }
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-content-type = { path = "../moli-content-type" }

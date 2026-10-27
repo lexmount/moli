@@ -32,6 +32,26 @@ pub(crate) fn construct<'s>(
     run(scope, |scope| constructor.new_instance(scope, arguments))
 }
 
+pub(crate) fn freeze_animation_time(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::native_bridge::AnimationScriptTimeGuard> {
+    let (_, crate::common_runtime::RuntimeExecutionContext::Window(host)) =
+        crate::common_runtime::CommonRuntimeBinding::from_scope(scope)?
+    else {
+        return None;
+    };
+    Some(
+        unsafe { &*host }
+            .animation_transition_state()
+            .enter_script_time(std::time::Instant::now()),
+    )
+}
+
+pub(crate) fn perform_animation_microtask_checkpoint(scope: &mut v8::PinScope<'_, '_>) {
+    let _sample = freeze_animation_time(scope);
+    scope.perform_microtask_checkpoint();
+}
+
 // Page and worker isolates use Explicit policy: this records native nesting,
 // while the script owner still chooses when to checkpoint. Inspector's Scoped
 // policy checkpoints on the outermost scope exit. Auto keeps V8's API behavior.
@@ -39,5 +59,6 @@ fn run<'s, R>(
     scope: &mut v8::PinScope<'s, '_>,
     execute: impl FnOnce(&mut v8::PinScope<'s, '_>) -> R,
 ) -> R {
+    let _sample = freeze_animation_time(scope);
     moli_v8_util::with_microtasks_scope(scope, execute)
 }

@@ -58,11 +58,13 @@ fn element_get_animations_tracks_script_created_animations() {
         r#"{"initial":[1,true],"secondInitial":0,"paused":[1,true],"cancelled":0,"replayed":[1,true],"finished":0,"manuallyPlayed":[1,true]}"#
     );
 }
-#[test]
-fn animation_internal_callback_state_ignores_public_spoofing() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test]
+async fn animation_internal_callback_state_ignores_public_spoofing() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
         "https://animations-callback-slots.test/page.html",
         "<!doctype html><body></body>",
+        &loader,
     );
 
     let initial = vm
@@ -87,7 +89,7 @@ fn animation_internal_callback_state_ignores_public_spoofing() {
               const target = document.body.appendChild(document.createElement("div"));
               const animation = target.animate(
                 { backgroundImage: ["url(real.png)", "url(real.png)"] },
-                { duration: 1 }
+                { duration: 1, fill: "forwards" }
               );
               const ownNames = Object.getOwnPropertyNames(animation)
                 .filter(name => name.startsWith("__moliAnimation"))
@@ -123,6 +125,22 @@ fn animation_internal_callback_state_ignores_public_spoofing() {
         .expect("Animation internal callback spoofing setup should evaluate");
     assert_eq!(initial, r#"{"ownNames":[],"events":[]}"#);
 
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if vm.eval("__animationCallbackEvents.length").unwrap() == "1" {
+                break;
+            }
+            if !vm
+                .run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .unwrap()
+            {
+                assert!(vm.wait_for_task_executor_work_arrival().await);
+            }
+        }
+    })
+    .await
+    .expect("native animation completion must settle the actual finished promise");
     let settled = vm
         .eval("JSON.stringify(globalThis.__animationCallbackEvents)")
         .expect("Animation internal callback promise should settle");
@@ -232,8 +250,8 @@ fn animation_private_slots_ignore_reflection_and_spoofing() {
             (() => {
               const target = document.getElementById("target");
               const realEffect = new KeyframeEffect(target, [
-                { backgroundImage: "url(real.png)" }
-              ], 1000);
+                { backgroundImage: "url(real.png)" }, { backgroundImage: "url(real.png)" }
+              ], {duration:1000,fill:"both"});
               const animation = new Animation(realEffect, document.timeline);
               let onfinishCount = 0;
               animation.onfinish = () => {
@@ -300,7 +318,7 @@ fn animation_private_slots_ignore_reflection_and_spoofing() {
               const realStateAfterFinish = animation.playState;
               const realOnfinishCount = onfinishCount;
               realEffect.setKeyframes([
-                { backgroundImage: "url(updated.png)" }
+                { backgroundImage: "url(updated.png)" },{ backgroundImage: "url(updated.png)" }
               ]);
               animation.cancel();
               const realAfterCancel = getComputedStyle(target).backgroundImage;
@@ -310,15 +328,19 @@ fn animation_private_slots_ignore_reflection_and_spoofing() {
 
               const fakeAnimation = Object.create(Animation.prototype);
               const fakeEffect = Object.create(KeyframeEffect.prototype);
-              KeyframeEffect.prototype.setKeyframes.call(fakeEffect, [
+              let effectRejected=false;
+              try {KeyframeEffect.prototype.setKeyframes.call(fakeEffect, [
                 { backgroundImage: "url(fake-own.png)" }
-              ]);
+              ]);} catch(error) {effectRejected=error instanceof TypeError;}
+              if(!effectRejected)throw new Error('unbranded KeyframeEffect must be rejected');
               const fakeEffectOwnSlots = Object.getOwnPropertyNames(fakeEffect)
                 .filter(name => name.startsWith("__moliKeyframeEffect"))
                 .sort();
 
               const before = target.style.backgroundImage || "";
-              Animation.prototype.play.call(fakeAnimation);
+              let playRejected=false;
+              try {Animation.prototype.play.call(fakeAnimation);}catch(error){playRejected=error instanceof TypeError;}
+              if(!playRejected)throw new Error('unbranded Animation must be rejected');
               const afterPlay = target.style.backgroundImage || "";
               const fakeAnimationOwnSlotsAfterPlay = Object.getOwnPropertyNames(fakeAnimation)
                 .filter(name => name.startsWith("__moliAnimation"))
@@ -328,7 +350,7 @@ fn animation_private_slots_ignore_reflection_and_spoofing() {
                 Animation.prototype.finish.call(fakeAnimation);
                 finish = "ok";
               } catch (error) {
-                finish = `throw:${error && error.message}`;
+                finish = `throw:${error && error.name}`;
               }
               const afterFinish = target.style.backgroundImage || "";
 
@@ -362,7 +384,7 @@ fn animation_private_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"animationOwnSlots":[],"keyframeOwnSlots":[],"pollutedAnimationOwnSlots":["__moliAnimationEffect","__moliAnimationFinishedResolve","__moliAnimationOnfinish","__moliAnimationPlayState"],"pollutedKeyframeOwnSlots":["__moliKeyframeEffectKeyframes"],"fakeEffectOwnSlots":[],"fakeAnimationOwnSlotsAfterPlay":[],"finish":"ok","real":"running|url(\"https://animations-declared-slots.test/real.png\")|ok|finished|1|none|url(\"https://animations-declared-slots.test/updated.png\")","fake":"||"}"#
+        r#"{"animationOwnSlots":[],"keyframeOwnSlots":[],"pollutedAnimationOwnSlots":["__moliAnimationEffect","__moliAnimationFinishedResolve","__moliAnimationOnfinish","__moliAnimationPlayState"],"pollutedKeyframeOwnSlots":["__moliKeyframeEffectKeyframes"],"fakeEffectOwnSlots":[],"fakeAnimationOwnSlotsAfterPlay":[],"finish":"throw:TypeError","real":"running|url(\"https://animations-declared-slots.test/real.png\")|ok|finished|0|none|url(\"https://animations-declared-slots.test/updated.png\")","fake":"||"}"#
     );
 }
 

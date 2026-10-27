@@ -60,6 +60,7 @@ impl CssCustomPropertyRegistry {
         Ok(())
     }
 
+    #[cfg(test)]
     fn registration(&self, name: &str) -> Option<CssCustomPropertyRegistration> {
         self.registrations
             .borrow()
@@ -106,6 +107,7 @@ impl MoliStyleEngine {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn registered_css_custom_property_registration_for_document(
         &self,
         document: crate::document_runtime::DomHandle,

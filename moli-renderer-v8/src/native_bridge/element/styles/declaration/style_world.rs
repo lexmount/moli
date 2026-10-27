@@ -236,6 +236,33 @@ fn connected_shadow_roots(host: &DomHost, document: DomHandle) -> Vec<DomHandle>
 }
 
 impl PageScriptHost {
+    pub(crate) fn document_has_css_lifecycle_style_sources(&self, document: DomHandle) -> bool {
+        if self.author_styles_disabled() {
+            return false;
+        }
+        let may_apply = StyloStylesheetSource::may_have_css_lifecycle;
+        std::iter::once(document)
+            .chain(connected_shadow_roots(self.dom_host(), document))
+            .any(|root| {
+                active_stylesheet_handles(self, root, false)
+                    .into_iter()
+                    .any(|handle| {
+                        self.owner_style_sheet_source(handle)
+                            .or_else(|| self.linked_stylesheet_source_for_owner(handle))
+                            .is_some_and(|source| source.may_have_css_lifecycle())
+                    })
+                    || if root == document {
+                        self.adopted_style_sheet_sources_for_document(document)
+                            .iter()
+                            .any(may_apply)
+                    } else {
+                        self.shadow_root_adopted_style_sheet_sources(root)
+                            .iter()
+                            .any(may_apply)
+                    }
+            })
+    }
+
     pub(crate) fn document_has_active_author_stylesheet_sources(
         &self,
         document: DomHandle,
