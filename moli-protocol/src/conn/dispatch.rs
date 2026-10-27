@@ -1121,7 +1121,7 @@ impl CdpConnection {
             CompletedCdpCommandDispatchKind::Workflow(completed) => {
                 let command_id = completed.command_id;
                 let session_id = completed.session_id.clone();
-                let plan = completed.finish(command_context);
+                let plan = completed.finish(self, command_context);
                 if let Some(cleanup) = command_context.take_command_failure_cleanup() {
                     return Ok(self.recover_command_output_cleanup(
                         cleanup,
@@ -1510,9 +1510,17 @@ impl CdpConnection {
                     }
                 }
             }
-            CompletedCdpCommandDispatchKind::Fetch(completed) => {
+            CompletedCdpCommandDispatchKind::Fetch(mut completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
+                if let Some(workflow) = completed.take_document_navigation_workflow(self) {
+                    return self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    );
+                }
                 let step = Box::pin(crate::domains::fetch::complete_pending_fetch_command(
                     self,
                     completed,

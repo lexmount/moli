@@ -1,3 +1,4 @@
+use anyhow::Result;
 use url::Url;
 
 use crate::conn::{
@@ -18,6 +19,180 @@ use moli_core::page::{
     RendererDocumentLifecycleMilestone, RendererPageCreationArtifacts, RendererRuntimeRealmInfo,
 };
 
+mod owned;
+pub(crate) use owned::{
+    CompletedNavigationProtocolCompletion, NavigationProtocolCleanup,
+    PreparedNavigationProtocolCompletion,
+};
+
+#[derive(Debug, thiserror::Error)]
+#[error("loaded navigation is missing its frozen main Document commit identity")]
+struct MissingMainDocumentCommit;
+
+struct LoadedNavigationPublication {
+    state: NavigationDispatchState,
+    token: Option<DocumentNavigationToken>,
+    pending_download: Option<moli_core::page::RendererPendingDownloadActivation>,
+    page_creation_artifacts: RendererPageCreationArtifacts,
+    final_url: Url,
+    response_headers: Vec<(String, Vec<u8>)>,
+    response_from_cache: bool,
+    main_document_body: Option<crate::conn::CapturedBody>,
+    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    progress_gate: crate::domains::network::MainDocumentProgressGate,
+    network_error_page: Option<crate::conn::NetworkErrorPageNavigation>,
+}
+
+impl LoadedNavigationPublication {
+    fn split(
+        state: NavigationDispatchState,
+        token: Option<DocumentNavigationToken>,
+        navigation: MaterializedLoadedDocumentProgress,
+    ) -> Result<(
+        Self,
+        CommittedNavigationPage,
+        Vec<RendererRuntimeRealmInfo>,
+        std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    )> {
+        let MaterializedLoadedDocumentProgress {
+            page,
+            pending_download,
+            page_creation_artifacts,
+            final_url,
+            response_headers,
+            response_from_cache,
+            main_document_body,
+            initial_runtime_realms,
+            renderer_output_predecessor,
+            main_document_commit,
+            progress_gate,
+            network_error_page,
+        } = navigation;
+        let commit = main_document_commit.ok_or(MissingMainDocumentCommit)?;
+        Ok((
+            Self {
+                state,
+                token,
+                pending_download,
+                page_creation_artifacts,
+                final_url,
+                response_headers,
+                response_from_cache,
+                main_document_body,
+                renderer_output_predecessor,
+                progress_gate,
+                network_error_page,
+            },
+            page,
+            initial_runtime_realms,
+            commit,
+        ))
+    }
+
+    fn target_url(&self) -> Url {
+        self.network_error_page
+            .as_ref()
+            .map(|error| error.unreachable_url().clone())
+            .unwrap_or_else(|| self.final_url.clone())
+    }
+
+    fn publish_superseded(mut self, out: &mut CommandOutputBuffer) {
+        // A replacement revokes new state effects, not the original response
+        // metadata and native commit already accepted by this navigation.
+        super::navigation::push_superseded_navigation_result(out, &self.state);
+        let mut metadata = Vec::new();
+        crate::domains::network::MainDocumentProgressBackgroundEventBarrier::drain_until_response_metadata_visible(
+            &mut metadata, &mut self.progress_gate,
+        );
+        out.extend_background_events_after_messages(metadata);
+        if let Some(boundary) = self.renderer_output_predecessor {
+            out.insert_renderer_output_boundary_after_messages(boundary);
+        }
+    }
+
+    fn publish(mut self, conn: &mut CdpConnection, out: &mut CommandOutputBuffer) {
+        if let Some(token) = self.token.as_ref()
+            && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&self.state.owner)
+        {
+            slot.merge_prepared_document_lifecycle_events(token, &mut self.page_creation_artifacts);
+        }
+        let Self {
+            state,
+            token,
+            pending_download,
+            page_creation_artifacts,
+            final_url,
+            response_headers,
+            response_from_cache,
+            main_document_body,
+            renderer_output_predecessor,
+            progress_gate,
+            network_error_page,
+        } = self;
+        let is_network_error_page = network_error_page.is_some();
+        let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
+            split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
+        let mut navigation_activity = MainDocumentNavigationActivity::new(
+            state,
+            final_url.clone(),
+            progress_gate,
+            token.clone(),
+        );
+        if let Some(error) = network_error_page {
+            navigation_activity =
+                navigation_activity.with_network_error_page_result(error.error_text().to_owned());
+        }
+        if !is_network_error_page {
+            let _ = conn.commit_main_document_resource_for_owner(
+                &navigation_activity.state().owner,
+                navigation_activity.state().frame_id.clone(),
+                navigation_activity.state().loader_id.clone(),
+                final_url.clone(),
+                response_headers,
+                response_from_cache,
+                main_document_body,
+            );
+        }
+
+        let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
+            .bind_renderer_document_lifecycle_for_owner(
+                &navigation_activity.state().owner,
+                page_creation_artifacts,
+                token.clone(),
+                navigation_activity.state().frame_id.clone(),
+                navigation_activity.state().loader_id.clone(),
+            );
+        let load_visibility_barrier_armed = renderer_document_binding.is_some()
+            && conn.begin_renderer_document_load_visibility_barrier_for_owner(
+                &navigation_activity.state().owner,
+                &navigation_activity.state().loader_id,
+            );
+        if load_visibility_barrier_armed {
+            // The creation artifact owns only the initial handoff prefix. Once
+            // that prefix is taken, every later lifecycle fact is frozen directly
+            // into the Page output FIFO, even if it is produced before protocol
+            // finishes installing this binding. Never read the Page back here:
+            // ordered ingress and the commit cursor preserve that handoff.
+            let (_, visible_events) = conn.ingest_renderer_document_lifecycle_events_for_owner(
+                &navigation_activity.state().owner,
+                std::mem::take(&mut deferred_initial_renderer_document_lifecycle_events),
+            );
+            initial_renderer_document_lifecycle_events.extend(visible_events);
+        }
+        navigation_activity.defer_initial_renderer_document_lifecycle_events_until_load_boundary(
+            deferred_initial_renderer_document_lifecycle_events,
+        );
+        navigation_activity.emit_loaded_navigation_commit(
+            conn,
+            out,
+            pending_download,
+            renderer_document_binding,
+            initial_renderer_document_lifecycle_events,
+            renderer_output_predecessor,
+        );
+    }
+}
+
 pub(super) async fn commit_loaded_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
@@ -27,122 +202,41 @@ pub(super) async fn commit_loaded_navigation_async(
     committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
     command_context: &mut CommandDispatchContext,
 ) {
-    let MaterializedLoadedDocumentProgress {
-        page,
-        pending_download,
-        page_creation_artifacts,
-        final_url,
-        response_headers,
-        response_from_cache,
-        main_document_body,
-        initial_runtime_realms,
-        renderer_output_predecessor,
-        main_document_commit,
-        progress_gate,
-        network_error_page,
-    } = navigation;
-    let target_url = network_error_page
-        .as_ref()
-        .map(|error_page| error_page.unreachable_url().clone())
-        .unwrap_or_else(|| final_url.clone());
-    let Some(main_document_commit) = main_document_commit else {
-        let error = "loaded navigation is missing its frozen main Document commit identity";
-        if state.navigate_id.is_some() {
-            out.push_error_after_messages(-32000, error);
-        } else {
-            tracing::warn!(
-                session_id = state.owner.session_id(),
-                loader_id = state.loader_id,
-                "{error} after early Page.navigate result"
-            );
-        }
-        return;
-    };
-    let is_network_error_page = network_error_page.is_some();
-    let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
-        split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
-    let mut navigation_activity = MainDocumentNavigationActivity::new(
+    let navigate_id = state.navigate_id;
+    let (publication, page, realms, main_commit) = match LoadedNavigationPublication::split(
         state,
-        final_url.clone(),
-        progress_gate,
         token.cloned(),
-    );
-    if let Some(error_page) = network_error_page.as_ref() {
-        navigation_activity =
-            navigation_activity.with_network_error_page_result(error_page.error_text().to_owned());
-    }
-    let Some(()) = restore_and_commit_loaded_navigation_page_async(
+        navigation,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if navigate_id.is_some() {
+                out.push_error_after_messages(-32000, error.to_string());
+            } else {
+                tracing::warn!(%error, "navigation commit failed after early Page.navigate result");
+            }
+            return;
+        }
+    };
+    let target_url = publication.target_url();
+    if restore_and_commit_loaded_navigation_page_async(
         conn,
         out,
         token,
-        navigation_activity.state(),
+        &publication.state,
         page,
-        &final_url,
+        &publication.final_url,
         &target_url,
-        &main_document_commit,
-        initial_runtime_realms,
+        &main_commit,
+        realms,
         committed_renderer_attachment,
         command_context,
     )
     .await
-    else {
-        return;
-    };
-    if !is_network_error_page {
-        let _ = conn.commit_main_document_resource_for_owner(
-            &navigation_activity.state().owner,
-            navigation_activity.state().frame_id.clone(),
-            navigation_activity.state().loader_id.clone(),
-            final_url.clone(),
-            response_headers,
-            response_from_cache,
-            main_document_body,
-        );
+    .is_some()
+    {
+        publication.publish(conn, out);
     }
-
-    let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
-        .bind_renderer_document_lifecycle_for_owner(
-            &navigation_activity.state().owner,
-            page_creation_artifacts,
-            token.cloned(),
-            navigation_activity.state().frame_id.clone(),
-            navigation_activity.state().loader_id.clone(),
-        );
-    let load_visibility_barrier_armed = renderer_document_binding.is_some()
-        && conn.begin_renderer_document_load_visibility_barrier_for_owner(
-            &navigation_activity.state().owner,
-            &navigation_activity.state().loader_id,
-        );
-    if load_visibility_barrier_armed {
-        // The creation artifact owns only the initial handoff prefix. Once
-        // that prefix is taken, every later lifecycle fact is frozen directly
-        // into the Page output FIFO, even if it is produced before protocol
-        // finishes installing this binding. Never read the Page back here:
-        // ordered ingress and the commit cursor preserve that handoff.
-        let (_, visible_events) = conn.ingest_renderer_document_lifecycle_events_for_owner(
-            &navigation_activity.state().owner,
-            std::mem::take(&mut deferred_initial_renderer_document_lifecycle_events),
-        );
-        initial_renderer_document_lifecycle_events.extend(visible_events);
-    }
-    navigation_activity.defer_initial_renderer_document_lifecycle_events_until_load_boundary(
-        deferred_initial_renderer_document_lifecycle_events,
-    );
-    // Keep the loaded commit tail boxed: the target/Patchright CDP test thread
-    // has historically hit stack limits when this future is inlined.
-    Box::pin(async move {
-        navigation_activity
-            .emit_loaded_navigation_commit_async(
-                conn,
-                out,
-                pending_download,
-                renderer_document_binding,
-                initial_renderer_document_lifecycle_events,
-                renderer_output_predecessor,
-            )
-            .await;
-    })
-    .await;
 }
 
 fn split_renderer_page_creation_lifecycle_at_load_boundary(
@@ -517,7 +611,7 @@ async fn commit_existing_navigation_protocol_state(
         return None;
     }
     let runtime_frontend_enabled = conn
-        .target_runtime_session_state_for_owner(&state.owner)
+        .target_runtime_configuration_for_owner(&state.owner)
         .is_some_and(|state| state.runtime_frontend_enabled);
     let started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
     let page_commit = match conn.commit_existing_page_navigation_for_owner(

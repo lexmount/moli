@@ -69,6 +69,10 @@ mod output;
 use capture::*;
 pub(in crate::domains) use output::project_page_output_async;
 mod navigation_commit;
+pub(crate) use navigation_commit::{
+    CompletedNavigationProtocolCompletion, NavigationProtocolCleanup,
+    PreparedNavigationProtocolCompletion,
+};
 mod pdf;
 mod popup;
 mod preload;

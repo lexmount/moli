@@ -762,7 +762,14 @@ impl TargetPageSlot {
             return false;
         };
         request.settle_background_completion();
-        if request.committed {
+        if request.committed
+            && (request.renderer_commit.is_none()
+                || self
+                    .renderer_document_lifecycle
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.navigation.as_ref() == Some(&request.token)))
+        {
             self.pending_navigation_request = None;
         }
         true
@@ -837,7 +844,7 @@ impl TargetPageSlot {
         let Some(commit) = self
             .pending_navigation_request
             .as_mut()
-            .filter(|request| request.matches(token) && !request.committed)
+            .filter(|request| request.matches(token))
             .and_then(|request| request.renderer_commit.as_mut())
         else {
             return;
@@ -1088,11 +1095,31 @@ impl TargetPageSlot {
         };
         self.committed_document_navigation = Some(token.clone());
         request.committed = true;
-        if request.background_work != BackgroundWorkState::Running {
+        // A prepared native commit still owns the unbound lifecycle prefix.
+        // The protocol tail can now wait independently after marking commit;
+        // retain this same request until its exact binding consumes that prefix.
+        if request.background_work != BackgroundWorkState::Running
+            && request.renderer_commit.is_none()
+        {
             request.retire_without_cancellation();
             self.pending_navigation_request = None;
         }
         true
+    }
+
+    fn retire_bound_prepared_document_navigation(&mut self) {
+        let Some(binding) = self.renderer_document_lifecycle.binding.as_ref() else {
+            return;
+        };
+        if let Some(request) = self.pending_navigation_request.as_mut().filter(|request| {
+            request.committed
+                && request.background_work != BackgroundWorkState::Running
+                && binding.navigation.as_ref() == Some(&request.token)
+                && request.renderer_commit.is_some()
+        }) {
+            request.retire_without_cancellation();
+            self.pending_navigation_request = None;
+        }
     }
 
     pub(crate) fn clear_pending_document_navigation_if_loader_matches(
@@ -1219,7 +1246,9 @@ impl TargetPageSlot {
             load_visibility: RendererDocumentLoadVisibility::default(),
         };
         self.root_post_load_observation = None;
-        self.ingest_renderer_document_lifecycle_events(initial_lifecycle_events)
+        let events = self.ingest_renderer_document_lifecycle_events(initial_lifecycle_events);
+        self.retire_bound_prepared_document_navigation();
+        events
     }
 
     pub(crate) fn begin_renderer_document_load_visibility_barrier(
@@ -1331,7 +1360,6 @@ impl TargetPageSlot {
         if let Some(commit) = self
             .pending_navigation_request
             .as_mut()
-            .filter(|request| !request.committed)
             .and_then(|request| request.renderer_commit.as_mut())
         {
             let binding = self.renderer_document_lifecycle.binding.as_ref();

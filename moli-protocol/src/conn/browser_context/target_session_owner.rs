@@ -607,6 +607,13 @@ impl<'a> TargetSessionOwnerRef<'a> {
             .map(|state| &state.runtime_session_state)
     }
 
+    pub(super) fn runtime_configuration(&self) -> Option<&'a TargetRuntimeSessionState> {
+        self.target()
+            .devtools_sessions
+            .session_for_configuration(&self.session_key)
+            .map(|state| &state.runtime_session_state)
+    }
+
     pub(super) fn renderer_runtime_inspector_session_id(&self) -> Option<String> {
         renderer_runtime_inspector_session_id(&self.session_key)
     }
@@ -1149,7 +1156,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
         {
             let target = self.target();
             let page_state = target;
-            let devtools_session_state = page_state.devtools_sessions.session(&self.session_key);
+            let devtools_session_state = page_state
+                .devtools_sessions
+                .session_for_configuration(&self.session_key);
             Some(TargetLoadedNavigationCommitState {
                 browser_context_id: self.browser_context.id.clone(),
                 runtime_frontend_enabled: devtools_session_state
@@ -1827,6 +1836,14 @@ impl CdpConnection {
     ) -> Option<&TargetRuntimeSessionState> {
         self.target_session_owner_ref_for_owner(owner)?
             .runtime_session_state()
+    }
+
+    pub(crate) fn target_runtime_configuration_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<&TargetRuntimeSessionState> {
+        self.target_session_owner_ref_for_owner(owner)?
+            .runtime_configuration()
     }
 
     pub(crate) fn target_runtime_bindings_for_renderer_owner(

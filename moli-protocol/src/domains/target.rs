@@ -33,7 +33,10 @@ pub(crate) use session_disposal::dispose_uncommitted_session_async;
 #[cfg(test)]
 mod tests;
 mod worker_target;
-pub(crate) use worker_target::{CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity};
+pub(crate) use worker_target::{
+    CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity, PreparedDedicatedWorkerRetirement,
+    WorkerRetirementFailureCleanup,
+};
 
 pub(crate) enum TargetCommandFailureCleanup {
     Detachment(TargetDetachmentFailureCleanup),
@@ -1249,7 +1252,9 @@ mod devtools_runtime_entry_tests {
                         .start(&mut command_context, Some(command_id), None)
                         .wait()
                         .await;
-                    step = TargetCommandTaskStep::Complete(completed.finish(&mut command_context));
+                    step = TargetCommandTaskStep::Complete(
+                        completed.finish(conn, &mut command_context),
+                    );
                 }
             }
         }

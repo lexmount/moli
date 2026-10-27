@@ -21,10 +21,18 @@ struct CommandContextSlot {
     returned: Notify,
 }
 
+type WorkflowStateCompletion = Box<
+    dyn for<'state, 'context> FnOnce(
+        ProtocolWorkflowState<'state>,
+        &'context mut CommandDispatchContext,
+    ) -> CommandOutputPlan,
+>;
+
 struct ReturnedCommandContext {
     context: CommandDispatchContext,
     terminal: Option<CommandOutputPlan>,
     retained_output: CommandOutputPlan,
+    state_completion: Option<WorkflowStateCompletion>,
 }
 
 #[derive(Clone)]
@@ -130,6 +138,7 @@ pub(crate) struct CommandWorkflowContext {
     terminal: Option<CommandOutputPlan>,
     retained_output: CommandOutputPlan,
     scope: CommandWorkflowContextReturn,
+    state_completion: Option<WorkflowStateCompletion>,
 }
 
 pub(super) struct OwnedCommandWorkflow {
@@ -171,6 +180,7 @@ impl CommandWorkflowContext {
                 context: Some(context),
                 terminal: None,
                 retained_output: CommandOutputPlan::default(),
+                state_completion: None,
                 scope: scope.clone(),
             },
             scope,
@@ -200,6 +210,7 @@ impl CommandWorkflowContext {
             terminal: self.terminal.take(),
             retained_output: std::mem::take(&mut self.retained_output),
             scope: self.scope.clone(),
+            state_completion: self.state_completion.take(),
         };
         let result = driver
             .with_state(move |state| {
@@ -212,6 +223,7 @@ impl CommandWorkflowContext {
                 self.context = returned.context.take();
                 self.terminal = returned.terminal.take();
                 self.retained_output = std::mem::take(&mut returned.retained_output);
+                self.state_completion = returned.state_completion.take();
                 Ok(value)
             }
             Err(error) => {
@@ -225,6 +237,7 @@ impl CommandWorkflowContext {
                 self.context = Some(returned.context);
                 self.terminal = returned.terminal;
                 self.retained_output = returned.retained_output;
+                self.state_completion = returned.state_completion;
                 Err(error)
             }
         }
@@ -237,7 +250,8 @@ impl CommandWorkflowContext {
     /// A terminal built by state remains durable before the reply channel
     /// delivers it. Losing that ready result cannot replace success with a
     /// second, invented terminal during recovery.
-    pub(crate) async fn finish_with_state(
+    #[cfg(test)]
+    async fn finish_with_state(
         mut self,
         driver: &mut ProtocolWorkflowDriver<'_>,
         operation: impl for<'state, 'context> FnOnce(
@@ -262,6 +276,26 @@ impl CommandWorkflowContext {
                     .await
             }
         }
+    }
+
+    /// Apply the final finite operation in the consuming actor turn, directly
+    /// before its output is handed to the publisher. No other input turn can
+    /// publish lifecycle work between this operation and the command result.
+    pub(crate) fn complete_in_owner_turn(
+        mut self,
+        plan: CommandOutputPlan,
+        operation: impl for<'state, 'context> FnOnce(
+            ProtocolWorkflowState<'state>,
+            &'context mut CommandDispatchContext,
+        ) -> CommandOutputPlan
+        + 'static,
+    ) -> CompletedCommandWorkflow {
+        self.state_completion = Some(Box::new(operation));
+        self.complete_retaining_cleanup(plan)
+    }
+
+    pub(crate) fn fail(self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
+        self.complete_retaining_cleanup(plan)
     }
 
     pub fn complete(mut self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
@@ -291,6 +325,7 @@ impl Drop for CommandWorkflowContext {
                     context,
                     terminal: self.terminal.take(),
                     retained_output: std::mem::take(&mut self.retained_output),
+                    state_completion: self.state_completion.take(),
                 });
             debug_assert!(previous.is_none(), "one command has one context owner");
             self.scope.slot.returned.notify_one();
@@ -320,18 +355,20 @@ impl PendingCommandWorkflowRecovery {
                 mut context,
                 terminal,
                 retained_output,
+                state_completion,
             }) = context
             {
-                let mut plan = terminal.unwrap_or(fallback);
-                plan.extend(retained_output);
+                let plan = terminal.unwrap_or(fallback);
+                let mut retained_output = retained_output;
                 for event in context.take_deferred_command_events() {
-                    plan.push_background_event(event);
+                    retained_output.push_background_event(event);
                 }
                 return CommandWorkflowContext {
                     context: Some(context),
                     terminal: None,
-                    retained_output: CommandOutputPlan::default(),
+                    retained_output,
                     scope: self.scope.clone(),
+                    state_completion,
                 }
                 .complete_retaining_cleanup(plan);
             }
@@ -341,7 +378,11 @@ impl PendingCommandWorkflowRecovery {
 }
 
 impl CompletedCommandWorkflow {
-    pub fn finish(mut self, target: &mut CommandDispatchContext) -> CommandOutputPlan {
+    pub fn finish(
+        mut self,
+        connection: &mut super::CdpConnection,
+        target: &mut CommandDispatchContext,
+    ) -> CommandOutputPlan {
         target.take_command_failure_cleanup();
         *target = self
             .context
@@ -353,7 +394,24 @@ impl CompletedCommandWorkflow {
             .terminal
             .take()
             .expect("completed workflow owns its terminal");
+        let mut completion_output = None;
+        if let Some(completion) = self.context.state_completion.take() {
+            match std::panic::catch_unwind(AssertUnwindSafe(|| {
+                completion(ProtocolWorkflowState::new(connection), target)
+            })) {
+                Ok(output) => {
+                    target.take_command_failure_cleanup();
+                    completion_output = Some(output);
+                }
+                Err(_) => {
+                    plan = CommandOutputPlan::error(-32000, OwnedProtocolWaitFailure::Panicked);
+                }
+            }
+        }
         plan.extend(std::mem::take(&mut self.context.retained_output));
+        if let Some(output) = completion_output {
+            plan.extend(output);
+        }
         plan
     }
 }
@@ -363,6 +421,69 @@ mod tests {
     use super::*;
     use crate::conn::{BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn discarded_workflow_result_retains_its_finite_owner_completion_once() {
+        for panic_in_completion in [false, true] {
+            let mut actor_context = CommandDispatchContext::default();
+            let calls = Rc::new(std::cell::Cell::new(0));
+            let applied = calls.clone();
+            let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
+                let mut prefix = CommandOutputPlan::default();
+                prefix.push_background_event(BackgroundProtocolEvent::page_file_chooser_opened(
+                    None,
+                    "FRAME-finite-completion",
+                    "selectSingle",
+                    41,
+                    None,
+                ));
+                context.retain_output(prefix);
+                context.complete_in_owner_turn(CommandOutputPlan::success(), move |_, _| {
+                    applied.set(applied.get() + 1);
+                    assert!(!panic_in_completion, "injected finite completion failure");
+                    let mut output = CommandOutputPlan::default();
+                    output.push_background_event(BackgroundProtocolEvent::immediate(json!({
+                        "method": "Moli.afterFiniteCompletion", "params": {}
+                    })));
+                    output
+                })
+            });
+            let pending = workflow.start(&mut actor_context, Some(90), None);
+            let completed = pending.wait().await;
+            assert_eq!(
+                calls.get(),
+                0,
+                "waiting does not execute the final state operation"
+            );
+            drop(completed);
+            let Some(super::super::CommandFailureCleanup::Workflow(scope)) =
+                actor_context.take_command_failure_cleanup()
+            else {
+                panic!("the original command retains its completion authority");
+            };
+            let completed = scope
+                .recover(CommandOutputPlan::error(
+                    -32000,
+                    OwnedProtocolWaitFailure::Cancelled,
+                ))
+                .wait()
+                .await;
+            let plan = completed.finish(&mut CdpConnection::new(), &mut actor_context);
+            assert_eq!(calls.get(), 1);
+            let mut messages = Vec::new();
+            plan.emit_into(&mut messages, Some(90), None);
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["id"] == 90)
+                    .count(),
+                1
+            );
+            assert_eq!(messages[0].get("error").is_some(), panic_in_completion);
+            assert_eq!(messages[1]["method"], "Page.fileChooserOpened");
+            assert_eq!(messages.len(), if panic_in_completion { 2 } else { 3 });
+        }
+    }
 
     #[tokio::test]
     async fn cancelling_before_context_return_preserves_typed_side_effects_and_order() {
@@ -390,7 +511,7 @@ mod tests {
         assert!(recovery.as_mut().now_or_never().is_none());
         drop(task_context);
         let completed = recovery.await;
-        let plan = completed.finish(&mut actor_context);
+        let plan = completed.finish(&mut CdpConnection::new(), &mut actor_context);
         let mut connection = CdpConnection::new();
         let CdpCommandTaskStep::Complete(outcome) =
             connection.complete_with_output_plan(&mut actor_context, plan, Some(91), None)
@@ -481,7 +602,7 @@ mod tests {
                 .recover(CommandOutputPlan::error(-32000, "cancelled"))
                 .wait()
                 .await;
-            let plan = completed.finish(&mut actor_context);
+            let plan = completed.finish(&mut CdpConnection::new(), &mut actor_context);
             let (before, boundary, after, post) =
                 plan.into_renderer_fenced_background_and_post_response_events(Some(92), None);
             assert_eq!(boundary.unwrap().cursor(), cursor);
@@ -539,7 +660,9 @@ mod tests {
             !observed.get(),
             "cancelled queued operations cannot mutate state"
         );
-        let plan = returned.await.finish(&mut actor_context);
+        let plan = returned
+            .await
+            .finish(&mut CdpConnection::new(), &mut actor_context);
         let (events, boundary, after, post) =
             plan.into_renderer_fenced_background_and_post_response_events(Some(94), None);
         assert_eq!(events.len(), 1);
@@ -658,7 +781,7 @@ mod tests {
             .start(&mut actor_context, Some(96), None)
             .wait()
             .await;
-        let plan = completed.finish(&mut actor_context);
+        let plan = completed.finish(&mut CdpConnection::new(), &mut actor_context);
         let (events, boundary, after, post) =
             plan.into_renderer_fenced_background_and_post_response_events(Some(96), None);
         assert_eq!(events.len(), 2);

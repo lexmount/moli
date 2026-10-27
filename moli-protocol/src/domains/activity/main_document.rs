@@ -115,7 +115,7 @@ impl MainDocumentNavigationActivity {
         );
     }
 
-    pub(crate) async fn emit_loaded_navigation_commit_async(
+    pub(crate) fn emit_loaded_navigation_commit(
         mut self,
         conn: &mut CdpConnection,
         out: &mut CommandOutputBuffer,
@@ -1422,16 +1422,14 @@ mod tests {
             },
         ];
 
-        activity
-            .emit_loaded_navigation_commit_async(
-                &mut conn,
-                &mut output,
-                None,
-                Some(renderer_document_binding),
-                renderer_lifecycle_events,
-                None,
-            )
-            .await;
+        activity.emit_loaded_navigation_commit(
+            &mut conn,
+            &mut output,
+            None,
+            Some(renderer_document_binding),
+            renderer_lifecycle_events,
+            None,
+        );
 
         let mut out = Vec::new();
         output

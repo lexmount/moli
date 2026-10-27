@@ -340,6 +340,27 @@ impl PendingFetchCommandDispatch {
 }
 
 impl CompletedFetchCommandDispatch {
+    pub(crate) fn take_document_navigation_workflow(
+        &mut self,
+        conn: &CdpConnection,
+    ) -> Option<crate::conn::PreparedCommandWorkflow> {
+        if !matches!(&self.completed, CompletedFetchCommandOperation::DocumentNavigation(completed) if completed.has_prepared_commit())
+        {
+            return None;
+        }
+        let access = conn.protocol_state_access()?;
+        let CompletedFetchCommandOperation::DocumentNavigation(completed) =
+            std::mem::replace(&mut self.completed, CompletedFetchCommandOperation::Ready)
+        else {
+            unreachable!("checked Document completion")
+        };
+        Some(document_navigation::complete_owned(
+            access,
+            *completed,
+            self.navigation_termination.take(),
+        ))
+    }
+
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }

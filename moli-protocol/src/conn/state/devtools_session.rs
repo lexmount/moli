@@ -127,6 +127,15 @@ impl DevToolsSessionRegistry {
         self.states.get(session_key)
     }
 
+    /// Configuration replay can only inherit live sessions. Cleanup and
+    /// already accepted receipts deliberately continue to use session().
+    pub(crate) fn session_for_configuration(
+        &self,
+        session_key: &DevToolsSessionKey,
+    ) -> Option<&DevToolsSessionState> {
+        self.session(session_key).filter(|state| !state.closing)
+    }
+
     pub(crate) fn ensure_session(
         &mut self,
         session_key: &DevToolsSessionKey,

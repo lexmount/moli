@@ -54,7 +54,7 @@ struct WorkerSessionFailureCleanup {
     info_events: Rc<RefCell<Vec<BackgroundProtocolEvent>>>,
 }
 
-struct WorkerRetirementFailureCleanup {
+pub(crate) struct WorkerRetirementFailureCleanup {
     identity: DedicatedWorkerRetirementIdentity,
     sessions: Vec<WorkerSessionFailureCleanup>,
     destroyed_delta: Option<PreparedTargetHostDelta>,
@@ -65,6 +65,36 @@ impl PreparedDedicatedWorkerRetirement {
     pub(in crate::domains::target) fn prepare_close(
         conn: &mut CdpConnection,
         target_id: &str,
+    ) -> Option<Result<Self>> {
+        Self::prepare(conn, target_id, true)
+    }
+
+    pub(crate) fn prepare_for_replaced_page(
+        conn: &mut CdpConnection,
+        page: &TargetPageResidenceIdentity,
+    ) -> Vec<Self> {
+        let targets = conn
+            .browser_context_by_id(page.browser_context_id())
+            .map(|context| {
+                context
+                    .dedicated_worker_targets
+                    .values()
+                    .filter(|target| &target.owner_page == page && !target.is_retiring())
+                    .map(|target| target.target_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        targets
+            .into_iter()
+            .filter_map(|id| Self::prepare(conn, &id, false))
+            .filter_map(|result| result.ok())
+            .collect()
+    }
+
+    fn prepare(
+        conn: &mut CdpConnection,
+        target_id: &str,
+        close_native: bool,
     ) -> Option<Result<Self>> {
         let CdpSessionRoute::DedicatedWorkerTarget {
             browser_context_id, ..
@@ -101,7 +131,9 @@ impl PreparedDedicatedWorkerRetirement {
             );
         }
         start_protocol_events.extend(claimed);
-        renderer_runtime.close_dedicated_worker_for_devtools(identity.instance_id);
+        if close_native {
+            renderer_runtime.close_dedicated_worker_for_devtools(identity.instance_id);
+        }
         let outputs = prepare_dedicated_worker_target_retirement(
             conn,
             &identity.browser_context_id,
@@ -194,7 +226,7 @@ impl PreparedDedicatedWorkerRetirement {
         .with_start_protocol_events(start_protocol_events)
     }
 
-    fn failure_cleanup(&self) -> WorkerRetirementFailureCleanup {
+    pub(crate) fn failure_cleanup(&self) -> WorkerRetirementFailureCleanup {
         WorkerRetirementFailureCleanup {
             identity: self.identity.clone(),
             sessions: self
@@ -216,10 +248,27 @@ impl PreparedDedicatedWorkerRetirement {
     }
 
     pub(in crate::domains::target) async fn run(
-        mut self,
+        self,
         driver: &mut ProtocolWorkflowDriver<'_>,
         mut context: CommandWorkflowContext,
     ) -> crate::conn::CompletedCommandWorkflow {
+        let result = self.run_into_context(driver, &mut context).await;
+        context.complete(match result {
+            Ok(()) => CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(
+                crate::automation::DevToolsCloseTargetResult { success: true },
+            )),
+            Err(error) => CommandOutputPlan::error(-32000, error),
+        })
+    }
+
+    pub(crate) async fn run_into_context(
+        mut self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        let mut start = CommandOutputPlan::default();
+        start.extend_background_events(std::mem::take(&mut self.start_protocol_events));
+        context.retain_output(start);
         let mut first_error = None;
         for session in std::mem::take(&mut self.sessions) {
             let mut prefix = CommandOutputPlan::default();
@@ -268,7 +317,7 @@ impl PreparedDedicatedWorkerRetirement {
             }
         }
         context
-            .finish_with_state(driver, move |state, context| {
+            .with_state(driver, move |state, context| {
                 let mut output = CommandOutputPlan::default();
                 output.extend_background_events(state.finish_dedicated_worker_retirement(
                     self.identity,
@@ -276,14 +325,12 @@ impl PreparedDedicatedWorkerRetirement {
                     self.uncommitted,
                 ));
                 context.retain_output(output);
-                match first_error {
-                    Some(error) => CommandOutputPlan::error(-32000, error),
-                    None => CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(
-                        crate::automation::DevToolsCloseTargetResult { success: true },
-                    )),
-                }
             })
-            .await
+            .await?;
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -309,6 +356,15 @@ impl WorkerRetirementFailureCleanup {
         mut context: CommandWorkflowContext,
         response: CommandOutputPlan,
     ) -> crate::conn::CompletedCommandWorkflow {
+        self.run_into_context(driver, &mut context).await;
+        context.complete(response)
+    }
+
+    pub(crate) async fn run_into_context(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) {
         for session in self.sessions {
             if let Some(wait) = session.join.as_ref() {
                 wait.clone().wait().await;
@@ -338,8 +394,8 @@ impl WorkerRetirementFailureCleanup {
                 }
             }
         }
-        context
-            .finish_with_state(driver, move |state, context| {
+        let _ = context
+            .with_state(driver, move |state, context| {
                 let mut output = CommandOutputPlan::default();
                 output.extend_background_events(state.finish_dedicated_worker_retirement(
                     self.identity,
@@ -347,9 +403,8 @@ impl WorkerRetirementFailureCleanup {
                     self.uncommitted,
                 ));
                 context.retain_output(output);
-                response
             })
-            .await
+            .await;
     }
 }
 

@@ -33,6 +33,75 @@ pub(super) struct CompletedDocumentNavigation {
     prefix: Vec<crate::conn::BackgroundProtocolEvent>,
 }
 
+impl CompletedDocumentNavigation {
+    pub(super) fn has_prepared_commit(&self) -> bool {
+        matches!(self.outcome, DocumentNavigationOutcome::Committed(_))
+    }
+}
+
+pub(super) fn complete_owned(
+    access: ProtocolStateAccess,
+    completed: CompletedDocumentNavigation,
+    termination: Option<NavigationTermination>,
+) -> crate::conn::PreparedCommandWorkflow {
+    use crate::domains::command_output::CommandOutputPlan;
+    let DocumentNavigationOutcome::Committed(navigation) = completed.outcome else {
+        unreachable!("owned protocol tail follows a prepared native commit");
+    };
+    let completion = completed
+        .commit
+        .complete(completed.token, completed.state, *navigation);
+    // Source cancellation follows resources already admitted by this tail;
+    // its inline completion must not get ahead of worker cleanup needing actor progress.
+    let termination = std::rc::Rc::new(std::cell::RefCell::new(termination));
+    let failure_termination = termination.clone();
+    let cleanup = page::NavigationProtocolCleanup::default();
+    let failure_cleanup = cleanup.clone();
+    let failure_access = access.clone();
+    crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+        let mut prefix = CommandOutputPlan::default();
+        prefix.extend_background_events(completed.prefix);
+        context.retain_output(prefix);
+        let mut driver = ProtocolWorkflowDriver::owned(access);
+        let admitted_termination = termination.clone();
+        let prepared = context
+            .with_state(&mut driver, move |state, context| {
+                let prepared = state.prepare_navigation_protocol_completion(completion, context);
+                if prepared.source_terminal_is_retained()
+                    && let Some(mut termination) = admitted_termination.borrow_mut().take()
+                {
+                    termination.disarm();
+                }
+                prepared
+            })
+            .await;
+        match prepared {
+            Ok(prepared) => {
+                prepared
+                    .run(&mut driver, context, cleanup, move || {
+                        if let Some(mut termination) = termination.borrow_mut().take() {
+                            termination.disarm();
+                        }
+                    })
+                    .await
+            }
+            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+        }
+    })
+    .with_failure_cleanup(move |response| {
+        crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+            failure_cleanup
+                .recover(
+                    &mut ProtocolWorkflowDriver::owned(failure_access),
+                    &mut context,
+                )
+                .await;
+            drop(failure_termination.borrow_mut().take());
+            context.complete(response)
+        })
+    })
+}
+
 enum DocumentNavigationOutcome {
     Committed(Box<Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError>>),
     Other(Result<NavigationLoadOutcome>),

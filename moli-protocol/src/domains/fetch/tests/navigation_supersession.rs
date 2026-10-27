@@ -1,6 +1,95 @@
 use super::*;
 
 #[tokio::test]
+async fn fulfill_document_protocol_tail_rejoins_after_wait_cancellation_and_ready_loss() {
+    use crate::conn::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use futures_util::FutureExt as _;
+
+    tokio::task::LocalSet::new().run_until(async {
+        for cancel_phase in 0..3 {
+            let mut ctx = TestContext::new();
+            ctx.conn.install_browser_context_fixture_for_test(attached_browser_context());
+            ctx.enable_page_events_for_test(Some("SID-1"));
+            ctx.process_async(json!({"id":1,"sessionId":"SID-1","method":"Fetch.enable"})).await;
+            ctx.expect_result(1, json!({}), Some("SID-1"));
+            let request_id = start_request_pause(&mut ctx, 2, "SID-1", "http://example.test/owned-tail").await;
+            let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
+            ctx.conn.set_background_navigation_completion_sender(sender);
+            let mut requests = ctx.conn.take_protocol_state_requests().unwrap();
+            let request = ParsedCdpCommand::from_serializable(json!({
+                "id":3,"sessionId":"SID-1","method":"Fetch.fulfillRequest",
+                "params":{"requestId":request_id,"responseCode":200,
+                    "responseHeaders":[{"name":"Content-Type","value":"text/html"}],
+                    "body": STANDARD.encode("<title>owned tail</title><p>fulfilled</p>")}
+            })).unwrap();
+            let mut context = CommandDispatchContext::default();
+            let CdpCommandTaskStep::Pending(native) = ctx.conn.start_parsed_command_dispatch_with_context(&request, &mut context) else {
+                panic!("fulfillment prepares and commits outside protocol state");
+            };
+            let mut native = Box::pin(native.wait());
+            let native = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        completed = &mut native => break completed,
+                        request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                    }
+                }
+            }).await.unwrap();
+            let Some(CdpCommandTaskStep::Pending(tail)) = Box::pin(ctx.conn.complete_pending_command_dispatch_with_context(native, &mut context)).now_or_never() else {
+                panic!("the protocol tail hands its waits back to the actor");
+            };
+            let mut wait = Box::pin(tail.wait());
+            if cancel_phase == 1 {
+                assert!(wait.as_mut().now_or_never().is_none());
+                requests.recv().await.unwrap().apply(&mut ctx.conn);
+                assert!(wait.as_mut().now_or_never().is_none());
+            }
+            if cancel_phase == 2 {
+                let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        tokio::select! {
+                            completed = &mut wait => break completed,
+                            request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                        }
+                    }
+                }).await.unwrap();
+                drop(completed);
+            }
+            drop(wait);
+            let CdpCommandTaskStep::Pending(recovery) = ctx.conn.complete_failed_command_wait_with_context(
+                Some(3), Some("SID-1"), "controlled fulfillment waiter cancellation", &mut context,
+            ) else { panic!("the original command resumes its admitted protocol tail") };
+            let mut recovery = Box::pin(recovery.wait());
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        completed = &mut recovery => break completed,
+                        request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                    }
+                }
+            }).await.unwrap();
+            let CdpCommandTaskStep::Complete(outcome) = ctx.conn.try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                .unwrap_or_else(|_| panic!("publication is finite")) else { panic!("no wait remains") };
+            let (mut messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
+            let sent_start = ctx.sent.len();
+            ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events).await;
+            if !messages.iter().any(|message| message["method"] == "Page.frameStoppedLoading") {
+                wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+            }
+            messages.extend(ctx.sent.drain(sent_start..));
+            for id in [2, 3] {
+                assert_eq!(messages.iter().filter(|message| message["id"] == id && message.get("result").is_some()).count(), 1, "command {id}: {messages:?}");
+            }
+            for method in ["Page.domContentEventFired", "Page.loadEventFired"] {
+                assert_eq!(messages.iter().filter(|message| message["method"] == method).count(), 1, "{method}: {messages:?}");
+            }
+            assert!(completions.try_recv().is_err(), "completed source navigation must not receive cancellation or a second terminal");
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn disable_cleanup_reports_policy_failure_after_settling_its_navigation() {
     let mut ctx = TestContext::new();
     ctx.conn

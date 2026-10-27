@@ -87,6 +87,12 @@ impl<'a> ProtocolWorkflowDriver<'a> {
     }
 }
 
+impl<'a> ProtocolWorkflowState<'a> {
+    pub(super) fn new(connection: &'a mut CdpConnection) -> Self {
+        Self { connection }
+    }
+}
+
 impl ProtocolWorkflowState<'_> {
     pub(crate) fn publish_bidi_channel_output(
         self,
@@ -395,6 +401,7 @@ mod activation;
 mod child_navigation;
 mod input;
 mod navigation_commit;
+mod navigation_completion;
 mod session_disposal;
 pub use navigation_commit::BackgroundPreparedNavigationCommit;
 pub(crate) use navigation_commit::PreparedDocumentCommitState;

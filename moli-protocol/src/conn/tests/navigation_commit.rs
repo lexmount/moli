@@ -1,7 +1,7 @@
 use super::*;
 use crate::conn::{
-    CapturedBody, DocumentNavigationToken, NavigationLoadOutcome, ProtocolStateRequestReceiver,
-    ResponseCommitReady,
+    CapturedBody, CdpCommandTaskStep, DocumentNavigationToken, NavigationLoadOutcome,
+    ProtocolStateRequestReceiver, ResponseCommitReady,
 };
 use crate::domains::page::BackgroundNavigationCompletion;
 use tokio::sync::mpsc;
@@ -75,6 +75,265 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
     ctx.process_async(json!({"id": id, "method": "Browser.getVersion"}))
         .await;
     assert!(ctx.take_response_by_id(id)["result"]["product"].is_string());
+}
+
+fn start_owned_protocol_tail(
+    conn: &mut CdpConnection,
+    completion: crate::conn::BackgroundPreparedNavigationCommit,
+    context: &mut CommandDispatchContext,
+) -> crate::conn::PendingCdpCommandDispatch {
+    let access = conn.protocol_state_access().unwrap();
+    let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+        let mut driver = crate::conn::ProtocolWorkflowDriver::owned(access);
+        let prepared = context
+            .with_state(&mut driver, move |state, context| {
+                state.prepare_navigation_protocol_completion(completion, context)
+            })
+            .await
+            .unwrap();
+        prepared
+            .run(
+                &mut driver,
+                context,
+                crate::domains::page::NavigationProtocolCleanup::default(),
+                || {},
+            )
+            .await
+    });
+    let CdpCommandTaskStep::Pending(pending) =
+        conn.start_command_workflow(workflow, Some(190), Some("SID-1"), context)
+    else {
+        panic!("the navigation protocol tail owns its waits");
+    };
+    *pending
+}
+
+#[tokio::test]
+async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publication() {
+    use futures_util::FutureExt as _;
+    use moli_core::page::{
+        RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+        RendererDocumentLifecycleMilestone,
+    };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for settle_in_gap in [false, true] {
+                let CommitFixture {
+                    mut ctx,
+                    token,
+                    navigation,
+                    prepared,
+                    mut requests,
+                    mut completions,
+                } = commit_fixture(true).await;
+                ctx.process_async(
+                    json!({"id": 189, "sessionId": "SID-1", "method": "Page.enable"}),
+                )
+                .await;
+                ctx.expect_result(189, json!({}), Some("SID-1"));
+                ctx.conn.start_background_prepared_navigation_commit(
+                    token.clone(),
+                    navigation.clone(),
+                    prepared,
+                );
+                requests.recv().await.unwrap().apply(&mut ctx.conn);
+                requests.recv().await.unwrap().apply(&mut ctx.conn);
+                let BackgroundNavigationCompletion::PreparedDocument(mut completion) =
+                    completions.recv().await.unwrap()
+                else {
+                    panic!("native commit expected")
+                };
+                if !settle_in_gap {
+                    assert!(ctx.conn.settle_background_navigation_completion(&token));
+                }
+                let loaded = completion.navigation.as_mut().unwrap();
+                let snapshot = loaded.page_creation_artifacts.lifecycle_snapshot;
+                let dcl = snapshot.dom_content_loaded.unwrap();
+                let facts =
+                    std::iter::once((dcl, RendererDocumentLifecycleMilestone::DomContentLoaded))
+                        .chain(
+                            snapshot
+                                .load
+                                .map(|stamp| (stamp, RendererDocumentLifecycleMilestone::Load)),
+                        )
+                        .map(|(stamp, milestone)| RendererDocumentLifecycleEvent {
+                            frame: snapshot.frame,
+                            document: snapshot.document,
+                            epoch: snapshot.epoch,
+                            sequence: stamp.sequence,
+                            timestamp_micros: stamp.timestamp_micros,
+                            kind: RendererDocumentLifecycleEventKind::Milestone(milestone),
+                        })
+                        .collect();
+                loaded
+                    .page_creation_artifacts
+                    .initial_lifecycle_events
+                    .retain(|event| {
+                        !matches!(event.kind, RendererDocumentLifecycleEventKind::Milestone(_))
+                    });
+                loaded
+                    .page_creation_artifacts
+                    .lifecycle_snapshot
+                    .dom_content_loaded = None;
+                loaded.page_creation_artifacts.lifecycle_snapshot.load = None;
+                let predecessor = loaded.renderer_output_predecessor.clone().unwrap();
+                ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
+                    .await;
+                let mut context = CommandDispatchContext::default();
+                let pending = start_owned_protocol_tail(&mut ctx.conn, *completion, &mut context);
+                let mut wait = Box::pin(pending.wait());
+                // The first three operations install the Page, claim original workers,
+                // and commit protocol identity. Hold the next state operation so live
+                // facts arrive after commit but before lifecycle publication.
+                for _ in 0..3 {
+                    assert!(wait.as_mut().now_or_never().is_none());
+                    requests.recv().await.unwrap().apply(&mut ctx.conn);
+                }
+                assert!(
+                    !ctx.conn
+                        .accepts_pending_document_navigation_for_owner(&navigation.owner, &token)
+                );
+                if settle_in_gap {
+                    assert!(ctx.conn.settle_background_navigation_completion(&token));
+                }
+                let (_, visible) = ctx
+                    .conn
+                    .ingest_renderer_document_lifecycle_events_for_owner(&navigation.owner, facts);
+                assert!(visible.is_empty());
+                independent_command(&mut ctx, 191).await;
+                let completed = loop {
+                    tokio::select! {
+                        completed = &mut wait => break completed,
+                        request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                    }
+                };
+                let CdpCommandTaskStep::Complete(outcome) = ctx
+                    .conn
+                    .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                    .unwrap_or_else(|_| panic!("final publication is finite"))
+                else {
+                    panic!("no wait remains")
+                };
+                let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                for method in std::iter::once("Page.domContentEventFired")
+                    .chain(snapshot.load.map(|_| "Page.loadEventFired"))
+                {
+                    assert_eq!(
+                        messages
+                            .iter()
+                            .filter(|message| message["method"] == method)
+                            .count(),
+                        1,
+                        "{method}"
+                    );
+                }
+                for id in [1, 190] {
+                    assert_eq!(
+                        messages
+                            .iter()
+                            .filter(|message| message["id"] == id)
+                            .count(),
+                        1
+                    );
+                }
+                let response = messages
+                    .iter()
+                    .position(|message| message["id"] == 190)
+                    .unwrap();
+                let dcl = messages
+                    .iter()
+                    .position(|message| message["method"] == "Page.domContentEventFired")
+                    .unwrap();
+                assert!(response < dcl);
+            }
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn owned_protocol_tail_does_not_finish_a_rebound_sessions_successor_navigation() {
+    use futures_util::FutureExt as _;
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let CommitFixture {
+                mut ctx,
+                token,
+                navigation,
+                prepared,
+                mut requests,
+                mut completions,
+            } = commit_fixture(true).await;
+            ctx.process_async(json!({"id": 188, "sessionId": "SID-1", "method": "Network.enable"}))
+                .await;
+            ctx.expect_result(188, json!({}), Some("SID-1"));
+            ctx.conn.start_background_prepared_navigation_commit(
+                token.clone(),
+                navigation.clone(),
+                prepared,
+            );
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            let BackgroundNavigationCompletion::PreparedDocument(completion) =
+                completions.recv().await.unwrap()
+            else {
+                panic!("native commit expected")
+            };
+            ctx.conn.settle_background_navigation_completion(&token);
+            let mut context = CommandDispatchContext::default();
+            let pending = start_owned_protocol_tail(&mut ctx.conn, *completion, &mut context);
+            let mut wait = Box::pin(pending.wait());
+            assert!(wait.as_mut().now_or_never().is_none());
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            let route = ctx.conn.session_route(Some("SID-1")).unwrap();
+            ctx.conn.register_session_route_for_test("SID-1", route);
+            let successor = ctx
+                .conn
+                .start_document_navigation_for_owner(&navigation.owner, "LID-successor".into())
+                .unwrap();
+            let completed = loop {
+                tokio::select! {
+                    completed = &mut wait => break completed,
+                    request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                }
+            };
+            let CdpCommandTaskStep::Complete(outcome) = ctx
+                .conn
+                .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                .unwrap_or_else(|_| panic!("final publication is finite"))
+            else {
+                panic!("no wait remains")
+            };
+            let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["id"] == 190 && message.get("result").is_some())
+                    .count(),
+                1
+            );
+            assert_eq!(
+                messages.iter().filter(|message| message["id"] == 1).count(),
+                1
+            );
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["method"] == "Network.responseReceived"
+                        && message["params"]["loaderId"] == navigation.loader_id)
+                    .count(),
+                1,
+                "the original frozen response metadata survives replacement"
+            );
+            assert!(
+                ctx.conn
+                    .accepts_pending_document_navigation_for_owner(&navigation.owner, &successor)
+            );
+            assert!(
+                ctx.conn
+                    .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
+            );
+        })
+        .await;
 }
 
 #[tokio::test]
