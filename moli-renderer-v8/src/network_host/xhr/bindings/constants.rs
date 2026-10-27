@@ -42,7 +42,7 @@ struct XmlHttpRequestPrototypeAccessorsDeclaration {
     response_type: (),
     #[webapi(accessor_property = "responseURL", getter = xhr_string_getter, data = callback_data_index_value(scope, 5))]
     response_url: (),
-    #[webapi(accessor_property, getter = xhr_value_getter, data = callback_data_index_value(scope, 6))]
+    #[webapi(accessor_property, getter = xhr_response_getter, data = callback_data_index_value(scope, 6))]
     response: (),
     #[webapi(
         accessor_property,
@@ -221,6 +221,27 @@ fn xhr_response_text_getter(
         return;
     }
     xhr_string_getter(scope, args, rv);
+}
+
+fn xhr_response_getter(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments<'_>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let xhr = xhr_receiver_target(scope, args.this());
+    let response_type = xhr_state_string_property(scope, xhr, XHR_RESPONSE_TYPE_SLOT)
+        .as_deref()
+        .and_then(XmlHttpRequestResponseType::parse)
+        .unwrap_or(XmlHttpRequestResponseType::Default);
+    if !matches!(
+        response_type,
+        XmlHttpRequestResponseType::Default | XmlHttpRequestResponseType::Text
+    ) && xhr_ready_state(scope, xhr) != XhrReadyState::Done
+    {
+        rv.set_null();
+        return;
+    }
+    xhr_value_getter(scope, args, rv);
 }
 
 fn xhr_response_xml_getter(
