@@ -97,6 +97,9 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
+    if common.live_layout && !common.layout {
+        bail!("--live-layout requires --layout or MOLI_LAYOUT=true");
+    }
     if common.scrollbars && !common.layout {
         bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
     }
@@ -194,7 +197,9 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     config
         .browser
         .set_subframe_loading_enabled(!common.disable_subframes);
-    config.browser.set_layout_policy(if common.layout {
+    config.browser.set_layout_policy(if common.live_layout {
+        LayoutPolicy::Live
+    } else if common.layout {
         LayoutPolicy::OnDemand
     } else {
         LayoutPolicy::Mock

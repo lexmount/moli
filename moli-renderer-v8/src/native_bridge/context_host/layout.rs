@@ -26,6 +26,15 @@ pub(crate) enum LayoutInputChange {
     UsedGeometry,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LayoutInputKey {
+    dom_version: u64,
+    style_generations: Vec<(DomHandle, u64, u64)>,
+    interaction_generation: u64,
+    resource_generation: u64,
+    viewport: LayoutViewport,
+}
+
 /// Resets the entry flag on every return path, including unwinding.
 ///
 /// This is a synchronous ownership guard, not a generation or a retry fence.
@@ -59,8 +68,12 @@ pub(crate) struct LayoutSnapshotCacheObservability {
 
 impl JsContextHost {
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
+        if self.layout_policy != policy {
+            *self.published_layout_input_key.get_mut() = None;
+        }
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
+            *self.published_layout_input_key.get_mut() = None;
         }
         self.layout_policy = policy;
     }
@@ -135,6 +148,18 @@ impl JsContextHost {
 
     pub(crate) fn layout_document_for_source(&self, source: DomHandle) -> Option<DomHandle> {
         self.dom_host().owner_document_handle(source)
+    }
+
+    fn layout_input_key(&self) -> LayoutInputKey {
+        LayoutInputKey {
+            dom_version: self.dom_host().dom_version(),
+            style_generations: self
+                .style_engine
+                .visual_style_input_generations(self.active_layout_document_handles()),
+            interaction_generation: self.visual_state_generation(),
+            resource_generation: self.visual_resource_generation(),
+            viewport: self.layout_viewport_for_document(self.document_handle()),
+        }
     }
 
     pub(crate) fn layout_viewport_for_document(&self, document: DomHandle) -> LayoutViewport {
@@ -276,8 +301,8 @@ impl JsContextHost {
 
     /// Lazily publishes the first screen layout for this main Document.
     ///
-    /// Every consumer shares the same recursive tree. Missing nodes or newly
-    /// navigated frames in an existing tree must not refresh the whole page.
+    /// Live mode republishes only after changed inputs. OnDemand readers keep
+    /// the published snapshot, including missing nodes or navigated frames.
     pub(crate) fn ensure_initial_layout(&self) -> Result<(), LayoutError> {
         if !self.layout_policy.uses_real_layout() {
             return Ok(());
@@ -286,11 +311,14 @@ impl JsContextHost {
             return Err(LayoutError::ReentrantLayoutPass);
         }
         let document = self.document_handle();
+        let dom_version = self.dom_host().dom_version();
         if self
             .document_layout_state
             .borrow()
-            .latest_layout(document)
-            .is_some()
+            .latest_layout_is_current(document, dom_version)
+            && (self.layout_policy != moli_page_types::LayoutPolicy::Live
+                || self.published_layout_input_key.borrow().as_ref()
+                    == Some(&self.layout_input_key()))
         {
             return Ok(());
         }
@@ -455,12 +483,19 @@ impl JsContextHost {
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.publish_latest_layout(document, tree);
+            state.publish_latest_layout(document, self.dom_host().dom_version(), tree);
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
+        }
+        if document == self.document_handle()
+            && self.layout_policy == moli_page_types::LayoutPolicy::Live
+        {
+            let mut key = self.layout_input_key();
+            key.viewport = pass_viewport;
+            *self.published_layout_input_key.borrow_mut() = Some(key);
         }
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
@@ -608,6 +643,7 @@ impl JsContextHost {
 
     pub(crate) fn reset_document_layout_state(&self) {
         *self.document_layout_state.borrow_mut() = Default::default();
+        *self.published_layout_input_key.borrow_mut() = None;
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
     }

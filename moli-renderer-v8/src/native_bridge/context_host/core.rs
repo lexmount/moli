@@ -346,6 +346,7 @@ impl JsContextHost {
             layout_snapshot_cache_hits: Cell::new(0),
             layout_snapshot_cache_misses: Cell::new(0),
             layout_snapshot_cache_publishes: Cell::new(0),
+            published_layout_input_key: RefCell::new(None),
             style_viewport_generation: Cell::new(0),
             root_document_lifecycle: None,
             output_journal: None,
