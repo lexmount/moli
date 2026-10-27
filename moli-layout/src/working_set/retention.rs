@@ -30,20 +30,6 @@ impl<N> RetainedWork<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(super) fn discard_inline_measurements(&mut self) {
-        let Some(numeric) = &mut self.inline_numeric_reuse else {
-            return;
-        };
-        numeric.discard_measurements();
-        // Measurement-only owners may have kept accepted lines for the next
-        // pass. Once this layer is evicted, retain their shaping alone.
-        for (owner, inline) in &mut self.inline_contexts {
-            if !numeric.contains(*owner) {
-                inline.prepare_for_retention(false);
-            }
-        }
-    }
-
     pub(super) fn from_world(
         mut world: LayoutWorld<N>,
         fonts: LayoutFontInputs,
@@ -125,20 +111,9 @@ where
         }
     }
 
-    /// Release excess growth capacity only under pressure. Keep space for
-    /// the previous pass's numeric-only suffix: truncating construction boxes
-    /// must not force a new doubling allocation on every static-position pass.
-    pub(super) fn trim_owned_box_capacity(&mut self) -> usize {
-        let RetainedGraph::Owned { boxes, .. } = &mut self.graph else {
-            return 0;
-        };
-        let before = boxes.capacity();
-        boxes.shrink_to(self.pass_box_count);
-        before.saturating_sub(boxes.capacity())
-    }
-
-    /// A budget fallback releases the full object allocation before its
-    /// smaller charge is published. IFCs and exact comparison inputs survive.
+    /// Compare compact and owned representations in tests. Production retains
+    /// owned construction when the graph supports it.
+    #[cfg(test)]
     pub(super) fn compact_graph(&mut self) {
         let old = std::mem::replace(&mut self.graph, RetainedGraph::Compact(Vec::new()));
         self.graph = match old {
@@ -160,7 +135,7 @@ where
             } => {
                 // HashMap exposes usable capacity, not allocator bucket bytes.
                 // Conservatively allow two bucket slots per usable entry plus
-                // controls; this is an admission model, not physical memory.
+                // controls; this is a storage estimate, not physical memory.
                 let buckets = source_mapping.capacity().saturating_mul(2);
                 let mapping = allocation::<(N, LayoutBoxId)>(buckets)
                     .saturating_add(buckets)

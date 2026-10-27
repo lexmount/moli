@@ -27,7 +27,6 @@ fn realtime_grid_retains_the_1024_item_graph_and_refreshes_layout_inputs() {
     let cold = main_stats(&vm).unwrap();
     assert!(cold.retained_boxes >= 2 * ITEMS, "{cold:?}");
     assert_eq!(cold.retained_owned_boxes, cold.retained_boxes, "{cold:?}");
-    assert!(cold.estimated_retained_bytes <= moli_layout::DEFAULT_DOCUMENT_WORKING_SET_BYTES);
     let before = vm.layout_pass_observability_for_test().1;
     vm.eval("grid.firstElementChild.style.width='333px'")
         .unwrap();

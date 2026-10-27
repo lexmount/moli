@@ -461,7 +461,7 @@ fn terminal_subtrees_with_discarded_whitespace_use_the_shared_compaction_path() 
 }
 
 #[test]
-fn owned_construction_capacity_is_charged_even_when_slots_are_unused() {
+fn owned_construction_capacity_is_reported_even_when_slots_are_unused() {
     let source = Source::new();
     let mut styles = Styles::new();
     let baseline_pass =
@@ -490,100 +490,6 @@ fn owned_construction_capacity_is_charged_even_when_slots_are_unused() {
         grown.stats().estimated_retained_bytes,
         baseline.stats().estimated_retained_bytes + additional
     );
-}
-
-#[test]
-fn owned_construction_reclaims_spare_capacity_before_compact_fallback_and_rejection() {
-    let source = Source::new();
-    let mut styles = Styles::new();
-    let mut live_pass =
-        build_layout_world_with_retained_inputs(&source, &mut styles, None).unwrap();
-    let construction_count = live_pass.len();
-    live_pass.boxes.shrink_to_fit();
-    let live_capacity = live_pass.boxes.capacity();
-    let mut baseline = LayoutWorkingSet::default();
-    publish(live_pass, &mut baseline);
-    assert_eq!(owned_parts(&baseline).0.capacity(), live_capacity);
-    let live_owned_charge = baseline.stats().estimated_retained_bytes;
-    let mut compact_probe = baseline.take().unwrap();
-    compact_probe.compact_graph();
-    let compact_charge = compact_probe.estimated_retention().total();
-    drop(compact_probe);
-    assert!(compact_charge < live_owned_charge);
-
-    let mut pass = build_layout_world_with_retained_inputs(&source, &mut styles, None).unwrap();
-    let extra_slots =
-        DEFAULT_DOCUMENT_WORKING_SET_BYTES / std::mem::size_of::<LayoutBox<usize>>() + 1;
-    pass.boxes.reserve_exact(extra_slots);
-    let oversized_capacity = pass.boxes.capacity();
-    assert!(
-        oversized_capacity * std::mem::size_of::<LayoutBox<usize>>()
-            > DEFAULT_DOCUMENT_WORKING_SET_BYTES
-    );
-    let mut work = LayoutWorkingSet::default();
-    publish(pass, &mut work);
-    assert_eq!(
-        work.limits().max_estimated_retained_bytes,
-        DEFAULT_DOCUMENT_WORKING_SET_BYTES
-    );
-    assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
-    assert_eq!(work.stats().retained_owned_boxes, construction_count);
-    assert_eq!(owned_parts(&work).0.capacity(), live_capacity);
-    assert_eq!(
-        work.stats().owned_box_capacity_trimmed,
-        oversized_capacity - live_capacity
-    );
-    assert!(work.stats().owned_box_capacity_trimmed > 0);
-    assert_eq!(work.stats().candidate_owned_bytes, live_owned_charge);
-    assert_eq!(work.stats().estimated_retained_bytes, live_owned_charge);
-
-    // Use the measured compact charge of this same graph and dependencies,
-    // not a source-count proxy. Even after real spare-capacity reclamation,
-    // the lower limit admits compact records but cannot admit live boxes.
-    let fallback_limit = compact_charge + (live_owned_charge - compact_charge) / 2;
-    assert!(compact_charge <= fallback_limit);
-    assert!(fallback_limit < live_owned_charge);
-    let pass = build_layout_world_with_retained_inputs(&source, &mut styles, None).unwrap();
-    let mut fallback = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: fallback_limit,
-        ..LayoutWorkingSetLimits::default()
-    });
-    publish(pass, &mut fallback);
-    assert_eq!(
-        fallback.stats().admission,
-        LayoutWorkingSetAdmission::Retained
-    );
-    assert!(matches!(
-        fallback.retained.as_ref().unwrap().graph,
-        RetainedGraph::Compact(_)
-    ));
-    assert_eq!(fallback.stats().retained_owned_boxes, 0);
-    assert_eq!(fallback.stats().candidate_owned_bytes, live_owned_charge);
-    assert_eq!(fallback.stats().estimated_retained_bytes, compact_charge);
-    assert_eq!(
-        fallback.limits().max_estimated_retained_bytes,
-        fallback_limit
-    );
-
-    // The same source dependencies also obey rejection when even compact
-    // storage cannot fit. A rejected candidate cannot keep its hidden source.
-    let dependency = Arc::downgrade(&source.hidden_name);
-    let pass = build_layout_world_with_retained_inputs(&source, &mut styles, None).unwrap();
-    work.clear();
-    fallback.clear();
-    drop(source);
-    let mut rejected = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: 1,
-        ..LayoutWorkingSetLimits::default()
-    });
-    publish(pass, &mut rejected);
-    assert_eq!(
-        rejected.stats().admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
-    assert_eq!(rejected.stats().estimated_retained_bytes, 0);
-    assert!(rejected.retained.is_none());
-    assert!(dependency.upgrade().is_none());
 }
 
 #[test]
@@ -817,15 +723,10 @@ fn assert_medium_owned_construction(paragraphs: usize) {
         work.stats(),
     );
     let construction_count = 1 + 2 * paragraphs;
-    assert_eq!(work.stats().candidate_boxes, construction_count);
+    assert_eq!(work.stats().retained_boxes, construction_count);
     assert_eq!(work.stats().retained_boxes, construction_count);
     assert_eq!(work.stats().retained_owned_boxes, construction_count);
     assert_eq!(work.stats().reused_owned_boxes, 0);
-    assert_eq!(
-        work.limits().max_estimated_retained_bytes,
-        DEFAULT_DOCUMENT_WORKING_SET_BYTES
-    );
-    assert!(work.stats().candidate_owned_bytes <= DEFAULT_DOCUMENT_WORKING_SET_BYTES);
     let box_pointer = owned_parts(&work).0.as_ptr();
     let box_capacity = owned_parts(&work).0.capacity();
     let warm = build_layout_pass_with_working_set(
@@ -859,117 +760,16 @@ fn assert_medium_owned_construction(paragraphs: usize) {
 }
 
 #[test]
-fn owned_construction_1024_text_blocks_fit_the_default_budget_and_reuse_their_allocation() {
+fn owned_construction_1024_text_blocks_retain_and_reuse_their_allocation() {
     assert_medium_owned_construction(1024);
 }
 
 #[test]
-fn owned_construction_1152_text_blocks_fit_the_default_budget_and_reuse_their_allocation() {
+fn owned_construction_1152_text_blocks_retain_and_reuse_their_allocation() {
     assert_medium_owned_construction(1152);
 }
 
 #[test]
-fn owned_construction_pressure_retains_real_numeric_suffix_headroom() {
-    for position in [
-        crate::LayoutPosition::Absolute,
-        crate::LayoutPosition::Fixed,
-    ] {
-        // The positioned child follows an ordinary block in a static container.
-        // Its containing block differs from its construction parent, and auto
-        // insets require the numeric backend to append a static-position box.
-        let mut source = Source::new();
-        source.nodes = vec![
-            Node::element(vec![1]),
-            Node::element(vec![2, 3]),
-            Node::element(Vec::new()),
-            Node::element(Vec::new()),
-        ];
-        let mut styles = Styles::new();
-        styles.positioned = Some((3, position));
-        let mut services = DocumentLayoutServices::new();
-        let mut probe = LayoutWorkingSet::default();
-        let reference = compare_with_cold(&source, &mut styles, &mut services, &mut probe);
-        let construction_count = probe.stats().candidate_boxes;
-        let pass_count = reference.metrics.box_count;
-        assert_eq!(construction_count, 4);
-        assert_eq!(pass_count, construction_count + 1, "{position:?}");
-        assert_eq!(probe.stats().retained_owned_boxes, construction_count);
-        assert_eq!(probe.stats().owned_box_capacity_trimmed, 0);
-        let spare_capacity = owned_parts(&probe).0.capacity();
-        assert!(
-            spare_capacity > pass_count,
-            "fixture needs real spare slots"
-        );
-        let spare_charge = probe.stats().estimated_retained_bytes;
-
-        // Measure this actual retained candidate with and without spare outer
-        // slots. No byte constant or construction-count proxy chooses the cap.
-        let mut trimmed_probe = probe.take().unwrap();
-        let removed = trimmed_probe.trim_owned_box_capacity();
-        let needed_capacity = match &trimmed_probe.graph {
-            RetainedGraph::Owned { boxes, .. } => boxes.capacity(),
-            RetainedGraph::Compact(_) => panic!("small fixture must retain owned boxes"),
-        };
-        let needed_charge = trimmed_probe.estimated_retention().total();
-        assert_eq!(needed_capacity, pass_count);
-        assert_eq!(removed, spare_capacity - needed_capacity);
-        assert!(removed > 0);
-        assert_eq!(
-            spare_charge - needed_charge,
-            removed * std::mem::size_of::<LayoutBox<usize>>()
-        );
-        drop(trimmed_probe);
-        let limit = needed_charge + (spare_charge - needed_charge) / 2;
-        assert!(needed_charge < limit && limit < spare_charge);
-        assert!(limit < DEFAULT_DOCUMENT_WORKING_SET_BYTES);
-        let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-            max_estimated_retained_bytes: limit,
-            ..LayoutWorkingSetLimits::default()
-        });
-
-        // The public full pass, not the measuring helper, must now reclaim
-        // spare capacity while preserving room for its actual numeric suffix.
-        let cold = compare_with_cold(&source, &mut styles, &mut services, &mut work);
-        assert_eq!(cold.metrics.box_count, pass_count);
-        assert_eq!(work.stats().candidate_boxes, construction_count);
-        assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
-        assert_eq!(work.stats().retained_owned_boxes, construction_count);
-        assert_eq!(work.stats().reused_owned_boxes, 0);
-        assert_eq!(work.stats().owned_box_capacity_trimmed, removed);
-        assert_eq!(work.stats().candidate_owned_bytes, needed_charge);
-        assert_eq!(work.stats().estimated_retained_bytes, needed_charge);
-        let (boxes, mapping) = owned_parts(&work);
-        assert_eq!(boxes.len(), construction_count);
-        assert_eq!(boxes.capacity(), pass_count);
-        assert!(mapping.values().all(|id| id.index() < construction_count));
-        let pointer = boxes.as_ptr();
-        let capacity = boxes.capacity();
-
-        // Numeric preparation appends again. Trimming to construction length
-        // would force regrowth here even though the source graph is unchanged.
-        let warm = compare_with_cold(&source, &mut styles, &mut services, &mut work);
-        assert_eq!(warm.metrics.box_count, pass_count);
-        assert_eq!(work.stats().retained_owned_boxes, construction_count);
-        assert_eq!(work.stats().reused_owned_boxes, construction_count);
-        assert_eq!(work.stats().owned_box_capacity_trimmed, 0);
-        assert_eq!(work.stats().estimated_retained_bytes, needed_charge);
-        assert_eq!(owned_parts(&work).0.as_ptr(), pointer);
-        assert_eq!(owned_parts(&work).0.capacity(), capacity);
-        assert_eq!(reference.tree.boxes, warm.tree.boxes);
-        assert_eq!(reference.tree.fragments, warm.tree.fragments);
-        assert_eq!(reference.paint_snapshot(), warm.paint_snapshot());
-
-        // Each pass above also compares all fixture queries and a hit grid to
-        // a fresh one-shot pass. Explicit eviction must preserve the same data.
-        work.clear();
-        let evicted = compare_with_cold(&source, &mut styles, &mut services, &mut work);
-        assert_eq!(evicted.metrics.box_count, pass_count);
-        assert_eq!(work.stats().reused_owned_boxes, 0);
-        assert_eq!(work.stats().retained_owned_boxes, construction_count);
-        assert_eq!(work.stats().owned_box_capacity_trimmed, removed);
-        assert_eq!(owned_parts(&work).0.capacity(), pass_count);
-        assert_eq!(warm.tree.boxes, evicted.tree.boxes);
-        assert_eq!(warm.tree.fragments, evicted.tree.fragments);
-        assert_eq!(warm.paint_snapshot(), evicted.paint_snapshot());
-    }
+fn owned_construction_4096_text_blocks_retain_and_reuse_their_allocation() {
+    assert_medium_owned_construction(4096);
 }

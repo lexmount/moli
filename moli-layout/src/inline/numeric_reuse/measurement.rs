@@ -7,9 +7,9 @@ use super::{InlineNumericInputs, allocation, style_allocation};
 use crate::LayoutBoxId;
 
 // Each owner can be probed under several intrinsic/definite constraints. Keep
-// a small LRU rather than replacing its accepted final-layout result. The
-// document's existing byte admission additionally bounds the whole sidecar.
-const CAPACITY: usize = 4;
+// a small LRU rather than replacing its accepted final-layout result.
+// Match Blink's per-object complete-measure LRU; this is not a document quota.
+const CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct InlineMeasurementInputs {
