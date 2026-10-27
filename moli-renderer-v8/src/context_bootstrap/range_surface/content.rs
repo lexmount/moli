@@ -89,22 +89,7 @@ pub(super) fn range_create_contextual_fragment_callback<'s>(
     ) else {
         return;
     };
-    let Some(start_container) =
-        range_boundary_container_object(scope, args.this(), RangeBoundarySide::Start)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let context_node =
-        if object_number_property(scope, start_container, "nodeType").unwrap_or(0.0) as u32 == 3 {
-            object_property_as_object(scope, start_container, "parentNode")
-                .unwrap_or(start_container)
-        } else {
-            start_container
-        };
-    let Some(fragment) =
-        create_contextual_fragment_internal(scope, args.this(), context_node, &markup)
-    else {
+    let Some(fragment) = create_contextual_fragment_internal(scope, args.this(), &markup) else {
         rv.set_undefined();
         return;
     };
