@@ -6,7 +6,7 @@ pub(super) fn prepare_runtime_inspector_payload(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     preparation: RuntimeInspectorPayloadPreparation,
-) -> Result<String, String> {
+) -> Result<String> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     prepare_runtime_inspector_payload_for_owner(conn, cmd, &owner, preparation)
 }
@@ -16,7 +16,7 @@ pub(super) fn prepare_runtime_inspector_payload_for_owner(
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
     preparation: RuntimeInspectorPayloadPreparation,
-) -> Result<String, String> {
+) -> Result<String> {
     match preparation {
         RuntimeInspectorPayloadPreparation::Passthrough => Ok(cmd.json.to_owned()),
         RuntimeInspectorPayloadPreparation::ValidateObjectOwner => {
@@ -188,7 +188,7 @@ pub(super) fn prepare_pending_devtools_call_function_json_for_owner(
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
     command: &DevToolsCallFunctionCommand,
-) -> Result<String, String> {
+) -> Result<String> {
     let object_ids = devtools_call_function_remote_object_ids(command);
     conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
     Ok(cmd.json.to_owned())
@@ -1171,6 +1171,7 @@ pub(super) fn runtime_inspector_error_plan(
     command_id: Option<u64>,
     message: impl std::fmt::Display,
 ) -> CommandOutputPlan {
+    let message = message.to_string();
     let message = format!("{message:#}");
     if message == "Duplicate `id` in protocol request" {
         return CommandOutputPlan::error(-32600, message);
@@ -1198,9 +1199,13 @@ pub(super) fn parse_synthesized_runtime_command(
         .map_err(|error| format!("invalid synthesized Runtime Inspector command: {error}"))
 }
 
-pub(super) fn worker_runtime_is_unavailable(message: &str) -> bool {
+pub(super) fn worker_runtime_is_unavailable(error: &anyhow::Error) -> bool {
     matches!(
-        message,
-        "SharedWorkerRuntimeUnavailable" | "DedicatedWorkerRuntimeUnavailable"
+        error.downcast_ref::<moli_core::page::WorkerInspectorError>(),
+        Some(
+            moli_core::page::WorkerInspectorError::SharedUnavailable
+                | moli_core::page::WorkerInspectorError::DedicatedUnavailable
+                | moli_core::page::WorkerInspectorError::ServiceUnavailable
+        )
     )
 }

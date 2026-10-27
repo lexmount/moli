@@ -107,7 +107,7 @@ fn runtime_inspector_command_rewrite_rejects_mismatched_wire_id() {
     .unwrap_err();
 
     assert_eq!(
-        error,
+        error.to_string(),
         "runtime Inspector command id mismatch: expected 9, got 8"
     );
 }
@@ -208,8 +208,10 @@ fn runtime_remote_object_validation_allows_session_local_id_collisions() {
         conn.validate_runtime_remote_object_ids_for_session_owner(
             Some("SID-active"),
             &["attached-only".to_owned()],
-        ),
-        Err("Cannot find object with given id".to_owned()),
+        )
+        .unwrap_err()
+        .to_string(),
+        "Cannot find object with given id",
         "an id known only to another session must remain inaccessible"
     );
 }
@@ -1557,7 +1559,8 @@ fn failed_await_registration_does_not_discard_existing_renderer_owner() {
             None,
             renderer_command_descriptor_for_test(17),
         )
-        .unwrap_err(),
+        .unwrap_err()
+        .to_string(),
         "Duplicate `id` in protocol request"
     );
 

@@ -198,16 +198,14 @@ impl CdpConnection {
                 });
             }
         };
-        let raw_json = self
-            .rewrite_runtime_inspector_command_for_session_owner(
-                session_id,
-                &payload,
-                Some((
-                    context.correlation.frontend_command_id(),
-                    context.correlation.renderer_call_id(),
-                )),
-            )
-            .map_err(anyhow::Error::msg)?;
+        let raw_json = self.rewrite_runtime_inspector_command_for_session_owner(
+            session_id,
+            &payload,
+            Some((
+                context.correlation.frontend_command_id(),
+                context.correlation.renderer_call_id(),
+            )),
+        )?;
         let page = self.loaded_page_mut_for_protocol_access(session_id)?;
         let sender = context.response_sender.clone();
         let pending = match context.delivery {

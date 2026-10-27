@@ -35,6 +35,28 @@ use crate::domains::runtime_context_events::{
 
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RuntimeInspectorError {
+    #[error("UnknownSession")]
+    UnknownSession,
+    #[error("UnknownMethod")]
+    UnknownMethod,
+    #[error("InvalidParams")]
+    InvalidParams,
+    #[error("Cannot find object with given id")]
+    CannotFindObject,
+    #[error("ConsoleCommandCompletionFailed: {0}")]
+    ConsoleCompletion(&'static str),
+    #[error("SessionResponseSenderMissing")]
+    SessionResponseSenderMissing,
+    #[error("RuntimeInspectorResponseCanceled")]
+    ResponseCanceled,
+    #[error("runtime Inspector command must be a JSON object")]
+    CommandNotObject,
+    #[error("runtime Inspector command id mismatch: expected {expected}, got {actual}")]
+    CommandIdMismatch { expected: u64, actual: String },
+}
+
 type RuntimeInspectorResponseReceiver = RuntimeInspectorAsyncCompletionReceiver;
 
 const SHARED_WORKER_RUNTIME_REMOTE_OBJECT_CLEANUP_COMMAND_ID_BASE: u64 = 900_600_000;
@@ -111,24 +133,25 @@ fn rewrite_runtime_inspector_command_for_renderer(
     raw_json: &str,
     command_id_rewrite: Option<(FrontendCommandId, RendererCallId)>,
     owner_target_id: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String> {
+    use anyhow::Context as _;
     let mut message = serde_json::from_str::<Value>(raw_json)
-        .map_err(|error| format!("invalid runtime Inspector command JSON: {error}"))?;
+        .context("invalid runtime Inspector command JSON")?;
     let Some(object) = message.as_object_mut() else {
-        return Err("runtime Inspector command must be a JSON object".to_owned());
+        return Err(RuntimeInspectorError::CommandNotObject.into());
     };
 
     if let Some((frontend_command_id, renderer_call_id)) = command_id_rewrite {
         let wire_command_id = object.get("id").and_then(Value::as_u64);
         if wire_command_id != Some(frontend_command_id.get()) {
-            return Err(format!(
-                "runtime Inspector command id mismatch: expected {}, got {}",
-                frontend_command_id.get(),
-                object
+            return Err(RuntimeInspectorError::CommandIdMismatch {
+                expected: frontend_command_id.get(),
+                actual: object
                     .get("id")
                     .map(Value::to_string)
-                    .unwrap_or_else(|| "missing".to_owned())
-            ));
+                    .unwrap_or_else(|| "missing".to_owned()),
+            }
+            .into());
         }
         object.insert("id".to_owned(), json!(renderer_call_id.get()));
     }
@@ -157,8 +180,7 @@ fn rewrite_runtime_inspector_command_for_renderer(
         }
     }
 
-    serde_json::to_string(&message)
-        .map_err(|error| format!("failed to encode runtime Inspector command: {error}"))
+    serde_json::to_string(&message).context("failed to encode runtime Inspector command")
 }
 
 pub(crate) fn renderer_command_turn_frontend_protocol_response(
@@ -385,12 +407,14 @@ enum PendingRuntimeProtocolMessageDispatchKind {
 }
 
 pub struct PendingSharedWorkerRuntimeProtocolMessageDispatch {
+    scope: WorkerRuntimeScope,
     session_id: Option<String>,
     pending: SharedWorkerRuntimeProtocolDispatchFuture,
     response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct PendingServiceWorkerRuntimeProtocolMessageDispatch {
+    scope: WorkerRuntimeScope,
     session_id: Option<String>,
     pending: ServiceWorkerRuntimeProtocolDispatchFuture,
     response_route: RuntimeProtocolResponseRoute,
@@ -471,7 +495,7 @@ impl CompletedWorkerRuntimeProtocolDispatch {
         }
     }
 
-    async fn wait_for_session_response(&mut self) -> Result<(), String> {
+    async fn wait_for_session_response(&mut self) -> Result<()> {
         let Some(pending) = self.pending_session_response.take() else {
             return Ok(());
         };
@@ -563,9 +587,9 @@ pub struct CompletedRuntimeChildDefaultContextLookupDispatch {
 }
 
 type SharedWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
+    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch>>>>;
 type ServiceWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
+    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch>>>>;
 
 #[derive(Clone, Debug)]
 struct RuntimeProtocolMessagePageRoute {
@@ -645,7 +669,11 @@ impl PendingRuntimeProtocolMessageDispatch {
 }
 
 impl PendingSharedWorkerRuntimeProtocolMessageDispatch {
-    pub async fn wait(self) -> Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String> {
+    pub(crate) fn scope(&self) -> &WorkerRuntimeScope {
+        &self.scope
+    }
+
+    pub async fn wait(self) -> Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch> {
         let dispatch = self.pending.await?;
         Ok(CompletedSharedWorkerRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
@@ -656,9 +684,11 @@ impl PendingSharedWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl PendingServiceWorkerRuntimeProtocolMessageDispatch {
-    pub async fn wait(
-        self,
-    ) -> Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String> {
+    pub(crate) fn scope(&self) -> &WorkerRuntimeScope {
+        &self.scope
+    }
+
+    pub async fn wait(self) -> Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch> {
         let dispatch = self.pending.await?;
         Ok(CompletedServiceWorkerRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
@@ -721,7 +751,7 @@ impl CompletedRuntimeProtocolMessageDispatch {
 }
 
 impl CompletedSharedWorkerRuntimeProtocolMessageDispatch {
-    pub(crate) async fn wait_for_session_response(&mut self) -> Result<(), String> {
+    pub(crate) async fn wait_for_session_response(&mut self) -> Result<()> {
         self.dispatch.wait_for_session_response().await
     }
 
@@ -745,7 +775,7 @@ impl CompletedSharedWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl CompletedServiceWorkerRuntimeProtocolMessageDispatch {
-    pub(crate) async fn wait_for_session_response(&mut self) -> Result<(), String> {
+    pub(crate) async fn wait_for_session_response(&mut self) -> Result<()> {
         self.dispatch.wait_for_session_response().await
     }
 
@@ -1029,3 +1059,6 @@ pub(crate) fn runtime_remote_object_ids_in_map(map: &Map<String, Value>) -> Vec<
 
 #[cfg(test)]
 mod tests;
+
+mod worker_scope;
+pub(crate) use worker_scope::WorkerRuntimeScope;

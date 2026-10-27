@@ -1795,7 +1795,7 @@ async fn worker_main(
         }
     }
     if install_global_failed {
-        inspector_task_runner.dispose("Worker global installation failed");
+        inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::InstallationFailed);
         *isolate_handle.lock() = None;
         worker_isolate.unregister_worker_isolate_platform();
         return;
@@ -3324,7 +3324,7 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
-    inspector_task_runner.dispose("Worker exited before Inspector task dispatch");
+    inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {

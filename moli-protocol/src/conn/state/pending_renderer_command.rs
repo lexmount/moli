@@ -2,7 +2,6 @@ use anyhow::{Context as _, Result};
 
 use std::{
     collections::{HashMap, hash_map::Entry},
-    fmt,
     num::NonZeroI32,
 };
 
@@ -129,7 +128,8 @@ impl RendererCommandDescriptor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("Duplicate `id` in protocol request")]
 pub(crate) struct DuplicatePendingRendererCommand {
     frontend_command_id: FrontendCommandId,
 }
@@ -140,14 +140,6 @@ impl DuplicatePendingRendererCommand {
         self.frontend_command_id
     }
 }
-
-impl fmt::Display for DuplicatePendingRendererCommand {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Duplicate `id` in protocol request")
-    }
-}
-
-impl std::error::Error for DuplicatePendingRendererCommand {}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PendingRendererCommandKey {
@@ -164,33 +156,17 @@ impl PendingRendererCommandKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("renderer Inspector call-id space exhausted")]
 pub(crate) struct RendererCallIdExhausted;
 
-impl fmt::Display for RendererCallIdExhausted {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("renderer Inspector call-id space exhausted")
-    }
-}
-
-impl std::error::Error for RendererCallIdExhausted {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum RegisterRendererCallError {
-    Duplicate(DuplicatePendingRendererCommand),
-    Exhausted(RendererCallIdExhausted),
+    #[error(transparent)]
+    Duplicate(#[from] DuplicatePendingRendererCommand),
+    #[error(transparent)]
+    Exhausted(#[from] RendererCallIdExhausted),
 }
-
-impl fmt::Display for RegisterRendererCallError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Duplicate(error) => error.fmt(formatter),
-            Self::Exhausted(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for RegisterRendererCallError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererCommandCorrelation {

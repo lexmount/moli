@@ -86,6 +86,8 @@ mod page_screenshot;
 mod page_settings;
 mod page_state;
 mod page_surface;
+mod worker_inspector_error;
+pub use worker_inspector_error::WorkerInspectorError;
 mod page_turn_scheduler;
 mod page_vm;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;

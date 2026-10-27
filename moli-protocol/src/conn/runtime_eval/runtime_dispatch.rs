@@ -226,11 +226,11 @@ impl CdpConnection {
     pub(super) fn shared_worker_runtime_target_for_session(
         &self,
         session_id: Option<&str>,
-    ) -> Result<SharedWorkerRuntimeTargetRoute, String> {
-        let session_id = session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+    ) -> Result<SharedWorkerRuntimeTargetRoute> {
+        let session_id = session_id.ok_or(RuntimeInspectorError::UnknownSession)?;
         let route = self
             .session_route(Some(session_id))
-            .ok_or_else(|| "UnknownSession".to_owned())?;
+            .ok_or(RuntimeInspectorError::UnknownSession)?;
         match route {
             CdpSessionRoute::SharedWorkerTarget {
                 browser_context_id,
@@ -239,7 +239,7 @@ impl CdpConnection {
                 let target = self
                     .browser_context_by_id(&browser_context_id)
                     .and_then(|context| context.shared_worker_target(&target_id))
-                    .ok_or_else(|| "UnknownSession".to_owned())?;
+                    .ok_or(RuntimeInspectorError::UnknownSession)?;
                 Ok(SharedWorkerRuntimeTargetRoute {
                     browser_context_id,
                     worker: WorkerRuntimeTarget::Shared(target.renderer_instance_id),
@@ -252,21 +252,21 @@ impl CdpConnection {
                 let target = self
                     .browser_context_by_id(&browser_context_id)
                     .and_then(|context| context.dedicated_worker_target(&target_id))
-                    .ok_or_else(|| "UnknownSession".to_owned())?;
+                    .ok_or(RuntimeInspectorError::UnknownSession)?;
                 Ok(SharedWorkerRuntimeTargetRoute {
                     browser_context_id,
                     worker: WorkerRuntimeTarget::Dedicated(target.renderer_instance_id),
                 })
             }
-            _ => Err("UnknownSession".to_owned()),
+            _ => Err(RuntimeInspectorError::UnknownSession.into()),
         }
     }
 
     pub(crate) fn run_dedicated_worker_if_waiting_for_debugger_for_session(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<bool, String> {
-        let session_id = session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+    ) -> Result<bool> {
+        let session_id = session_id.ok_or(RuntimeInspectorError::UnknownSession)?;
         let route = self.shared_worker_runtime_target_for_session(Some(session_id))?;
         let WorkerRuntimeTarget::Dedicated(instance_id) = route.worker else {
             return Ok(false);
@@ -277,28 +277,28 @@ impl CdpConnection {
         let renderer_runtime = self
             .browser_context_by_id(&route.browser_context_id)
             .map(|context| context.renderer_runtime())
-            .ok_or_else(|| "UnknownSession".to_owned())?;
+            .ok_or(RuntimeInspectorError::UnknownSession)?;
         Ok(renderer_runtime.run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance_id))
     }
 
     pub(super) fn service_worker_runtime_target_for_session(
         &self,
         session_id: Option<&str>,
-    ) -> Result<ServiceWorkerRuntimeTargetRoute, String> {
-        let session_id = session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+    ) -> Result<ServiceWorkerRuntimeTargetRoute> {
+        let session_id = session_id.ok_or(RuntimeInspectorError::UnknownSession)?;
         let CdpSessionRoute::ServiceWorkerTarget {
             browser_context_id,
             target_id,
         } = self
             .session_route(Some(session_id))
-            .ok_or_else(|| "UnknownSession".to_owned())?
+            .ok_or(RuntimeInspectorError::UnknownSession)?
         else {
-            return Err("UnknownSession".to_owned());
+            return Err(RuntimeInspectorError::UnknownSession.into());
         };
         let target = self
             .browser_context_by_id(&browser_context_id)
             .and_then(|context| context.service_worker_target(&target_id))
-            .ok_or_else(|| "UnknownSession".to_owned())?;
+            .ok_or(RuntimeInspectorError::UnknownSession)?;
         Ok(ServiceWorkerRuntimeTargetRoute {
             browser_context_id,
             version_id: target.renderer_version_id,
@@ -309,7 +309,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         raw_json: String,
-    ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch> {
         let raw_json =
             self.rewrite_runtime_inspector_command_for_session_owner(session_id, &raw_json, None)?;
         self.start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
@@ -325,7 +325,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
-    ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch> {
         self.shared_worker_runtime_target_for_session(session_id)?;
         let (_correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
@@ -343,12 +343,12 @@ impl CdpConnection {
         raw_json: String,
         response_sender: Option<RendererRuntimeInspectorResponseSender>,
         response_route: RuntimeProtocolResponseRoute,
-    ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch> {
         let route = self.shared_worker_runtime_target_for_session(session_id)?;
         let renderer_runtime = self
             .browser_context_by_id(&route.browser_context_id)
             .map(|context| context.renderer_runtime())
-            .ok_or_else(|| "UnknownSession".to_owned())?;
+            .ok_or(RuntimeInspectorError::UnknownSession)?;
         let worker = route.worker;
         let inspector_session_id = session_id.map(str::to_owned);
         let response_delivery = response_route.delivery();
@@ -378,7 +378,7 @@ impl CdpConnection {
                 RendererInspectorResponseDelivery::SessionSink,
             ) => {
                 let inspector_session_id =
-                    inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+                    inspector_session_id.ok_or(RuntimeInspectorError::UnknownSession)?;
                 Box::pin(async move {
                     renderer_runtime
                         .dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
@@ -426,7 +426,7 @@ impl CdpConnection {
                 RendererInspectorResponseDelivery::SessionSink,
             ) => {
                 let inspector_session_id =
-                    inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+                    inspector_session_id.ok_or(RuntimeInspectorError::UnknownSession)?;
                 Box::pin(async move {
                     renderer_runtime
                         .dispatch_dedicated_worker_runtime_protocol_message_with_devtools_session_response(
@@ -454,52 +454,21 @@ impl CdpConnection {
                     .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
             }),
             (_, None, RendererInspectorResponseDelivery::SessionSink) => {
-                return Err("SessionResponseSenderMissing".to_owned());
+                return Err(RuntimeInspectorError::SessionResponseSenderMissing.into());
             }
         };
         Ok(PendingSharedWorkerRuntimeProtocolMessageDispatch {
+            scope: WorkerRuntimeScope::capture(self, session_id)?,
             session_id: session_id.map(str::to_owned),
             pending,
             response_route,
         })
     }
 
-    pub(crate) async fn dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
-        &mut self,
-        session_id: Option<&str>,
-        raw_json: &str,
-        command_id: u64,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())
-            .map_err(anyhow::Error::msg)?;
-        let pending = self
-            .start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(
-                session_id, descriptor, command_id,
-            )
-            .map_err(anyhow::Error::msg)?;
-        let mut completed = pending.wait().await.map_err(anyhow::Error::msg)?;
-        let response_rx = completed.take_deferred_response_receiver();
-        let mut messages = self
-            .complete_shared_worker_runtime_protocol_message_for_session(completed)
-            .map_err(anyhow::Error::msg)?;
-        if let Some(response_rx) = response_rx
-            && let Some(message) = self
-                .await_registered_runtime_inspector_response_for_session_owner_async(
-                    session_id,
-                    command_id,
-                    response_rx,
-                )
-                .await
-        {
-            messages.push(message);
-        }
-        Ok(messages)
-    }
-
     pub(crate) fn complete_shared_worker_runtime_protocol_message_for_session(
         &mut self,
         mut completed: CompletedSharedWorkerRuntimeProtocolMessageDispatch,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.restore_frontend_command_ids_in_runtime_messages(
             completed.session_id.as_deref(),
             None,
@@ -512,7 +481,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         raw_json: String,
-    ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch> {
         let raw_json =
             self.rewrite_runtime_inspector_command_for_session_owner(session_id, &raw_json, None)?;
         self.start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
@@ -528,7 +497,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
-    ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch> {
         self.service_worker_runtime_target_for_session(session_id)?;
         let (_correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
@@ -546,12 +515,12 @@ impl CdpConnection {
         raw_json: String,
         response_sender: Option<RendererRuntimeInspectorResponseSender>,
         response_route: RuntimeProtocolResponseRoute,
-    ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
+    ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch> {
         let route = self.service_worker_runtime_target_for_session(session_id)?;
         let renderer_runtime = self
             .browser_context_by_id(&route.browser_context_id)
             .map(|context| context.renderer_runtime())
-            .ok_or_else(|| "UnknownSession".to_owned())?;
+            .ok_or(RuntimeInspectorError::UnknownSession)?;
         let version_id = route.version_id;
         let inspector_session_id = session_id.map(str::to_owned);
         let response_delivery = response_route.delivery();
@@ -570,7 +539,7 @@ impl CdpConnection {
                 }
                 (Some(response), RendererInspectorResponseDelivery::SessionSink) => {
                     let inspector_session_id =
-                        inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+                        inspector_session_id.ok_or(RuntimeInspectorError::UnknownSession)?;
                     renderer_runtime
                             .dispatch_service_worker_runtime_protocol_message_with_devtools_session_response(
                                 version_id,
@@ -590,11 +559,12 @@ impl CdpConnection {
                     .await
                     .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply),
                 (None, RendererInspectorResponseDelivery::SessionSink) => {
-                    Err("SessionResponseSenderMissing".to_owned())
+                    Err(RuntimeInspectorError::SessionResponseSenderMissing.into())
                 }
             }
         });
         Ok(PendingServiceWorkerRuntimeProtocolMessageDispatch {
+            scope: WorkerRuntimeScope::capture(self, session_id)?,
             session_id: session_id.map(str::to_owned),
             pending,
             response_route,
@@ -604,7 +574,7 @@ impl CdpConnection {
     pub(crate) fn complete_service_worker_runtime_protocol_message_for_session(
         &mut self,
         mut completed: CompletedServiceWorkerRuntimeProtocolMessageDispatch,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.restore_frontend_command_ids_in_runtime_messages(
             completed.session_id.as_deref(),
             None,

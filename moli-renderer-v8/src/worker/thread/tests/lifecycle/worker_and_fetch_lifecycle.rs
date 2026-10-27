@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Result;
 
 #[tokio::test]
 async fn worker_resource_timing_buffer_configuration_does_not_require_a_window() {
@@ -525,8 +526,7 @@ async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_j
         id: i64,
         method: &str,
         params: Option<serde_json::Value>,
-    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>, String>>
-    {
+    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>>> {
         let (response_tx, response_rx) = oneshot::channel();
         let mut message = serde_json::json!({
             "id": id,

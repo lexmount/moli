@@ -1093,6 +1093,42 @@ impl CdpConnection {
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> Result<CdpCommandTaskStep, CompletedCdpCommandDispatch> {
+        let completed = if matches!(
+            completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Runtime(_)
+        ) && let Some(access) = self.protocol_state_access()
+        {
+            let CompletedCdpCommandDispatchKind::Runtime(runtime) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = runtime.command_id();
+            let session_id = runtime.session_id().map(str::to_owned);
+            match crate::domains::runtime::PreparedWorkerRuntimeCommand::from_completed(runtime) {
+                Ok(prepared) => {
+                    return Ok(self.start_command_workflow(
+                        prepared.into_workflow(access),
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    ));
+                }
+                Err(runtime) => {
+                    return Err(CompletedCdpCommandDispatch {
+                        inner: Box::new(CompletedCdpCommandDispatchKind::Runtime(runtime)),
+                    });
+                }
+            }
+        } else {
+            completed
+        };
+        self.try_complete_finite_command_dispatch_with_context(completed, command_context)
+    }
+
+    fn try_complete_finite_command_dispatch_with_context(
+        &mut self,
+        completed: CompletedCdpCommandDispatch,
+        command_context: &mut CommandDispatchContext,
+    ) -> Result<CdpCommandTaskStep, CompletedCdpCommandDispatch> {
         if !matches!(
             completed.inner.as_ref(),
             CompletedCdpCommandDispatchKind::Workflow(_)
@@ -1411,8 +1447,11 @@ impl CdpConnection {
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
+        // Exclusive automation and nested adapters drive the common Worker
+        // workflow inline. They cannot wait for a state request to the actor
+        // whose connection borrow they already own.
         let completed = match self
-            .try_complete_ready_command_dispatch_with_context(completed, command_context)
+            .try_complete_finite_command_dispatch_with_context(completed, command_context)
         {
             Ok(step) => return step,
             Err(completed) => completed,

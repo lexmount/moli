@@ -1615,8 +1615,7 @@ impl ScriptVm {
                                     outbound.capture_dispatch_responses();
                                 with_scoped_inspector_microtasks(scope, || {
                                     dispatch_with_runtime_defaults(session, raw_json, &outbound)
-                                })
-                                .map_err(anyhow::Error::msg)?;
+                                })?;
                             }
                             let response = outbound
                                 .take_response_for_call_id_after(
@@ -1844,7 +1843,7 @@ impl ScriptVm {
                             dispatch_with_runtime_defaults(session, raw_json, &outbound)
                         }) {
                             outbound.discard_messages_after(snap);
-                            return Err(anyhow::Error::msg(error));
+                            return Err(error);
                         }
                         if let (Some(total_started), Some(started)) =
                             (timing_started, dispatch_started)

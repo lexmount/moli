@@ -6,6 +6,7 @@ use crate::protocol_types::{
     SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceResourceType,
     WebSocketFrameDirection, WebSocketFrameOpcode,
 };
+use crate::runtime::WorkerInspectorError;
 use crate::runtime::{
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
     ServiceWorkerClientFocus, ServiceWorkerClientFocusResult, ServiceWorkerClientMessage,
@@ -34,6 +35,7 @@ use crate::runtime::{
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
 use crate::worker::inspector_task_runner::{WorkerInspectorTaskMode, WorkerInspectorTaskRunner};
+use anyhow::Result;
 use moli_crypto::sha256_hex;
 use moli_fetch::{RequestCredentialsMode, ResponseHead};
 use moli_shared_worker::SharedWorkerInstanceId;
@@ -713,7 +715,7 @@ impl WorkerDevToolsHandle {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
     ) -> bool {
         self.inspector_tasks.append_protocol_message(
             inspector_session_id,
@@ -741,12 +743,12 @@ impl WorkerDevToolsHandle {
         self.inspector_tasks.append_run_if_waiting_for_debugger()
     }
 
-    pub(crate) fn dispose(&self, message: &str) {
-        self.inspector_tasks.dispose(message);
+    pub(crate) fn dispose(&self, error: WorkerInspectorError) {
+        self.inspector_tasks.dispose(error);
     }
 
     pub(crate) fn terminate_for_devtools(&self) -> bool {
-        self.dispose("Worker closed before Inspector task dispatch");
+        self.dispose(WorkerInspectorError::Closed);
         self.worker_tx.send(WorkerMessage::Terminate).is_ok()
     }
 }
@@ -827,8 +829,7 @@ impl WorkerHandle {
         // Publish the lifecycle transition before interrupting V8. The worker
         // event loop can then reject an already-selected task without relying
         // on ordering between cloned mpsc senders.
-        self.devtools
-            .dispose("Worker terminated before Inspector task dispatch");
+        self.devtools.dispose(WorkerInspectorError::Terminated);
         self.termination_requested.store(true, Ordering::Release);
         self.terminate_execution_if_ready();
         let _ = self.tx.send(WorkerMessage::Terminate);
@@ -858,7 +859,7 @@ impl WorkerHandle {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
     ) -> bool {
         self.devtools.dispatch_runtime_protocol_message(
             inspector_session_id,

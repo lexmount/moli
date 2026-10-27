@@ -5,7 +5,7 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
         object_ids: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if object_ids.is_empty() {
             return Ok(());
         }
@@ -22,7 +22,7 @@ impl CdpConnection {
                 continue;
             }
             if self.runtime_remote_object_id_known_for_different_owner(&owner, object_id) {
-                return Err("Cannot find object with given id".to_owned());
+                return Err(RuntimeInspectorError::CannotFindObject.into());
             }
         }
         Ok(())
@@ -32,7 +32,7 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
         object_ids: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if owner.session_id().is_some() {
             return self.validate_runtime_remote_object_ids_for_session_owner(
                 owner.session_id(),
@@ -51,7 +51,7 @@ impl CdpConnection {
                 continue;
             }
             if self.runtime_remote_object_id_known_for_different_owner(&owner_identity, object_id) {
-                return Err("Cannot find object with given id".to_owned());
+                return Err(RuntimeInspectorError::CannotFindObject.into());
             }
         }
         Ok(())

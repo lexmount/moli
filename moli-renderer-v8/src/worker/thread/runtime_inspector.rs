@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::Result;
 use std::{
     cell::{Cell, OnceCell, RefCell, UnsafeCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -573,7 +575,7 @@ impl WorkerRuntimeInspector {
         scope: &mut v8::PinScope<'_, '_>,
         inspector_session_id: Option<&str>,
         raw_json: &str,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_protocol_message_with_optional_deferred_response(
             scope,
             inspector_session_id,
@@ -589,7 +591,7 @@ impl WorkerRuntimeInspector {
         inspector_session_id: Option<&str>,
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let messages = with_scoped_inspector_microtasks(scope, || {
             self.dispatch_protocol_message_scoped(inspector_session_id, raw_json, deferred_response)
         })?;
@@ -602,10 +604,10 @@ impl WorkerRuntimeInspector {
         inspector_session_id: Option<&str>,
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let session_key = worker_inspector_session_key(inspector_session_id);
         if self.detached_sessions.borrow().contains(&session_key) {
-            return Err("Worker Inspector session has been detached".to_owned());
+            return Err(WorkerInspectorError::Detached.into());
         }
         if let Some(callback) = deferred_response {
             self.outbound
@@ -1025,7 +1027,7 @@ mod tests {
         owner.release();
         assert_eq!(read_defaults(&mut isolate, false), baseline);
         registration.unregister();
-        task_runner.dispose("test complete");
+        task_runner.dispose(WorkerInspectorError::Closed);
     }
 
     #[test]
@@ -1521,8 +1523,10 @@ mod tests {
                     &json!({"id": 1, "method": "Runtime.enable"}).to_string(),
                     None,
                 )
-                .expect_err("detached session must reject a queued late command"),
-            "Worker Inspector session has been detached"
+                .expect_err("detached session must reject a queued late command")
+                .downcast::<crate::runtime::WorkerInspectorError>()
+                .unwrap(),
+            crate::runtime::WorkerInspectorError::Detached
         );
     }
 }

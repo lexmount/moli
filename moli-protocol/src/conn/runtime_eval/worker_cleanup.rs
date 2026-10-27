@@ -56,7 +56,7 @@ impl CdpConnection {
         let mut command_id = SHARED_WORKER_RUNTIME_REMOTE_OBJECT_CLEANUP_COMMAND_ID_BASE;
         let mut commands = Vec::new();
         for (method, params) in payloads {
-            let descriptor = RendererCommandDescriptor::from_synthesized_payload(
+            let descriptor = RendererCommandDescriptor::for_document_helper(
                 json!({"id": command_id, "method": method, "params": params}).to_string(),
             );
             let pending = descriptor.and_then(|descriptor| if service_worker {
@@ -64,7 +64,7 @@ impl CdpConnection {
             } else {
                 self.start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(Some(session_id), descriptor, command_id).map(WorkerCleanupCall::Shared)
             });
-            commands.push((command_id, pending.map_err(anyhow::Error::msg)));
+            commands.push((command_id, pending));
             command_id = command_id.saturating_add(1);
         }
         SessionWorkerCleanup {
@@ -81,20 +81,22 @@ impl SessionWorkerCleanup {
             let reply = async {
                 let (reply, receiver) = match pending? {
                     WorkerCleanupCall::Shared(pending) => {
-                        let mut completed = pending.wait().await.map_err(anyhow::Error::msg)?;
+                        let mut completed = pending.wait().await?;
                         let receiver = completed.take_deferred_response_receiver();
                         (WorkerCleanupReply::Shared(completed), receiver)
                     }
                     WorkerCleanupCall::Service(pending) => {
-                        let mut completed = pending.wait().await.map_err(anyhow::Error::msg)?;
+                        let mut completed = pending.wait().await?;
                         let receiver = completed.take_deferred_response_receiver();
                         (WorkerCleanupReply::Service(completed), receiver)
                     }
                 };
                 let response = match receiver {
-                    Some(receiver) => {
-                        Some(receiver.await.context("RuntimeInspectorResponseCanceled"))
-                    }
+                    Some(receiver) => Some(
+                        receiver
+                            .await
+                            .context(RuntimeInspectorError::ResponseCanceled),
+                    ),
                     None => None,
                 };
                 Ok(CompletedWorkerCleanupCall {
@@ -119,12 +121,10 @@ impl CompletedSessionWorkerCleanup {
             let result = reply.and_then(|completed| {
                 match completed.reply {
                     WorkerCleanupReply::Shared(reply) => {
-                        conn.complete_shared_worker_runtime_protocol_message_for_session(reply)
-                            .map_err(anyhow::Error::msg)?;
+                        conn.complete_shared_worker_runtime_protocol_message_for_session(reply)?;
                     }
                     WorkerCleanupReply::Service(reply) => {
-                        conn.complete_service_worker_runtime_protocol_message_for_session(reply)
-                            .map_err(anyhow::Error::msg)?;
+                        conn.complete_service_worker_runtime_protocol_message_for_session(reply)?;
                     }
                 }
                 if let Some(response) = completed.response {

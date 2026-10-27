@@ -59,7 +59,6 @@ use crate::domains::runtime_context_events::{
     RuntimeContextProtocolEvent, emit_runtime_context_protocol_background_event_typed,
 };
 
-const SHARED_WORKER_RUNTIME_BINDING_REPLAY_COMMAND_ID_BASE: u64 = 900_000_000;
 const WEBDRIVER_BIDI_FILE_PROMPT_HANDLER_PARAM: &str = "__moliWebDriverBidiFilePromptHandler";
 const LOCATE_NODES_START_NODE_OBJECT_GROUP: &str = "moli-locate-nodes-start-nodes";
 
@@ -312,11 +311,13 @@ enum CompletedRuntimeCommandKind {
         routed_output: RuntimeInspectorRoutedOutput,
     },
     SharedWorkerInspector {
-        completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
+        scope: crate::conn::WorkerRuntimeScope,
+        completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch>,
         binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     },
     ServiceWorkerInspector {
-        completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
+        scope: crate::conn::WorkerRuntimeScope,
+        completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch>,
     },
     MoliDiagnostics(Result<CompletedMoliDiagnosticsDispatch, String>),
     Enable(Result<CompletedRuntimeEnableEventsDispatch, String>),
@@ -754,12 +755,18 @@ impl PendingRuntimeCommandDispatch {
                 PendingRuntimeCommandKind::SharedWorkerInspector {
                     pending,
                     binding_effect,
-                } => CompletedRuntimeCommandKind::SharedWorkerInspector {
-                    completed: pending.wait().await,
-                    binding_effect,
-                },
+                } => {
+                    let scope = pending.scope().clone();
+                    CompletedRuntimeCommandKind::SharedWorkerInspector {
+                        scope,
+                        completed: pending.wait().await,
+                        binding_effect,
+                    }
+                }
                 PendingRuntimeCommandKind::ServiceWorkerInspector { pending } => {
+                    let scope = pending.scope().clone();
                     CompletedRuntimeCommandKind::ServiceWorkerInspector {
+                        scope,
                         completed: pending.wait().await,
                     }
                 }
@@ -2006,6 +2013,14 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
     completed: CompletedRuntimeCommandDispatch,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> RuntimeCommandTaskStep {
+    let completed = match PreparedWorkerRuntimeCommand::from_completed(Box::new(completed)) {
+        Ok(prepared) => {
+            return RuntimeCommandTaskStep::Complete(
+                prepared.run_inline(conn, response_flush).await,
+            );
+        }
+        Err(completed) => *completed,
+    };
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
     let meta = RuntimeCommandCompletionMeta::from(&completed);
     match completed.completed {
@@ -2063,29 +2078,9 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
                 complete_pending_runtime_deferred_inspector_reply_command(meta, routed_output),
             )
         }
-        CompletedRuntimeCommandKind::SharedWorkerInspector {
-            completed: completed_inspector,
-            binding_effect,
-        } => {
-            Box::pin(complete_pending_shared_worker_runtime_inspector_command(
-                conn,
-                meta,
-                completed_inspector,
-                binding_effect,
-                timing_started,
-            ))
-            .await
-        }
-        CompletedRuntimeCommandKind::ServiceWorkerInspector {
-            completed: completed_inspector,
-        } => {
-            Box::pin(complete_pending_service_worker_runtime_inspector_command(
-                conn,
-                meta,
-                completed_inspector,
-                timing_started,
-            ))
-            .await
+        CompletedRuntimeCommandKind::SharedWorkerInspector { .. }
+        | CompletedRuntimeCommandKind::ServiceWorkerInspector { .. } => {
+            unreachable!("Worker completions use their owned workflow")
         }
     }
 }
@@ -2094,46 +2089,15 @@ pub(in crate::domains) async fn replay_shared_worker_runtime_bindings_for_sessio
     conn: &mut CdpConnection,
     session_id: Option<&str>,
 ) {
-    let Some(session_id) = session_id else {
+    let Some(replay) = crate::conn::WorkerRuntimeScope::capture(conn, session_id)
+        .ok()
+        .and_then(|scope| PreparedWorkerBindingReplay::prepare(conn, scope))
+    else {
         return;
     };
-    let bindings = conn
-        .shared_worker_target_for_session(Some(session_id))
-        .map(|target| target.runtime_bindings_requiring_replay(session_id))
-        .unwrap_or_default();
-    for (index, binding) in bindings.into_iter().enumerate() {
-        let command_id = SHARED_WORKER_RUNTIME_BINDING_REPLAY_COMMAND_ID_BASE
-            .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
-        let raw_json = shared_worker_runtime_binding_replay_json(command_id, &binding);
-        match conn
-            .dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
-                Some(session_id),
-                &raw_json,
-                command_id,
-            )
-            .await
-        {
-            Ok(messages) if command_response_succeeded(&messages, Some(command_id)) => {
-                if let Some(target) = conn.shared_worker_target_for_session_mut(Some(session_id)) {
-                    target.mark_runtime_binding_replayed(session_id, &binding);
-                }
-            }
-            Ok(messages) => {
-                tracing::warn!(
-                    binding = %binding.name,
-                    messages = ?messages,
-                    "shared worker Runtime binding replay did not receive a successful inspector response"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    binding = %binding.name,
-                    error = %error,
-                    "failed to replay shared worker Runtime binding"
-                );
-            }
-        }
-    }
+    replay
+        .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
+        .await;
 }
 
 pub(crate) async fn execute_runtime_listener_command_for_owner(
@@ -3428,4 +3392,42 @@ mod protocol_neutral_tests {
             "successful V8 Runtime.disable should clear target-local Runtime binding state"
         );
     }
+}
+
+mod worker_binding_replay;
+pub(crate) use worker_binding_replay::{
+    PreparedWorkerBindingReplay, WorkerBindingReplayCall, finish_binding_dispatch,
+    finish_binding_response,
+};
+
+mod worker_completion;
+pub(crate) use worker_completion::{PreparedWorkerRuntimeCommand, WorkerRuntimeContinuation};
+
+#[cfg(test)]
+fn worker_workflow_fixture() -> CdpConnection {
+    let mut conn = CdpConnection::new();
+    let mut browser = crate::conn::BrowserContext::new("BID-owned-worker".into());
+    let mut target = crate::conn::SharedWorkerTargetState::new(
+        moli_core::RendererOwnerLocalHostId::new_for_testing(15),
+        moli_shared_worker::SharedWorkerInstanceId::from_u64(26),
+        "TID-owned-worker".into(),
+        None,
+        String::new(),
+        String::new(),
+    );
+    target.attach_session("SID-owned-worker".into());
+    target.record_runtime_execution_context_created_event(&RuntimeExecutionContextEvent {
+        target_id: None,
+        context_id: Some(17),
+        realm_id: None,
+        frame_id: None,
+        origin: None,
+        name: None,
+        is_default: None,
+        context_type: Some("worker".into()),
+        grant_universal_access: None,
+    });
+    browser.insert_shared_worker_target(target);
+    conn.install_browser_context_fixture_for_test(browser);
+    conn
 }

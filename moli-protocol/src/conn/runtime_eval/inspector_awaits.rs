@@ -59,7 +59,7 @@ impl CdpConnection {
         cdp_request_id: u64,
         dispatched_attachment_id: Option<RendererAgentAttachmentId>,
         descriptor: RendererCommandDescriptor,
-    ) -> Result<PreparedRendererCallDispatch, String> {
+    ) -> Result<PreparedRendererCallDispatch> {
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
         {
@@ -70,8 +70,8 @@ impl CdpConnection {
                     dispatched_attachment_id,
                     descriptor,
                 )
-                .ok_or_else(|| "UnknownSession".to_owned())?
-                .map_err(|error| error.to_string());
+                .ok_or(RuntimeInspectorError::UnknownSession)?
+                .map_err(anyhow::Error::from);
         }
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.service_worker_target_for_session_mut(session_id)
@@ -83,14 +83,14 @@ impl CdpConnection {
                     dispatched_attachment_id,
                     descriptor,
                 )
-                .ok_or_else(|| "UnknownSession".to_owned())?
-                .map_err(|error| error.to_string());
+                .ok_or(RuntimeInspectorError::UnknownSession)?
+                .map_err(anyhow::Error::from);
         }
         self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
             state.try_register_renderer_call(cdp_request_id, dispatched_attachment_id, descriptor)
         })
-        .ok_or_else(|| "UnknownSession".to_owned())?
-        .map_err(|error| error.to_string())
+        .ok_or(RuntimeInspectorError::UnknownSession)?
+        .map_err(anyhow::Error::from)
     }
 
     pub(super) fn try_register_renderer_call_for_owner(
@@ -99,7 +99,7 @@ impl CdpConnection {
         cdp_request_id: u64,
         dispatched_attachment_id: Option<RendererAgentAttachmentId>,
         descriptor: RendererCommandDescriptor,
-    ) -> Result<PreparedRendererCallDispatch, String> {
+    ) -> Result<PreparedRendererCallDispatch> {
         if owner.session_id().is_some() {
             return self.try_register_renderer_call_for_session_owner(
                 owner.session_id(),
@@ -111,8 +111,8 @@ impl CdpConnection {
         self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
             state.try_register_renderer_call(cdp_request_id, dispatched_attachment_id, descriptor)
         })
-        .ok_or_else(|| "UnknownSession".to_owned())?
-        .map_err(|error| error.to_string())
+        .ok_or(RuntimeInspectorError::UnknownSession)?
+        .map_err(anyhow::Error::from)
     }
 
     pub(crate) fn take_renderer_call_for_frontend_for_session_owner(
@@ -409,15 +409,12 @@ impl CdpConnection {
         descriptor: RendererCommandDescriptor,
         cdp_request_id: u64,
         dispatched_attachment_id: Option<RendererAgentAttachmentId>,
-    ) -> Result<
-        (
-            RendererCommandCorrelation,
-            String,
-            RendererRuntimeInspectorResponseSender,
-            RuntimeProtocolResponseRoute,
-        ),
+    ) -> Result<(
+        RendererCommandCorrelation,
         String,
-    > {
+        RendererRuntimeInspectorResponseSender,
+        RuntimeProtocolResponseRoute,
+    )> {
         let raw_json = descriptor.frontend_payload().to_owned();
         let response_delivery = descriptor.response_delivery();
         let prepared = self.try_register_renderer_call_for_session_owner(
@@ -462,15 +459,12 @@ impl CdpConnection {
         descriptor: RendererCommandDescriptor,
         cdp_request_id: u64,
         dispatched_attachment_id: Option<RendererAgentAttachmentId>,
-    ) -> Result<
-        (
-            RendererCommandCorrelation,
-            String,
-            RendererRuntimeInspectorResponseSender,
-            RuntimeProtocolResponseRoute,
-        ),
+    ) -> Result<(
+        RendererCommandCorrelation,
         String,
-    > {
+        RendererRuntimeInspectorResponseSender,
+        RuntimeProtocolResponseRoute,
+    )> {
         let raw_json = descriptor.frontend_payload().to_owned();
         let response_delivery = descriptor.response_delivery();
         let prepared = self.try_register_renderer_call_for_owner(
@@ -513,7 +507,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         raw_json: &str,
         command_id_rewrite: Option<(FrontendCommandId, RendererCallId)>,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let owner_target_id = self
             .runtime_context_owner_identity_for_session(session_id)
             .and_then(|(_, target_id)| target_id);
@@ -529,7 +523,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         raw_json: &str,
         command_id_rewrite: Option<(FrontendCommandId, RendererCallId)>,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         if owner.session_id().is_some() {
             return self.rewrite_runtime_inspector_command_for_session_owner(
                 owner.session_id(),

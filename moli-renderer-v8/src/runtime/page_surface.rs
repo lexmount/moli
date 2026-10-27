@@ -8,7 +8,7 @@ use crate::protocol_types::{
     ChildFrameDocumentOpenedSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
 };
 use crate::types::{ScriptObservableOutput, ScriptObservableOutputItem};
-use anyhow::bail;
+use anyhow::{Context as _, Result, bail};
 pub use moli_page_types::{
     DevToolsSessionKey, DocumentNodeObjectSnapshot, DocumentNodeSnapshot,
     RendererAgentAttachmentId, RendererDevToolsAgentToken,
@@ -2831,11 +2831,11 @@ pub struct PendingWorkerRuntimeInspectorSessionResponse {
 }
 
 impl PendingWorkerRuntimeInspectorSessionResponse {
-    pub async fn wait(self) -> Result<(RendererOutputFence, bool), String> {
+    pub async fn wait(self) -> Result<(RendererOutputFence, bool)> {
         self.settlement
             .await
             .map(RendererRuntimeInspectorSessionResponseSettlement::into_parts)
-            .map_err(|_| "WorkerRuntimeInspectorResponseCanceled".to_owned())
+            .context(WorkerInspectorError::ResponseCanceled)
     }
 }
 
@@ -2850,7 +2850,7 @@ impl CompletedWorkerRuntimeInspectorCommandDispatch {
     }
 
     pub(crate) fn finish(
-        dispatch: Result<Vec<RendererRuntimeInspectorMessage>, String>,
+        dispatch: Result<Vec<RendererRuntimeInspectorMessage>>,
         settlement: oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>,
         error_response: RendererRuntimeInspectorResponseSender,
     ) -> Self {
@@ -2862,7 +2862,7 @@ impl CompletedWorkerRuntimeInspectorCommandDispatch {
                     "id": call_id,
                     "error": {
                         "code": -32000,
-                        "message": message,
+                        "message": message.to_string(),
                     }
                 }));
                 Vec::new()

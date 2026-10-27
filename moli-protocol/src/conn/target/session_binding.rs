@@ -136,8 +136,20 @@ impl CdpConnection {
             {
                 continue;
             }
-            self.target_control
-                .commit_attached_session(session_id, None, &target_id, route, false, false);
+            let attachment =
+                self.worker_protocol_attachment_identity_for_route(&route, &session_id);
+            self.target_control.commit_attached_session(
+                session_id.clone(),
+                None,
+                &target_id,
+                route,
+                false,
+                false,
+            );
+            if let Some(attachment) = attachment {
+                self.target_control
+                    .bind_worker_attachment(&session_id, attachment);
+            }
         }
     }
 
@@ -338,6 +350,8 @@ impl CdpConnection {
         let target_id = route.target_id().unwrap_or_else(|| {
             panic!("test auto-attached session route must identify a target: {route:?}")
         });
+        let attachment = self.worker_protocol_attachment_identity_for_route(&route, &session_id);
+        let binding_session = session_id.clone();
         self.target_control.commit_auto_attached_session_for_target(
             session_id,
             owner_session_id,
@@ -345,6 +359,10 @@ impl CdpConnection {
             route.clone(),
             false,
         );
+        if let Some(attachment) = attachment {
+            self.target_control
+                .bind_worker_attachment(&binding_session, attachment);
+        }
     }
 
     #[cfg(test)]
@@ -366,6 +384,7 @@ impl CdpConnection {
         route: CdpSessionRoute,
     ) {
         let target_id = route.target_id().unwrap_or("browser").to_owned();
+        let attachment = self.worker_protocol_attachment_identity_for_route(&route, session_id);
         self.target_control.commit_attached_session(
             session_id.to_owned(),
             None,
@@ -374,6 +393,10 @@ impl CdpConnection {
             false,
             false,
         );
+        if let Some(attachment) = attachment {
+            self.target_control
+                .bind_worker_attachment(session_id, attachment);
+        }
     }
 
     pub(crate) fn commit_prepared_attach_event_plan(

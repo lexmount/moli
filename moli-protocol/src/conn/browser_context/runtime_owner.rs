@@ -406,6 +406,7 @@ impl CdpConnection {
             | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => target_id.clone(),
             _ => return None,
         };
+        let attachment = self.worker_protocol_attachment_identity_for_route(route, session_id)?;
         self.target_control.commit_attached_session(
             session_id.to_owned(),
             None,
@@ -414,6 +415,8 @@ impl CdpConnection {
             false,
             false,
         );
+        self.target_control
+            .bind_worker_attachment(session_id, attachment);
         Some(())
     }
 }

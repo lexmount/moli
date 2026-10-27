@@ -1,4 +1,6 @@
+use crate::runtime::WorkerInspectorError;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
+use anyhow::Result;
 
 use super::super::ids::ServiceWorkerVersionId;
 use super::ServiceWorkerRuntimeService;
@@ -9,9 +11,9 @@ impl ServiceWorkerRuntimeService {
         version_id: ServiceWorkerVersionId,
         inspector_session_id: Option<String>,
         raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(host) = self.running_host_for_version(version_id) else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         host.dispatch_worker_runtime_protocol_message_without_deferred_response(
             inspector_session_id,
@@ -26,9 +28,9 @@ impl ServiceWorkerRuntimeService {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(host) = self.running_host_for_version(version_id) else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         host.dispatch_worker_runtime_protocol_message_with_deferred_response(
             inspector_session_id,
@@ -44,12 +46,12 @@ impl ServiceWorkerRuntimeService {
         inspector_session_id: String,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
+    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch> {
         let Some(host) = self.running_host_for_version(version_id) else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         let Some(output_journal) = self.target_output_journal(version_id) else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         let response = response
             .route_to_worker_devtools_session_output(inspector_session_id.clone(), output_journal);

@@ -5,6 +5,10 @@ mod bidi_nodes;
 mod bindings;
 mod command_classification;
 mod dispatcher;
+pub(crate) use dispatcher::{PreparedWorkerRuntimeCommand, WorkerRuntimeContinuation};
+pub(crate) use dispatcher::{
+    WorkerBindingReplayCall, finish_binding_dispatch, finish_binding_response,
+};
 mod evaluate;
 mod native;
 pub(in crate::domains) use native::{

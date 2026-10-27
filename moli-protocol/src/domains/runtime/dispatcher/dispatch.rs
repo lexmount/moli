@@ -265,7 +265,8 @@ pub(super) fn start_heap_profiler_inspector_shared_worker_command_dispatch(
             if matches!(
                 action,
                 HeapProfilerAction::Enable | HeapProfilerAction::Disable
-            ) && (message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message)) =>
+            ) && (message.is::<crate::conn::NoDocumentLoaded>()
+                || worker_runtime_is_unavailable(&message)) =>
         {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
@@ -494,7 +495,7 @@ pub(super) fn start_console_inspector_service_worker_command_dispatch(
         cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
-        Err(message) if message == "ServiceWorkerRuntimeUnavailable" => {
+        Err(message) if worker_runtime_is_unavailable(&message) => {
             if !apply_console_output_state_for_session(conn, cmd.session_id, action) {
                 return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(
                     "UnknownSession".to_owned(),
@@ -866,7 +867,7 @@ pub(super) fn start_shared_worker_frontend_inspector_dispatch(
     cmd: &Cmd<'_>,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -891,7 +892,7 @@ pub(super) fn start_service_worker_frontend_inspector_dispatch(
     cmd: &Cmd<'_>,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -958,7 +959,7 @@ pub(super) fn prepare_pending_devtools_runtime_inspector_json(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     command: &AutomationCommand,
-) -> Result<String, String> {
+) -> Result<String> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     prepare_pending_devtools_runtime_inspector_json_for_owner(conn, cmd, &owner, command)
 }
@@ -968,13 +969,13 @@ pub(super) fn prepare_pending_devtools_runtime_inspector_json_for_owner(
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
     command: &AutomationCommand,
-) -> Result<String, String> {
+) -> Result<String> {
     match command {
         AutomationCommand::EvaluateScript(_) => Ok(cmd.json.to_owned()),
         AutomationCommand::CallFunction(command) => {
             prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, command)
         }
-        _ => Err("UnsupportedDevToolsCommand".to_owned()),
+        _ => Err(crate::conn::RuntimeInspectorError::UnknownMethod.into()),
     }
 }
 

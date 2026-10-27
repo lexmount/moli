@@ -630,9 +630,10 @@ async fn dedicated_worker_debugger_resume_discards_unobserved_main_script_comple
     let session_id = dedicated_attached_session_id(&loaded);
     let _ = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
 
-    assert_eq!(
-        conn.run_dedicated_worker_if_waiting_for_debugger_for_session(Some(&session_id)),
-        Ok(false),
+    assert!(
+        !conn
+            .run_dedicated_worker_if_waiting_for_debugger_for_session(Some(&session_id))
+            .unwrap(),
         "the unit fixture has no live renderer worker, but the resume boundary must still consume replay eligibility"
     );
     assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)));

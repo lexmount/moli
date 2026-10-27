@@ -594,6 +594,7 @@ pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
+pub(crate) use runtime_eval::WorkerRuntimeScope;
 #[cfg(test)]
 pub(crate) use runtime_eval::dispatch_runtime_helper_using;
 pub(crate) use runtime_eval::{
@@ -602,7 +603,7 @@ pub(crate) use runtime_eval::{
     CompletedSessionWorkerCleanup, PreparedBidiChannelAction, PreparedRendererNavigationFinish,
     PreparedRuntimeHelper, PreparedRuntimeRealmInventory, RuntimeBindingCallEvent,
     RuntimeEnableEventsReplay, RuntimeEnableReplayEvent, RuntimeHelperIdentity,
-    SessionWorkerCleanup, renderer_command_turn_frontend_protocol_response,
+    RuntimeInspectorError, SessionWorkerCleanup, renderer_command_turn_frontend_protocol_response,
     runtime_realm_inventory_using, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{

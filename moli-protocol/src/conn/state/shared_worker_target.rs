@@ -218,17 +218,31 @@ impl SharedWorkerTargetState {
             .collect()
     }
 
-    pub(crate) fn mark_runtime_binding_replayed(
+    pub(crate) fn take_runtime_binding_replay(
+        &mut self,
+        session_id: &str,
+        binding: &RuntimeBindingDefinition,
+    ) -> bool {
+        let Some(state) = self.session_state_mut(session_id) else {
+            return false;
+        };
+        state
+            .runtime_binding_replay_pending
+            .remove(&(binding.name.clone(), binding.execution_context_name.clone()))
+    }
+
+    pub(crate) fn retry_runtime_binding_replay(
         &mut self,
         session_id: &str,
         binding: &RuntimeBindingDefinition,
     ) {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state
-            .runtime_binding_replay_pending
-            .remove(&(binding.name.clone(), binding.execution_context_name.clone()));
+        if let Some(state) = self.session_state_mut(session_id)
+            && state.runtime_bindings.contains(binding)
+        {
+            state
+                .runtime_binding_replay_pending
+                .insert((binding.name.clone(), binding.execution_context_name.clone()));
+        }
     }
 
     fn mark_all_runtime_bindings_pending_replay(&mut self) {

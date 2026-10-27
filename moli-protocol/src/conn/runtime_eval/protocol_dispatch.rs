@@ -117,35 +117,6 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn await_registered_runtime_inspector_response_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        command_id: u64,
-        response_rx: RuntimeInspectorResponseReceiver,
-    ) -> Option<RendererRuntimeInspectorMessage> {
-        let response = crate::conn::RuntimeInspectorResponseReady::new(
-            command_id,
-            session_id,
-            response_rx
-                .await
-                .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
-        );
-        let mut response = self.resolve_runtime_inspector_response_ready(response)?;
-        if response
-            .renderer_agent_attachment_id()
-            .is_some_and(|attachment_id| {
-                !self.renderer_agent_attachment_is_current_for_session_owner(
-                    session_id,
-                    attachment_id,
-                )
-            })
-        {
-            response.replace_with_error("Execution context was destroyed by navigation");
-        }
-        let message = response.into_protocol_message_for_typed_runtime_route();
-        Some(RendererRuntimeInspectorMessage::protocol(message))
-    }
-
     pub(crate) fn start_runtime_protocol_message_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -179,9 +150,7 @@ impl CdpConnection {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
             .context(NoDocumentLoaded)?;
-        let raw_json = self
-            .rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)
-            .map_err(anyhow::Error::msg)?;
+        let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = match inspector_route {
@@ -256,8 +225,7 @@ impl CdpConnection {
                 descriptor,
                 command_id,
                 Some(route.renderer_agent_attachment_id),
-            )
-            .map_err(anyhow::Error::msg)?;
+            )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page_result = match inspector_route {
@@ -307,9 +275,7 @@ impl CdpConnection {
         let route = self
             .runtime_protocol_message_page_route_for_owner(owner)
             .context(NoDocumentLoaded)?;
-        let raw_json = self
-            .rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)
-            .map_err(anyhow::Error::msg)?;
+        let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
@@ -344,8 +310,7 @@ impl CdpConnection {
                 descriptor,
                 command_id,
                 Some(route.renderer_agent_attachment_id),
-            )
-            .map_err(anyhow::Error::msg)?;
+            )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = match self.loaded_page_mut_for_protocol_access_for_owner(owner) {
