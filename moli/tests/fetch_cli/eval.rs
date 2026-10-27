@@ -134,7 +134,7 @@ fn eval_can_dump_html_without_a_serializable_return_value() -> Result<()> {
 
 #[test]
 fn eval_dumps_destination_after_interaction_navigation() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     for script in [
@@ -156,7 +156,7 @@ fn eval_dumps_destination_after_interaction_navigation() -> Result<()> {
 
 #[test]
 fn eval_follows_load_handler_navigation_chains_like_direct_fetch() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     for remaining in [1, 2] {
@@ -490,7 +490,7 @@ fn eval_file_with_layout_publishes_after_readiness() -> Result<()> {
 
 #[test]
 fn eval_uses_standard_document_apis_and_writes_text() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let output = run_eval(
@@ -514,7 +514,7 @@ fn eval_uses_standard_document_apis_and_writes_text() -> Result<()> {
 
 #[test]
 fn eval_writes_objects_as_compact_json() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let output = run_eval(
@@ -540,7 +540,7 @@ fn eval_writes_objects_as_compact_json() -> Result<()> {
 
 #[test]
 fn eval_awaits_a_promise_result() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let output = run_eval(
@@ -561,7 +561,7 @@ fn eval_awaits_a_promise_result() -> Result<()> {
 
 #[test]
 fn eval_file_executes_large_multiline_scripts() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let script_file = unique_temp_file_path("eval-file-large", "extract.js")?;
@@ -670,7 +670,7 @@ fn eval_file_reports_read_errors_before_fetching() -> Result<()> {
 
 #[test]
 fn eval_remains_available_when_page_javascript_is_disabled() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let output = run_eval(
@@ -691,7 +691,7 @@ fn eval_remains_available_when_page_javascript_is_disabled() -> Result<()> {
 
 #[test]
 fn eval_reports_javascript_exceptions_as_command_failures() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let output = run_eval(&url, r#"throw new Error("extraction failed")"#, &[])?;
@@ -710,7 +710,7 @@ fn eval_reports_javascript_exceptions_as_command_failures() -> Result<()> {
 
 #[test]
 fn eval_rejects_raw_non_html_documents() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/inline.pdf");
     let output = run_eval(&url, "document.title", &[])?;

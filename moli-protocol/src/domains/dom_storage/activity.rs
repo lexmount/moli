@@ -2,75 +2,24 @@ use moli_core::network::WebStorageMutationSubscription;
 use moli_core::network::{WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord};
 use serde_json::{Value, json};
 
-use crate::{
-    conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope},
-    domains::{
-        activity::{
-            ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink,
-            ProtocolOutputSlot,
-        },
-        command_output::protocol_message_background_event,
-    },
-};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope};
+use crate::domains::command_output::protocol_message_background_event;
 
-#[derive(Clone, Debug, Default, PartialEq)]
-struct DomStoragePreparedOutputs {
-    events: Vec<BackgroundProtocolEvent>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(in crate::domains) struct DomStoragePreparedOutputSlot {
-    outputs: DomStoragePreparedOutputs,
-}
-
-pub(in crate::domains) const SLOT_DOM_STORAGE: ProtocolOutputSlot = ProtocolOutputSlot::DomStorage;
-
-pub(in crate::domains) fn project_dom_storage(
-    context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: &mut ProtocolOutputPayloads,
-) {
-    let Some(slot) = prepared_outputs.dom_storage_mut() else {
-        return;
-    };
-    context
-        .command
-        .protocol_events_mut()
-        .append(&mut slot.outputs.events);
-}
-
-impl DomStoragePreparedOutputSlot {
-    pub(in crate::domains) fn extend(&mut self, mut other: Self) {
-        self.outputs.events.append(&mut other.outputs.events);
-    }
-}
-
-impl DomStoragePreparedOutputs {
-    fn append_to_output_sink(self, sink: &mut (impl ProtocolOutputSink + ?Sized)) {
-        if self.events.is_empty() {
-            return;
-        }
-        sink.push_produced_slot(SLOT_DOM_STORAGE);
-        sink.push_prepared_payload(DomStoragePreparedOutputSlot { outputs: self }.into());
-    }
-}
-
-pub(in crate::domains) fn append_pending_dom_storage_outputs_for_owner(
+pub(crate) fn take_pending_dom_storage_outputs_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
-    sink: &mut (impl ProtocolOutputSink + ?Sized),
-) {
-    let mut outputs = DomStoragePreparedOutputs::default();
+) -> Vec<BackgroundProtocolEvent> {
+    let mut events = Vec::new();
     for (event_session_id, subscription) in
         dom_storage_subscriptions_for_browser_context_owner(conn, owner)
     {
-        let records = subscription.drain();
-        outputs.events.extend(
-            records.into_iter().filter_map(|record| {
+        events.extend(
+            subscription.drain().into_iter().filter_map(|record| {
                 event_from_mutation_record(record, event_session_id.as_deref())
             }),
         );
     }
-    outputs.append_to_output_sink(sink);
+    events
 }
 
 fn dom_storage_subscriptions_for_browser_context_owner(

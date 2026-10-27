@@ -351,15 +351,6 @@ impl PreparedProtocolOutputs {
         prepared
     }
 
-    pub(in crate::domains::activity) async fn from_protocol_local_command_boundary(
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-    ) -> Self {
-        let mut outputs = Self::empty();
-        outputs.append_protocol_local_outputs(conn, owner).await;
-        outputs
-    }
-
     pub(in crate::domains::activity) fn from_renderer_owner_action(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -625,6 +616,7 @@ impl PreparedProtocolOutputs {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::domains::activity) async fn project_async(
         self,
         conn: &mut CdpConnection,
@@ -695,16 +687,6 @@ impl PreparedProtocolOutputs {
         if !self.ordered_slots.contains(&slot) {
             self.ordered_slots.push(slot);
         }
-    }
-
-    async fn append_protocol_local_outputs(
-        &mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-    ) {
-        crate::domains::dom_storage::append_pending_dom_storage_outputs_for_owner(
-            conn, owner, self,
-        );
     }
 }
 

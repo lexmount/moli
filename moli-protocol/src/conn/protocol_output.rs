@@ -394,7 +394,7 @@ impl CdpConnection {
         )
     }
 
-    pub async fn project_protocol_local_command_outputs_turn_async(
+    pub fn project_protocol_local_command_outputs_turn(
         &mut self,
         session_id: Option<&str>,
     ) -> CdpTurnOutcome {
@@ -404,8 +404,7 @@ impl CdpConnection {
             self,
             &owner,
             &mut command_context,
-        )
-        .await;
+        );
         CdpTurnOutcome::new_with_protocol_and_post_response_events(
             command_context.take_protocol_events(),
             command_context.take_post_response_events(),

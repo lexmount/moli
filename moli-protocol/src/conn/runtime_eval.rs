@@ -832,12 +832,14 @@ impl PendingRuntimeEnableEventsDispatch {
 }
 
 impl PendingRuntimeBindingPageCommandDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeBindingPageCommandDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeBindingPageCommandDispatch> {
+        use anyhow::Context as _;
+
         let completion = self
             .pending
             .wait()
             .await
-            .map_err(|error| format!("{} failed: {error}", self.operation))?;
+            .with_context(|| format!("{} failed", self.operation))?;
         Ok(CompletedRuntimeBindingPageCommandDispatch {
             owner: self.owner,
             operation: self.operation,

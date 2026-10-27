@@ -309,7 +309,7 @@ fn assert_no_css_requests(server: &DisableCssFixtureServer, scenario: &str) {
 
 #[test]
 fn disables_all_author_style_surfaces_without_disabling_scripts() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/page.html"),
@@ -354,7 +354,7 @@ fn disables_all_author_style_surfaces_without_disabling_scripts() -> Result<()> 
 
 #[test]
 fn survives_http_redirect_without_losing_the_page_policy() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/redirect.html"),
@@ -380,7 +380,7 @@ fn survives_http_redirect_without_losing_the_page_policy() -> Result<()> {
 
 #[test]
 fn blocked_stylesheet_links_dispatch_error_and_preserve_cssom() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/link-events.html"),
@@ -420,7 +420,7 @@ fn survives_document_open_replacement() -> Result<()> {
         return ready;
     })()"#;
 
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/document-open.html"),
@@ -454,7 +454,7 @@ fn author_styles_remain_enabled_by_default() -> Result<()> {
         return ready;
     })()"#;
 
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/baseline.html"),

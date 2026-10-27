@@ -5,7 +5,10 @@ mod bidi_nodes;
 mod bindings;
 mod command_classification;
 mod dispatcher;
-pub(crate) use dispatcher::{PreparedWorkerRuntimeCommand, WorkerRuntimeContinuation};
+pub(crate) use dispatcher::{
+    PageRuntimeCommandContinuation, PageRuntimeCompletion, PreparedWorkerRuntimeCommand,
+    WorkerRuntimeContinuation, prepare_page_runtime_command_completion,
+};
 pub(crate) use dispatcher::{
     WorkerBindingReplayCall, finish_binding_dispatch, finish_binding_response,
 };

@@ -923,9 +923,8 @@ impl RuntimeDeferredReplyCompletion {
                 .await;
             self.output.prepend_protocol_output(output);
         }
-        let output = scheduler
-            .project_protocol_local_command_outputs_now(self.output_session_id.as_deref())
-            .await;
+        let output =
+            scheduler.project_protocol_local_command_outputs_now(self.output_session_id.as_deref());
         self.output.prepend_protocol_output(output);
         self
     }
@@ -1766,9 +1765,7 @@ async fn start_ready_command_dispatch(
             let session_id = pending.pending.session_id().map(str::to_owned);
             let mut output = take_runtime_deferred_initial_protocol_output(&mut pending);
             output.append(
-                scheduler
-                    .project_protocol_local_command_outputs_now(session_id.as_deref())
-                    .await,
+                scheduler.project_protocol_local_command_outputs_now(session_id.as_deref()),
             );
             enqueue_pending_runtime_deferred_reply_state(
                 pending_runtime_deferred_replies,
@@ -1916,11 +1913,9 @@ async fn flush_completed_command_output(
         );
     }
     causal_prefix.append(
-        scheduler
-            .project_protocol_local_command_outputs_now(
-                metadata.command_output_session_id.as_deref(),
-            )
-            .await,
+        scheduler.project_protocol_local_command_outputs_now(
+            metadata.command_output_session_id.as_deref(),
+        ),
     );
     output.prepend_protocol_output(causal_prefix);
     let (
@@ -2294,9 +2289,7 @@ async fn handle_pending_command_completion(
             let session_id = pending.pending.session_id().map(str::to_owned);
             let mut output = take_runtime_deferred_initial_protocol_output(&mut pending);
             output.append(
-                scheduler
-                    .project_protocol_local_command_outputs_now(session_id.as_deref())
-                    .await,
+                scheduler.project_protocol_local_command_outputs_now(session_id.as_deref()),
             );
             enqueue_pending_runtime_deferred_reply_state(
                 pending_runtime_deferred_replies,

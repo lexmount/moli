@@ -366,12 +366,11 @@ impl CdpConnection {
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     ) -> AutomationCommandDispatchOutcome {
         let mut dispatch_context = CommandDispatchContext::default();
-        Box::pin(self.project_protocol_local_outputs_for_direct_command(
+        self.project_protocol_local_outputs_for_direct_command(
             &command_context,
             &mut dispatch_context,
             &mut protocol_events,
-        ))
-        .await;
+        );
         protocol_events.extend(dispatch_context.take_post_response_events());
         let scheduler_events = self.take_scheduler_events();
         AutomationCommandDispatchOutcome::new_with_protocol_events(
@@ -486,7 +485,7 @@ impl CdpConnection {
         (listener_events, renderer_output_predecessor)
     }
 
-    async fn project_protocol_local_outputs_for_direct_command(
+    fn project_protocol_local_outputs_for_direct_command(
         &mut self,
         context: &AutomationContext,
         dispatch_context: &mut CommandDispatchContext,
@@ -513,8 +512,7 @@ impl CdpConnection {
             self,
             &owner,
             dispatch_context,
-        )
-        .await;
+        );
         protocol_events.extend(dispatch_context.take_protocol_events());
     }
 }

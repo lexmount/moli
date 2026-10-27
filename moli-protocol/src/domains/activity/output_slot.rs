@@ -58,7 +58,6 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     DocumentTitleChanged,
     DocumentLifecycle,
     RuntimeObservable,
-    DomStorage,
     ChildFrameActivity,
     SameDocumentNavigation,
     SessionHistoryUpdate,
@@ -97,8 +96,7 @@ impl ProtocolOutputSlot {
             | Self::DomMutations
             | Self::MainDocumentCommit
             | Self::DocumentTitleChanged
-            | Self::DocumentLifecycle
-            | Self::DomStorage => ProtocolOutputDelivery::ProtocolObservation,
+            | Self::DocumentLifecycle => ProtocolOutputDelivery::ProtocolObservation,
         }
     }
 
@@ -144,7 +142,6 @@ impl ProtocolOutputSlot {
             | Self::DocumentTitleChanged
             | Self::DocumentLifecycle
             | Self::RuntimeObservable
-            | Self::DomStorage
             | Self::WebMcp
             | Self::SessionHistoryUpdate
             | Self::SameDocumentNavigation => ProtocolOutputResponseOrder::BeforeResponse,
@@ -190,7 +187,6 @@ impl ProtocolOutputSlot {
             Self::DomMutations => {
                 crate::domains::dom::project_dom_mutations(conn, context, payloads)
             }
-            Self::DomStorage => crate::domains::dom_storage::project_dom_storage(context, payloads),
             Self::MainDocumentCommit => {
                 crate::domains::page::project_main_document_commit(conn, context, payloads)
             }
@@ -369,7 +365,6 @@ mod tests {
             (DocumentTitleChanged, ProtocolObservation, BeforeResponse),
             (DocumentLifecycle, ProtocolObservation, BeforeResponse),
             (RuntimeObservable, OwnerAction, BeforeResponse),
-            (DomStorage, ProtocolObservation, BeforeResponse),
             (WebMcp, ProtocolObservation, BeforeResponse),
             (ChildFrameActivity, OwnerAction, AfterResponse),
             (SameDocumentNavigation, OwnerAction, BeforeResponse),

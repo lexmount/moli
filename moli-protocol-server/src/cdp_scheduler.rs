@@ -897,10 +897,17 @@ impl CdpScheduler {
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> CommandTaskStep {
-        let step = self
+        let step = match self
             .conn
-            .complete_pending_command_dispatch_with_context(completed, command_context)
-            .await;
+            .try_complete_ready_command_dispatch_with_context(completed, command_context)
+        {
+            Ok(step) => step,
+            Err(completed) => {
+                self.conn
+                    .complete_pending_command_dispatch_with_context(completed, command_context)
+                    .await
+            }
+        };
         self.materialize_command_dispatch_step(step)
     }
 
@@ -2820,14 +2827,13 @@ impl CdpScheduler {
         self.complete_protocol_residence(residence).await
     }
 
-    pub(crate) async fn project_protocol_local_command_outputs_now(
+    pub(crate) fn project_protocol_local_command_outputs_now(
         &mut self,
         session_id: Option<&str>,
     ) -> ProtocolOutputSequence {
         let outcome = self
             .conn
-            .project_protocol_local_command_outputs_turn_async(session_id)
-            .await;
+            .project_protocol_local_command_outputs_turn(session_id);
         self.apply_protocol_only_turn_outcome(outcome)
     }
 

@@ -274,8 +274,7 @@ impl CdpConnection {
             self,
             &owner,
             &mut command_context,
-        )
-        .await;
+        );
         match self.complete_with_output_plan(
             &mut command_context,
             plan,

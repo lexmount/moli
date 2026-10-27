@@ -290,7 +290,9 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
                     && message["params"]["frame"]["id"] == child_id
                     && message["params"]["frame"]["url"] == child_url
             })
-            .expect("child commit must precede the navigation reply");
+            .unwrap_or_else(|| {
+                panic!("child commit must precede the navigation reply: {observed:#?}")
+            });
         assert!(navigation < reply, "{observed:?}");
         assert_eq!(cdp_runtime_evaluate_string(&mut socket, &session.session_id, 11,
             "JSON.stringify([frames[0].childDone, frames[0].document.querySelector('p').textContent])").await, r#"[true,"child"]"#);

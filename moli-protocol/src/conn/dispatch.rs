@@ -1088,7 +1088,7 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) fn try_complete_ready_command_dispatch_with_context(
+    pub fn try_complete_ready_command_dispatch_with_context(
         &mut self,
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
@@ -1113,8 +1113,33 @@ impl CdpConnection {
                     ));
                 }
                 Err(runtime) => {
-                    return Err(CompletedCdpCommandDispatch {
-                        inner: Box::new(CompletedCdpCommandDispatchKind::Runtime(runtime)),
+                    let flush = command_context.response_flush().clone();
+                    let step =
+                        match crate::domains::runtime::prepare_page_runtime_command_completion(
+                            self, *runtime, &flush,
+                        ) {
+                            crate::domains::runtime::PageRuntimeCompletion::Step(step) => step,
+                            crate::domains::runtime::PageRuntimeCompletion::Wait(prepared) => {
+                                let workflow = prepared.into_workflow(access, command_context);
+                                return Ok(self.start_command_workflow(
+                                    workflow,
+                                    command_id,
+                                    session_id.as_deref(),
+                                    command_context,
+                                ));
+                            }
+                        };
+                    return Ok(match step {
+                        crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
+                            self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                        }
+                        crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => self
+                            .complete_with_output_plan(
+                                command_context,
+                                plan,
+                                command_id,
+                                session_id.as_deref(),
+                            ),
                     });
                 }
             }
@@ -1768,14 +1793,11 @@ impl CdpConnection {
                 }
             }
         }
-        Box::pin(
-            crate::domains::activity::project_protocol_local_command_outputs(
-                self,
-                &output_owner,
-                &mut command_context,
-            ),
-        )
-        .await;
+        crate::domains::activity::project_protocol_local_command_outputs(
+            self,
+            &output_owner,
+            &mut command_context,
+        );
         command_context
             .protocol_events_mut()
             .extend(protocol_events);

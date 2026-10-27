@@ -92,8 +92,11 @@ mod bidi_script_values;
 mod dispatch;
 mod locate_nodes;
 mod node_values;
+mod page_completion;
 mod remote_values;
 mod runtime_command_flow;
+pub(crate) use page_completion::{PageRuntimeCommandContinuation, PageRuntimeCompletion};
+use page_completion::{PageRuntimeContinuationKind, PreparedPageRuntimeCommand};
 mod runtime_lifecycle;
 mod runtime_realms;
 mod runtime_targets;
@@ -331,7 +334,7 @@ enum CompletedRuntimeCommandKind {
     },
     BindingPage {
         task: RuntimeBindingCommandTask,
-        completed: Result<CompletedRuntimeBindingPageCommandDispatch, String>,
+        completed: Result<CompletedRuntimeBindingPageCommandDispatch>,
     },
 }
 
@@ -2021,6 +2024,19 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
         }
         Err(completed) => *completed,
     };
+    match prepare_page_runtime_command_completion(conn, completed, response_flush) {
+        PageRuntimeCompletion::Step(step) => step,
+        PageRuntimeCompletion::Wait(prepared) => {
+            RuntimeCommandTaskStep::Complete(prepared.run_inline(conn, response_flush).await)
+        }
+    }
+}
+
+pub(crate) fn prepare_page_runtime_command_completion(
+    conn: &mut CdpConnection,
+    completed: CompletedRuntimeCommandDispatch,
+    response_flush: &crate::conn::CommandResponseFlushContext,
+) -> PageRuntimeCompletion {
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
     let meta = RuntimeCommandCompletionMeta::from(&completed);
     match completed.completed {
@@ -2039,14 +2055,13 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
             task,
             completed: completed_inspector,
         } => {
-            Box::pin(complete_pending_runtime_binding_inspector_command(
+            return prepare_pending_runtime_binding_inspector_command(
                 conn,
                 meta,
                 task,
                 completed_inspector,
                 response_flush,
-            ))
-            .await
+            );
         }
         CompletedRuntimeCommandKind::BindingContextLookup {
             task,
@@ -2064,14 +2079,13 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
         CompletedRuntimeCommandKind::Inspector {
             completed: completed_inspector,
         } => {
-            Box::pin(complete_pending_runtime_inspector_command(
+            return prepare_pending_runtime_inspector_command(
                 conn,
                 meta,
                 completed_inspector,
                 timing_started,
                 response_flush,
-            ))
-            .await
+            );
         }
         CompletedRuntimeCommandKind::InspectorDeferredReplyReady { routed_output, .. } => {
             RuntimeCommandTaskStep::Complete(
@@ -2083,6 +2097,7 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
             unreachable!("Worker completions use their owned workflow")
         }
     }
+    .into()
 }
 
 pub(crate) async fn execute_runtime_listener_command_for_owner(

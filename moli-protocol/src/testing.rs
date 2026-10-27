@@ -767,11 +767,10 @@ impl TestContext {
 
         if drain_after_command && completed {
             crate::domains::activity::project_protocol_local_command_outputs(
-                &mut self.conn,
+                &self.conn,
                 &output_owner,
                 &mut command_context,
-            )
-            .await;
+            );
             protocol_events.extend(command_context.take_protocol_events());
             protocol_events.extend(command_context.take_post_response_events());
             scheduler_events.extend(self.conn.take_scheduler_events());
@@ -906,11 +905,10 @@ impl TestContext {
                     protocol_events
                         .extend(pending.take_scheduler_deferred_inspector_reply_events());
                     crate::domains::activity::project_protocol_local_command_outputs(
-                        &mut self.conn,
+                        &self.conn,
                         &owner,
                         command_context,
-                    )
-                    .await;
+                    );
                     protocol_events.extend(command_context.take_protocol_events());
                     protocol_events.extend(command_context.take_post_response_events());
                     scheduler_events.extend(self.conn.take_scheduler_events());

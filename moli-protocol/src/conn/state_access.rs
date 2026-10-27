@@ -522,6 +522,7 @@ mod tests {
 
 mod initial_document;
 mod output_projection;
+mod page_runtime;
 mod popup;
 mod subresource;
 mod worker_projection;

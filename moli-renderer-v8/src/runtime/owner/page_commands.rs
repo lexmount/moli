@@ -672,29 +672,26 @@ impl RendererOwnerHandle {
         deadline: Instant,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
-        let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
+        let mut entry = match take_entry_for_command_on_bound_owner_local_store(token) {
             Ok(entry) => entry,
             Err(error) => return Err(error).into(),
         };
-        if entry.page_vm().child_frame_lifecycle_work_is_complete() {
+        let complete = entry.page_vm().child_frame_lifecycle_work_is_complete();
+        if complete || Instant::now() >= deadline {
+            // Admission predates the child work being observed. Freeze its
+            // completed output now, including a load already published by an
+            // autonomous Page turn, before state capture can yield again.
+            let publication = entry.page_vm_mut().settle_renderer_output_publication();
+            let cursor = entry.page_vm().renderer_output_tail_cursor();
+            if let Some(publication) = publication {
+                self.publish_renderer_output(publication);
+            }
             return self
                 .finish_live_page_entry_with_page_state_and_continuation(
                     token,
                     entry,
-                    RendererPageReply::Bool(true),
-                    None,
-                    None,
-                    capture_policy,
-                )
-                .await;
-        }
-        if Instant::now() >= deadline {
-            return self
-                .finish_live_page_entry_with_page_state_and_continuation(
-                    token,
-                    entry,
-                    RendererPageReply::Bool(false),
-                    None,
+                    RendererPageReply::Bool(complete),
+                    cursor,
                     None,
                     capture_policy,
                 )

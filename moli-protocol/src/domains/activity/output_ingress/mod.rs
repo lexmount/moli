@@ -18,13 +18,12 @@ use crate::conn::{CdpConnection, CommandDispatchContext, CommandOwnerScope};
 /// than by a renderer output stream. They therefore keep an explicit
 /// command-local flush, while renderer output must arrive exclusively through
 /// concrete publications and exact cursor fences.
-pub(crate) async fn project_protocol_local_command_outputs(
-    conn: &mut CdpConnection,
+pub(crate) fn project_protocol_local_command_outputs(
+    conn: &CdpConnection,
     owner: &CommandOwnerScope,
     command: &mut CommandDispatchContext,
 ) {
-    PreparedProtocolOutputs::from_protocol_local_command_boundary(conn, owner)
-        .await
-        .project_async(conn, owner, command)
-        .await;
+    command.protocol_events_mut().extend(
+        crate::domains::dom_storage::take_pending_dom_storage_outputs_for_owner(conn, owner),
+    );
 }

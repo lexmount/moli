@@ -340,41 +340,7 @@ pub(super) fn start_pending_runtime_binding_page_phase(
     })
 }
 
-pub(super) async fn route_registered_runtime_response_receiver_into(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    response_rx: RuntimeInspectorAsyncCompletionReceiver,
-    routed_output: &mut RuntimeInspectorRoutedOutput,
-) -> bool {
-    let Some(command_id) = command_id else {
-        return false;
-    };
-    let response = RuntimeInspectorResponseReady::for_owner(
-        command_id,
-        owner,
-        response_rx
-            .await
-            .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
-    );
-    let Some(response) = conn.resolve_runtime_inspector_response_ready(response) else {
-        return false;
-    };
-    let (_, output, renderer_output_predecessor) = response.into_renderer_command_output();
-    if let Some(predecessor) = renderer_output_predecessor {
-        routed_output.set_renderer_output_predecessor(predecessor);
-    }
-    route_runtime_command_output_into_routed_output(
-        conn,
-        output,
-        Some(command_id),
-        owner,
-        routed_output,
-    )
-    .await
-}
-
-pub(super) async fn route_runtime_command_output_into_routed_output(
+pub(super) fn route_runtime_command_output_into_routed_output(
     conn: &mut CdpConnection,
     output: RendererRuntimeCommandOutput,
     command_id: Option<u64>,
@@ -392,7 +358,7 @@ pub(super) async fn route_runtime_command_output_into_routed_output(
     saw_current_response
 }
 
-pub(super) async fn route_renderer_command_turn_output_into_routed_output(
+pub(super) fn route_renderer_command_turn_output_into_routed_output(
     conn: &mut CdpConnection,
     output: RendererCommandTurnOutput,
     command_id: Option<u64>,
@@ -444,13 +410,13 @@ pub(super) fn route_inspector_messages_into_routed_output(
     saw_current_response
 }
 
-pub(super) async fn complete_pending_runtime_inspector_command(
+pub(super) fn prepare_pending_runtime_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch>,
     timing_started: Option<std::time::Instant>,
     response_flush: &crate::conn::CommandResponseFlushContext,
-) -> RuntimeCommandTaskStep {
+) -> PageRuntimeCompletion {
     let (
         messages,
         mut renderer_response_rx,
@@ -507,13 +473,15 @@ pub(super) async fn complete_pending_runtime_inspector_command(
                                 );
                                 return RuntimeCommandTaskStep::Complete(
                                     CommandOutputPlan::default(),
-                                );
+                                )
+                                .into();
                             }
                         }
                         return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
                             completed.command_id,
                             message,
-                        ));
+                        ))
+                        .into();
                     }
                 }
             }
@@ -530,13 +498,14 @@ pub(super) async fn complete_pending_runtime_inspector_command(
                         error = %message,
                         "ignored canceled renderer route after another route settled the frontend call"
                     );
-                    return RuntimeCommandTaskStep::Complete(CommandOutputPlan::default());
+                    return RuntimeCommandTaskStep::Complete(CommandOutputPlan::default()).into();
                 }
             }
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
                 completed.command_id,
                 message,
-            ));
+            ))
+            .into();
         }
     };
     let initial_message_count = messages.as_ref().map_or(0, |messages| {
@@ -554,7 +523,6 @@ pub(super) async fn complete_pending_runtime_inspector_command(
         );
     }
 
-    let mut plan = CommandOutputPlan::default();
     let mut routed_output = RuntimeInspectorRoutedOutput::default();
     if let Some(predecessor) = session_response_predecessor {
         routed_output.set_renderer_output_predecessor(predecessor);
@@ -568,7 +536,6 @@ pub(super) async fn complete_pending_runtime_inspector_command(
             response_flush,
             &mut routed_output,
         )
-        .await
     } else {
         false
     };
@@ -600,20 +567,6 @@ pub(super) async fn complete_pending_runtime_inspector_command(
         // must not join or await the legacy per-command receiver.
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
-        && !completed.wait_for_deferred_reply
-        && let Some(renderer_response_rx) = renderer_response_rx.take()
-    {
-        let saw_deferred_response = route_registered_runtime_response_receiver_into(
-            conn,
-            completed.command_id,
-            &completed.owner_scope,
-            renderer_response_rx,
-            &mut routed_output,
-        )
-        .await;
-        saw_current_response |= saw_deferred_response;
-    }
     if completed.await_promise {
         conn.trace_runtime_await_initial_dispatch_done(
             completed.command_id,
@@ -632,108 +585,27 @@ pub(super) async fn complete_pending_runtime_inspector_command(
             completed,
             routed_output,
             renderer_response_rx,
-        );
+        )
+        .into();
     }
-    let succeeded = session_response_succeeded
-        .unwrap_or_else(|| routed_output.command_response_succeeded(completed.command_id));
-    if succeeded {
-        routed_output.register_object_group_for_success(
-            conn,
-            &completed.owner_scope,
-            completed.object_group.as_deref(),
-        );
+    if completed.command_id.is_none() {
+        renderer_response_rx.take();
     }
-    if succeeded {
-        if let Some(console_action) = console_action_from_protocol_method(completed.action)
-            && !apply_console_output_state_for_owner(conn, &completed.owner_scope, console_action)
-        {
-            let message = format!("ConsoleCommandCompletionFailed: {}", completed.action);
-            if session_response_succeeded.is_some() {
-                tracing::warn!(
-                    command_id = completed.command_id,
-                    session_id = completed.session_id(),
-                    error = %message,
-                    "could not apply browser projection after the terminal renderer response was published"
-                );
-            } else {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    completed.command_id,
-                    message,
-                ));
-            }
+    let continuation = PageRuntimeCommandContinuation {
+        completed,
+        routed_output,
+        session_response_succeeded,
+        kind: PageRuntimeContinuationKind::Command { timing_started },
+    };
+    match renderer_response_rx {
+        Some(receiver) => {
+            PageRuntimeCompletion::Wait(Box::new(PreparedPageRuntimeCommand::Response {
+                continuation,
+                receiver,
+            }))
         }
-        if completed.action == "discardConsoleEntries" {
-            advance_runtime_observable_cursors_to_current_for_owner(conn, &completed.owner_scope);
-        }
-        if completed.action == "disable" {
-            if let Err(message) = apply_runtime_disable_projection_after_success_for_owner(
-                conn,
-                &completed.owner_scope,
-            ) {
-                if session_response_succeeded.is_some() {
-                    tracing::warn!(
-                        command_id = completed.command_id,
-                        session_id = completed.session_id(),
-                        error = %message,
-                        "could not apply browser projection after the terminal renderer response was published"
-                    );
-                } else {
-                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                        completed.command_id,
-                        message,
-                    ));
-                }
-            }
-            if let Err(message) = conn
-                .apply_runtime_binding_state_for_owner_async(&completed.owner_scope)
-                .await
-            {
-                if session_response_succeeded.is_some() {
-                    tracing::warn!(
-                        command_id = completed.command_id,
-                        session_id = completed.session_id(),
-                        error = %message,
-                        "could not apply browser projection after the terminal renderer response was published"
-                    );
-                } else {
-                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                        completed.command_id,
-                        message,
-                    ));
-                }
-            }
-        }
-        if !completed.release_object_ids.is_empty() {
-            conn.unregister_runtime_remote_object_ids_for_owner(
-                &completed.owner_scope,
-                &completed.release_object_ids,
-            );
-        }
-        if let Some(object_group) = completed.release_object_group.as_deref() {
-            conn.unregister_runtime_remote_object_group_for_owner(
-                &completed.owner_scope,
-                object_group,
-            );
-        }
-        if completed.action == "runIfWaitingForDebugger"
-            && conn.release_waiting_for_debugger_session(completed.session_id())
-        {
-            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
-                conn,
-                completed.session_id(),
-            );
-        }
+        None => continuation.finish_routed(conn),
     }
-    routed_output.push_ordered_into_plan(&mut plan, completed.command_id);
-    if let Some(started) = timing_started {
-        tracing::info!(
-            target: "moli_cdp_nav_timing",
-            action = completed.action,
-            stage = "runtime_inspector_plan_ready",
-            elapsed_ms = started.elapsed().as_millis(),
-        );
-    }
-    RuntimeCommandTaskStep::Complete(plan)
 }
 
 pub(super) fn pending_runtime_deferred_inspector_reply_command(
@@ -900,13 +772,13 @@ pub(super) fn complete_pending_runtime_binding_context_lookup_command(
     }
 }
 
-pub(super) async fn complete_pending_runtime_binding_inspector_command(
+pub(super) fn prepare_pending_runtime_binding_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     mut task: RuntimeBindingCommandTask,
     completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch>,
     response_flush: &crate::conn::CommandResponseFlushContext,
-) -> RuntimeCommandTaskStep {
+) -> PageRuntimeCompletion {
     let (
         messages,
         mut renderer_response_rx,
@@ -946,7 +818,8 @@ pub(super) async fn complete_pending_runtime_binding_inspector_command(
                         return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
                             completed.command_id,
                             message,
-                        ));
+                        ))
+                        .into();
                     }
                 }
             }
@@ -955,7 +828,8 @@ pub(super) async fn complete_pending_runtime_binding_inspector_command(
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
                 completed.command_id,
                 message,
-            ));
+            ))
+            .into();
         }
     };
     debug_assert_eq!(response_delivery, task.response_delivery);
@@ -973,7 +847,6 @@ pub(super) async fn complete_pending_runtime_binding_inspector_command(
             response_flush,
             &mut routed_output,
         )
-        .await
     } else {
         false
     };
@@ -983,45 +856,23 @@ pub(super) async fn complete_pending_runtime_binding_inspector_command(
     if response_delivery == RendererInspectorResponseDelivery::SessionSink {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
-        && let Some(renderer_response_rx) = renderer_response_rx
-    {
-        route_registered_runtime_response_receiver_into(
-            conn,
-            completed.command_id,
-            &completed.owner_scope,
-            renderer_response_rx,
-            &mut routed_output,
-        )
-        .await;
+    if completed.command_id.is_none() {
+        renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::AdapterReply {
-        record_runtime_binding_command_response_from_routed_events(
-            &mut task,
-            routed_output.events(),
-            completed.command_id,
-        );
-    }
-    if routed_output.background_event_count() > 0 {
-        tracing::debug!(
-            events = routed_output.background_event_count(),
-            "dropping unexpected Runtime binding background events during inspector phase"
-        );
-    }
-    if !runtime_binding_command_response_succeeded(&task) {
-        return RuntimeCommandTaskStep::Complete(runtime_binding_output_plan(task));
-    }
-    if task.skip_live_page_update_after_inspector_success {
-        return complete_runtime_binding_after_live_update(conn, completed, task);
-    }
-    match start_pending_runtime_binding_page_phase(
-        conn,
-        completed.command_id,
-        task.clone(),
-        completed.owner_scope.clone(),
-    ) {
-        Some(pending) => RuntimeCommandTaskStep::Pending(Box::new(pending)),
-        None => complete_runtime_binding_after_live_update(conn, completed, task),
+    let continuation = PageRuntimeCommandContinuation {
+        completed,
+        routed_output,
+        session_response_succeeded,
+        kind: PageRuntimeContinuationKind::Binding(task),
+    };
+    match renderer_response_rx {
+        Some(receiver) => {
+            PageRuntimeCompletion::Wait(Box::new(PreparedPageRuntimeCommand::Response {
+                continuation,
+                receiver,
+            }))
+        }
+        None => continuation.finish_routed(conn),
     }
 }
 
@@ -1029,7 +880,7 @@ pub(super) fn complete_pending_runtime_binding_page_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     task: RuntimeBindingCommandTask,
-    completed_page: Result<CompletedRuntimeBindingPageCommandDispatch, String>,
+    completed_page: Result<CompletedRuntimeBindingPageCommandDispatch>,
 ) -> RuntimeCommandTaskStep {
     match completed_page {
         Ok(completed_page) => {
