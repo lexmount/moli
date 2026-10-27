@@ -405,12 +405,19 @@ pub(crate) fn render<D: Dom + ?Sized>(
                                     | "colgroup"
                                     | "col"
                             );
+                        // Placeholder anchors expand to non-link targets, so
+                        // generated descendants can keep their own links.
+                        let link_href = if tag == "a" {
+                            crate::media::link_href(dom, node)
+                        } else {
+                            None
+                        };
                         let retained = if expanded && matches!(tag, "colgroup" | "col") {
                             None
                         } else if expanded {
                             Some("div")
                         } else if allowed(tag)
-                            && (tag != "a" || !in_link)
+                            && (tag != "a" || (!in_link && link_href.is_some()))
                             && (tag != "span"
                                 || !anchor_targets.targets(dom, node).is_empty()
                                 || dom.attribute(node, "title").is_some())
@@ -464,13 +471,17 @@ pub(crate) fn render<D: Dom + ?Sized>(
                                 } else {
                                     None
                                 };
-                                let value = if name == "src" && tag == "img" {
+                                let value = if name == "href" && tag == "a" {
+                                    link_href
+                                } else if name == "src" && tag == "img" {
                                     image_source
                                 } else {
                                     dom.attribute(node, name)
                                 };
                                 if let Some(value) = value {
-                                    if (name == "href" && !crate::media::safe_link_url(value))
+                                    if (name == "href"
+                                        && tag != "a"
+                                        && !crate::media::safe_link_url(value))
                                         || (name == "src" && !crate::media::safe_url(value, true))
                                     {
                                         continue;

@@ -286,6 +286,12 @@ pub(crate) fn label<'a, D: Dom + ?Sized>(dom: &'a D, node: D::NodeId, tag: &str)
         })
 }
 
+/// Use the same nonempty, acceptable destination in both anchor output paths.
+pub(crate) fn link_href<D: Dom + ?Sized>(dom: &D, node: D::NodeId) -> Option<&str> {
+    dom.attribute(node, "href")
+        .filter(|href| !href.is_empty() && safe_link_url(href))
+}
+
 /// Links preserve application protocols; executable inline-document schemes do not.
 pub(crate) fn safe_link_url(value: &str) -> bool {
     let normalized: String = value

@@ -335,11 +335,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "sup" => self.style(Style::Superscript),
             "sub" => self.style(Style::Subscript),
             "a" => {
-                if let Some(href) = self
-                    .dom
-                    .attribute(node, "href")
-                    .filter(|href| !href.is_empty() && crate::media::safe_link_url(href))
-                {
+                if let Some(href) = crate::media::link_href(self.dom, node) {
                     self.serial += 1;
                     let serial = self.serial;
                     let style = Style::Link {

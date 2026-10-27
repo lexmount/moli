@@ -1137,3 +1137,128 @@ fn math_content_ends_code_crlf_continuity_but_transparent_markup_does_not() {
         }
     }
 }
+
+#[test]
+fn placeholder_anchors_keep_resource_links_and_referenced_targets() {
+    let targets: &[(&str, &[&str])] = &[
+        ("", &[]),
+        ("name='clip'", &["clip"]),
+        ("id='clip'", &["clip"]),
+        ("id='clip' name='alias'", &["clip", "alias"]),
+    ];
+    for &(attributes, ids) in targets {
+        for (href, author) in [
+            ("", None),
+            ("href=''", None),
+            ("href='javascript:bad()'", None),
+            ("href='java&#10;script:bad()'", None),
+            ("href='data:text/html,blocked'", None),
+            ("href='/watch'", Some("/watch")),
+            ("href='app://watch'", Some("app://watch")),
+        ] {
+            for media in ["video", "audio", "iframe"] {
+                let body = format!(
+                    "<a {attributes} {href}><{media} src='/clip.mp4' title='Clip'></{media}>Watch</a>\
+                     <{media} src='/after.mp4' title='After'></{media}>"
+                );
+                for wrapper in ["plain", "code", "pre"] {
+                    let content = match wrapper {
+                        "code" => format!("<code id='snippet'>{body}</code>"),
+                        "pre" => format!("<pre id='snippet'>{body}</pre>"),
+                        _ => body.clone(),
+                    };
+                    let jumps: String = ids
+                        .iter()
+                        .map(|id| format!("<a href='#{id}'>Jump</a>"))
+                        .collect();
+                    let content = format!("{content}{jumps}<a href='#snippet'>Snippet</a>");
+                    for source in containers(&content) {
+                        let input = Tree::parse(&source);
+                        let markdown = convert(&input, input.root);
+                        let output = Tree::parse(&rendered_html(&markdown));
+                        let resources = with_attribute(&output, "href", "/clip.mp4");
+                        if let Some(author) = author {
+                            let links = with_attribute(&output, "href", author);
+                            let body: String =
+                                links.iter().map(|&node| text(&output, node)).collect();
+                            assert!(
+                                body.contains("Clip")
+                                    && body.contains("/clip.mp4")
+                                    && body.contains("Watch"),
+                                "{source}: {markdown}"
+                            );
+                            assert!(!body.contains("After"), "{markdown}");
+                            assert!(resources.is_empty(), "{markdown}");
+                        } else {
+                            assert_eq!(resources.len(), 1, "{source}: {markdown}");
+                            assert_eq!(text(&output, resources[0]), "Clip", "{markdown}");
+                        }
+                        let after = with_attribute(&output, "href", "/after.mp4");
+                        assert_eq!(after.len(), 1, "{source}: {markdown}");
+                        assert_eq!(text(&output, after[0]), "After", "{markdown}");
+                        for &id in ids {
+                            let targets = with_attribute(&output, "id", id);
+                            assert_eq!(targets.len(), 1, "{source}: {markdown}");
+                            if author.is_none() {
+                                assert_eq!(
+                                    output.nodes[targets[0]].tag.as_deref(),
+                                    Some("span"),
+                                    "{markdown}"
+                                );
+                            }
+                        }
+                        for node in descendants(&output, output.root) {
+                            if output.nodes[node].tag.as_deref() == Some("a") {
+                                assert!(
+                                    output
+                                        .attribute(node, "href")
+                                        .is_some_and(|href| !href.is_empty()),
+                                    "{source}: {markdown}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn expanded_anchors_preserve_inherited_author_link_context() {
+    for href in ["", "href=''", "href='javascript:bad()'", "href='/inner'"] {
+        let content = format!(
+            "<a href='/watch'><code id='snippet'><svg><a id='clip' {href}></a></svg>\
+             <video src='/clip.mp4' title='Clip'></video>Watch</code></a>\
+             <a href='#clip'>Jump</a><a href='#snippet'>Snippet</a>"
+        );
+        for source in containers(&content) {
+            let input = Tree::parse(&source);
+            let markdown = convert(&input, input.root);
+            let output = Tree::parse(&rendered_html(&markdown));
+            let links = with_attribute(&output, "href", "/watch");
+            assert_eq!(links.len(), 1, "{source}: {markdown}");
+            let body = text(&output, links[0]);
+            assert!(
+                body.contains("Clip") && body.contains("/clip.mp4") && body.contains("Watch"),
+                "{source}: {markdown}"
+            );
+            for id in ["clip", "snippet"] {
+                let targets = with_attribute(&output, "id", id);
+                assert_eq!(targets.len(), 1, "{markdown}");
+                assert!(
+                    descendants(&output, links[0]).contains(&targets[0]),
+                    "{markdown}"
+                );
+            }
+            assert!(
+                with_attribute(&output, "href", "/clip.mp4").is_empty(),
+                "{markdown}"
+            );
+            assert!(
+                with_attribute(&output, "href", "/inner").is_empty(),
+                "{markdown}"
+            );
+        }
+    }
+}
