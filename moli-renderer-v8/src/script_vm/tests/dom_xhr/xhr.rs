@@ -2,6 +2,69 @@ use super::*;
 use crate::util::v8str;
 use moli_webapi_declare::WebApiObject;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+async fn synchronous_xhr_excludes_native_wait_from_watchdog_but_keeps_js_bounded() {
+    use crate::v8_execution_watchdog::{V8ExecutionWatchdog, V8ExecutionWatchdogKind};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                assert!(head.len() < 8192);
+                head.push(stream.read_u8().await.unwrap());
+            }
+            assert!(head.starts_with(b"GET /slow HTTP/1.1\r\n"));
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\nnative-response")
+                .await
+                .unwrap();
+        }
+    });
+    let mut vm = new_storage_test_vm(&format!("{origin}/"));
+    let _budget = V8ExecutionWatchdog::override_timeout_for_test(
+        V8ExecutionWatchdogKind::ScriptTurn,
+        std::time::Duration::from_millis(300),
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+function request() {
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', '/slow', false);
+  xhr.send();
+  return xhr.status + ':' + xhr.responseText;
+}
+request()
+"#
+        )
+        .expect("native network waiting must not terminate the JavaScript function"),
+        "200:native-response"
+    );
+    let error = vm
+        .exec(
+            r#"
+globalThis.nativeWaitFinished = false;
+request();
+nativeWaitFinished = true;
+for (;;) {}
+"#,
+            None,
+        )
+        .expect_err("author JavaScript must remain bounded after native waiting");
+    assert!(
+        error.to_string().contains("script execution exceeded"),
+        "{error}"
+    );
+    assert_eq!(vm.eval("String(nativeWaitFinished)").unwrap(), "true");
+    assert_eq!(vm.eval("String(1 + 1)").unwrap(), "2");
+    server.await.unwrap();
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct PendingBodyOwnerProbeDeclaration {}

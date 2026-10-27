@@ -9,9 +9,16 @@
 //! A registration is removed when its guard is disarmed or dropped. Expiry and
 //! disarm serialize on the registration itself, which guarantees that a
 //! cancellation can never race ahead of a later `terminate_execution()` call.
+//!
+//! Synchronous native I/O can suspend the active registrations on its owner
+//! thread. Resuming preserves each remaining JS budget and replaces its
+//! deadline key so an expiry dequeued before the wait cannot terminate it.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -75,7 +82,8 @@ struct V8ExecutionWatchdogRegistrationKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum V8ExecutionWatchdogRegistrationState {
-    Armed,
+    Armed(V8ExecutionWatchdogRegistrationKey),
+    Paused { remaining: Duration, depth: usize },
     Completed,
     TimedOut,
 }
@@ -87,12 +95,16 @@ struct V8ExecutionWatchdogRegistration {
 }
 
 impl V8ExecutionWatchdogRegistration {
-    fn expire_if_armed(&self) {
+    fn expire_if_armed(&self, key: V8ExecutionWatchdogRegistrationKey) {
         let mut state = self.state.lock();
-        if *state != V8ExecutionWatchdogRegistrationState::Armed {
+        if *state != V8ExecutionWatchdogRegistrationState::Armed(key) {
             return;
         }
 
+        self.expire(&mut state);
+    }
+
+    fn expire(&self, state: &mut V8ExecutionWatchdogRegistrationState) {
         // Keep the registration lock across the termination request. A
         // concurrent disarm therefore either wins before this call and makes
         // it unreachable, or observes TimedOut only after termination has
@@ -110,7 +122,12 @@ impl V8ExecutionWatchdogRegistration {
     fn disarm(&self) -> V8ExecutionWatchdogOutcome {
         let mut state = self.state.lock();
         match *state {
-            V8ExecutionWatchdogRegistrationState::Armed => {
+            V8ExecutionWatchdogRegistrationState::Armed(key) => {
+                V8ExecutionWatchdogService::global().remove(key);
+                *state = V8ExecutionWatchdogRegistrationState::Completed;
+                V8ExecutionWatchdogOutcome::Completed
+            }
+            V8ExecutionWatchdogRegistrationState::Paused { .. } => {
                 *state = V8ExecutionWatchdogRegistrationState::Completed;
                 V8ExecutionWatchdogOutcome::Completed
             }
@@ -127,6 +144,55 @@ impl V8ExecutionWatchdogRegistration {
             }
         }
     }
+
+    fn pause(&self) -> bool {
+        let mut state = self.state.lock();
+        match *state {
+            V8ExecutionWatchdogRegistrationState::Armed(key) => {
+                let now = Instant::now();
+                if now >= key.deadline {
+                    // A native wait must not revive an already exhausted JS
+                    // budget, even if the service has not dequeued it yet.
+                    self.expire(&mut state);
+                    V8ExecutionWatchdogService::global().remove(key);
+                    return false;
+                }
+                *state = V8ExecutionWatchdogRegistrationState::Paused {
+                    remaining: key.deadline - now,
+                    depth: 1,
+                };
+                V8ExecutionWatchdogService::global().remove(key);
+                true
+            }
+            V8ExecutionWatchdogRegistrationState::Paused { remaining, depth } => {
+                *state = V8ExecutionWatchdogRegistrationState::Paused {
+                    remaining,
+                    depth: depth.checked_add(1).expect("native wait nesting overflow"),
+                };
+                true
+            }
+            V8ExecutionWatchdogRegistrationState::Completed
+            | V8ExecutionWatchdogRegistrationState::TimedOut => false,
+        }
+    }
+
+    fn resume(self: &Arc<Self>) {
+        let mut state = self.state.lock();
+        let V8ExecutionWatchdogRegistrationState::Paused { remaining, depth } = *state else {
+            return;
+        };
+        if depth > 1 {
+            *state = V8ExecutionWatchdogRegistrationState::Paused {
+                remaining,
+                depth: depth - 1,
+            };
+            return;
+        }
+        // A fresh sequence prevents an expiry already dequeued before pause()
+        // from terminating this resumed registration.
+        let key = V8ExecutionWatchdogService::global().rearm(self, remaining);
+        *state = V8ExecutionWatchdogRegistrationState::Armed(key);
+    }
 }
 
 #[derive(Default)]
@@ -134,6 +200,19 @@ struct V8ExecutionWatchdogServiceState {
     next_sequence: u64,
     registrations:
         BTreeMap<V8ExecutionWatchdogRegistrationKey, Arc<V8ExecutionWatchdogRegistration>>,
+}
+
+impl V8ExecutionWatchdogServiceState {
+    fn next_key(&mut self, timeout: Duration) -> V8ExecutionWatchdogRegistrationKey {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .expect("a V8 execution watchdog deadline must fit in Instant");
+        let sequence = self.next_sequence;
+        self.next_sequence = sequence
+            .checked_add(1)
+            .expect("V8 execution watchdog registration sequence exhausted");
+        V8ExecutionWatchdogRegistrationKey { deadline, sequence }
+    }
 }
 
 #[derive(Default)]
@@ -170,35 +249,41 @@ impl V8ExecutionWatchdogService {
         kind: V8ExecutionWatchdogKind,
         isolate: v8::IsolateHandle,
         timeout: Duration,
-    ) -> (
-        V8ExecutionWatchdogRegistrationKey,
-        Arc<V8ExecutionWatchdogRegistration>,
-    ) {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .expect("a V8 execution watchdog deadline must fit in Instant");
+    ) -> Arc<V8ExecutionWatchdogRegistration> {
+        let mut state = self.shared.state.lock();
+        let key = state.next_key(timeout);
         let registration = Arc::new(V8ExecutionWatchdogRegistration {
             kind,
             isolate,
-            state: Mutex::new(V8ExecutionWatchdogRegistrationState::Armed),
+            state: Mutex::new(V8ExecutionWatchdogRegistrationState::Armed(key)),
         });
-        let key = {
-            let mut state = self.shared.state.lock();
-            let sequence = state.next_sequence;
-            state.next_sequence = state
-                .next_sequence
-                .checked_add(1)
-                .expect("V8 execution watchdog registration sequence exhausted");
-            let key = V8ExecutionWatchdogRegistrationKey { deadline, sequence };
-            let previous = state.registrations.insert(key, Arc::clone(&registration));
-            assert!(
-                previous.is_none(),
-                "a V8 execution watchdog registration key must be unique"
-            );
-            key
-        };
+        assert!(
+            state
+                .registrations
+                .insert(key, Arc::clone(&registration))
+                .is_none()
+        );
+        drop(state);
         self.shared.changed.notify_one();
-        (key, registration)
+        registration
+    }
+
+    fn rearm(
+        &self,
+        registration: &Arc<V8ExecutionWatchdogRegistration>,
+        timeout: Duration,
+    ) -> V8ExecutionWatchdogRegistrationKey {
+        let mut state = self.shared.state.lock();
+        let key = state.next_key(timeout);
+        assert!(
+            state
+                .registrations
+                .insert(key, Arc::clone(registration))
+                .is_none()
+        );
+        drop(state);
+        self.shared.changed.notify_one();
+        key
     }
 
     fn remove(&self, key: V8ExecutionWatchdogRegistrationKey) {
@@ -225,20 +310,45 @@ fn run_v8_execution_watchdog_service(shared: Arc<V8ExecutionWatchdogServiceShare
                     shared.changed.wait_for(&mut state, key.deadline - now);
                     continue;
                 }
-                break state.registrations.remove(&key);
+                break state
+                    .registrations
+                    .remove(&key)
+                    .map(|registration| (key, registration));
             }
         };
 
-        if let Some(registration) = registration {
-            registration.expire_if_armed();
+        if let Some((key, registration)) = registration {
+            // Registration operations can remove or rearm a deadline while
+            // holding its lock. Release the service lock before taking it.
+            registration.expire_if_armed(key);
         }
     }
 }
 
 pub(crate) struct V8ExecutionWatchdog {
-    key: V8ExecutionWatchdogRegistrationKey,
     registration: Option<Arc<V8ExecutionWatchdogRegistration>>,
     timeout: Duration,
+    _thread_affine: PhantomData<Rc<()>>,
+}
+
+std::thread_local! {
+    static ACTIVE_WATCHDOGS: RefCell<Vec<Weak<V8ExecutionWatchdogRegistration>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Excludes only a synchronous native wait from the active JS execution
+/// budgets on this owner thread. No script may run while this guard is held.
+pub(crate) struct V8ExecutionWatchdogNativeWait {
+    registrations: Vec<Arc<V8ExecutionWatchdogRegistration>>,
+    _thread_affine: PhantomData<Rc<()>>,
+}
+
+impl Drop for V8ExecutionWatchdogNativeWait {
+    fn drop(&mut self) {
+        for registration in &self.registrations {
+            registration.resume();
+        }
+    }
 }
 
 impl V8ExecutionWatchdog {
@@ -249,12 +359,25 @@ impl V8ExecutionWatchdog {
     ) -> Self {
         #[cfg(test)]
         let timeout = v8_execution_watchdog_timeout(kind, timeout);
-        let (key, registration) =
-            V8ExecutionWatchdogService::global().register(kind, isolate, timeout);
+        let registration = V8ExecutionWatchdogService::global().register(kind, isolate, timeout);
+        ACTIVE_WATCHDOGS.with(|active| active.borrow_mut().push(Arc::downgrade(&registration)));
         Self {
-            key,
             registration: Some(registration),
             timeout,
+            _thread_affine: PhantomData,
+        }
+    }
+
+    pub(crate) fn pause_for_native_wait() -> V8ExecutionWatchdogNativeWait {
+        let mut registrations = ACTIVE_WATCHDOGS.with(|active| {
+            let mut active = active.borrow_mut();
+            active.retain(|registration| registration.strong_count() > 0);
+            active.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
+        });
+        registrations.retain(|registration| registration.pause());
+        V8ExecutionWatchdogNativeWait {
+            registrations,
+            _thread_affine: PhantomData,
         }
     }
 
@@ -285,7 +408,10 @@ impl V8ExecutionWatchdog {
         let Some(registration) = self.registration.take() else {
             return V8ExecutionWatchdogOutcome::Completed;
         };
-        V8ExecutionWatchdogService::global().remove(self.key);
+        let weak = Arc::downgrade(&registration);
+        ACTIVE_WATCHDOGS.with(|active| {
+            active.borrow_mut().retain(|entry| !entry.ptr_eq(&weak));
+        });
         registration.disarm()
     }
 }
@@ -373,6 +499,109 @@ mod tests {
         let script = v8::Script::compile(scope, source, None)?;
         let value = crate::script_execution::execute_compiled_script(scope, script)?;
         Some(value.to_string(scope)?.to_rust_string_lossy(scope))
+    }
+
+    #[test]
+    fn nested_native_waits_suspend_expiry_and_stale_deadlines_cannot_terminate_resumed_js() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let watchdog = V8ExecutionWatchdog::arm(
+            V8ExecutionWatchdogKind::ScriptTurn,
+            isolate.thread_safe_handle(),
+            Duration::from_millis(500),
+        );
+        let registration = watchdog.registration.as_ref().unwrap().clone();
+        let V8ExecutionWatchdogRegistrationState::Armed(old_key) = *registration.state.lock()
+        else {
+            panic!("new registration must be armed");
+        };
+        let outer = V8ExecutionWatchdog::pause_for_native_wait();
+        let inner = V8ExecutionWatchdog::pause_for_native_wait();
+        let V8ExecutionWatchdogRegistrationState::Paused { remaining, depth } =
+            *registration.state.lock()
+        else {
+            panic!("nested native waits must pause the registration");
+        };
+        assert_eq!(depth, 2);
+        assert!(remaining < Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(600));
+        drop(outer);
+        registration.expire_if_armed(old_key);
+        assert!(!isolate.is_execution_terminating());
+        let resume_started = Instant::now();
+        drop(inner);
+        let resume_finished = Instant::now();
+        let V8ExecutionWatchdogRegistrationState::Armed(resumed_key) = *registration.state.lock()
+        else {
+            panic!("the last native wait must resume the registration");
+        };
+        assert!(resumed_key.deadline >= resume_started + remaining);
+        assert!(resumed_key.deadline <= resume_finished + remaining);
+        registration.expire_if_armed(old_key);
+        assert_eq!(evaluate_script(&mut isolate, "1 + 1").as_deref(), Some("2"));
+        assert!(
+            evaluate_script(&mut isolate, "for (;;) {}").is_none(),
+            "resumed JavaScript must still have a finite execution budget"
+        );
+        assert_eq!(watchdog.disarm(), V8ExecutionWatchdogOutcome::TimedOut);
+    }
+
+    #[test]
+    fn dropping_a_paused_watchdog_cannot_rearm_it_after_the_wait() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let watchdog = V8ExecutionWatchdog::arm(
+            V8ExecutionWatchdogKind::ScriptTurn,
+            isolate.thread_safe_handle(),
+            Duration::from_millis(500),
+        );
+        let native_wait = V8ExecutionWatchdog::pause_for_native_wait();
+        drop(watchdog);
+        drop(native_wait);
+        let mut next_isolate = v8::Isolate::new(Default::default());
+        let next = V8ExecutionWatchdog::arm(
+            V8ExecutionWatchdogKind::ScriptTurn,
+            next_isolate.thread_safe_handle(),
+            Duration::from_millis(600),
+        );
+        assert!(evaluate_script(&mut next_isolate, "for (;;) {}").is_none());
+        assert_eq!(next.disarm(), V8ExecutionWatchdogOutcome::TimedOut);
+        drop(next_isolate);
+        assert_eq!(evaluate_script(&mut isolate, "1 + 1").as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn native_wait_cannot_revive_an_expired_watchdog() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        for expired_before_wait in [true, false] {
+            let watchdog = V8ExecutionWatchdog::arm(
+                V8ExecutionWatchdogKind::ScriptTurn,
+                isolate.thread_safe_handle(),
+                Duration::from_secs(1),
+            );
+            let registration = watchdog.registration.as_ref().unwrap();
+            let V8ExecutionWatchdogRegistrationState::Armed(key) = *registration.state.lock()
+            else {
+                panic!("new registration must be armed");
+            };
+            if expired_before_wait {
+                registration.expire_if_armed(key);
+            } else {
+                // Model an expiry dequeued by the service but not yet
+                // processed, so pause() must enforce the elapsed deadline.
+                V8ExecutionWatchdogService::global().remove(key);
+                thread::sleep(Duration::from_millis(1100));
+            }
+            let native_wait = V8ExecutionWatchdog::pause_for_native_wait();
+            drop(native_wait);
+            assert!(
+                evaluate_script(&mut isolate, "1 + 1").is_none(),
+                "an exhausted budget must still interrupt JS after the native wait"
+            );
+            assert_eq!(watchdog.disarm(), V8ExecutionWatchdogOutcome::TimedOut);
+            assert_eq!(evaluate_script(&mut isolate, "1 + 1").as_deref(), Some("2"));
+        }
     }
 
     #[test]
