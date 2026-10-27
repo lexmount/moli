@@ -848,6 +848,66 @@ fn detached_html_template_content_uses_separate_owner_document() {
 }
 
 #[test]
+fn detached_html_template_contents_preserve_html_element_names() {
+    let mut vm = new_storage_test_vm("https://template-content-document-kind.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const documents = [
+    document.implementation.createHTMLDocument(''),
+    new DOMParser().parseFromString('<body></body>', 'text/html')
+  ];
+  const results = documents.map(doc => {
+    const template = doc.createElement('template');
+    template.innerHTML =
+      '<head><title>outer</title></head><template><head><title>inner</title></head></template>';
+    doc.body.appendChild(template);
+    const content = template.content;
+    const title = content.firstElementChild;
+    const nested = content.querySelector('template').content;
+    const nestedTitle = nested.firstElementChild;
+    return [
+      content.ownerDocument !== doc,
+      content.ownerDocument.defaultView === null,
+      content.ownerDocument.childNodes.length,
+      content.ownerDocument.createElement('MiXeD').localName,
+      title.ownerDocument === content.ownerDocument,
+      title.nodeName,
+      title.tagName,
+      nestedTitle.ownerDocument === nested.ownerDocument,
+      nestedTitle.nodeName,
+      nestedTitle.tagName
+    ].join('|');
+  });
+  const xml = new DOMParser().parseFromString(
+    '<template xmlns="http://www.w3.org/1999/xhtml"><title>xml</title></template>',
+    'application/xhtml+xml'
+  );
+  const xmlContent = xml.documentElement.content;
+  results.push([
+    xmlContent.ownerDocument.createElement('MiXeD').localName,
+    xmlContent.firstElementChild.nodeName,
+    xmlContent.firstElementChild.tagName
+  ].join('|'));
+  return results.join('\n');
+})()
+"#,
+        )
+        .expect("template contents should retain the source document kind");
+
+    assert_eq!(
+        result,
+        concat!(
+            "true|true|0|mixed|true|TITLE|TITLE|true|TITLE|TITLE\n",
+            "true|true|0|mixed|true|TITLE|TITLE|true|TITLE|TITLE\n",
+            "MiXeD|title|title"
+        )
+    );
+}
+
+#[test]
 fn template_content_host_rejects_insertion_cycles_after_adoption() {
     let mut vm = new_storage_test_vm("https://template-content-host.test/");
 
