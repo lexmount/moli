@@ -406,6 +406,7 @@ css/css-cascade/inherit-initial.html
 css/css-cascade/inline-style-background.html
 css/css-cascade/layer-basic.html
 css/css-cascade/layer-cssom-order-reverse-at-property.html
+css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-import.html
 css/css-cascade/layer-important.html
 css/css-cascade/layer-namespace-sandwich-crash.html
@@ -1630,6 +1631,7 @@ css/css-flexbox/webkit-box-vertical-writing-mode.html
 css/css-flexbox/whitespace-in-flexitem-001.html
 css/css-flexbox/zero-content-size-with-scrollbar-crash.html
 css/css-font-loading/empty-family-load.html
+css/css-font-loading/font-face-reject.html
 css/css-font-loading/fontface-font-variation-settings-persisted-js-api.html
 css/css-font-loading/fontface-fonts-loading.html
 css/css-font-loading/fontface-invalid-arraybuffer.html
@@ -1642,6 +1644,7 @@ css/css-font-loading/fontfaceset-load-css-connected.html
 css/css-font-loading/fontfaceset-loading-worker-crash.html
 css/css-font-loading/fontfaceset-update-after-stylesheet-change.html
 css/css-font-loading/fontfaceset-worker-fontface-crash.html
+css/css-font-loading/fontfacesetloadevent-constructor.html
 css/css-font-loading/historical.html
 css/css-font-loading/nonexistent-file-url.html
 css/css-forced-color-adjust/parsing/forced-color-adjust-computed.html
@@ -6388,6 +6391,7 @@ html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -9022,8 +9026,10 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
+trusted-types/trusted-types-navigation.html?06-10
+trusted-types/trusted-types-navigation.html?11-15
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?36-last
+trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html

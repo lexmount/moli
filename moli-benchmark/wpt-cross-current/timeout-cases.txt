@@ -23,7 +23,6 @@ cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/css-cascade/all-prop-initial-xml.html
 css/css-easing/linear-timing-functions-duplicate-points-crash.html
 css/css-flexbox/inline-flex-column-image-load.html
-css/css-font-loading/font-face-reject.html
 css/css-values/dynamic-viewport-units-rule-cache.html
 css/css-variables/variable-animation-from-to.html
 css/css-variables/variable-animation-over-transition.html
@@ -181,6 +180,7 @@ page-visibility/onvisibilitychange.html
 page-visibility/unload-bubbles.html
 page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
+print/crashtests/reload-crash.html
 requestidlecallback/callback-suspended.html
 resource-timing/input-sequence-of-events.html
 resource-timing/tentative/initiator-url/post-message-shared-worker.html

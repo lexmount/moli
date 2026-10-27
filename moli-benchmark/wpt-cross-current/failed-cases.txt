@@ -43,7 +43,6 @@ css/css-animations/stability/animation-event-destroy-renderer.html?animationiter
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
-css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html
 css/css-cascade/layer-media-query.html
@@ -366,7 +365,6 @@ css/css-flexbox/table-with-infinite-max-intrinsic-width.html
 css/css-font-loading/fontface-descriptor-updates-2.html
 css/css-font-loading/fontfaceset-load-css-wide-keywords.html
 css/css-font-loading/fontfaceset-load-var.html
-css/css-font-loading/fontfacesetloadevent-constructor.html
 css/css-forms/parsing/checkmark-pseudo-element.html
 css/css-forms/parsing/picker-icon-pseudo-element.html
 css/css-forms/parsing/picker-select-pseudo-element.html
@@ -2862,7 +2860,6 @@ html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitiv
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
