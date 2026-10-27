@@ -1,0 +1,126 @@
+<!doctype html>
+<body>
+<script>
+async function probeUploads(scope, base) {
+  const cases = [
+    {name: 'timeout before first report', timeout: 30, head: 500, expected: 'timeout'},
+    {name: 'busy before first report', timeout: 50, head: 500, busy: 80, expected: 'timeout'},
+    {name: 'queued report after deadline while busy', timeout: 30, head: 500, busy: 150, complete: true, expected: 'timeout'},
+    {name: 'periodic completion before timeout', timeout: 300, head: 800, complete: true, expected: 'timeout'},
+    {name: 'queued completion before elapsed timeout', timeout: 300, head: 650, busy: 450, complete: true, expected: 'timeout'},
+    {name: 'response headers flush during busy task', timeout: 150, head: 20, body: 600, busy: 300, complete: true, expected: 'timeout'},
+    {name: 'completed response wins', timeout: 150, head: 20, busy: 300, complete: true, expected: 'load'},
+    {name: 'empty body timeout', bytes: 0, timeout: 30, head: 500, expected: 'timeout'},
+    {name: 'empty body success', bytes: 0, timeout: 0, head: 150, expected: 'load'},
+    {name: 'absent body timeout', bytes: null, timeout: 30, head: 500, expected: 'timeout'},
+    {name: 'absent body success', bytes: null, timeout: 0, head: 150, expected: 'load'},
+    {name: 'disable elapsed timeout', timeout: 30, head: 300, busy: 150, after: 0, complete: true, expected: 'load'},
+    {name: 'author abort discards queued completion', timeout: 0, head: 500, busy: 150, abort: true, expected: 'abort'},
+    {name: 'upload microtask disables timeout after headers', timeout: 30, head: 20, body: 400, busy: 150, afterUpload: 0, complete: true, expected: 'load'},
+    {name: 'upload microtask disables timeout after periodic report', timeout: 30, head: 500, busy: 150, afterUpload: 0, complete: true, expected: 'load'},
+    {name: 'upload microtask extends timeout', timeout: 30, head: 20, body: 400, busy: 150, afterUpload: 1000, complete: true, expected: 'load'}
+  ];
+  const facts = [];
+  for (const config of cases) {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const events = [];
+      let outcome;
+      const bytes = 'bytes' in config ? config.bytes : 12;
+      const watchdog = setTimeout(() => reject(new Error(scope + '/' + config.name + ': no terminal')), 5000);
+      xhr.addEventListener('readystatechange', () => events.push('state:' + xhr.readyState));
+      for (const [target, prefix] of [[xhr, 'xhr'], [xhr.upload, 'upload']]) {
+        for (const type of ['loadstart', 'progress', 'load', 'loadend', 'timeout', 'error', 'abort']) {
+          target.addEventListener(type, event => events.push(
+            [prefix, type, event.loaded, event.total, event.lengthComputable].join(':')));
+        }
+      }
+      for (const type of ['load', 'timeout', 'error', 'abort']) {
+        xhr.addEventListener(type, () => { outcome = type; });
+      }
+      if ('afterUpload' in config) {
+        xhr.upload.addEventListener('loadend', () => Promise.resolve().then(() => {
+          xhr.timeout = config.afterUpload;
+        }));
+      }
+      xhr.addEventListener('loadend', () => {
+        clearTimeout(watchdog);
+        try {
+          const expected = [];
+          if (bytes !== null) expected.push('upload:loadstart:0:' + bytes + ':true');
+          if (config.complete) {
+            for (const type of ['progress', 'load', 'loadend']) expected.push('upload:' + type + ':12:12:true');
+          } else if (config.expected !== 'load') {
+            expected.push('upload:' + config.expected + ':0:0:false', 'upload:loadend:0:0:false');
+          }
+          const upload = events.filter(event => event.startsWith('upload:'));
+          if (JSON.stringify(upload) !== JSON.stringify(expected) || outcome !== config.expected || xhr.readyState !== 4 ||
+              xhr.status !== (outcome === 'load' ? 200 : 0) || xhr.responseText !== (outcome === 'load' ? 'network-body' : '')) {
+            throw new Error(JSON.stringify({scope, config, expected, upload, outcome, state: xhr.readyState, status: xhr.status, events}));
+          }
+          if (config.expected === 'timeout' && !config.complete) {
+            const expectedEvents = ['state:1', 'xhr:loadstart:0:0:false'];
+            if (bytes !== null) expectedEvents.push(expected[0]);
+            expectedEvents.push('state:4', ...expected.filter(event => !event.startsWith('upload:loadstart:')),
+              'xhr:timeout:0:0:false', 'xhr:loadend:0:0:false');
+            if (JSON.stringify(events) !== JSON.stringify(expectedEvents)) throw new Error('timeout event order: ' + JSON.stringify(events));
+          }
+          facts.push({name: config.name, outcome, events});
+          resolve();
+        } catch (error) { reject(error); }
+      });
+      xhr.open('POST', base + '/upload?head=' + config.head + '&body=' + (config.body || 0));
+      xhr.timeout = config.timeout;
+      xhr.send(bytes === null ? null : bytes === 0 ? '' : 'Test Message');
+      const until = performance.now() + (config.busy || 0);
+      while (performance.now() < until) {}
+      if ('after' in config) xhr.timeout = config.after;
+      if (config.abort) xhr.abort();
+    });
+  }
+  if (scope === 'worker') {
+    const order = await new Promise(resolve => {
+      const events = [];
+      setTimeout(() => { events.push('older delayed'); resolve(events); }, 20);
+      const until = performance.now() + 150;
+      while (performance.now() < until) {}
+      setTimeout(() => events.push('newer zero'), 0);
+    });
+    if (JSON.stringify(order) !== JSON.stringify(['newer zero', 'older delayed'])) {
+      throw new Error('ordinary worker timer order changed: ' + JSON.stringify(order));
+    }
+    let cancelledRan = false;
+    await new Promise(resolve => {
+      const id = setTimeout(() => { cancelledRan = true; }, 0);
+      Promise.resolve().then(() => clearTimeout(id));
+      setTimeout(resolve, 30);
+    });
+    if (cancelledRan) throw new Error('cancelled pending worker timer fired');
+    let cancelledReadyRan = false;
+    await new Promise(resolve => {
+      let second;
+      setTimeout(() => { clearTimeout(second); setTimeout(resolve, 20); }, 0);
+      second = setTimeout(() => { cancelledReadyRan = true; }, 0);
+    });
+    if (cancelledReadyRan) throw new Error('cancelled ready worker timer fired');
+  }
+  return {result: scope + ':' + facts.length + '/' + cases.length, facts};
+}
+(async () => {
+  const base = location.origin;
+  const windowResult = await probeUploads('window', base);
+  const worker = new Worker(URL.createObjectURL(new Blob([
+    probeUploads.toString(),
+    '\nonmessage = async event => { try { postMessage(await probeUploads("worker", event.data)); } catch (error) { postMessage({error: String(error)}); } };'
+  ], {type: 'text/javascript'})));
+  try {
+    const workerResult = await new Promise((resolve, reject) => {
+      worker.onmessage = event => event.data.error ? reject(new Error(event.data.error)) : resolve(event.data);
+      worker.onerror = event => reject(new Error(event.message));
+      worker.postMessage(base);
+    });
+    globalThis.uploadTimeoutFacts = {window: windowResult.facts, worker: workerResult.facts};
+    document.body.dataset.uploadTimeouts = windowResult.result + '|' + workerResult.result;
+  } finally { worker.terminate(); }
+})().catch(error => { document.body.dataset.uploadTimeouts = 'error:' + error; });
+</script>
