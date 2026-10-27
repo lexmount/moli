@@ -214,7 +214,6 @@ pub struct RendererLayoutWorkingSetObservation {
     pub(crate) vm_creation_id: u64,
     pub(crate) document: crate::document_runtime::DomHandle,
     pub(crate) working_sets: usize,
-    pub(crate) tickets: usize,
     pub(crate) builds: u64,
     /// Existing last-pass diagnostics; this is not a cumulative paint counter.
     pub(crate) last_pass_paint_operations: Option<usize>,
@@ -969,49 +968,6 @@ impl RendererPageTestingHandle {
             RendererOwnerReply::TestingLayoutWorkingSetObservation(snapshot) => Ok(*snapshot),
             other => Err(anyhow!(
                 "renderer owner returned non-layout-working-set-observation testing reply: {:?}",
-                std::mem::discriminant(&other)
-            )),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn layout_working_set_state_async(&self) -> Result<(usize, usize)> {
-        match self
-            .render_runtime
-            .dispatch(RendererOwnerCommand::TestingLayoutWorkingSetState { token: self.token })
-            .await?
-        {
-            RendererOwnerReply::TestingLayoutWorkingSetState(state) => Ok(state),
-            other => Err(anyhow!(
-                "renderer owner returned non-layout-working-set testing reply: {:?}",
-                std::mem::discriminant(&other)
-            )),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn close_working_set_retention_probe_async(
-        &self,
-        pool: crate::LayoutWorkingSetBudget,
-        checked_out_publication: bool,
-    ) -> Result<
-        Vec<(
-            crate::LayoutWorkingSetBudgetSnapshot,
-            Option<(usize, usize)>,
-        )>,
-    > {
-        match self
-            .render_runtime
-            .dispatch(RendererOwnerCommand::TestingCloseWorkingSetRetention {
-                token: self.token,
-                pool,
-                checked_out_publication,
-            })
-            .await?
-        {
-            RendererOwnerReply::TestingCloseWorkingSetRetention(samples) => Ok(samples),
-            other => Err(anyhow!(
-                "renderer owner returned non-working-set-close testing reply: {:?}",
                 std::mem::discriminant(&other)
             )),
         }

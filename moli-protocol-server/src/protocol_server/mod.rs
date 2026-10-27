@@ -112,7 +112,6 @@ impl ProtocolServer {
         storage_partition: Arc<StoragePartitionState>,
         mut navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
-        navigation_runtime_config.ensure_layout_working_set_budget();
         if navigation_runtime_config
             .fetch_config()
             .http_cache_dir()
@@ -599,8 +598,6 @@ impl AppState {
         screencast_interval_ms: u32,
         control: BrowserInstanceControl,
     ) -> anyhow::Result<Self> {
-        let mut navigation_runtime_config = navigation_runtime_config;
-        navigation_runtime_config.ensure_layout_working_set_budget();
         let browser_id = Uuid::new_v4();
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_owner_registry = SharedCdpOwnerRegistry::new(

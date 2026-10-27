@@ -5,8 +5,6 @@ use moli_layout::{
 };
 use moli_page_types::LayoutPolicy;
 
-mod budget;
-mod budget_maintenance;
 mod construction;
 mod grid;
 mod shared_stylesheets;
@@ -472,88 +470,6 @@ fn realtime_working_sets_lend_distinct_caches_through_nested_frames() {
 }
 
 #[test]
-fn realtime_working_sets_apply_one_page_budget_without_losing_child_geometry() {
-    fn publish_with_limit(vm: &StandaloneScriptVmHarness, limit: usize) {
-        let host = vm._context_host.borrow();
-        let document = host.document_handle();
-        let screen = host.layout_viewport_for_document(document);
-        let mut publication = host
-            .prepare_layout_publication(document, screen, LayoutPublicationRequest::Screen)
-            .unwrap();
-        publication
-            .working_sets_for_pass()
-            .unwrap()
-            .set_retention_limit_for_test(limit);
-        let pass = host
-            .build_layout_pass_for_document_in_environment(
-                document,
-                LayoutPassRequest::new(screen, LayoutFlushReason::Test),
-                None,
-                publication.working_sets_for_pass(),
-            )
-            .unwrap()
-            .unwrap();
-        host.finish_layout_publication(publication, pass).unwrap();
-    }
-
-    let mut vm = fixture();
-    let child = install_child(&mut vm);
-    let read = "JSON.stringify([changing.offsetWidth,stable.offsetHeight,frame.offsetWidth,child.document.getElementById('target').offsetWidth])";
-    let expected = vm.eval(read).unwrap();
-    let root_charge = main_stats(&vm).unwrap().estimated_retained_bytes;
-    let child_charge = vm
-        ._context_host
-        .borrow()
-        .realtime_layout_working_set_stats_for_test(child)
-        .unwrap()
-        .estimated_retained_bytes;
-    assert!(root_charge > 0 && child_charge > 0);
-    let limit = root_charge.max(child_charge);
-    assert!(limit < root_charge + child_charge);
-
-    // Each real document individually fits this limit. Their aggregate does
-    // not: admission must refuse a working tree without dropping its frozen
-    // geometry from the successfully published frame tree.
-    publish_with_limit(&vm, limit);
-    let charge = {
-        let host = vm._context_host.borrow();
-        [host.document_handle(), child]
-            .into_iter()
-            .filter_map(|document| host.realtime_layout_working_set_stats_for_test(document))
-            .map(|stats| stats.estimated_retained_bytes)
-            .sum::<usize>()
-    };
-    assert_eq!(count(&vm), 1);
-    assert!(
-        charge > 0 && charge <= limit,
-        "retained {charge}, limit {limit}"
-    );
-    let builds = vm.layout_pass_observability_for_test().1;
-    assert_eq!(vm.eval(read).unwrap(), expected);
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-
-    // Zero admission evicts even the previously reusable entry, but does not
-    // change observable results or require a follow-up geometry build.
-    publish_with_limit(&vm, 0);
-    assert_eq!(count(&vm), 0);
-    let builds = vm.layout_pass_observability_for_test().1;
-    assert_eq!(vm.eval(read).unwrap(), expected);
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-
-    let screen = viewport(&vm);
-    vm.with_fresh_layout_pass(
-        LayoutPassRequest::new(screen, LayoutFlushReason::Test),
-        LayoutPublicationRequest::Screen,
-        |_| Ok(()),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(count(&vm), 2);
-    assert_eq!(main_stats(&vm).unwrap().reused_box_slots, 0);
-    assert_eq!(vm.eval(read).unwrap(), expected);
-}
-
-#[test]
 fn realtime_working_sets_release_all_documents_while_closed_host_is_retained() {
     let mut vm = fixture();
     install_child(&mut vm);
@@ -587,7 +503,6 @@ fn legacy_modes_never_install_layout_working_sets() {
         vm.set_layout_policy(policy);
         vm.eval("target.offsetWidth;target.style.width='150px';target.offsetWidth")
             .unwrap();
-        assert_eq!(vm.maintain_realtime_layout_working_set_budget(), None);
         if policy == LayoutPolicy::OnDemand {
             let screen = viewport(&vm);
             vm.screenshot_layout_snapshot(screen).unwrap().unwrap();

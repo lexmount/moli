@@ -14,7 +14,6 @@ use crate::{
     layout_renderer::{
         NativeLayoutWorkingSetOwner, NativeLayoutWorkingSetPass, NativeLayoutWorkingSets,
     },
-    layout_working_set_budget::{PageBudgetHandle, TrimStatus},
     style_engine::StyloStyleEnvironment,
 };
 
@@ -136,39 +135,6 @@ impl ScreenLayoutInputs {
 }
 
 impl JsContextHost {
-    /// The stable renderer Page owns registration. PageVm always installs a
-    /// managed binding after selecting Realtime and before layout access. None
-    /// means registration failed: geometry runs, but retention is disabled.
-    /// Only standalone ScriptVm harnesses may leave the binding uninstalled.
-    pub(crate) fn bind_realtime_layout_working_set_budget(
-        &self,
-        page: Option<PageBudgetHandle>,
-    ) -> Result<(), &'static str> {
-        let state = self
-            .realtime_layout_state
-            .as_ref()
-            .ok_or("working-set budgets require Realtime layout")?;
-        state.working_sets.borrow_mut().bind_page_budget(page)
-    }
-
-    /// Called by the existing owner maintenance action; unchanged budgets do
-    /// not evict caches. The same helper can advance expired shared demands
-    /// even when this Host currently owns no retained tree.
-    pub(crate) fn maintain_realtime_layout_working_set_budget(&self) -> Option<TrimStatus> {
-        self.realtime_layout_state
-            .as_ref()?
-            .working_sets
-            .borrow_mut()
-            .maintain_budget()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn realtime_layout_working_set_ticket_count_for_test(&self) -> usize {
-        self.realtime_layout_state
-            .as_ref()
-            .map_or(0, |state| state.working_sets.borrow().ticket_count())
-    }
-
     /// Capture the inputs before computing a fresh pass. A temporary viewport
     /// cannot replace Realtime's canonical screen tree or child viewports.
     pub(crate) fn prepare_layout_publication(

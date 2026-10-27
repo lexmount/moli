@@ -5,7 +5,6 @@ mod browsing_contexts;
 mod element_references;
 mod events_and_network;
 mod input;
-mod layout_working_set_budget;
 mod navigation;
 mod network_and_storage;
 mod script_preload_channels;
