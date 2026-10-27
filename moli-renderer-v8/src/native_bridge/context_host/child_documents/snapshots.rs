@@ -2,7 +2,8 @@ use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, 
 use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
 use moli_web_mime::{
-    is_html_document_mime, resource_mime_essence_for_url, response_document_content_type,
+    is_html_document_mime, navigation_response_mime_type_from_headers,
+    resource_mime_essence_for_url,
 };
 use url::Url;
 
@@ -120,7 +121,7 @@ impl JsContextHost {
 pub(in crate::native_bridge::context_host) fn child_document_content_type_from_headers(
     headers: &[(String, Vec<u8>)],
 ) -> Option<String> {
-    response_document_content_type(headers)
+    navigation_response_mime_type_from_headers(headers)
 }
 
 fn child_document_content_type_from_header_value(value: &str) -> Option<String> {
@@ -136,6 +137,15 @@ pub(in crate::native_bridge::context_host) fn child_document_content_type_for_ur
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_nosniff_navigation_defaults_missing_mime_to_plain_text() {
+        let headers = vec![("X-Content-Type-Options".to_owned(), b"nosniff".to_vec())];
+        assert_eq!(
+            child_document_content_type_from_headers(&headers).as_deref(),
+            Some("text/plain")
+        );
+    }
 
     #[test]
     fn child_document_content_type_routes_through_web_mime_helpers() {
