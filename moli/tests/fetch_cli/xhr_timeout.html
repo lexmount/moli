@@ -1,0 +1,78 @@
+<!doctype html>
+<body>
+<script>
+async function probeTimeouts(scope, base) {
+  const cases = [
+    {name: 'late headers', head: 200, body: 0, timeout: 100, expected: 'load'},
+    {name: 'late body', head: 0, body: 200, timeout: 100, expected: 'load'},
+    {name: 'early shortened', head: 0, body: 0, timeout: 1000, after: 1, expected: 'load'},
+    {name: 'late shortened', head: 0, body: 200, timeout: 100, after: 1, expected: 'load'},
+    {name: 'pending headers', head: 1500, body: 0, timeout: 100, expected: 'timeout'},
+    {name: 'pending body', head: 0, body: 1500, timeout: 100, expected: 'timeout'},
+    {name: 'disabled', head: 1000, body: 0, timeout: 100, after: 0, expected: 'load'},
+    {name: 'extended', head: 1000, body: 0, timeout: 100, after: 2000, expected: 'load'},
+    {name: 'author abort', head: 0, body: 100, timeout: 1000, abort: true, expected: 'abort'},
+    {name: 'reopened', head: 0, body: 100, timeout: 1000, reopen: true, expected: 'timeout'}
+  ];
+  let passed = 0;
+  for (const config of cases) {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const events = [];
+      let outcome;
+      let taskFinished = false;
+      const watchdog = setTimeout(() => reject(new Error(scope + '/' + config.name + ': no terminal')), 5000);
+      for (const type of ['load', 'timeout', 'error', 'abort']) {
+        xhr.addEventListener(type, () => { events.push(type); outcome = type; });
+      }
+      xhr.onloadend = () => {
+        clearTimeout(watchdog);
+        try {
+          if (!taskFinished || outcome !== config.expected || events.length !== 1 || xhr.readyState !== 4) {
+            throw new Error(JSON.stringify({scope, config, outcome, events, taskFinished, state: xhr.readyState}));
+          }
+          const expectedStatus = outcome === 'load' ? 200 : 0;
+          const expectedBody = outcome === 'load' ? 'network-body' : '';
+          if (xhr.status !== expectedStatus || xhr.responseText !== expectedBody) {
+            throw new Error('incorrect terminal response ' + xhr.status + ':' + xhr.responseText);
+          }
+          resolve();
+        } catch (error) { reject(error); }
+      };
+      xhr.open('GET', base + '/response?head=' + config.head + '&body=' + config.body);
+      xhr.timeout = config.timeout;
+      xhr.send();
+      // Keep author callbacks queued while the independent HTTP server and
+      // resource executor finish the fast responses, including late bodies.
+      const until = performance.now() + 650;
+      while (performance.now() < until) {}
+      taskFinished = true;
+      if ('after' in config) xhr.timeout = config.after;
+      if (config.abort) xhr.abort();
+      if (config.reopen) {
+        xhr.open('GET', base + '/response?head=1500&body=0');
+        xhr.timeout = 100;
+        xhr.send();
+      }
+    });
+    passed++;
+  }
+  return scope + ':' + passed + '/' + cases.length;
+}
+(async () => {
+  const base = location.origin;
+  const windowResult = await probeTimeouts('window', base);
+  const worker = new Worker(URL.createObjectURL(new Blob([
+    probeTimeouts.toString(),
+    '\nonmessage = async event => { try { postMessage({result: await probeTimeouts("worker", event.data)}); } catch (error) { postMessage({error: String(error)}); } };'
+  ], {type: 'text/javascript'})));
+  try {
+    const workerResult = await new Promise((resolve, reject) => {
+      worker.onmessage = event => event.data.error ? reject(new Error(event.data.error)) : resolve(event.data.result);
+      worker.onerror = event => reject(new Error(event.message));
+      worker.postMessage(base);
+    });
+    document.body.dataset.xhrTimeouts = windowResult + '|' + workerResult;
+  } finally { worker.terminate(); }
+})().catch(error => { document.body.dataset.xhrTimeouts = 'error:' + error; });
+</script>
