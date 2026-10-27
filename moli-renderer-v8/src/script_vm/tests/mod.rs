@@ -2019,6 +2019,18 @@ async fn spawn_child_external_classic_source_error_server() -> (
 }
 
 fn new_parsed_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
+    new_parsed_test_vm_with_completion_sender(
+        url,
+        markup,
+        RendererResourceCompletionSender::direct_completion_only(),
+    )
+}
+
+fn new_parsed_test_vm_with_completion_sender(
+    url: &str,
+    markup: &str,
+    resource_completion_tx: RendererResourceCompletionSender,
+) -> StandaloneScriptVmHarness {
     let _js_runtime = crate::JsRuntime::initialize();
     let document =
         HtmlParser::SCRIPTING_ENABLED.parse(Url::parse(url).expect("test url"), markup.to_owned());
@@ -2027,10 +2039,11 @@ fn new_parsed_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
         page_task_queue.owner_attached_runtime_page_task_sender_for_test();
     let page_task_front_injection_tx = page_task_queue.parser_boundary_sender();
     let page_runtime_task_source = page_task_queue.residence();
-    ScriptVmDefaultWorldBootstrap::standalone_from_dom_host_for_test(
+    ScriptVmDefaultWorldBootstrap::standalone_from_dom_host_with_resource_completion_sender_for_test(
         DomHost::from_dom(document),
         post_domcontentloaded_page_task_sender,
         page_task_front_injection_tx,
+        resource_completion_tx,
     )
     .expect("script vm bootstrap should succeed")
     .finish()
