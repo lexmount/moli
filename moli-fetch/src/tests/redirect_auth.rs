@@ -218,7 +218,10 @@ fn redirect_authorization_proxy_credentials_keep_their_independent_scope() -> Re
             target,
             ..server_auth(RequestAuthScheme::Basic)
         });
-        assert_eq!(request.auth_for_url(&foreign).unwrap().target, target);
+        assert_eq!(
+            request.transport_auth_for_url(&foreign).unwrap().target,
+            target
+        );
         assert!(
             request
                 .preemptive_server_basic_auth_for_url(&foreign)

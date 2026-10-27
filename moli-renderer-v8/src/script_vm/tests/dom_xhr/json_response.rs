@@ -123,6 +123,7 @@ __jsonStream.send();
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
         network_request_headers: None,
