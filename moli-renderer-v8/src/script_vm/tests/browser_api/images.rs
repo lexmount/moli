@@ -112,6 +112,219 @@ async fn wait_for_image_event_task(
 }
 
 #[tokio::test]
+async fn image_complete_starts_a_new_pending_load_inside_the_previous_load_handler() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-completion.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    assert_eq!(
+        vm.eval(
+            r#"
+            globalThis.__reloadImage = new Image();
+            globalThis.__reloadStates = [];
+            let reloads = 0;
+            __reloadImage.onload = () => {
+              __reloadStates.push(`load:${__reloadImage.complete}`);
+              if (++reloads === 1) {
+                __reloadImage.src = '/second.gif';
+                __reloadStates.push(`changed:${__reloadImage.complete}`);
+              }
+            };
+            __reloadImage.src = '/first.gif';
+            __reloadImage.complete
+            "#,
+        )
+        .unwrap(),
+        "false"
+    );
+    let first = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(first.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        first[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(&mut vm, &loader, "first completion before source change").await;
+    assert_eq!(
+        vm.eval("__reloadStates.join('|')").unwrap(),
+        "load:true|changed:false"
+    );
+    let second = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].url.path(), "/second.gif");
+    assert_eq!(vm.eval("__reloadImage.complete").unwrap(), "false");
+    vm.fulfill_pending_subresource_fetch(
+        second[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    assert_eq!(vm.eval("__reloadImage.complete").unwrap(), "true");
+    run_next_image_event_task(&mut vm, &loader, "replacement image completion").await;
+    assert_eq!(
+        vm.eval("__reloadStates.join('|')").unwrap(),
+        "load:true|changed:false|load:true"
+    );
+}
+
+#[tokio::test]
+async fn available_image_installs_metadata_synchronously_and_dispatches_load_as_a_task() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://available-image.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval("globalThis.__availablePreload = new Image(); __availablePreload.src = '/shared.gif';")
+        .unwrap();
+    let first = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(first.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        first[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(&mut vm, &loader, "available image preload").await;
+    assert_eq!(
+        vm.eval(
+            r#"
+            globalThis.__availableImage = new Image();
+            globalThis.__availableEvents = [];
+            globalThis.__availableDecode = 'pending';
+            __availableImage.onload = () => __availableEvents.push('load');
+            __availableImage.onerror = () => __availableEvents.push('error');
+            __availableImage.src = '/shared.gif';
+            const immediate = [__availableImage.complete, __availableImage.naturalWidth,
+              __availableImage.naturalHeight, __availableEvents.length].join(':');
+            __availableImage.decode().then(() => __availableDecode = 'resolve',
+              error => __availableDecode = error.name);
+            immediate
+            "#,
+        )
+        .unwrap(),
+        "true:1:1:0"
+    );
+    assert_eq!(vm.eval("__availableDecode").unwrap(), "resolve");
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    run_next_image_event_task(&mut vm, &loader, "reused available image load event").await;
+    assert_eq!(vm.eval("__availableEvents.join('|')").unwrap(), "load");
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+}
+
+#[tokio::test]
+async fn image_decode_keeps_the_loaded_resource_after_the_document_base_url_changes() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-current-resource.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.head) document.documentElement.prepend(document.createElement('head'));
+        globalThis.__imageBase = document.createElement('base');
+        __imageBase.href = '/first/';
+        document.head.appendChild(__imageBase);
+        globalThis.__baseImage = new Image();
+        __baseImage.src = 'pixel.gif';
+        "#,
+    )
+    .unwrap();
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].url.path(), "/first/pixel.gif");
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(&mut vm, &loader, "image at the original base URL").await;
+    assert_eq!(
+        vm.eval(
+            r#"
+            __imageBase.href = '/second/';
+            globalThis.__baseImageDecode = 'pending';
+            __baseImage.decode().then(() => __baseImageDecode = 'resolve',
+              error => __baseImageDecode = error.name);
+            [__baseImage.src, __baseImage.currentSrc].join('|')
+            "#,
+        )
+        .unwrap(),
+        "https://image-current-resource.test/second/pixel.gif|https://image-current-resource.test/first/pixel.gif"
+    );
+    assert_eq!(vm.eval("__baseImageDecode").unwrap(), "resolve");
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+}
+
+#[tokio::test]
+async fn available_image_cannot_bypass_a_new_csp_for_load_or_decode() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://available-image-csp.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval("globalThis.__cspImagePreload = new Image(); __cspImagePreload.src = '/shared.gif';")
+        .unwrap();
+    let first = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(first.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        first[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(&mut vm, &loader, "image before CSP restriction").await;
+    assert_eq!(
+        vm.eval(
+            r#"
+            if (!document.documentElement) document.appendChild(document.createElement('html'));
+            if (!document.head) document.documentElement.prepend(document.createElement('head'));
+            const restriction = document.createElement('meta');
+            restriction.httpEquiv = 'Content-Security-Policy';
+            restriction.content = "img-src 'none'";
+            document.head.appendChild(restriction);
+            globalThis.__cspImage = new Image();
+            globalThis.__cspImageEvents = [];
+            globalThis.__cspImageDecode = 'pending';
+            __cspImage.onload = () => __cspImageEvents.push('load');
+            __cspImage.onerror = () => __cspImageEvents.push('error');
+            __cspImage.src = '/shared.gif';
+            __cspImage.decode().then(() => __cspImageDecode = 'resolve',
+              error => __cspImageDecode = `reject:${error.name}`);
+            [__cspImage.complete, __cspImage.naturalWidth, __cspImageEvents.length].join(':')
+            "#,
+        )
+        .unwrap(),
+        "true:0:0"
+    );
+    assert_eq!(vm.eval("__cspImageDecode").unwrap(), "reject:EncodingError");
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    run_next_image_event_task(&mut vm, &loader, "blocked available image event").await;
+    assert_eq!(vm.eval("__cspImageEvents.join('|')").unwrap(), "error");
+    assert_eq!(vm.eval("__cspImageDecode").unwrap(), "reject:EncodingError");
+}
+
+#[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),
@@ -259,6 +472,117 @@ async fn image_fetch_enabled_discards_stale_queued_terminal_event() {
         vm.eval("globalThis.__staleImageEvents.join(',')")
             .expect("replacement image events should evaluate"),
         "load"
+    );
+}
+
+#[tokio::test]
+async fn image_current_src_switches_only_when_the_update_microtask_selects_a_current_request() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let (mut vm, _resource_completion_queue) =
+        new_storage_test_vm_with_loader_and_resource_completion_queue(
+            "https://image-current-request.test/page.html",
+            &loader,
+        );
+
+    let before_update = vm
+        .eval(
+            r#"
+            (() => {
+              const picture = document.createElement("picture");
+              const nonMatchingSource = document.createElement("source");
+              nonMatchingSource.media = "not all";
+              nonMatchingSource.srcset = "data:,a";
+              picture.append(nonMatchingSource);
+
+              const matchingSource = document.createElement("source");
+              matchingSource.media = "all";
+              matchingSource.srcset = "data:,b";
+              picture.append(matchingSource);
+
+              const image = document.createElement("img");
+              globalThis.__imageCurrentRequestObservations = [];
+              image.src = "data:,c";
+              const beforeUpdate = image.currentSrc;
+              queueMicrotask(() => {
+                __imageCurrentRequestObservations.push(`first:${image.currentSrc}`);
+                picture.append(image);
+                __imageCurrentRequestObservations.push(`inserted:${image.currentSrc}`);
+                queueMicrotask(() => {
+                  __imageCurrentRequestObservations.push(`second:${image.currentSrc}`);
+                });
+              });
+              return beforeUpdate;
+            })()
+            "#,
+        )
+        .expect("image current request setup should evaluate");
+    assert_eq!(before_update, "");
+    assert_eq!(
+        vm.eval("globalThis.__imageCurrentRequestObservations.join('|')")
+            .expect("image current request observations should evaluate"),
+        "first:data:,c|inserted:data:,c|second:data:,b"
+    );
+}
+
+#[tokio::test]
+async fn image_current_src_is_empty_while_a_replacement_request_is_pending() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let (mut vm, _resource_completion_queue) =
+        new_storage_test_vm_with_loader_and_resource_completion_queue(
+            "https://image-current-request.test/page.html",
+            &loader,
+        );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__pendingCurrentRequestImage = new Image();
+          __pendingCurrentRequestImage.src = "data:,old";
+        })()
+        "#,
+    )
+    .expect("initial synthetic image request should evaluate");
+    assert_eq!(
+        vm.eval("globalThis.__pendingCurrentRequestImage.currentSrc")
+            .expect("initial current source should evaluate"),
+        "data:,old"
+    );
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const before = __pendingCurrentRequestImage.currentSrc;
+              __pendingCurrentRequestImage.src = "replacement.gif";
+              return `${before}|${__pendingCurrentRequestImage.currentSrc}`;
+            })()
+            "#,
+        )
+        .expect("replacement image request should evaluate"),
+        "data:,old|data:,old"
+    );
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        vm.eval("globalThis.__pendingCurrentRequestImage.currentSrc")
+            .expect("pending current source should evaluate"),
+        ""
+    );
+
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .expect("replacement image request should fulfill");
+    assert_eq!(
+        vm.eval("globalThis.__pendingCurrentRequestImage.currentSrc")
+            .expect("completed current source should evaluate"),
+        "https://image-current-request.test/replacement.gif"
     );
 }
 
@@ -489,6 +813,81 @@ async fn inserting_completed_detached_image_does_not_restart_request() {
 }
 
 #[tokio::test]
+async fn image_update_microtask_freezes_request_after_observing_live_base_url() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-update-base.test/page.html",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+
+    vm.eval(
+        r#"
+        (() => {
+          const image = new Image();
+          globalThis.__baseSelectedImage = image;
+          globalThis.__baseSelectedImageEvents = [];
+          image.onload = () => __baseSelectedImageEvents.push("load");
+          image.onerror = () => __baseSelectedImageEvents.push("error");
+          image.src = "green.png";
+
+          const root = document.documentElement ||
+            document.appendChild(document.createElement("html"));
+          const head = document.head ||
+            root.insertBefore(document.createElement("head"), root.firstChild);
+          const base = document.createElement("base");
+          base.href = "/resources/";
+          head.appendChild(base);
+          globalThis.__baseSelectedImageBase = base;
+        })()
+        "#,
+    )
+    .expect("image and base should update in one script turn");
+
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].url.as_str(),
+        "https://image-update-base.test/resources/green.png",
+        "URL selection must happen in the queued image-update microtask"
+    );
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .expect("base-selected image response should complete");
+
+    vm.eval(
+        r#"
+        (() => {
+          __baseSelectedImageBase.href = "/bogus/";
+          (document.body || document.documentElement).appendChild(__baseSelectedImage);
+        })()
+        "#,
+    )
+    .expect("completed detached image should insert after a later base change");
+    assert!(
+        vm.take_pending_subresource_fetch_infos().is_empty(),
+        "ordinary insertion must preserve the request selected by the update microtask"
+    );
+
+    run_next_image_event_task(&mut vm, &loader, "base-selected image event").await;
+    assert_eq!(
+        vm.eval(
+            r#"__baseSelectedImageEvents.join("|") + ":" +
+               performance.getEntriesByName(
+                 "https://image-update-base.test/resources/green.png"
+               ).length"#,
+        )
+        .expect("base-selected image result should evaluate"),
+        "load:1"
+    );
+}
+
+#[tokio::test]
 async fn removed_lazy_image_suppresses_in_flight_terminal_event() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     loader.set_image_fetch_enabled(true);
@@ -517,6 +916,8 @@ async fn removed_lazy_image_suppresses_in_flight_terminal_event() {
         vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
             .expect("near lazy-image layout refresh should succeed")
     );
+    vm.perform_owner_lane_task_microtask_checkpoints()
+        .expect("layout task should finish its image-update microtask checkpoint");
     let pending = vm.take_pending_subresource_fetch_infos();
     assert_eq!(pending.len(), 1);
 
@@ -852,7 +1253,7 @@ async fn image_request_interception_fulfills_through_image_continuation() {
 }
 
 #[tokio::test]
-async fn image_decode_waits_for_in_flight_pixels_and_reuses_the_ready_resource() {
+async fn image_decode_quick_attach_distinguishes_uncached_and_ready_requests() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     loader.set_image_fetch_enabled(true);
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -883,8 +1284,8 @@ async fn image_decode_waits_for_in_flight_pixels_and_reuses_the_ready_resource()
     assert_eq!(pending.len(), 1);
     assert_eq!(
         vm.eval("globalThis.__firstSharedDecode")
-            .expect("in-flight image decode state should evaluate"),
-        "pending"
+            .expect("uncached quick-attach image decode state should evaluate"),
+        "reject:EncodingError"
     );
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
@@ -897,7 +1298,7 @@ async fn image_decode_waits_for_in_flight_pixels_and_reuses_the_ready_resource()
     assert_eq!(
         vm.eval("globalThis.__firstSharedDecode")
             .expect("first image decode result should evaluate"),
-        "resolve"
+        "reject:EncodingError"
     );
     let first_image = vm
         .document_runtime
