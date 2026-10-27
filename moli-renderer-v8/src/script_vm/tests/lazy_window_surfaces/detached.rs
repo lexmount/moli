@@ -179,6 +179,149 @@ fn detached_child_cold_surface_matrix_keeps_realm_identity_and_operations() {
     );
 }
 
+#[test]
+fn retained_child_registry_does_not_read_reinserted_frame_definitions() {
+    for cold in [true, false] {
+        let mut vm = new_storage_html_test_vm("https://detached-registry-reinsert.test/");
+        vm.eval("globalThis.frame=document.createElement('iframe'); document.body.append(frame); globalThis.oldWindow=frame.contentWindow;")
+            .unwrap();
+        materialize_single_child_default_realm_for_test(&mut vm, "original registry owner");
+        if !cold {
+            vm.eval(
+                r#"
+                globalThis.oldRegistry=oldWindow.customElements;
+                globalThis.OldElement=class extends oldWindow.HTMLElement {};
+                oldRegistry.define('x-old', OldElement);
+                globalThis.oldPromise=oldRegistry.whenDefined('x-reinsert-probe');
+            "#,
+            )
+            .unwrap();
+        }
+        vm.eval(r#"
+            frame.remove(); globalThis.oldRegistry=oldWindow.customElements;
+            globalThis.oldPromise=globalThis.oldPromise || oldRegistry.whenDefined('x-reinsert-probe');
+            globalThis.oldResolved=false; oldPromise.then(()=>oldResolved=true);
+            document.body.append(frame); void frame.contentWindow;
+        "#).unwrap();
+        materialize_single_child_default_realm_for_test(&mut vm, "reinserted registry owner");
+        let facts = vm.eval(r#"
+            globalThis.newWindow=frame.contentWindow;
+            globalThis.newRegistry=newWindow.customElements;
+            globalThis.NewElement=class extends newWindow.HTMLElement {};
+            newRegistry.define('x-reinsert-probe', NewElement);
+            oldRegistry.define('x-old-write', class extends newWindow.HTMLElement {});
+            newRegistry.define.call(oldRegistry, 'x-borrowed-write', class extends newWindow.HTMLElement {});
+            globalThis.oldPromiseAfter=oldRegistry.whenDefined('x-reinsert-probe');
+            globalThis.oldAfterResolved=false; oldPromiseAfter.then(()=>oldAfterResolved=true);
+            JSON.stringify({
+              distinctWindows:oldWindow!==newWindow,
+              distinctRegistries:oldRegistry!==newRegistry,
+              oldCannotReadNew:oldRegistry.get('x-reinsert-probe')===undefined,
+              oldCannotNameNew:oldRegistry.getName(NewElement)===null,
+              newCanReadNew:newRegistry.get('x-reinsert-probe')===NewElement,
+              newCannotReadOld:newRegistry.get('x-old')===undefined,
+              oldKeepsOwn:!globalThis.OldElement || (oldRegistry.get('x-old')===OldElement && oldRegistry.getName(OldElement)==='x-old'),
+              borrowedOldReceiver:newRegistry.get.call(oldRegistry,'x-reinsert-probe')===undefined,
+              borrowedNewReceiver:oldRegistry.get.call(newRegistry,'x-reinsert-probe')===NewElement,
+              oldCannotWriteNew:newRegistry.get('x-old-write')===undefined && newRegistry.get('x-borrowed-write')===undefined,
+              oldPromiseSame:oldPromise===oldPromiseAfter
+            })
+        "#).unwrap();
+        let facts = serde_json::from_str::<serde_json::Value>(&facts).unwrap();
+        assert!(
+            facts.as_object().unwrap().values().all(|v| v == true),
+            "cold={cold}: {facts}"
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify([oldResolved,oldAfterResolved])")
+                .unwrap(),
+            "[false,false]"
+        );
+    }
+}
+
+#[tokio::test]
+async fn retained_child_registry_stays_isolated_after_same_origin_navigation() {
+    let mut vm = new_storage_html_test_vm("https://retained-registry-navigation.test/");
+    vm.eval("globalThis.frame=document.createElement('iframe'); frame.srcdoc='<body>old</body>'; document.body.append(frame); void frame.contentWindow;").unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "original registry Document").await;
+    assert_eq!(
+        vm.eval(
+            r#"
+        globalThis.oldWindow=frame.contentWindow;
+        globalThis.oldRegistry=oldWindow.customElements;
+        globalThis.OldElement=class extends oldWindow.HTMLElement {};
+        oldRegistry.define('x-old', OldElement);
+        globalThis.pending=oldRegistry.whenDefined('x-replacement');
+        oldRegistry.get('x-old')===OldElement;
+    "#,
+        )
+        .unwrap(),
+        "true",
+        "the original definition must exist before navigation"
+    );
+    vm.eval(
+        r#"
+        frame.srcdoc='<body>replacement</body>';
+    "#,
+    )
+    .unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "replacement registry Document")
+        .await;
+    assert_eq!(
+        vm.eval(
+            r#"
+        globalThis.newRegistry=frame.contentWindow.customElements;
+        newRegistry.define('x-replacement',class extends frame.contentWindow.HTMLElement {});
+        JSON.stringify([
+          oldWindow===frame.contentWindow,
+          oldRegistry!==newRegistry,
+          oldRegistry.get('x-old')===OldElement,
+          oldRegistry.get('x-replacement')===undefined,
+          newRegistry.get('x-replacement')!==undefined,
+          newRegistry.get('x-old')===undefined,
+          pending===oldRegistry.whenDefined('x-replacement')
+        ])
+    "#
+        )
+        .unwrap(),
+        "[true,true,true,true,true,true,true]"
+    );
+}
+
+#[test]
+fn retained_registry_definitions_and_promises_do_not_root_retired_realms() {
+    let mut vm = new_storage_html_test_vm("https://retained-registry-gc.test/");
+    let baseline = collected_context_count(&mut vm);
+    vm.eval("globalThis.frame=document.createElement('iframe'); document.body.append(frame); void frame.contentWindow;").unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "collectible registry");
+    vm.eval(
+        r#"
+        globalThis.registry=frame.contentWindow.customElements;
+        registry.define('x-old',class extends frame.contentWindow.HTMLElement {});
+        globalThis.pending=registry.whenDefined('x-undefined');
+        frame.remove(); document.body.append(frame); void frame.contentWindow;
+    "#,
+    )
+    .unwrap();
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "replacement while retaining registry",
+    );
+    assert!(collected_context_count(&mut vm) > baseline + 1);
+    vm.eval("registry.whenDefined('x-another-undefined'); registry=undefined; pending=undefined;")
+        .unwrap();
+    vm.prune_stale_child_default_execution_contexts();
+    assert_eq!(
+        collected_context_count(&mut vm),
+        baseline + 1,
+        "only the live replacement Realm remains"
+    );
+    vm.eval("frame.remove(); frame=undefined;").unwrap();
+    vm.prune_stale_child_default_execution_contexts();
+    assert_eq!(collected_context_count(&mut vm), baseline);
+}
+
 #[tokio::test]
 async fn cold_old_window_getters_follow_reused_proxy_origin_and_receiver() {
     for cross_origin in [false, true] {
