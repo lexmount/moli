@@ -21,6 +21,17 @@ use crate::v8_execution_watchdog::{
 const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
+    /// The selected HTML task owns one sample through callback execution and
+    /// its checkpoint. This guard owns no ScriptVm/Host borrow across awaits.
+    pub(crate) fn enter_animation_task_time(
+        &self,
+    ) -> crate::native_bridge::AnimationScriptTimeGuard {
+        self._context_host
+            .borrow()
+            .animation_transition_state()
+            .enter_script_time(Instant::now())
+    }
+
     pub(super) fn prepare_main_document_event<'event>(
         &self,
         target: EventTargetHandle,

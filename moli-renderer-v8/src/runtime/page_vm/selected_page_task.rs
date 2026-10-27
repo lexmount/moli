@@ -18,6 +18,7 @@ impl PageVm {
         task: RendererPageSchedulerTask,
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
+        let _animation_time = self.vm().enter_animation_task_time();
         match task {
             #[cfg(any(test, feature = "devtools"))]
             RendererPageSchedulerTask::ActionWindow { deadline } => {
