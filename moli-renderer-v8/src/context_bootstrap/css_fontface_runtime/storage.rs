@@ -20,8 +20,6 @@ struct FontFaceSetObjectDeclaration {
     listeners: (),
     #[webapi(slot = FONT_FACE_SET_STATUS_SLOT, init = string("loaded"))]
     status: (),
-    #[webapi(slot = FONT_FACE_SET_SIZE_SLOT, init = 0)]
-    size: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -265,7 +263,6 @@ pub(crate) fn rebuild_font_face_set_faces<'s>(
     let combined =
         serialize_v8_iter_array(scope, combined).unwrap_or_else(|| v8::Array::new(scope, 0));
     set_font_face_set_slot_value(scope, object, FONT_FACE_SET_FACES_SLOT, combined.into());
-    sync_font_face_set_size(scope, object);
     sync_font_face_set_matching_order(scope, object);
     // Publish membership before changing owners can start a loading cycle.
     // Reentrant FontFaceSet queries must see the same members as that cycle.
@@ -518,17 +515,6 @@ pub(super) fn array_contains_value(
         }
     }
     false
-}
-
-fn sync_font_face_set_size<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) {
-    let size = font_face_set_faces_array(scope, object)
-        .map(|faces| faces.length() as i32)
-        .unwrap_or(0);
-    let value = v8::Integer::new(scope, size);
-    set_font_face_set_slot_value(scope, object, FONT_FACE_SET_SIZE_SLOT, value.into());
 }
 
 fn font_face_set_slot_value<'s>(

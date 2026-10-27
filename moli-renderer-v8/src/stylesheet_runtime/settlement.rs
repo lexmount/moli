@@ -374,9 +374,9 @@ impl DocumentRuntime {
                 Ok(crate::network_host::StylesheetSubresourceFetchStart::WebFontSettled(
                     web_font,
                 )) => {
-                    if let Some(resource) =
-                        Self::complete_document_web_font(host, binding, web_font)
-                        && let Some(document) = host.stylesheet_web_font_document(binding)
+                    if let Some(document) = host.stylesheet_web_font_document(binding)
+                        && let Some(resource) =
+                            Self::complete_document_web_font(host, document, web_font)
                         && let Some(binding) = host
                             .accept_current_stylesheet_subresource_load_delay_for_document(document)
                     {
@@ -393,12 +393,12 @@ impl DocumentRuntime {
                     }
                     let settlement = host.settle_stylesheet_subresource_load_delay(binding);
                     if let StylesheetSubresourceTarget::Font(font) = failed_target
+                        && let Some(document) = host.stylesheet_web_font_document(binding)
                         && let Some(resource) = Self::complete_document_web_font(
                             host,
-                            binding,
+                            document,
                             crate::css_resource_urls::CompletedStylesheetWebFont::failure(font),
                         )
-                        && let Some(document) = host.stylesheet_web_font_document(binding)
                         && let Some(binding) = host
                             .accept_current_stylesheet_subresource_load_delay_for_document(document)
                     {
@@ -418,12 +418,11 @@ impl DocumentRuntime {
         crate::context_bootstrap::publish_font_face_load_changes(scope);
     }
 
-    fn complete_document_web_font(
+    pub(crate) fn complete_document_web_font(
         host: &JsContextHost,
-        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
+        document: DomHandle,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
     ) -> Option<StylesheetSubresourceRequest> {
-        let document = host.stylesheet_web_font_document(binding)?;
         match host.complete_document_web_font(document, terminal) {
             crate::script_vm::web_fonts::DocumentWebFontCompletion::Registered(outcome) => {
                 tracing::debug!(

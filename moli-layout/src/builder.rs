@@ -176,7 +176,7 @@ where
         if !matches!(
             root_style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents
-        ) && !is_leaf_element(&root_semantics, root_kind, &root_style)
+        ) && !is_leaf_element(&root_semantics, &root_style)
         {
             self.populate_root(
                 &mut world,
@@ -353,7 +353,7 @@ where
                     }
                     world.map_source(source_node, id);
 
-                    if is_leaf_element(&semantics, kind, &style) {
+                    if is_leaf_element(&semantics, &style) {
                         return Ok(vec![id]);
                     }
 
@@ -1485,15 +1485,10 @@ fn principal_kind(
     }
 }
 
-fn is_leaf_element(
-    semantics: &LayoutElementSemantics,
-    kind: LayoutBoxKind,
-    style: &ResolvedLayoutStyle,
-) -> bool {
+fn is_leaf_element(semantics: &LayoutElementSemantics, style: &ResolvedLayoutStyle) -> bool {
     semantics
         .category
         .is_leaf(semantics.is_replaced(), style.display())
-        || kind == LayoutBoxKind::TableColumn
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

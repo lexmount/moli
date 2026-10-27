@@ -30,7 +30,6 @@ pub(super) const FONT_FACE_LOAD_NOTIFICATION_SENT_SLOT: &str = "__moliFontFaceLo
 pub(super) const FONT_FACE_SET_MANUAL_FACES_SLOT: &str = "__moliFontFaceSetManualFaces";
 pub(super) const FONT_FACE_SET_CONNECTED_FACES_SLOT: &str = "__moliFontFaceSetConnectedFaces";
 pub(super) const FONT_FACE_SET_STATUS_SLOT: &str = "__moliFontFaceSetStatus";
-pub(super) const FONT_FACE_SET_SIZE_SLOT: &str = "__moliFontFaceSetSize";
 const FONT_FACE_SET_READY_SLOT: &str = "__moliFontFaceSetReady";
 
 mod automatic;

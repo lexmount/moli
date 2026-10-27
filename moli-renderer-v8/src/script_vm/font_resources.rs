@@ -25,42 +25,29 @@ impl ScriptVm {
         else {
             return;
         };
-        let completion = self
-            ._context_host
-            .borrow()
-            .complete_document_web_font(document, terminal);
-        match completion {
-            web_fonts::DocumentWebFontCompletion::Registered(outcome) => tracing::debug!(
-                ?outcome,
-                "registered current document web font for the next fresh layout refresh"
-            ),
-            web_fonts::DocumentWebFontCompletion::Invalid(error) => tracing::warn!(
-                %error,
-                "discarded invalid current document web font response"
-            ),
-            web_fonts::DocumentWebFontCompletion::NetworkFailed => {
-                tracing::debug!("current document web font request reached a failed terminal")
-            }
-            web_fonts::DocumentWebFontCompletion::Stale => {
-                tracing::debug!("discarded superseded document web font response")
-            }
-            web_fonts::DocumentWebFontCompletion::Retry(request) => {
-                let binding = self
-                    ._context_host
-                    .borrow_mut()
-                    .accept_current_stylesheet_subresource_load_delay_for_document(document);
-                if let Some(binding) = binding
-                    && let Err(error) = self.with_default_context_scope(move |scope, host_ptr| {
-                        crate::document_runtime::DocumentRuntime::start_stylesheet_subresource_requests_in_current_scope(
-                            scope, host_ptr, vec![(binding, *request)],
-                        );
-                        Ok(())
-                    })
-                {
-                    self.record_runtime_warning(format_args!(
-                        "failed to enter stylesheet subresource request scope: {error}"
-                    ));
-                }
+        let retry = DocumentRuntime::complete_document_web_font(
+            &self._context_host.borrow(),
+            document,
+            terminal,
+        );
+        if let Some(request) = retry {
+            let binding = self
+                ._context_host
+                .borrow_mut()
+                .accept_current_stylesheet_subresource_load_delay_for_document(document);
+            if let Some(binding) = binding
+                && let Err(error) = self.with_default_context_scope(move |scope, host_ptr| {
+                    DocumentRuntime::start_stylesheet_subresource_requests_in_current_scope(
+                        scope,
+                        host_ptr,
+                        vec![(binding, request)],
+                    );
+                    Ok(())
+                })
+            {
+                self.record_runtime_warning(format_args!(
+                    "failed to enter stylesheet subresource request scope: {error}"
+                ));
             }
         }
         if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
