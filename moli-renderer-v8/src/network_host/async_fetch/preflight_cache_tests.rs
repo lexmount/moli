@@ -91,7 +91,7 @@ async fn fetch(
     let headers = request.request_headers.to_byte_strings();
     let (head, body) = if streaming {
         fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-            loader, request, None, headers, observer,
+            loader, request, None, headers, observer, None,
         )
         .await?
         .into_response()
@@ -103,6 +103,7 @@ async fn fetch(
             None,
             headers,
             observer,
+            None,
         )
         .await?
         .into_response()

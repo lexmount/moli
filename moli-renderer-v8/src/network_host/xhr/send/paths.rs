@@ -385,6 +385,7 @@ pub(super) fn spawn_network_xhr_fetch(
         prepared.method,
         prepared.request_headers,
         request_body_text(&prepared.send_body),
+        host.window_redirect_owner(internal_id),
     );
     internal_id
 }

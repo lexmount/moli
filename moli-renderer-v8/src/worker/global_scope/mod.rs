@@ -69,8 +69,6 @@ use crate::network_host::{
     begin_xhr_send, capture_xhr_upload_listener_flag, close_pending_network_body_stream,
     convert_xhr_send_body_from_args, dispatch_xhr_loadstart, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
-    fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
     filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
     parse_fetch_init, request_headers_guard_for_mode, request_object_credentials_mode,
     resolve_context_url, set_xhr_state_number, throw_synchronous_xhr_failure,
@@ -125,12 +123,15 @@ mod nested_workers;
 mod network_state;
 mod origin;
 mod performance;
+mod redirect_owner;
 mod resource_timing;
 mod service_worker_api;
 mod service_worker_results;
 mod state;
 mod timers;
 mod xhr;
+
+pub(crate) use redirect_owner::WorkerRedirectOwner;
 
 use self::service_worker_api::*;
 pub(super) use self::service_worker_api::{
