@@ -355,6 +355,10 @@ fn outgoing_request_headers_preserve_explicit_cookies_for_curl_policy() {
             vec![
                 ("Cookie".to_owned(), "sid=server".to_owned()),
                 ("Cookie".to_owned(), "manual=1".to_owned()),
+                (
+                    "Accept-Encoding".to_owned(),
+                    crate::content_coding::default_accept_encoding(),
+                ),
             ]
         );
     }

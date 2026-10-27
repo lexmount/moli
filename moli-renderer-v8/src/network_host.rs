@@ -144,7 +144,7 @@ pub(crate) use self::image::{
     image_response_descriptor_from_parkable, image_response_origin_clean,
     start_image_element_resource_fetch, start_scanned_image_preload,
 };
-pub(in crate::network_host) use self::js_values::{defined_object_string_property, v8_json_parse};
+pub(in crate::network_host) use self::js_values::defined_object_string_property;
 pub(crate) use self::media::{
     MediaElementResourceFetchStart, media_response_status_is_successful,
     start_media_element_resource_fetch,
