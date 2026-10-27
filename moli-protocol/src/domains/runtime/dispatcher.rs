@@ -26,12 +26,11 @@ use moli_page_types::RendererInspectorResponseDelivery;
 use crate::conn::{
     AutomationCommandDispatchOutcome, AutomationExecutionOutput, BackgroundCommandResponsePayload,
     BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent, BidiChannelListenerResidence,
-    BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection, CdpRendererCommandAccess,
-    CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute, ClaimedPendingInspectorAwait,
-    Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
-    CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
-    CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
-    CompletedServiceWorkerRuntimeProtocolMessageDispatch,
+    BidiChannelPageOwner, CdpConnection, CdpRendererCommandAccess, CdpRendererCommandPolicy,
+    CdpSchedulerEvent, CdpSessionRoute, ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope,
+    CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
+    CompletedRuntimeChildDefaultContextLookupDispatch, CompletedRuntimeEnableEventsDispatch,
+    CompletedRuntimeProtocolMessageDispatch, CompletedServiceWorkerRuntimeProtocolMessageDispatch,
     CompletedSharedWorkerRuntimeProtocolMessageDispatch, DuplicatePendingRendererCommand,
     InspectorCommandDispatch, ParsedCdpCommand, PendingBidiChannelListener,
     PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
@@ -1666,145 +1665,184 @@ struct BidiNodeSharedReferencePath {
     shared_id: String,
 }
 
+pub(crate) struct PreparedBidiPreloadChannelListeners {
+    inventory: crate::conn::PreparedRuntimeRealmInventory,
+    owner: BidiChannelPageOwner,
+    target: DevToolsRuntimeTarget,
+    handoffs: Vec<BidiPreloadChannelHandoff>,
+    execution_context_id: i64,
+}
+
+impl PreparedBidiPreloadChannelListeners {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        execution_context_id: i64,
+    ) -> Option<Self> {
+        let handoffs = conn.target_owner_bidi_channel_preload_handoffs_for_owner(owner);
+        if handoffs.is_empty() {
+            return None;
+        }
+        let target_id = conn
+            .target_owner_identity_for_owner(owner)
+            .and_then(|(_, target)| target)
+            .map(DevToolsTargetId::from);
+        let route = owner.resolve_route(conn).or_else(|| {
+            target_id
+                .as_ref()
+                .and_then(|id| conn.target_session_route_for_target_id(id.as_str()))
+        })?;
+        let target = DevToolsRuntimeTarget {
+            route,
+            execution_context_id: Some(execution_context_id),
+            window_context_id: target_id,
+        };
+        let owner = bidi_channel_page_owner_for_runtime_target(conn, &target, owner)?;
+        if !owner.can_start_listener(conn) {
+            return None;
+        }
+        // Freeze and admit the inventory on this original Page in the same
+        // finite operation. run() must not query a successor Page after a wait.
+        let inventory =
+            crate::conn::PreparedRuntimeRealmInventory::prepare(conn, owner.command_owner())
+                .ok()?;
+        Some(Self {
+            inventory,
+            owner,
+            target,
+            handoffs,
+            execution_context_id,
+        })
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) {
+        let mut materialized = crate::conn::BidiChannelOutput {
+            target_id: self.owner.target_id().map(str::to_owned),
+            ..crate::conn::BidiChannelOutput::default()
+        };
+        self.run_inner(driver, &mut materialized).await;
+        // These internal observations follow their own original renderer
+        // position. Turning them into a whole-command predecessor would pull
+        // an independent navigation commit in front of its response metadata.
+        match driver
+            .with_state(move |state| state.publish_bidi_channel_output(materialized))
+            .await
+        {
+            Ok(events) => out.extend(events),
+            Err(error) => tracing::debug!(?error, "BiDi preload output owner closed"),
+        }
+    }
+
+    async fn run_inner(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        materialized: &mut crate::conn::BidiChannelOutput,
+    ) {
+        let realm = self
+            .inventory
+            .run_collecting_renderer_predecessor(driver, &mut materialized.predecessor)
+            .await
+            .ok()
+            .and_then(|realms| {
+                realms
+                    .into_iter()
+                    .find(|realm| realm.context_id == Some(self.execution_context_id))
+            });
+        let realm_id = realm.as_ref().and_then(|realm| realm.realm_id.clone());
+        let listener_target_id = realm
+            .as_ref()
+            .and_then(|realm| realm.frame_id.clone())
+            .map(|id| DevToolsTargetId::from(id.into_string()))
+            .or_else(|| self.target.window_context_id.clone());
+        for handoff in self.handoffs {
+            let owner = self.owner.clone();
+            let lease = match driver
+                .with_state(move |state| state.allocate_bidi_channel_object_group(owner))
+                .await
+            {
+                Ok(Some(lease)) => lease,
+                Ok(None) | Err(_) => return,
+            };
+            let proxy_handle = match bidi_preload_channel_proxy_handle_using(
+                driver,
+                self.owner.clone(),
+                &self.target,
+                realm_id.as_ref(),
+                handoff.handoff_id.as_str(),
+                handoff.token.as_str(),
+                lease.name(),
+                &mut materialized.predecessor,
+            )
+            .await
+            {
+                Ok(Some(handle)) => handle,
+                Ok(None) => {
+                    tracing::debug!(handoff_id = %handoff.handoff_id, channel = %handoff.channel, "BiDi preload channel handoff had no proxy handle");
+                    continue;
+                }
+                Err(error) => {
+                    tracing::debug!(?error, handoff_id = %handoff.handoff_id, "failed to materialize BiDi preload channel proxy handle");
+                    continue;
+                }
+            };
+            let properties = match bidi_preload_channel_properties_from_handoff(&handoff) {
+                Ok(properties) => properties,
+                Err(error) => {
+                    tracing::debug!(?error, handoff_id = %handoff.handoff_id, "skipping invalid BiDi preload channel handoff");
+                    continue;
+                }
+            };
+            let Some(listener) = PendingBidiChannelListener::new(
+                listener_target_id.clone(),
+                realm_id.clone(),
+                proxy_handle,
+                lease.name().to_owned(),
+                properties,
+            ) else {
+                tracing::debug!(handoff_id = %handoff.handoff_id, "skipping BiDi preload channel listener without target or realm");
+                continue;
+            };
+            match driver
+                .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
+                .await
+            {
+                Ok(Some(prepared)) => {
+                    let output = prepared.run(driver).await;
+                    materialized.append(output);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(?error, "BiDi preload channel listener owner closed");
+                    return;
+                }
+            }
+        }
+    }
+}
+
 pub(crate) async fn start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     execution_context_id: i64,
     out: &mut Vec<BackgroundProtocolEvent>,
 ) {
-    let session_id = owner.session_id();
-    let handoff_owners = conn.target_owner_bidi_channel_preload_handoffs_for_owner(owner);
-    if handoff_owners.is_empty() {
-        return;
-    }
-    let target_id = conn
-        .target_owner_identity_for_owner(owner)
-        .and_then(|(_, target_id)| target_id)
-        .map(DevToolsTargetId::from);
-    let route = owner.resolve_route(conn).or_else(|| {
-        target_id
-            .as_ref()
-            .and_then(|target_id| conn.target_session_route_for_target_id(target_id.as_str()))
-    });
-    let Some(route) = route else {
-        return;
-    };
-    let target = DevToolsRuntimeTarget {
-        route,
-        execution_context_id: Some(execution_context_id),
-        window_context_id: target_id,
-    };
-    let Some(listener_owner) = bidi_channel_page_owner_for_runtime_target(conn, &target, owner)
-    else {
-        return;
-    };
-    let realm = devtools_runtime_realm_for_target_async(conn, &target).await;
-    let realm_id = realm.as_ref().and_then(|realm| realm.realm_id.clone());
-    let listener_target_id = realm
-        .as_ref()
-        .and_then(|realm| realm.frame_id.clone())
-        .map(|frame_id| DevToolsTargetId::from(frame_id.into_string()))
-        .or_else(|| target.window_context_id.clone());
-    for handoff_owner in handoff_owners {
-        let channel_object_group = conn.next_bidi_channel_object_group();
-        let proxy_handle = match bidi_preload_channel_proxy_handle_async(
-            conn,
-            &target,
-            realm_id.as_ref(),
-            handoff_owner.handoff_id.as_str(),
-            handoff_owner.token.as_str(),
-            &channel_object_group,
-        )
+    let mut driver = crate::conn::ProtocolWorkflowDriver::inline(conn);
+    let owner = owner.clone();
+    match driver
+        .with_state(move |state| {
+            state.prepare_bidi_preload_channel_listeners(owner, execution_context_id)
+        })
         .await
-        {
-            Ok(Some(handle)) => handle,
-            Ok(None) => {
-                tracing::debug!(
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "BiDi preload channel handoff had no proxy handle"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "failed to materialize BiDi preload channel proxy handle"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-        };
-        let properties = match bidi_preload_channel_properties_from_handoff(&handoff_owner) {
-            Ok(properties) => properties,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "skipping invalid BiDi preload channel handoff"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-        };
-        let listener = match PendingBidiChannelListener::new(
-            listener_target_id.clone(),
-            realm_id.clone(),
-            proxy_handle,
-            channel_object_group.clone(),
-            properties,
-        ) {
-            Some(listener) => listener,
-            None => {
-                tracing::debug!(
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "skipping BiDi preload channel listener without target or realm"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-        };
-        conn.complete_bidi_channel_owner_action_with_background_events_async(
-            BidiChannelOwnerAction::start_listener(BidiChannelListenerResidence::new(
-                listener_owner.clone(),
-                listener,
-            )),
-            out,
-        )
-        .await;
+    {
+        Ok(Some(prepared)) => prepared.run(&mut driver, out).await,
+        Ok(None) => {}
+        Err(error) => {
+            tracing::debug!(?error, "BiDi preload owner unavailable");
+        }
     }
 }
 

@@ -133,19 +133,21 @@ impl ProtocolSchedulerResidence {
         )
     }
 
-    pub(super) fn is_ready_to_complete(&self) -> bool {
+    pub(super) fn is_ready_to_complete(&self, conn: &moli_protocol::CdpConnection) -> bool {
         match self {
             Self::RendererOutputPublication(work) => {
                 work.client_turn_predecessor == ClientTurnPredecessor::Satisfied
                     && work.load_predecessors.is_empty()
             }
             Self::ProtocolWork {
+                work,
                 client_turn_predecessor,
                 load_predecessors,
                 ..
             } => {
                 *client_turn_predecessor == ClientTurnPredecessor::Satisfied
                     && load_predecessors.is_empty()
+                    && work.renderer_output_predecessor_is_projected(conn)
             }
         }
     }
@@ -378,10 +380,13 @@ impl SchedulerQueues {
         }
     }
 
-    pub(super) fn should_complete_next_residence(&self) -> bool {
+    pub(super) fn should_complete_next_residence(
+        &self,
+        conn: &moli_protocol::CdpConnection,
+    ) -> bool {
         self.protocol_residences
             .front()
-            .is_some_and(ProtocolSchedulerResidence::is_ready_to_complete)
+            .is_some_and(|residence| residence.is_ready_to_complete(conn))
     }
 
     pub(super) fn pop_next_protocol_residence(&mut self) -> Option<ProtocolSchedulerResidence> {

@@ -431,12 +431,12 @@ pub(super) fn bidi_script_message_ownership_from_value(
 
 pub(super) fn bidi_script_message_ownership_from_str(
     value: Option<&str>,
-) -> Result<DevToolsResultOwnership, String> {
+) -> Result<DevToolsResultOwnership, InvalidBidiChannelArgument> {
     match value {
         None => Ok(DevToolsResultOwnership::None),
         Some("root") => Ok(DevToolsResultOwnership::Root),
         Some("none") => Ok(DevToolsResultOwnership::None),
-        Some(_) => Err("InvalidChannelArgument".to_owned()),
+        Some(_) => Err(InvalidBidiChannelArgument),
     }
 }
 

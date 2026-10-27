@@ -369,6 +369,11 @@ impl CdpConnection {
         &mut self,
         mut response: RuntimeInspectorResponseReady,
     ) -> Option<RuntimeInspectorResponseReady> {
+        // Validate the original lifetime before looking up a call by ids.
+        // Literal ids and host-local counters can match a rebound session.
+        if !response.bidi_channel_owner_is_current(self) {
+            return None;
+        }
         if response.has_bound_renderer_call_id() {
             return Some(response);
         }
@@ -611,31 +616,38 @@ impl CdpConnection {
     pub(super) fn start_or_enqueue_registered_runtime_inspector_response_ready(
         &self,
         command_id: u64,
-        owner: &CommandOwnerScope,
+        owner: &BidiChannelPageOwner,
         mut response_rx: RuntimeInspectorResponseReceiver,
     ) -> bool {
         let Some(response_tx) = self.runtime_inspector_response_ready_sender() else {
             return false;
         };
-        let owner = owner.clone();
+        let page_owner = owner.clone();
+        let owner = page_owner.command_owner().clone();
         // Keep both completion timings on the same response-ready lane. If the
         // renderer callback has already completed, enqueue it immediately; if
         // not, spawn a waiter that will enqueue the same event later.
         match response_rx.try_recv() {
             Ok(completion) => {
-                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
-                    command_id,
-                    &owner,
-                    Ok(completion),
-                ));
+                let _ = response_tx.send(
+                    crate::conn::RuntimeInspectorResponseReady::for_owner(
+                        command_id,
+                        &owner,
+                        Ok(completion),
+                    )
+                    .bind_bidi_channel_owner(page_owner),
+                );
                 return true;
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
-                    command_id,
-                    &owner,
-                    Err("RuntimeInspectorResponseCanceled".to_owned()),
-                ));
+                let _ = response_tx.send(
+                    crate::conn::RuntimeInspectorResponseReady::for_owner(
+                        command_id,
+                        &owner,
+                        Err("RuntimeInspectorResponseCanceled".to_owned()),
+                    )
+                    .bind_bidi_channel_owner(page_owner),
+                );
                 return true;
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
@@ -644,9 +656,10 @@ impl CdpConnection {
             let response = response_rx
                 .await
                 .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned());
-            let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
-                command_id, &owner, response,
-            ));
+            let _ = response_tx.send(
+                crate::conn::RuntimeInspectorResponseReady::for_owner(command_id, &owner, response)
+                    .bind_bidi_channel_owner(page_owner),
+            );
         });
         true
     }

@@ -9,6 +9,25 @@ mod task;
 pub use task::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
 
 impl CdpConnection {
+    pub(crate) fn publish_renderer_fenced_protocol_output(
+        &mut self,
+        events: Vec<super::BackgroundProtocolEvent>,
+        predecessor: moli_core::RendererOutputFence,
+        target_id: Option<String>,
+    ) {
+        let sequence = self
+            .scheduler_state
+            .allocate_protocol_work_publish_sequence();
+        let work = crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
+            sequence,
+            events,
+            predecessor,
+            target_id,
+        );
+        self.scheduler_state
+            .push_scheduler_event(super::CdpSchedulerEvent::ProtocolWorkPublished { work });
+    }
+
     pub(crate) fn apply_renderer_output_stream_control(
         &mut self,
         control: moli_core::RendererOutputStreamControl,
@@ -160,6 +179,17 @@ impl CdpConnection {
         work: crate::domains::activity::ProtocolSchedulerWork,
     ) -> CdpTurnOutcome {
         match work.into_ready() {
+            ReadyProtocolSchedulerWork::RendererFencedOutput(output) => {
+                assert!(
+                    self.renderer_output_cursor_is_projected(output.predecessor.cursor()),
+                    "materialized protocol output cannot cross its concrete renderer predecessor"
+                );
+                CdpTurnOutcome::new_with_protocol_events(
+                    output.events,
+                    self.take_scheduler_events(),
+                )
+            }
+
             ReadyProtocolSchedulerWork::ProtocolObservation(work) => {
                 CdpTurnOutcome::new_with_protocol_events(
                     work.into_background_events(self),

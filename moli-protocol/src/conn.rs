@@ -39,6 +39,10 @@ pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 #[error("NoDocumentLoaded")]
 pub(crate) struct NoDocumentLoaded;
 
+#[derive(Debug, thiserror::Error)]
+#[error("Navigation is changing the document")]
+pub(crate) struct DocumentNavigationInProgress;
+
 mod activity_source;
 mod automation_command;
 mod bidi_channel_work;
@@ -583,13 +587,16 @@ pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
+#[cfg(test)]
+pub(crate) use runtime_eval::dispatch_runtime_helper_using;
 pub(crate) use runtime_eval::{
-    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, CompletedSessionWorkerCleanup,
-    PreparedRendererNavigationFinish, PreparedRuntimeHelper, PreparedRuntimeRealmInventory,
-    RuntimeBindingCallEvent, RuntimeEnableEventsReplay, RuntimeEnableReplayEvent,
-    RuntimeHelperIdentity, SessionWorkerCleanup, dispatch_runtime_helper_using,
-    renderer_command_turn_frontend_protocol_response, runtime_realm_inventory_using,
-    runtime_remote_object_ids_in_map,
+    BidiChannelDispatchIdentity, BidiChannelDispatchOutput, BidiChannelObjectGroupLease,
+    BidiChannelOutput, ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner,
+    CompletedSessionWorkerCleanup, PreparedBidiChannelAction, PreparedRendererNavigationFinish,
+    PreparedRuntimeHelper, PreparedRuntimeRealmInventory, RuntimeBindingCallEvent,
+    RuntimeEnableEventsReplay, RuntimeEnableReplayEvent, RuntimeHelperIdentity,
+    SessionWorkerCleanup, renderer_command_turn_frontend_protocol_response,
+    runtime_realm_inventory_using, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -1874,7 +1881,7 @@ impl CdpConnection {
     ) -> Result<()> {
         anyhow::ensure!(
             !self.has_pending_document_navigation_for_owner(owner),
-            "Navigation is changing the document"
+            DocumentNavigationInProgress
         );
         Ok(())
     }

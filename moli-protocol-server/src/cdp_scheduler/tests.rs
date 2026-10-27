@@ -579,14 +579,14 @@ fn renderer_output_publication_waits_for_its_exact_load_predecessors() {
     );
 
     queues.satisfy_front_client_turn_predecessor();
-    assert!(!queues.should_complete_next_residence());
+    assert!(!queues.should_complete_next_residence(&moli_protocol::CdpConnection::new()));
     queues.satisfy_load_predecessor(second);
     assert!(
-        !queues.should_complete_next_residence(),
+        !queues.should_complete_next_residence(&moli_protocol::CdpConnection::new()),
         "an unrelated completed load must not release the frozen batch early"
     );
     queues.satisfy_load_predecessor(first);
-    assert!(queues.should_complete_next_residence());
+    assert!(queues.should_complete_next_residence(&moli_protocol::CdpConnection::new()));
 }
 
 #[test]

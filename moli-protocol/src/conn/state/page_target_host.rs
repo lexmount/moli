@@ -18,6 +18,13 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 #[derive(Clone, Debug)]
 pub(crate) struct PageTargetHostIdentity(Weak<()>);
 
+impl PartialEq for PageTargetHostIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other)
+    }
+}
+impl Eq for PageTargetHostIdentity {}
+
 impl PageTargetHostIdentity {
     pub(crate) fn matches(&self, other: &Self) -> bool {
         self.0.ptr_eq(&other.0)

@@ -88,6 +88,85 @@ impl<'a> ProtocolWorkflowDriver<'a> {
 }
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn publish_bidi_channel_output(
+        self,
+        output: super::BidiChannelOutput,
+    ) -> Vec<super::BackgroundProtocolEvent> {
+        output.publish(self.connection)
+    }
+
+    pub(crate) fn prepare_bidi_channel_proxy(
+        self,
+        owner: super::BidiChannelPageOwner,
+        params: serde_json::Value,
+    ) -> Result<Option<super::PreparedRuntimeHelper>> {
+        if !owner.can_start_listener(self.connection) {
+            return Ok(None);
+        }
+        // Admission and Native preparation are one finite operation, on the
+        // original Page rather than a possibly changed ambient Browser route.
+        self.prepare_runtime_helper(
+            owner.command_owner().clone(),
+            "Runtime.callFunctionOn",
+            params,
+        )
+        .map(Some)
+    }
+
+    pub(crate) fn prepare_bidi_preload_channel_listeners(
+        self,
+        owner: super::CommandOwnerScope,
+        execution_context_id: i64,
+    ) -> Option<crate::domains::runtime::PreparedBidiPreloadChannelListeners> {
+        crate::domains::runtime::PreparedBidiPreloadChannelListeners::prepare(
+            self.connection,
+            &owner,
+            execution_context_id,
+        )
+    }
+
+    pub(crate) fn prepare_bidi_channel_action(
+        self,
+        action: super::BidiChannelOwnerAction,
+    ) -> Option<super::PreparedBidiChannelAction> {
+        super::PreparedBidiChannelAction::prepare(self.connection, action)
+    }
+
+    pub(crate) fn allocate_bidi_channel_object_group(
+        self,
+        owner: super::BidiChannelPageOwner,
+    ) -> Option<super::BidiChannelObjectGroupLease> {
+        super::BidiChannelObjectGroupLease::allocate(self.connection, owner)
+    }
+
+    pub(crate) fn prepare_bidi_channel_listener(
+        self,
+        lease: super::BidiChannelObjectGroupLease,
+        listener: super::PendingBidiChannelListener,
+    ) -> Option<super::PreparedBidiChannelAction> {
+        super::PreparedBidiChannelAction::prepare_listener(self.connection, lease, listener)
+    }
+
+    pub(crate) fn cancel_bidi_channel_dispatch(self, identity: super::BidiChannelDispatchIdentity) {
+        identity.cancel(self.connection);
+    }
+
+    pub(crate) fn finish_bidi_channel_dispatch(
+        self,
+        identity: super::BidiChannelDispatchIdentity,
+        completed: super::CompletedRuntimeProtocolMessageDispatch,
+    ) -> Result<super::BidiChannelDispatchOutput> {
+        identity.finish_dispatch(self.connection, completed)
+    }
+
+    pub(crate) fn finish_bidi_channel_dispatch_response(
+        self,
+        identity: super::BidiChannelDispatchIdentity,
+        response: moli_core::RendererRuntimeInspectorAsyncCompletion,
+    ) -> Result<super::BidiChannelOutput> {
+        identity.finish_response(self.connection, response)
+    }
+
     pub(crate) fn prepare_runtime_helper(
         self,
         owner: super::CommandOwnerScope,

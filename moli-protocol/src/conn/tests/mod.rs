@@ -1819,3 +1819,44 @@ fn site_summary(
 ) -> CookieSiteDataSummary {
     CookieSiteDataSummary::new(name.to_owned(), cookie_count, persistent_cookie_count)
 }
+
+#[test]
+fn protocol_page_access_preserves_the_typed_navigation_gate_through_context() {
+    use crate::conn::{CommandOwnerScope, DocumentNavigationInProgress};
+    use anyhow::Context as _;
+
+    let mut conn = CdpConnection::default();
+    let mut browser = crate::conn::BrowserContext::new("BID-document-gate".into());
+    browser.set_active_target_id("TID-document-gate");
+    browser.attach_active_session("SID-document-gate");
+    conn.install_browser_context_fixture_for_test(browser);
+    let owner = CommandOwnerScope::for_session("SID-document-gate");
+    conn.start_document_navigation_for_owner(&owner, "LID-pending".into())
+        .unwrap();
+    let error = conn
+        .ensure_document_accessible_for_owner(&owner)
+        .context("checking protocol access")
+        .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<DocumentNavigationInProgress>()
+            .is_some()
+    );
+    let error = conn
+        .loaded_page_mut_for_protocol_access_for_owner(&owner)
+        .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<DocumentNavigationInProgress>()
+            .is_some()
+    );
+    assert_eq!(error.to_string(), "Navigation is changing the document");
+    let error = conn
+        .loaded_page_mut_for_protocol_access(Some("SID-document-gate"))
+        .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<DocumentNavigationInProgress>()
+            .is_some()
+    );
+}

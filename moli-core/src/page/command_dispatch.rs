@@ -61,6 +61,19 @@ pub enum CompletedRuntimeInspectorCommandDispatch {
     },
 }
 
+impl CompletedRuntimeInspectorCommandDispatch {
+    pub fn renderer_output_predecessor(&self) -> Option<RendererOutputFence> {
+        match self {
+            Self::Owner(completion) | Self::OwnerSessionResponse { completion, .. } => {
+                completion.renderer_output_predecessor()
+            }
+            Self::OwnerSessionErrorSettled(predecessor)
+            | Self::InspectorSessionResponse { predecessor, .. } => Some(predecessor.clone()),
+            Self::Inspector => None,
+        }
+    }
+}
+
 pub struct CompletedPageCommand {
     output: RendererCommandTurnOutput,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,

@@ -178,8 +178,15 @@ impl PartialEq for SessionClosed {
 }
 impl Eq for SessionClosed {}
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct SessionDisposalWait(watch::Receiver<bool>);
+
+impl PartialEq for SessionDisposalWait {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.same_channel(&other.0)
+    }
+}
+impl Eq for SessionDisposalWait {}
 
 impl SessionDisposalWait {
     pub(crate) fn is_closed(&self) -> bool {

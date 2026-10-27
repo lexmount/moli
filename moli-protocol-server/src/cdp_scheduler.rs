@@ -1752,7 +1752,7 @@ impl CdpScheduler {
                 self.queues.satisfy_front_client_turn_predecessor();
                 continue;
             }
-            if !self.queues.should_complete_next_residence()
+            if !self.queues.should_complete_next_residence(&self.conn)
                 || !self
                     .queues
                     .protocol_residences
@@ -1842,7 +1842,7 @@ impl CdpScheduler {
             let has_pending_target_predecessor = target_ids
                 .iter()
                 .any(|target_id| blocked_target_ids.contains(target_id));
-            let has_pending_scheduler_predecessor = !residence.is_ready_to_complete();
+            let has_pending_scheduler_predecessor = !residence.is_ready_to_complete(&self.conn);
             let pending_load_observation = matches!(
                 &residence,
                 ProtocolSchedulerResidence::ProtocolWork { work, .. }
@@ -1961,7 +1961,7 @@ impl CdpScheduler {
             }
             self.queues
                 .satisfy_checked_out_client_turn_predecessor(&mut residence);
-            if !residence.is_ready_to_complete() {
+            if !residence.is_ready_to_complete(&self.conn) {
                 if target_ids.is_empty() {
                     retained.push_back(residence);
                     retained.append(&mut snapshot);
@@ -2049,7 +2049,9 @@ impl CdpScheduler {
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
-            if !residence.should_yield_to_client_turn() && !residence.is_ready_to_complete() {
+            if !residence.should_yield_to_client_turn()
+                && !residence.is_ready_to_complete(&self.conn)
+            {
                 if target_ids.is_empty() {
                     return None;
                 }
@@ -2599,7 +2601,7 @@ impl CdpScheduler {
         if residence.should_yield_to_client_turn() {
             return ProtocolSchedulerStep::SatisfyClientTurnPredecessor;
         }
-        if residence.is_ready_to_complete() {
+        if residence.is_ready_to_complete(&self.conn) {
             return ProtocolSchedulerStep::CompleteReadyResidence;
         }
         ProtocolSchedulerStep::Wait

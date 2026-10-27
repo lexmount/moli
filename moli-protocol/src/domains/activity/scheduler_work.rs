@@ -1,6 +1,7 @@
 use std::fmt;
 
-use moli_core::RendererOutputTransportMessage;
+use crate::conn::BackgroundProtocolEvent;
+use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 
 use crate::{
     automation::AutomationContext,
@@ -76,7 +77,15 @@ pub struct ProtocolSchedulerWork {
     payload: ProtocolSchedulerWorkPayload,
 }
 
+#[derive(Debug)]
+pub(crate) struct RendererFencedProtocolOutput {
+    pub(crate) events: Vec<BackgroundProtocolEvent>,
+    pub(crate) predecessor: RendererOutputFence,
+    target_id: Option<String>,
+}
+
 enum ProtocolSchedulerWorkPayload {
+    RendererFencedOutput(RendererFencedProtocolOutput),
     ProtocolObservation(ProtocolOutputWork),
     MainDocumentLoadOwnerAction(Box<DeferredMainDocumentLoadCompletionActivity>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
@@ -93,6 +102,10 @@ impl fmt::Debug for ProtocolSchedulerWork {
             .field("publish_sequence", &self.publish_sequence)
             .field("kind", &self.kind());
         match &self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
+                debug.field("output", output);
+            }
+
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 debug.field("payload", output);
             }
@@ -144,6 +157,39 @@ impl fmt::Debug for ProtocolSchedulerWork {
 }
 
 impl ProtocolSchedulerWork {
+    pub(crate) fn renderer_fenced_output(
+        publish_sequence: ProtocolWorkPublishSequence,
+        events: Vec<BackgroundProtocolEvent>,
+        predecessor: RendererOutputFence,
+        target_id: Option<String>,
+    ) -> Self {
+        Self {
+            publish_sequence,
+            payload: ProtocolSchedulerWorkPayload::RendererFencedOutput(
+                RendererFencedProtocolOutput {
+                    events,
+                    predecessor,
+                    target_id,
+                },
+            ),
+        }
+    }
+
+    /// A materialized observation retains its original concrete renderer
+    /// predecessor. It becomes deliverable after projection, without another
+    /// Native wait or a second task registry.
+    pub fn renderer_output_predecessor_is_projected(&self, conn: &CdpConnection) -> bool {
+        self.renderer_output_predecessor()
+            .is_none_or(|fence| conn.renderer_output_cursor_is_projected(fence.cursor()))
+    }
+
+    pub fn renderer_output_predecessor(&self) -> Option<&RendererOutputFence> {
+        match &self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => Some(&output.predecessor),
+            _ => None,
+        }
+    }
+
     pub(crate) fn protocol_observation(
         publish_sequence: ProtocolWorkPublishSequence,
         output: ProtocolOutputWork,
@@ -222,7 +268,8 @@ impl ProtocolSchedulerWork {
 
     pub fn kind(&self) -> ProtocolSchedulerWorkKind {
         match &self.payload {
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_) => {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
+            | ProtocolSchedulerWorkPayload::ProtocolObservation(_) => {
                 ProtocolSchedulerWorkKind::ProtocolObservation
             }
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => {
@@ -254,7 +301,8 @@ impl ProtocolSchedulerWork {
     /// when its exact lifecycle observer has published a typed terminal.
     pub fn is_ready(&self) -> bool {
         match &self.payload {
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_) => true,
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
+            | ProtocolSchedulerWorkPayload::ProtocolObservation(_) => true,
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 completion.has_terminal_lifecycle_observation()
             }
@@ -282,7 +330,8 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
                 action.is_command_followup()
             }
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
+            | ProtocolSchedulerWorkPayload::ProtocolObservation(_)
             | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => false,
         }
@@ -290,6 +339,9 @@ impl ProtocolSchedulerWork {
 
     pub fn navigation_gate_target_id(&self) -> Option<&str> {
         match &self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
+                output.target_id.as_deref()
+            }
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 output.navigation_gate_target_id()
             }
@@ -327,7 +379,8 @@ impl ProtocolSchedulerWork {
             {
                 ProtocolNavigationDependency::ReplacesPendingLoad
             }
-            ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
+            | ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => {
                 ProtocolNavigationDependency::Independent
             }
             _ => ProtocolNavigationDependency::AfterLoad,
@@ -431,7 +484,8 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 PendingDeferredMainDocumentLoadCompletion::new((*completion).start_scheduler_step())
             }
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
+            | ProtocolSchedulerWorkPayload::ProtocolObservation(_)
             | ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
             | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_)
@@ -482,6 +536,7 @@ impl ProtocolSchedulerWork {
 }
 
 pub(crate) enum ReadyProtocolSchedulerWork {
+    RendererFencedOutput(RendererFencedProtocolOutput),
     ProtocolObservation(ProtocolOutputWork),
     MainDocumentLoadOwnerAction(
         Box<super::main_document::CompletedDeferredMainDocumentLoadCompletionActivity>,
@@ -496,6 +551,9 @@ pub(crate) enum ReadyProtocolSchedulerWork {
 impl ProtocolSchedulerWork {
     pub(crate) fn into_ready(self) -> ReadyProtocolSchedulerWork {
         match self.payload {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
+                ReadyProtocolSchedulerWork::RendererFencedOutput(output)
+            }
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 ReadyProtocolSchedulerWork::ProtocolObservation(output)
             }

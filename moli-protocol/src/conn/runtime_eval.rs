@@ -498,6 +498,12 @@ pub struct CompletedRuntimeEnableEventsDispatch {
     completion: moli_core::page::CompletedPageCommand,
 }
 
+impl CompletedRuntimeProtocolMessageDispatch {
+    pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.completion.renderer_output_predecessor()
+    }
+}
+
 impl CompletedRuntimeEnableEventsDispatch {
     pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         self.completion.renderer_output_predecessor()
@@ -889,10 +895,16 @@ fn bidi_channel_listener_call_function_json(
 mod page_scope;
 use page_scope::RuntimePageScope;
 
-mod helper_workflow;
-pub(crate) use helper_workflow::{
-    PreparedRuntimeHelper, RuntimeHelperIdentity, dispatch_runtime_helper_using,
+mod bidi_workflow;
+pub(crate) use bidi_workflow::{
+    BidiChannelDispatchIdentity, BidiChannelDispatchOutput, BidiChannelObjectGroupLease,
+    BidiChannelOutput, PreparedBidiChannelAction,
 };
+
+mod helper_workflow;
+#[cfg(test)]
+pub(crate) use helper_workflow::dispatch_runtime_helper_using;
+pub(crate) use helper_workflow::{PreparedRuntimeHelper, RuntimeHelperIdentity};
 mod execution_contexts;
 pub(crate) use execution_contexts::{PreparedRuntimeRealmInventory, runtime_realm_inventory_using};
 mod inspector_awaits;

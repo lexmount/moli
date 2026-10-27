@@ -36,6 +36,7 @@ pub struct RuntimeInspectorResponseReady {
     frontend_command_id: FrontendCommandId,
     session_key: DevToolsSessionKey,
     owner: Option<CommandOwnerScope>,
+    bidi_channel_owner: Option<Box<crate::conn::BidiChannelPageOwner>>,
     expected_renderer_call_id: Option<RendererCallId>,
     response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
 }
@@ -50,6 +51,7 @@ impl RuntimeInspectorResponseReady {
             frontend_command_id: FrontendCommandId::new(command_id),
             session_key: DevToolsSessionKey::from_wire_session_id(session_id),
             owner: None,
+            bidi_channel_owner: None,
             expected_renderer_call_id: None,
             response,
         }
@@ -64,9 +66,29 @@ impl RuntimeInspectorResponseReady {
             frontend_command_id: FrontendCommandId::new(command_id),
             session_key: DevToolsSessionKey::from_wire_session_id(owner.session_id()),
             owner: Some(owner.clone()),
+            bidi_channel_owner: None,
             expected_renderer_call_id: None,
             response,
         }
+    }
+
+    pub(crate) fn bind_bidi_channel_owner(
+        mut self,
+        owner: crate::conn::BidiChannelPageOwner,
+    ) -> Self {
+        assert_eq!(
+            self.owner.as_ref(),
+            Some(owner.command_owner()),
+            "a deferred channel reply retains its original owner"
+        );
+        self.bidi_channel_owner = Some(Box::new(owner));
+        self
+    }
+
+    pub(crate) fn bidi_channel_owner_is_current(&self, conn: &CdpConnection) -> bool {
+        self.bidi_channel_owner
+            .as_ref()
+            .is_none_or(|owner| owner.is_current(conn))
     }
 
     pub fn command_id(&self) -> u64 {

@@ -142,7 +142,8 @@ pub(in crate::domains) use activity::{
 pub(in crate::domains) use dispatcher::replay_shared_worker_runtime_bindings_for_session_async;
 pub(crate) use dispatcher::{
     BidiPreloadFunctionDeclaration, CompletedRuntimeCommandDispatch, PendingRuntimeCommandDispatch,
-    RuntimeCommandTaskStep, bidi_preload_function_declaration_source,
+    PreparedBidiPreloadChannelListeners, RuntimeCommandTaskStep,
+    bidi_preload_function_declaration_source,
     complete_pending_runtime_command_at_response_boundary,
     devtools_deep_serialization_options_json,
     execute_devtools_runtime_command_async_with_protocol_events,

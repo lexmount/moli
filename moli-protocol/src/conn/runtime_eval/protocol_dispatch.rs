@@ -583,32 +583,21 @@ impl CdpConnection {
         action: BidiChannelOwnerAction,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) {
-        let (owner, body) = action.into_parts();
-        if !owner.is_current(self) {
-            tracing::debug!(
-                session_id = owner.session_id(),
-                action = ?body,
-                "discarding stale BiDi channel owner action"
-            );
-            return;
-        }
-        let command_owner = owner.command_owner().clone();
-        match body {
-            BidiChannelOwnerActionBody::StartListener(listener) => {
-                self.start_bidi_channel_listener_once_for_owner_with_background_events_async(
-                    &command_owner,
-                    BidiChannelListenerResidence::from_boxed(owner, listener),
-                    background_events,
-                )
-                .await;
+        let mut driver = crate::conn::ProtocolWorkflowDriver::inline(self);
+        match driver
+            .with_state(move |state| state.prepare_bidi_channel_action(action))
+            .await
+        {
+            Ok(Some(prepared)) => {
+                let output = prepared.run(&mut driver).await;
+                driver
+                    .with_state(move |state| state.publish_bidi_channel_output(output))
+                    .await
+                    .map(|events| background_events.extend(events))
+                    .ok();
             }
-            BidiChannelOwnerActionBody::ReleaseObjectGroup(object_group) => {
-                self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                    &command_owner,
-                    &object_group,
-                )
-                .await;
-            }
+            Ok(None) => {}
+            Err(error) => tracing::debug!(?error, "BiDi channel owner unavailable"),
         }
     }
 
@@ -617,289 +606,13 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         object_group: &str,
     ) {
-        let command_id = self.next_internal_runtime_command_id();
-        let raw_json = json!({
-            "id": command_id,
-            "method": "Runtime.releaseObjectGroup",
-            "params": { "objectGroup": object_group }
-        })
-        .to_string();
-        let descriptor = match RendererCommandDescriptor::from_synthesized_payload(raw_json) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                tracing::debug!(%error, object_group, "failed to prepare BiDi object group release");
-                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
-                return;
-            }
-        };
-        let pending = match self
-            .start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
-                owner,
-                "releaseObjectGroup",
-                descriptor,
-                command_id,
-            ) {
-            Ok(pending) => pending,
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    object_group,
-                    "failed to start BiDi channel object group release"
-                );
-                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
-                return;
-            }
-        };
-        let mut completed = match pending.wait().await {
-            Ok(completed) => completed,
-            Err(error) => {
-                self.forget_pending_inspector_await_for_owner(command_id, owner);
-                tracing::debug!(
-                    %error,
-                    object_group,
-                    "BiDi channel object group release dispatch failed"
-                );
-                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
-                return;
-            }
-        };
-        let mut renderer_response_rx = completed.take_deferred_response_receiver();
-        let messages = match self.complete_runtime_protocol_message(completed) {
-            Ok(messages) => messages,
-            Err(error) => {
-                self.forget_pending_inspector_await_for_owner(command_id, owner);
-                tracing::debug!(
-                    %error,
-                    object_group,
-                    "BiDi channel object group release completion failed"
-                );
-                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
-                return;
-            }
-        };
-        let mut release_events = Vec::new();
-        let mut release_post_response_events = Vec::new();
-        let response_flush = CommandResponseFlushContext::default();
-        let release_response_seen = if let Some(messages) = messages {
-            self.route_renderer_command_turn_output_for_owner_into(
-                messages,
-                Some(command_id),
-                owner,
-                &response_flush,
-                &mut release_events,
-                &mut release_post_response_events,
-            )
-            .0
-        } else {
-            false
-        };
-        if !release_response_seen {
-            tracing::debug!(
-                command_id,
-                "internal object group release inspector response was not routed as current command"
-            );
-        }
-        if release_response_seen {
-            renderer_response_rx.take();
-        }
-        release_events.extend(release_post_response_events);
-        if let Some(renderer_response_rx) = renderer_response_rx {
-            let response = RuntimeInspectorResponseReady::for_owner(
-                command_id,
-                owner,
-                renderer_response_rx
-                    .await
-                    .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
-            );
-            if let Some(response) = self.resolve_runtime_inspector_response_ready(response) {
-                let (_, output, renderer_output_predecessor) =
-                    response.into_renderer_command_output();
-                assert!(
-                    renderer_output_predecessor.is_none(),
-                    "internal object-group cleanup cannot discard a concrete output cursor"
-                );
-                let release_response_seen = self
-                    .route_renderer_runtime_command_output_for_owner_into(
-                        output,
-                        Some(command_id),
-                        owner,
-                        &mut release_events,
-                    );
-                if !release_response_seen {
-                    tracing::debug!(
-                        command_id,
-                        "internal object group release deferred inspector response was not routed as current command"
-                    );
-                }
-            }
-        }
-        self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
-    }
-
-    pub(super) async fn start_bidi_channel_listener_once_for_owner_with_background_events_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        residence: BidiChannelListenerResidence,
-        background_events: &mut Vec<BackgroundProtocolEvent>,
-    ) {
-        let listener = residence.listener();
-        if self.runtime_inspector_response_ready_sender().is_none() {
-            self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                owner,
-                listener.channel_object_group(),
-            )
-            .await;
+        let Some(owner) = BidiChannelPageOwner::capture_for_owner(self, owner.clone()) else {
             return;
-        }
-        let command_id = self.next_internal_runtime_command_id();
-        let raw_json = bidi_channel_listener_call_function_json(command_id, listener);
-        let descriptor = match RendererCommandDescriptor::from_synthesized_payload(raw_json) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                tracing::debug!(%error, "failed to prepare BiDi channel listener command");
-                self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                    owner,
-                    listener.channel_object_group(),
-                )
-                .await;
-                return;
-            }
         };
-        let pending = match self
-            .start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
-                owner,
-                "callFunctionOn",
-                descriptor,
-                command_id,
-            ) {
-            Ok(pending) => pending,
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    channel = %listener.properties().channel,
-                    "failed to start BiDi channel listener"
-                );
-                self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                    owner,
-                    listener.channel_object_group(),
-                )
-                .await;
-                return;
-            }
-        };
-        self.register_pending_bidi_channel_listener_for_owner(command_id, owner, residence);
-        let mut completed = match pending.wait().await {
-            Ok(completed) => completed,
-            Err(error) => {
-                let object_group = self
-                    .remove_pending_inspector_await_for_cancellation_for_owner(command_id, owner)
-                    .and_then(|entry| {
-                        entry
-                            .bidi_channel_listener()
-                            .map(|listener| listener.channel_object_group().to_owned())
-                    });
-                tracing::debug!(%error, "BiDi channel listener dispatch failed");
-                if let Some(object_group) = object_group {
-                    self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                        owner,
-                        &object_group,
-                    )
-                    .await;
-                }
-                return;
-            }
-        };
-        let mut renderer_response_rx = completed.take_deferred_response_receiver();
-        let messages = match self.complete_runtime_protocol_message(completed) {
-            Ok(messages) => messages,
-            Err(error) => {
-                let object_group = self
-                    .remove_pending_inspector_await_for_cancellation_for_owner(command_id, owner)
-                    .and_then(|entry| {
-                        entry
-                            .bidi_channel_listener()
-                            .map(|listener| listener.channel_object_group().to_owned())
-                    });
-                tracing::debug!(%error, "BiDi channel listener completion failed");
-                if let Some(object_group) = object_group {
-                    self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                        owner,
-                        &object_group,
-                    )
-                    .await;
-                }
-                return;
-            }
-        };
-        let mut listener_events = Vec::new();
-        let mut listener_post_response_events = Vec::new();
-        let response_flush = CommandResponseFlushContext::default();
-        let listener_response_seen = if let Some(messages) = messages {
-            self.route_renderer_command_turn_output_for_owner_into(
-                messages,
-                Some(command_id),
-                owner,
-                &response_flush,
-                &mut listener_events,
-                &mut listener_post_response_events,
-            )
-            .0
-        } else {
-            false
-        };
-        if !listener_response_seen {
-            tracing::debug!(
-                command_id,
-                "BiDi channel listener inspector response was consumed before command response routing"
-            );
-        }
-        if listener_response_seen {
-            renderer_response_rx.take();
-        }
-        listener_events.extend(listener_post_response_events);
-        let non_listener_response_count = listener_events
-            .iter()
-            .filter(|event| event.protocol_message_id().is_some())
-            .count();
-        if non_listener_response_count > 0 {
-            tracing::debug!(
-                messages = non_listener_response_count,
-                "BiDi channel listener produced non-listener protocol messages on background route"
-            );
-        }
-        background_events.extend(
-            listener_events
-                .into_iter()
-                .filter(|event| event.protocol_message_id().is_none()),
-        );
-        if let Some(renderer_response_rx) = renderer_response_rx {
-            // Listener responses use the same response-ready lane whether the
-            // oneshot is already completed or still pending.
-            if self.start_or_enqueue_registered_runtime_inspector_response_ready(
-                command_id,
-                owner,
-                renderer_response_rx,
-            ) {
-                return;
-            }
-            let object_group = self
-                .remove_pending_inspector_await_for_cancellation_for_owner(command_id, owner)
-                .and_then(|entry| {
-                    entry
-                        .bidi_channel_listener()
-                        .map(|listener| listener.channel_object_group().to_owned())
-                });
-            tracing::debug!(
-                channel_object_group = object_group.as_deref(),
-                "BiDi channel listener started without scheduler runtime response hook"
-            );
-            if let Some(object_group) = object_group {
-                self.release_bidi_channel_object_group_for_owner_best_effort_async(
-                    owner,
-                    &object_group,
-                )
-                .await;
-            }
-        }
+        self.complete_bidi_channel_owner_action_with_background_events_async(
+            BidiChannelOwnerAction::release_object_group(owner, object_group),
+            &mut Vec::new(),
+        )
+        .await;
     }
 }

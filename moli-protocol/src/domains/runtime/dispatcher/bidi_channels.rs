@@ -1,5 +1,16 @@
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+#[error("InvalidChannelArgument")]
+pub(super) struct InvalidBidiChannelArgument;
+
+#[derive(Debug, thiserror::Error)]
+#[error("BiDi preload channel Inspector error {code}: {message}")]
+struct BidiPreloadChannelInspectorError {
+    code: i32,
+    message: String,
+}
+
 pub(super) fn bidi_call_function_value_at_path_mut<'a>(
     command: &'a mut DevToolsCallFunctionCommand,
     root: BidiCallFunctionValueRoot,
@@ -107,39 +118,25 @@ pub(super) fn bidi_channel_properties_from_local_value(
             .to_owned(),
         ownership: bidi_script_message_ownership_from_value(channel.get("ownership"))?,
         serialization_options: match channel.get("serializationOptions") {
-            Some(value) => Some(bidi_script_message_serialization_options_from_value(value)?),
+            Some(value) => Some(
+                bidi_script_message_serialization_options_from_value(value)
+                    .map_err(|error| error.to_string())?,
+            ),
             None => None,
         },
     })
 }
 
-pub(super) async fn bidi_preload_channel_proxy_handle_async(
-    conn: &mut CdpConnection,
-    target: &DevToolsRuntimeTarget,
-    realm_id: Option<&DevToolsRealmId>,
-    handoff_id: &str,
-    token: &str,
-    channel_object_group: &str,
-) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
-    bidi_preload_channel_proxy_handle_using(
-        &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-        target,
-        realm_id,
-        handoff_id,
-        token,
-        channel_object_group,
-    )
-    .await
-}
-
 pub(super) async fn bidi_preload_channel_proxy_handle_using(
     driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    owner: BidiChannelPageOwner,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
     handoff_id: &str,
     token: &str,
     channel_object_group: &str,
-) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
+    predecessor: &mut Option<moli_core::RendererOutputFence>,
+) -> Result<Option<DevToolsRemoteHandleId>> {
     let mut params = json!({
         "functionDeclaration": bidi_preload_channel_proxy_handle_source(),
         "arguments": [{"value":handoff_id},{"value":token}],
@@ -153,18 +150,21 @@ pub(super) async fn bidi_preload_channel_proxy_handle_using(
     } else if let Some(realm_id) = realm_id {
         params["uniqueContextId"] = json!(realm_id.as_str());
     }
-    let response = crate::conn::dispatch_runtime_helper_using(
-        driver,
-        CommandOwnerScope::for_route(target.route.clone()),
-        "Runtime.callFunctionOn",
-        params,
-    )
-    .await
-    .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
+    let Some(prepared) = driver
+        .with_state(move |state| state.prepare_bidi_channel_proxy(owner, params))
+        .await??
+    else {
+        return Ok(None);
+    };
+    let output = prepared.run(driver).await;
+    if let Some(fence) = output.predecessor {
+        fence.merge_into_same_stream_tail(predecessor);
+    }
+    let response = output.response?;
     match response {
-        BackgroundCommandResponsePayload::Error { code, message, .. } => Err(
-            devtools_error_from_cdp_error_parts(Some(i64::from(code)), &message),
-        ),
+        BackgroundCommandResponsePayload::Error { code, message, .. } => {
+            Err(BidiPreloadChannelInspectorError { code, message }.into())
+        }
         BackgroundCommandResponsePayload::Success { result } => {
             if result.get("exceptionDetails").is_some() {
                 return Ok(None);
@@ -180,7 +180,7 @@ pub(super) async fn bidi_preload_channel_proxy_handle_using(
 
 pub(super) fn bidi_preload_channel_properties_from_handoff(
     handoff: &BidiPreloadChannelHandoff,
-) -> Result<DevToolsBidiChannelProperties, String> {
+) -> Result<DevToolsBidiChannelProperties, InvalidBidiChannelArgument> {
     Ok(DevToolsBidiChannelProperties {
         channel: handoff.channel.clone(),
         ownership: bidi_script_message_ownership_from_str(handoff.ownership.as_deref())?,
@@ -449,7 +449,10 @@ pub(super) fn bidi_channel_properties_from_channel_map(
             .to_owned(),
         ownership: bidi_script_message_ownership_from_value(channel.get("ownership"))?,
         serialization_options: match channel.get("serializationOptions") {
-            Some(value) => Some(bidi_script_message_serialization_options_from_value(value)?),
+            Some(value) => Some(
+                bidi_script_message_serialization_options_from_value(value)
+                    .map_err(|error| error.to_string())?,
+            ),
             None => None,
         },
     })

@@ -21,8 +21,17 @@ impl PreparedRuntimeRealmInventory {
     }
 
     pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    ) -> Result<Vec<RuntimeExecutionContextEvent>> {
+        self.run_collecting_renderer_predecessor(driver, &mut None)
+            .await
+    }
+
+    pub(crate) async fn run_collecting_renderer_predecessor(
         mut self,
         driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        predecessor: &mut Option<moli_core::RendererOutputFence>,
     ) -> Result<Vec<RuntimeExecutionContextEvent>> {
         let pending = self
             .pending
@@ -32,6 +41,9 @@ impl PreparedRuntimeRealmInventory {
             .wait()
             .await
             .context("runtime realm inventory failed")?;
+        if let Some(fence) = completed.renderer_output_predecessor() {
+            fence.merge_into_same_stream_tail(predecessor);
+        }
         driver
             .with_state(move |state| state.finish_runtime_realm_inventory(self, completed))
             .await?

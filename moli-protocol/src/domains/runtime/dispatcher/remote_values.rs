@@ -510,32 +510,22 @@ pub(super) fn devtools_script_result_remote_value_mut(
 
 pub(super) fn bidi_script_message_serialization_options_from_value(
     value: &Value,
-) -> Result<DevToolsSerializationOptions, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "InvalidChannelArgument".to_owned())?;
+) -> Result<DevToolsSerializationOptions, InvalidBidiChannelArgument> {
+    let object = value.as_object().ok_or(InvalidBidiChannelArgument)?;
     let max_object_depth = match object.get("maxObjectDepth") {
         Some(Value::Null) | None => None,
-        Some(value) => Some(
-            value
-                .as_u64()
-                .ok_or_else(|| "InvalidChannelArgument".to_owned())?,
-        ),
+        Some(value) => Some(value.as_u64().ok_or(InvalidBidiChannelArgument)?),
     };
     let max_dom_depth = match object.get("maxDomDepth") {
         Some(Value::Null) | None => None,
-        Some(value) => Some(
-            value
-                .as_u64()
-                .ok_or_else(|| "InvalidChannelArgument".to_owned())?,
-        ),
+        Some(value) => Some(value.as_u64().ok_or(InvalidBidiChannelArgument)?),
     };
     let include_shadow_tree = match object.get("includeShadowTree") {
         None => None,
         Some(Value::String(value)) if matches!(value.as_str(), "none" | "open" | "all") => {
             Some(value.clone())
         }
-        Some(_) => return Err("InvalidChannelArgument".to_owned()),
+        Some(_) => return Err(InvalidBidiChannelArgument),
     };
     Ok(DevToolsSerializationOptions {
         max_object_depth,

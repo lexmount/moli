@@ -34,6 +34,11 @@ impl Drop for RuntimeHelperCancellation {
     }
 }
 
+pub(crate) struct RuntimeHelperOutput {
+    pub(crate) response: Result<BackgroundCommandResponsePayload>,
+    pub(crate) predecessor: Option<moli_core::RendererOutputFence>,
+}
+
 /// One internal Inspector request, retaining its existing session-local call
 /// registration while its native dispatch and response wait outside state.
 /// The caller retains ownership of any object group referenced by the request.
@@ -84,8 +89,9 @@ impl PreparedRuntimeHelper {
     pub(crate) async fn run(
         mut self,
         driver: &mut ProtocolWorkflowDriver<'_>,
-    ) -> Result<BackgroundCommandResponsePayload> {
-        let result = self.run_inner(driver).await;
+    ) -> RuntimeHelperOutput {
+        let mut predecessor = None;
+        let result = self.run_inner(driver, &mut predecessor).await;
         let identity = self.cancellation.identity.clone();
         // Inline compatibility shares the same finish boundary; direct and
         // mailbox workflows also keep this authority on cancellation/drop.
@@ -95,21 +101,29 @@ impl PreparedRuntimeHelper {
         if cleanup.is_ok() {
             self.cancellation.access.take();
         }
-        match (result, cleanup) {
+        let response = match (result, cleanup) {
             (Err(error), _) | (Ok(_), Err(error)) => Err(error),
             (Ok(response), Ok(())) => Ok(response),
+        };
+        RuntimeHelperOutput {
+            response,
+            predecessor,
         }
     }
 
     async fn run_inner(
         &mut self,
         driver: &mut ProtocolWorkflowDriver<'_>,
+        predecessor: &mut Option<moli_core::RendererOutputFence>,
     ) -> Result<BackgroundCommandResponsePayload> {
         let pending = self
             .pending
             .take()
             .expect("one helper owns one native dispatch");
         let mut completed = pending.wait().await?;
+        if let Some(fence) = completed.renderer_output_predecessor() {
+            fence.merge_into_same_stream_tail(predecessor);
+        }
         let receiver = completed.take_deferred_response_receiver();
         let identity = self.cancellation.identity.clone();
         let command_id = self.command_id;
@@ -126,6 +140,9 @@ impl PreparedRuntimeHelper {
             .context("internal Runtime helper has no response receiver")?
             .await
             .context("internal Runtime helper response cancelled")?;
+        if let Some(fence) = response.renderer_output_predecessor() {
+            fence.merge_into_same_stream_tail(predecessor);
+        }
         let identity = self.cancellation.identity.clone();
         let object_group = self.object_group.clone();
         driver
@@ -136,6 +153,7 @@ impl PreparedRuntimeHelper {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn dispatch_runtime_helper_using(
     driver: &mut ProtocolWorkflowDriver<'_>,
     owner: CommandOwnerScope,
@@ -147,6 +165,7 @@ pub(crate) async fn dispatch_runtime_helper_using(
         .await??
         .run(driver)
         .await
+        .response
 }
 
 fn register_helper_result(
@@ -293,7 +312,7 @@ mod tests {
         let response = loop {
             tokio::select! {
                 request = requests.recv() => request.unwrap().apply(&mut context.conn),
-                result = &mut work => break result.unwrap(),
+                result = &mut work => break result.response.unwrap(),
             }
         };
         let BackgroundCommandResponsePayload::Success { result } = response else {

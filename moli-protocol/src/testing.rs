@@ -1569,7 +1569,12 @@ impl TestContext {
     ) {
         loop {
             let selected_index = match self.pending_protocol_scheduler_work.front() {
-                Some(front) if front.is_ready() => 0,
+                Some(front)
+                    if front.is_ready()
+                        && front.renderer_output_predecessor_is_projected(&self.conn) =>
+                {
+                    0
+                }
                 Some(front)
                     if front.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction =>
                 {
@@ -1578,6 +1583,8 @@ impl TestContext {
                             .iter()
                             .position(|candidate| {
                                 candidate.is_ready()
+                                    && candidate
+                                        .renderer_output_predecessor_is_projected(&self.conn)
                                     && candidate.navigation_dependency()
                                         == crate::ProtocolNavigationDependency::ReplacesPendingLoad
                             })
@@ -1957,7 +1964,8 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
     enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
     while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
         assert!(
-            protocol_work.is_ready(),
+            protocol_work.is_ready()
+                && protocol_work.renderer_output_predecessor_is_projected(conn),
             "the stateless compatibility materializer cannot own pending protocol work; use TestContext or the production CdpScheduler"
         );
         let (events, nested_scheduler_events) = conn
