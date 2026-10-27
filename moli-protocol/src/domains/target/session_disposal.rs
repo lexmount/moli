@@ -6,6 +6,16 @@ use crate::conn::{
     TargetSessionDetachCleanupPlan,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub(in crate::domains::target) enum SessionDisposalError {
+    #[error("InvalidSessionId")]
+    InvalidSession,
+    #[error("UnknownTargetId")]
+    UnknownTarget,
+    #[error("Session is closing")]
+    Closing,
+}
+
 pub(crate) async fn close_page_target_using(
     driver: &mut ProtocolWorkflowDriver<'_>,
     target_id: String,
@@ -51,12 +61,12 @@ fn prepare_session_disposal(
     let session_id = detachment.session_id();
     let route = conn
         .session_route(Some(session_id))
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+        .ok_or(SessionDisposalError::InvalidSession)?;
     let plan = SessionDisposalPlan::for_session_route(session_id, &route)
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+        .ok_or(SessionDisposalError::InvalidSession)?;
     anyhow::ensure!(
         plan.target_id() == Some(detachment.target_id()),
-        "UnknownTargetId"
+        SessionDisposalError::UnknownTarget
     );
     Ok((plan, detachment))
 }
@@ -67,12 +77,12 @@ fn prepare_browser_session_disposal(
 ) -> Result<SessionDisposalPlan> {
     let route = conn
         .session_route(Some(session_id))
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+        .ok_or(SessionDisposalError::InvalidSession)?;
     let plan = SessionDisposalPlan::for_session_route(session_id, &route)
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+        .ok_or(SessionDisposalError::InvalidSession)?;
     anyhow::ensure!(
         matches!(plan.target(), SessionDisposalTarget::Browser),
-        "InvalidSessionId"
+        SessionDisposalError::InvalidSession
     );
     Ok(plan)
 }
@@ -91,13 +101,13 @@ impl TargetSessionDisposalOutcome {
 /// Captures the original renderer before any handler can wait. A session can
 /// remain attached while a successor Document replaces that renderer.
 pub(crate) struct LiveSessionDisposal {
-    identity: SessionDisposalIdentity,
     handlers: crate::domains::session::PreparedSessionHandlers,
 }
 
 #[derive(Clone)]
 pub(crate) struct SessionDisposalIdentity {
     plan: SessionDisposalPlan,
+    binding: Option<crate::conn::SessionDisposalWait>,
     page: Option<SessionDisposalPage>,
 }
 
@@ -121,25 +131,13 @@ impl FailedSessionPageRetirement {
 
 impl LiveSessionDisposal {
     pub(crate) fn identity(&self) -> SessionDisposalIdentity {
-        self.identity.clone()
+        self.handlers.identity().clone()
     }
 
     pub(crate) fn prepare(conn: &mut CdpConnection, plan: SessionDisposalPlan) -> Self {
-        let owner = CommandOwnerScope::for_session(plan.session_id());
-        let page = conn
-            .runtime_session_owner_slot_for_owner(&owner)
-            .and_then(|slot| slot.loaded_page())
-            .map(|page| SessionDisposalPage {
-                residence: RendererPageResidenceIdentity::from_page(page),
-                attachment: page.renderer_agent_attachment_id(),
-                document: conn.target_root_document_lifecycle_identity_for_owner(&owner),
-            });
         let handlers = crate::domains::session::PreparedSessionHandlers::prepare(conn, &plan);
         conn.mark_session_closing(&plan);
-        Self {
-            identity: SessionDisposalIdentity { plan, page },
-            handlers,
-        }
+        Self { handlers }
     }
 
     pub(crate) async fn run(
@@ -148,9 +146,10 @@ impl LiveSessionDisposal {
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> Result<Option<moli_core::RendererOutputFence>> {
-        let Self { identity, handlers } = self;
-        let disposal = handlers
-            .run(driver, background_events, protocol_events, &identity.plan)
+        let identity = self.identity();
+        let disposal = self
+            .handlers
+            .run(driver, background_events, protocol_events)
             .await;
         let (error, predecessor) = disposal.into_parts();
         if let Some(error) = error {
@@ -172,6 +171,51 @@ impl LiveSessionDisposal {
 }
 
 impl SessionDisposalIdentity {
+    pub(crate) fn capture(conn: &CdpConnection, plan: SessionDisposalPlan) -> Self {
+        let owner = CommandOwnerScope::for_session(plan.session_id());
+        let page = conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .and_then(|slot| slot.loaded_page())
+            .map(|page| SessionDisposalPage {
+                residence: RendererPageResidenceIdentity::from_page(page),
+                attachment: page.renderer_agent_attachment_id(),
+                document: conn.target_root_document_lifecycle_identity_for_owner(&owner),
+            });
+        let binding = conn.session_binding_lifetime(plan.session_id());
+        Self {
+            plan,
+            binding,
+            page,
+        }
+    }
+
+    pub(crate) fn plan(&self) -> &SessionDisposalPlan {
+        &self.plan
+    }
+
+    /// Closing retains cleanup authority; only this original binding may
+    /// accept its state updates. Literal session ids and routes can be reused.
+    pub(crate) fn binding_is_current(&self, conn: &CdpConnection) -> bool {
+        let current = conn.session_binding_lifetime(self.plan.session_id());
+        match self.binding.as_ref() {
+            Some(binding) => !binding.is_closed() && current.as_ref() == Some(binding),
+            // Prepared attachment rollback may have no committed CDP binding.
+            // It must not claim a binding registered after preparation.
+            None => current.is_none(),
+        }
+    }
+
+    pub(crate) fn is_current(&self, conn: &CdpConnection) -> bool {
+        self.binding_is_current(conn)
+            && conn
+                .session_route(Some(self.plan.session_id()))
+                .and_then(|route| {
+                    SessionDisposalPlan::for_session_route(self.plan.session_id(), &route)
+                })
+                .as_ref()
+                == Some(&self.plan)
+    }
+
     async fn recover_failure(
         &self,
         driver: &mut ProtocolWorkflowDriver<'_>,
@@ -203,16 +247,20 @@ impl SessionDisposalIdentity {
 
     fn owns_current_page(&self, conn: &CdpConnection) -> bool {
         let owner = CommandOwnerScope::for_session(self.plan.session_id());
-        self.page.as_ref().is_some_and(|expected| {
-            conn.renderer_page_residence_identity_for_owner(&owner) == Some(expected.residence)
-                && conn.current_renderer_agent_attachment_id_for_owner(&owner)
-                    == expected.attachment
-                && conn.target_root_document_lifecycle_identity_for_owner(&owner)
-                    == expected.document
-        })
+        self.binding_is_current(conn)
+            && self.page.as_ref().is_some_and(|expected| {
+                conn.renderer_page_residence_identity_for_owner(&owner) == Some(expected.residence)
+                    && conn.current_renderer_agent_attachment_id_for_owner(&owner)
+                        == expected.attachment
+                    && conn.target_root_document_lifecycle_identity_for_owner(&owner)
+                        == expected.document
+            })
     }
 
     pub(crate) fn detach_inspector(&self, conn: &mut CdpConnection) -> Result<()> {
+        if !self.binding_is_current(conn) {
+            return Ok(());
+        }
         if matches!(self.plan.target(), SessionDisposalTarget::PageTarget { .. })
             && !self.owns_current_page(conn)
         {
@@ -263,6 +311,9 @@ impl SessionDisposalIdentity {
         conn: &mut CdpConnection,
         retired: FailedSessionPageRetirement,
     ) -> Vec<BackgroundProtocolEvent> {
+        if !self.binding_is_current(conn) {
+            return Vec::new();
+        }
         if let SessionDisposalTarget::PageTarget { session_key, .. } = self.plan.target() {
             // Retire only this session's metadata. Native removal belongs to
             // the original Page, never to a replacement installed during close.
@@ -371,9 +422,9 @@ pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
 ) -> Result<Option<moli_core::RendererOutputFence>> {
     let route = conn
         .session_route(Some(session_id))
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+        .ok_or(SessionDisposalError::InvalidSession)?;
     let plan = SessionDisposalPlan::for_session_route(session_id, &route)
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+        .ok_or(SessionDisposalError::InvalidSession)?;
     if !matches!(
         plan.target(),
         SessionDisposalTarget::PageTarget {
@@ -381,13 +432,13 @@ pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
             ..
         }
     ) {
-        anyhow::bail!("InvalidSessionId");
+        anyhow::bail!(SessionDisposalError::InvalidSession);
     }
 
     let predecessor =
         dispose_live_session_domains_async(conn, background_events, protocol_events, &plan).await?;
     if !conn.release_primary_target_session_binding_without_event(session_id) {
-        anyhow::bail!("InvalidSessionId");
+        anyhow::bail!(SessionDisposalError::InvalidSession);
     }
     Ok(predecessor)
 }
@@ -403,7 +454,7 @@ pub(super) async fn dispose_dedicated_worker_session_after_prepared_state_delta_
         plan.target(),
         SessionDisposalTarget::DedicatedWorkerTarget { .. }
     ) {
-        anyhow::bail!("InvalidSessionId");
+        anyhow::bail!(SessionDisposalError::InvalidSession);
     }
 
     dispose_live_session_domains_async(conn, background_events, protocol_events, &plan).await?;
@@ -431,7 +482,7 @@ pub(super) async fn dispose_removed_worker_session_async(
             | SessionDisposalTarget::DedicatedWorkerTarget { .. }
             | SessionDisposalTarget::ServiceWorkerTarget { .. }
     ) {
-        anyhow::bail!("InvalidSessionId");
+        anyhow::bail!(SessionDisposalError::InvalidSession);
     }
     dispose_closed_session_domains_async(conn, &plan).await;
     Ok(conn.commit_target_session_detachment_event_plan(detachment))

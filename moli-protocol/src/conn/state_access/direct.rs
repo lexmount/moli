@@ -1058,7 +1058,7 @@ mod tests {
             let completed = pending.wait().await;
             ready.send(()).unwrap();
             released.await.unwrap();
-            task_handle.with_state(|state| completed.finish(state.connection))
+            task_handle.with_state(|state| completed.finish(Some(state.connection)))
         };
         tokio::pin!(workflow);
         tokio::time::timeout(std::time::Duration::from_secs(30), async {

@@ -69,11 +69,16 @@ impl SessionScriptCleanup {
 }
 
 impl CompletedSessionScriptCleanup {
-    pub(crate) fn finish(self, conn: &mut CdpConnection) -> SessionPageUpdateResult {
+    pub(crate) fn finish(self, mut conn: Option<&mut CdpConnection>) -> SessionPageUpdateResult {
         let mut result = SessionPageUpdateResult::default();
         for (key, updates) in self.removals {
-            let completed = updates.finish(conn.loaded_page_mut_for_owner(&self.owner));
-            if completed.first_error.is_none() {
+            let completed = updates.finish(
+                conn.as_deref_mut()
+                    .and_then(|conn| conn.loaded_page_mut_for_owner(&self.owner)),
+            );
+            if completed.first_error.is_none()
+                && let Some(conn) = conn.as_deref_mut()
+            {
                 let _ = conn.with_target_owner_state_for_session_mut(
                     self.owner.session_id(),
                     |state| {
@@ -88,7 +93,9 @@ impl CompletedSessionScriptCleanup {
         }
         // Failed registry keys retain cleanup authority until retry or exact
         // Page retirement. Unkeyed scripts require no renderer round trip.
-        if result.first_error.is_none() {
+        if result.first_error.is_none()
+            && let Some(conn) = conn
+        {
             let _ = conn
                 .with_target_owner_state_for_session_mut(self.owner.session_id(), |state| {
                     state.remove_document_start_scripts_for_session(&self.session)

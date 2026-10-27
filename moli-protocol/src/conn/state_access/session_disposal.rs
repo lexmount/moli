@@ -3,14 +3,13 @@ use anyhow::Result;
 use super::ProtocolWorkflowState;
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, CompletedSessionPageUpdates,
-    CompletedSessionScriptCleanup, CompletedSessionWorkerCleanup, SessionDisposalPlan,
-    SessionPageUpdateResult,
+    CompletedSessionScriptCleanup, CompletedSessionWorkerCleanup, SessionPageUpdateResult,
 };
-#[cfg(test)]
-use crate::domains::session::PreparedSessionHandlers;
 use crate::domains::target::session_disposal::{
     FailedSessionPageRetirement, SessionDisposalIdentity,
 };
+#[cfg(test)]
+use crate::{conn::SessionDisposalPlan, domains::session::PreparedSessionHandlers};
 
 impl ProtocolWorkflowState<'_> {
     pub(crate) fn prepare_target_termination(
@@ -101,24 +100,35 @@ impl ProtocolWorkflowState<'_> {
 
     pub(crate) fn finish_session_page_updates(
         self,
+        identity: &SessionDisposalIdentity,
         owner: &CommandOwnerScope,
         completed: CompletedSessionPageUpdates,
     ) -> SessionPageUpdateResult {
-        completed.finish(self.connection.loaded_page_mut_for_owner(owner))
+        let page = if identity.binding_is_current(self.connection) {
+            self.connection.loaded_page_mut_for_owner(owner)
+        } else {
+            None
+        };
+        completed.finish(page)
     }
 
     pub(crate) fn finish_session_script_cleanup(
         self,
+        identity: &SessionDisposalIdentity,
         completed: CompletedSessionScriptCleanup,
     ) -> SessionPageUpdateResult {
-        completed.finish(self.connection)
+        let current = identity.binding_is_current(self.connection);
+        completed.finish(current.then_some(self.connection))
     }
 
     pub(crate) fn finish_session_runtime_cleanup(
         self,
-        plan: &SessionDisposalPlan,
+        identity: &SessionDisposalIdentity,
         completed: Option<CompletedSessionWorkerCleanup>,
     ) -> (Vec<BackgroundProtocolEvent>, Vec<BackgroundProtocolEvent>) {
+        if !identity.binding_is_current(self.connection) {
+            return (Vec::new(), Vec::new());
+        }
         if let Some(completed) = completed {
             completed.finish(self.connection);
         }
@@ -128,7 +138,7 @@ impl ProtocolWorkflowState<'_> {
             self.connection,
             &mut background_events,
             &mut protocol_events,
-            plan.session_id(),
+            identity.plan().session_id(),
         );
         (background_events, protocol_events)
     }

@@ -542,7 +542,7 @@ impl CdpConnection {
         self.prepare_session_script_cleanup(session_id)
             .wait()
             .await
-            .finish(self)
+            .finish(Some(self))
             .into_result()
     }
 }

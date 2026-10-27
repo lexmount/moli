@@ -88,11 +88,16 @@ impl DevToolsSessionHandlerDisposal {
 /// still authoritative. One failure never prevents the remaining handlers
 /// from receiving their disposal callback.
 pub(crate) struct PreparedSessionHandlers {
+    identity: crate::domains::target::session_disposal::SessionDisposalIdentity,
     handlers: Vec<(DevToolsSessionDomainHandler, PreparedSessionHandlerDisposal)>,
 }
 
 impl PreparedSessionHandlers {
     pub(crate) fn prepare(conn: &mut CdpConnection, plan: &SessionDisposalPlan) -> Self {
+        let identity = crate::domains::target::session_disposal::SessionDisposalIdentity::capture(
+            conn,
+            plan.clone(),
+        );
         let handlers = DevToolsSessionHandlers::for_target(plan.target())
             .handlers
             .iter()
@@ -103,7 +108,13 @@ impl PreparedSessionHandlers {
                 )
             })
             .collect();
-        Self { handlers }
+        Self { identity, handlers }
+    }
+
+    pub(crate) fn identity(
+        &self,
+    ) -> &crate::domains::target::session_disposal::SessionDisposalIdentity {
+        &self.identity
     }
 
     pub(crate) async fn run(
@@ -111,15 +122,15 @@ impl PreparedSessionHandlers {
         driver: &mut ProtocolWorkflowDriver<'_>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
-        plan: &SessionDisposalPlan,
     ) -> DevToolsSessionHandlerDisposal {
         let mut disposal = DevToolsSessionHandlerDisposal {
             first_error: None,
             renderer_output_predecessor: None,
         };
+        let plan = self.identity.plan();
         for (handler, prepared) in self.handlers {
             let result = prepared
-                .run(driver, background_events, protocol_events, plan)
+                .run(driver, background_events, protocol_events, &self.identity)
                 .await;
             match result {
                 Ok(update) => {
@@ -156,7 +167,7 @@ async fn dispose_live_handlers_using(
         .with_state(move |state| state.prepare_session_handlers(&preparation_plan))
         .await
         .unwrap()
-        .run(driver, background_events, protocol_events, plan)
+        .run(driver, background_events, protocol_events)
         .await
 }
 
@@ -372,9 +383,10 @@ impl PreparedSessionHandlerDisposal {
                         false
                     };
                     if !found {
-                        updates.record_error(anyhow::anyhow!(
-                            "primary Page target disappeared during session disposal"
-                        ));
+                        updates.record_error(
+                            anyhow::Error::new(crate::conn::NoDocumentLoaded)
+                                .context("primary Page target disappeared during session disposal"),
+                        );
                     }
                 }
                 Self::PageUpdates { owner, updates }
@@ -387,7 +399,7 @@ impl PreparedSessionHandlerDisposal {
         driver: &mut ProtocolWorkflowDriver<'_>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
-        plan: &SessionDisposalPlan,
+        identity: &crate::domains::target::session_disposal::SessionDisposalIdentity,
     ) -> Result<crate::conn::SessionPageUpdateResult> {
         match self {
             Self::Complete => Ok(Default::default()),
@@ -409,9 +421,11 @@ impl PreparedSessionHandlerDisposal {
                     Some(pending) => Some(pending.wait().await),
                     None => None,
                 };
-                let plan = plan.clone();
+                let identity = identity.clone();
                 let (background, protocol) = driver
-                    .with_state(move |state| state.finish_session_runtime_cleanup(&plan, completed))
+                    .with_state(move |state| {
+                        state.finish_session_runtime_cleanup(&identity, completed)
+                    })
                     .await?;
                 background_events.extend(background);
                 protocol_events.extend(protocol);
@@ -419,14 +433,20 @@ impl PreparedSessionHandlerDisposal {
             }
             Self::Scripts(pending) => {
                 let completed = pending.wait().await;
+                let identity = identity.clone();
                 driver
-                    .with_state(move |state| state.finish_session_script_cleanup(completed))
+                    .with_state(move |state| {
+                        state.finish_session_script_cleanup(&identity, completed)
+                    })
                     .await
             }
             Self::PageUpdates { owner, updates } => {
                 let completed = updates.wait().await;
+                let identity = identity.clone();
                 driver
-                    .with_state(move |state| state.finish_session_page_updates(&owner, completed))
+                    .with_state(move |state| {
+                        state.finish_session_page_updates(&identity, &owner, completed)
+                    })
                     .await
             }
         }

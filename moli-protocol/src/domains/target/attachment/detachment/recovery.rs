@@ -11,7 +11,6 @@ pub(crate) struct TargetDetachmentFailureCleanup {
 
 struct SessionFailureCleanup {
     identity: SessionDisposalIdentity,
-    plan: SessionDisposalPlan,
     commit: SessionDetachmentCommit,
 }
 
@@ -33,7 +32,6 @@ impl TargetDetachmentFailureCleanup {
                     };
                     Some(SessionFailureCleanup {
                         identity: disposal.identity(),
-                        plan: session.plan.clone(),
                         commit: session.commit.clone(),
                     })
                 })
@@ -51,19 +49,14 @@ impl TargetDetachmentFailureCleanup {
         let mut pages = Vec::new();
         let mut background_events = Vec::new();
         for session in self.sessions {
-            let current = conn
-                .session_route(Some(session.plan.session_id()))
-                .and_then(|route| {
-                    SessionDisposalPlan::for_session_route(session.plan.session_id(), &route)
-                });
-            if current.as_ref() != Some(&session.plan) {
+            if !session.identity.is_current(conn) {
                 continue;
             }
             crate::domains::runtime::fail_pending_session_calls(
                 conn,
                 &mut background_events,
                 context.protocol_events_mut(),
-                session.plan.session_id(),
+                session.identity.plan().session_id(),
             );
             let mut retired = session.identity.prepare_failed_page_retirement(conn);
             // Exact Page retirement owns Inspector destruction at close ACK.
@@ -100,12 +93,7 @@ impl TargetDetachmentRecovery {
             output.push_background_event(event);
         }
         for (session, retired) in self.sessions {
-            let current = conn
-                .session_route(Some(session.plan.session_id()))
-                .and_then(|route| {
-                    SessionDisposalPlan::for_session_route(session.plan.session_id(), &route)
-                });
-            if current.as_ref() != Some(&session.plan) {
+            if !session.identity.is_current(conn) {
                 continue;
             }
             for event in session
@@ -114,12 +102,13 @@ impl TargetDetachmentRecovery {
             {
                 output.push_background_event(event);
             }
-            let (events, error) = commit_session_detachment(conn, &session.plan, session.commit);
+            let (events, error) =
+                commit_session_detachment(conn, &session.identity, session.commit);
             for event in events {
                 output.push_background_event(event);
             }
             if let Some(error) = error {
-                tracing::warn!(session_id = session.plan.session_id(), %error,
+                tracing::warn!(session_id = session.identity.plan().session_id(), %error,
                     "failed to remove retired session domain state");
             }
         }
