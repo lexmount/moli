@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod schema_validation;
+mod scope_commit;
 
 struct TestDir {
     path: PathBuf,
