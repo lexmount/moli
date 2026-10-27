@@ -54,6 +54,12 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         !self.active.is_empty()
     }
 
+    pub(crate) fn poll_handlers(&mut self, poll: fn(&mut H)) {
+        for active in self.active.values_mut() {
+            poll(active.handle.get_mut());
+        }
+    }
+
     /// DNS-only work can wait on its completion channel without polling curl.
     pub(crate) fn has_curl_work(&self) -> bool {
         self.has_active() || !self.pending.is_empty()
