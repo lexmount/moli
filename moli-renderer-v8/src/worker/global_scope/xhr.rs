@@ -228,6 +228,25 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
         return;
     }
 
+    set_xhr_state_number(scope, xhr, XHR_TIMEOUT_TIMER_SLOT, 0.0);
+    let response_completed = state
+        .borrow()
+        .pending_xhrs
+        .get(&scheduled_xhr_id)
+        .is_some_and(|pending| {
+            // A response held for authentication or DevTools is not yet the
+            // XHR's outcome. Otherwise use the same atomic transport/timeout
+            // arbitration as Window, including requests sent from a previous
+            // completion's Promise reaction.
+            !pending.request_paused
+                && pending.paused_response.is_none()
+                && !pending.load.cancel_if_response_pending()
+        });
+    if response_completed {
+        rv.set_undefined();
+        return;
+    }
+
     let pending = state.borrow_mut().pending_xhrs.remove(&scheduled_xhr_id);
     if let Some(pending) = pending {
         pending.timing.abort(scope);
