@@ -839,13 +839,31 @@ async fn runtime_enable_replays_page_and_shared_worker_contexts_to_their_own_ses
         90_020,
         "context-replay-isolation",
         r#"
-onconnect = event => {
-  console.warn('worker boot warning');
-  event.ports[0].postMessage('ready');
-};
+globalThis.sharedWorkerBootReady = new Promise(resolve => {
+  onconnect = event => {
+    console.warn('worker boot warning');
+    resolve('booted');
+    event.ports[0].postMessage('ready');
+  };
+});
 "#,
     )
     .await;
+    // Auto-attachment can precede onconnect. Observe the log-producing task
+    // before enabling Runtime so this checks replay of an existing message.
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 90_024,
+        "method": "Runtime.evaluate",
+        "sessionId": shared_worker_session_id,
+        "params": {
+            "expression": "sharedWorkerBootReady",
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let ready = take_response_by_id(&mut ctx, 90_024);
+    assert_eq!(ready["result"]["result"]["value"], json!("booted"));
     ctx.sent.clear();
 
     ctx.process_async(json!({
