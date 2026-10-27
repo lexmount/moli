@@ -143,6 +143,19 @@ impl AnimationTransitionState {
                 .any(|document| !document.elements.is_empty())
     }
 
+    pub(crate) fn has_ticking_effects(&self) -> bool {
+        self.documents.borrow().values().any(|d| {
+            d.engine.active_instances().any(|a| {
+                let a = a.borrow();
+                !a.playback.is_idle()
+                    && !a.playback.clock().is_paused()
+                    && a.playback.clock().rate != 0.0
+                    && a.target.is_some()
+                    && !a.playback.frames.is_empty()
+            })
+        })
+    }
+
     pub(crate) fn observe_initial_style(
         &self,
         owner: WindowDocumentOwner,

@@ -256,6 +256,69 @@ fn reversing_a_transition_starts_at_its_sampled_value_and_shortens_the_return() 
     assert_eq!(result, r#"[true,"idle",400,"0.4","0.2"]"#);
 }
 
+#[tokio::test]
+async fn infinite_effects_keep_demand_sampling_without_arming_periodic_deadlines() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://animation-core.test/infinite-service",
+        "<!doctype html><div id=box style='width:10px;height:20px'></div>",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.eval(
+        r#"
+      globalThis.animation=document.getElementById('box').animate([{width:'10px'},{width:'110px'}],
+        {duration:1000,iterations:Infinity,easing:'linear',fill:'both'});
+    "#,
+    )
+    .unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime| {
+        let runtime = unsafe { &*runtime };
+        let owner = runtime
+            .current_window_document_task_target(scope)
+            .unwrap()
+            .owner();
+        assert!(runtime.animation_transition_state().has_ticking_effects());
+        assert!(
+            crate::native_bridge::element::next_animation_transition_deadline(runtime, owner)
+                .is_none(),
+            "an active infinite effect has no lifecycle boundary to poll"
+        );
+        Ok(())
+    })
+    .unwrap();
+    vm.eval("document.getElementById('box').getBoundingClientRect().width")
+        .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let value = global
+            .get(scope, crate::util::v8str(scope, "animation").into())
+            .unwrap();
+        let value = v8::Local::<v8::Object>::try_from(value).unwrap();
+        let animation = crate::animation_bindings::instance(scope, value).unwrap();
+        // Advance only the clock. No DOM mutation or JS currentTime setter
+        // invalidates layout on behalf of this demand.
+        animation
+            .borrow_mut()
+            .playback
+            .command(
+                moli_animation::AnimationCommand::Seek(0.5),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval("Math.round(document.getElementById('box').getBoundingClientRect().width)")
+            .unwrap(),
+        "60"
+    );
+}
+
 #[test]
 fn animation_and_effect_brands_do_not_accept_each_others_native_instance_id() {
     let mut vm = new_parsed_test_vm(
