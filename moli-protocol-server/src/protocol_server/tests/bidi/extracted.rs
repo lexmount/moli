@@ -6,7 +6,6 @@ mod dialog_policy;
 mod element_references;
 mod events_and_network;
 mod input;
-mod layout_working_set_budget;
 mod navigation;
 mod network_and_storage;
 mod runtime_admission;

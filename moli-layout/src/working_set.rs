@@ -23,7 +23,7 @@ use crate::{
 };
 
 #[cfg(test)]
-mod construction_budget_tests;
+mod construction_retention_tests;
 #[cfg(test)]
 mod numeric_tests;
 #[cfg(test)]
@@ -33,55 +33,14 @@ mod retention;
 #[cfg(test)]
 mod tests;
 
-/// Default admission charge for one document's optional computation state.
-pub const DEFAULT_DOCUMENT_WORKING_SET_BYTES: usize = 16 * 1024 * 1024;
-
-/// Admission limits for a working tree. These bound source complexity, not
-/// total allocator bytes or shared font/style payloads. The estimated-byte
-/// charge additionally limits owned buffers and models opaque text-layout
-/// storage; it is not an allocator measurement or a physical-memory ceiling.
-/// Embedders must also aggregate working sets across their live documents.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LayoutWorkingSetLimits {
-    pub max_boxes: usize,
-    pub max_text_bytes: usize,
-    pub max_estimated_retained_bytes: usize,
-}
-
-impl Default for LayoutWorkingSetLimits {
-    fn default() -> Self {
-        Self {
-            max_boxes: 4096,
-            max_text_bytes: 256 * 1024,
-            max_estimated_retained_bytes: DEFAULT_DOCUMENT_WORKING_SET_BYTES,
-        }
-    }
-}
-
-/// Outcome of admitting a completed pass into its optional working set.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LayoutWorkingSetAdmission {
-    /// No completed pass has attempted retention since the last take/clear.
-    #[default]
-    NotAttempted,
-    /// The owned or compact graph and eligible inline state fit all limits.
-    Retained,
-    /// The construction graph exceeds the box count limit.
-    BoxLimit,
-    /// Source text exceeds the source-complexity limit.
-    TextLimit,
-    /// Even the estimated compact-state charge exceeds its admission limit.
-    EstimatedByteLimit,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutWorkingSetStats {
     pub retained_boxes: usize,
     pub retained_text_bytes: usize,
-    /// Admission charge for retained buffers. Includes visible allocation
+    /// Estimated storage of retained buffers. Includes visible allocation
     /// capacities and an opaque Parley storage model, but excludes shared
     /// computed-style/font payloads and allocator metadata. Shared source text
-    /// may be charged more than once; this is not resident-memory accounting.
+    /// may be counted more than once; this is not resident-memory accounting.
     pub estimated_retained_bytes: usize,
     /// Construction slots whose retained identities matched the fresh pass.
     /// A complete topology match counts the graph; partial restoration counts
@@ -96,11 +55,6 @@ pub struct LayoutWorkingSetStats {
     pub reused_owned_boxes: usize,
     /// Retained box objects, rather than compact comparison records.
     pub retained_owned_boxes: usize,
-    /// Owned candidate charge after reclaiming spare slots, before a possible
-    /// compact fallback. This is not a physical-memory measurement.
-    pub candidate_owned_bytes: usize,
-    /// Actual unused box slots released under estimated-byte pressure.
-    pub owned_box_capacity_trimmed: usize,
     pub reused_inline_contexts: usize,
     /// Final numeric calls answered by a validated result from a previous
     /// pass. This counts calls, not unique owners or hits on newly computed
@@ -109,24 +63,16 @@ pub struct LayoutWorkingSetStats {
     /// Size-only pure-text probes answered by exact constraints from a
     /// previous pass. Separate from final layout and same-pass cache hits.
     pub reused_inline_measurements: usize,
-    pub admission: LayoutWorkingSetAdmission,
-    /// Source-complexity counts, rather than retained allocation sizes.
-    pub candidate_boxes: usize,
-    pub candidate_text_bytes: usize,
-    /// Zero when a source-complexity limit rejects before compact-state
-    /// estimation. `admission` distinguishes that case from an empty charge.
-    pub candidate_estimated_bytes: usize,
-    /// Candidate estimate components, including a candidate rejected by its
-    /// estimated-byte limit. These do not describe currently retained bytes.
+    /// Estimated components of the currently retained computation state.
     pub estimated_graph_bytes: usize,
-    /// The graph charge attributable to optional source dependencies used to
+    /// The graph storage attributable to optional source dependencies used to
     /// validate construction reuse. Already included in `estimated_graph_bytes`.
     pub estimated_construction_bytes: usize,
-    /// Total candidate inline charge, including `estimated_inline_numeric_bytes`.
+    /// Total retained inline storage, including `estimated_inline_numeric_bytes`.
     pub estimated_inline_bytes: usize,
-    /// The inline charge attributable to retained numeric keys/results and
+    /// The inline storage attributable to retained numeric keys/results and
     /// visible placement/fragment capacities. Opaque Parley storage remains
-    /// in the preparation model and is not charged a second time here.
+    /// in the preparation model and is not counted a second time here.
     pub estimated_inline_numeric_bytes: usize,
     pub estimated_font_metadata_bytes: usize,
 }
@@ -143,7 +89,6 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     retained: Option<RetainedWork<N>>,
-    limits: LayoutWorkingSetLimits,
     stats: LayoutWorkingSetStats,
 }
 
@@ -168,7 +113,7 @@ where
     fonts: LayoutFontInputs,
 }
 
-/// A single graph owner. Unsupported or oversized graphs retain compact
+/// A single graph owner. Unsupported graphs retain compact
 /// comparison inputs; supported graphs may keep the actual construction
 /// objects. Neither representation retains paint resources or valid Taffy work.
 pub(crate) enum RetainedGraph<N> {
@@ -393,7 +338,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     fn default() -> Self {
-        Self::new(LayoutWorkingSetLimits::default())
+        Self::new()
     }
 }
 
@@ -401,33 +346,10 @@ impl<N> LayoutWorkingSet<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub const fn new(limits: LayoutWorkingSetLimits) -> Self {
+    pub fn new() -> Self {
         Self {
             retained: None,
-            limits,
-            stats: LayoutWorkingSetStats {
-                retained_boxes: 0,
-                retained_text_bytes: 0,
-                estimated_retained_bytes: 0,
-                reused_box_slots: 0,
-                reused_construction_boxes: 0,
-                reused_owned_boxes: 0,
-                retained_owned_boxes: 0,
-                candidate_owned_bytes: 0,
-                owned_box_capacity_trimmed: 0,
-                reused_inline_contexts: 0,
-                reused_inline_numeric_layouts: 0,
-                reused_inline_measurements: 0,
-                admission: LayoutWorkingSetAdmission::NotAttempted,
-                candidate_boxes: 0,
-                candidate_text_bytes: 0,
-                candidate_estimated_bytes: 0,
-                estimated_graph_bytes: 0,
-                estimated_construction_bytes: 0,
-                estimated_inline_bytes: 0,
-                estimated_inline_numeric_bytes: 0,
-                estimated_font_metadata_bytes: 0,
-            },
+            stats: LayoutWorkingSetStats::default(),
         }
     }
 
@@ -438,10 +360,6 @@ where
 
     pub const fn stats(&self) -> LayoutWorkingSetStats {
         self.stats
-    }
-
-    pub const fn limits(&self) -> LayoutWorkingSetLimits {
-        self.limits
     }
 
     pub(crate) fn take(&mut self) -> Option<RetainedWork<N>> {
@@ -458,9 +376,7 @@ where
         construction_box_count: usize,
     ) {
         self.clear();
-        // Numeric layout can append placeholders which are neither source
-        // boxes nor part of the next construction graph. Their only incoming
-        // edges are layout_children, absent from retained construction input.
+        // Numeric placeholders belong to this pass, not the retained graph.
         assert!(construction_box_count <= world.boxes.len());
         let pass_box_count = world.boxes.len();
         world.boxes.truncate(construction_box_count);
@@ -486,56 +402,19 @@ where
             .inline_numeric_reuse
             .as_ref()
             .map_or(0, |numeric| numeric.measurement_hits());
-        self.stats.candidate_boxes = world.len();
-        self.stats.candidate_text_bytes = text_bytes;
-        if world.len() > self.limits.max_boxes {
-            self.stats.admission = LayoutWorkingSetAdmission::BoxLimit;
-            return;
-        }
-        if text_bytes > self.limits.max_text_bytes {
-            self.stats.admission = LayoutWorkingSetAdmission::TextLimit;
-            return;
-        }
-        let mut retained = RetainedWork::from_world(world, fonts, pass_box_count);
-        let mut estimate = retained.estimated_retention();
-        if retained.owned_construction().is_some() {
-            if estimate.total() > self.limits.max_estimated_retained_bytes {
-                self.stats.owned_box_capacity_trimmed = retained.trim_owned_box_capacity();
-                estimate = retained.estimated_retention();
-            }
-            self.stats.candidate_owned_bytes = estimate.total();
-            if estimate.total() > self.limits.max_estimated_retained_bytes {
-                retained.compact_graph();
-                estimate = retained.estimated_retention();
-            }
-        }
-        if estimate.total() > self.limits.max_estimated_retained_bytes {
-            // Prefer a compact validated structure with useful text results
-            // over keeping full box storage by prematurely evicting them.
-            // Both graph representations use the same numeric backend.
-            // Discard the measurement layer only if the compact candidate
-            // also exceeds the unchanged document admission limit.
-            retained.discard_inline_measurements();
-            estimate = retained.estimated_retention();
-        }
-        let estimated_retained_bytes = estimate.total();
-        self.stats.candidate_estimated_bytes = estimated_retained_bytes;
-        self.stats.estimated_graph_bytes = estimate.graph;
-        self.stats.estimated_construction_bytes = estimate.construction;
-        self.stats.estimated_inline_bytes = estimate.inline;
-        self.stats.estimated_inline_numeric_bytes = estimate.inline_numeric;
-        self.stats.estimated_font_metadata_bytes = estimate.font_metadata;
-        if estimated_retained_bytes > self.limits.max_estimated_retained_bytes {
-            self.stats.admission = LayoutWorkingSetAdmission::EstimatedByteLimit;
-            return;
-        }
+        let retained = RetainedWork::from_world(world, fonts, pass_box_count);
+        let estimate = retained.estimated_retention();
         self.stats.retained_boxes = retained.box_count();
         self.stats.retained_owned_boxes = retained
             .owned_construction()
             .map_or(0, |(boxes, _)| boxes.len());
         self.stats.retained_text_bytes = text_bytes;
-        self.stats.estimated_retained_bytes = estimated_retained_bytes;
-        self.stats.admission = LayoutWorkingSetAdmission::Retained;
+        self.stats.estimated_retained_bytes = estimate.total();
+        self.stats.estimated_graph_bytes = estimate.graph;
+        self.stats.estimated_construction_bytes = estimate.construction;
+        self.stats.estimated_inline_bytes = estimate.inline;
+        self.stats.estimated_inline_numeric_bytes = estimate.inline_numeric;
+        self.stats.estimated_font_metadata_bytes = estimate.font_metadata;
         self.retained = Some(retained);
     }
 }

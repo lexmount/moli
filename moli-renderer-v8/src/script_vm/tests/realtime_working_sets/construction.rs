@@ -50,29 +50,14 @@ fn block_tail_construction_preserves_unchanged_text_and_retires_removed_sources(
 }
 
 #[test]
-fn construction_admission_covers_small_and_over_budget_documents() {
+fn construction_retention_covers_small_and_large_documents() {
     for items in [64, 256, 1024, 2048, 4096] {
         let mut vm = construction_fixture_with_items(LayoutPolicy::Realtime, items);
         vm.eval("first.style.width='150px';first.offsetWidth")
             .unwrap();
-        let stats = main_stats(&vm);
-        eprintln!("construction_scale items={items} stats={stats:?}");
-        if items >= 2048 {
-            assert!(items * 2 + 2 > moli_layout::LayoutWorkingSetLimits::default().max_boxes);
-            assert!(stats.is_none());
-            assert_eq!(
-                count(&vm),
-                0,
-                "rejected candidates must not retain a working set"
-            );
-        } else {
-            let stats = stats.unwrap();
-            assert_eq!(
-                stats.admission,
-                moli_layout::LayoutWorkingSetAdmission::Retained
-            );
-            assert!(stats.reused_owned_boxes > 0, "{stats:?}");
-        }
+        let stats = main_stats(&vm).unwrap();
+        assert!(stats.reused_owned_boxes > 0, "{stats:?}");
+        assert_eq!(count(&vm), 1);
         compare_evicted(
             &mut vm,
             "JSON.stringify([first.offsetWidth,document.body.scrollHeight,document.querySelectorAll('.item').length])",

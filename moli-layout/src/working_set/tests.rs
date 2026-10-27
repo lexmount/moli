@@ -50,7 +50,6 @@ fn retained_work_drops_pass_image_resources_but_keeps_reusable_source_inputs() {
     work.publish(world, fonts, 0, 0, 1);
 
     assert_eq!(work.stats().retained_boxes, 1);
-    assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
     assert!(
         image_weak.upgrade().is_none(),
         "working state must not pin paint images"
@@ -65,14 +64,10 @@ fn retained_work_drops_pass_image_resources_but_keeps_reusable_source_inputs() {
         "eviction must release retained source inputs"
     );
     assert_eq!(work.stats().estimated_retained_bytes, 0);
-    assert_eq!(
-        work.stats().admission,
-        LayoutWorkingSetAdmission::NotAttempted
-    );
 }
 
 #[test]
-fn estimated_admission_catches_control_payloads_outside_the_source_text_limit() {
+fn retained_control_payload_capacity_is_reported_and_released_on_clear() {
     fn control_world(label: Arc<str>) -> LayoutWorld<usize> {
         let mut world = world(None);
         let mut semantics = LayoutElementSemantics::new(
@@ -92,33 +87,23 @@ fn estimated_admission_catches_control_payloads_outside_the_source_text_limit() 
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     baseline.publish(control_world(Arc::from("")), fonts.clone(), 0, 0, 1);
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline.stats().estimated_retained_bytes + 1024,
-        ..LayoutWorkingSetLimits::default()
-    });
+    let mut work = LayoutWorkingSet::default();
     let label: Arc<str> = Arc::from("a".repeat(64 * 1024));
     let label_weak = Arc::downgrade(&label);
     work.publish(control_world(label), fonts, 0, 0, 1);
     let stats = work.stats();
-    assert_eq!(stats.retained_boxes, 0);
-    assert_eq!(stats.estimated_retained_bytes, 0);
+    assert!(stats.estimated_retained_bytes > baseline.stats().estimated_retained_bytes);
+    assert_eq!(stats.retained_boxes, 1);
+    assert_eq!(stats.retained_text_bytes, 0);
     assert_eq!(
-        stats.admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
-    assert_eq!(stats.candidate_boxes, 1);
-    assert_eq!(stats.candidate_text_bytes, 0);
-    assert!(stats.candidate_estimated_bytes > work.limits().max_estimated_retained_bytes);
-    assert_eq!(
-        stats.candidate_estimated_bytes,
+        stats.estimated_retained_bytes,
         stats.estimated_graph_bytes
             + stats.estimated_inline_bytes
             + stats.estimated_font_metadata_bytes
     );
-    assert!(
-        label_weak.upgrade().is_none(),
-        "rejected work must release its payload"
-    );
+    assert!(label_weak.upgrade().is_some());
+    work.clear();
+    assert!(label_weak.upgrade().is_none());
 }
 
 #[test]
@@ -142,62 +127,36 @@ fn numeric_placeholders_do_not_survive_as_construction_graph_members() {
 }
 
 #[test]
-fn source_limits_report_rejection_before_compact_state_estimation() {
-    for (limits, admission) in [
-        (
-            LayoutWorkingSetLimits {
-                max_boxes: 0,
-                max_text_bytes: 0,
-                ..LayoutWorkingSetLimits::default()
-            },
-            LayoutWorkingSetAdmission::BoxLimit,
-        ),
-        (
-            LayoutWorkingSetLimits {
-                max_text_bytes: 0,
-                ..LayoutWorkingSetLimits::default()
-            },
-            LayoutWorkingSetAdmission::TextLimit,
-        ),
-    ] {
-        let text: Arc<str> = Arc::from("source text");
-        let text_weak = Arc::downgrade(&text);
-        let mut work = LayoutWorkingSet::new(limits);
-        work.publish(
-            world(Some(text)),
-            DocumentLayoutServices::new().font_inputs(),
-            0,
-            0,
-            1,
-        );
-        let stats = work.stats();
-        assert_eq!(stats.admission, admission);
-        assert_eq!(stats.candidate_boxes, 1);
-        assert_eq!(stats.candidate_text_bytes, "source text".len());
-        assert_eq!(stats.candidate_estimated_bytes, 0);
-        assert_eq!(stats.estimated_retained_bytes, 0);
-        assert_eq!(stats.retained_boxes, 0);
-        assert!(text_weak.upgrade().is_none());
-    }
-}
-
-#[test]
-fn oversized_pass_allocation_does_not_consume_compact_state_budget() {
+fn compact_retention_discards_pass_only_allocation_capacity() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     baseline.publish(world(None), fonts.clone(), 0, 0, 1);
     let baseline_bytes = baseline.stats().estimated_retained_bytes;
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline_bytes + 1024,
-        ..LayoutWorkingSetLimits::default()
-    });
+    let mut work = LayoutWorkingSet::default();
     let mut pass = world(None);
     // Pass capacity can outlive its numeric placeholders until publication.
     // Retaining that full LayoutBox allocation defeats the compact graph.
     pass.boxes.reserve(1024);
     work.publish(pass, fonts, 0, 0, 1);
 
-    assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
     assert_eq!(work.stats().retained_boxes, 1);
     assert_eq!(work.stats().estimated_retained_bytes, baseline_bytes);
+}
+
+#[test]
+fn retained_text_above_the_former_document_limit_survives_until_clear() {
+    let text: Arc<str> = Arc::from("x".repeat(512 * 1024));
+    let weak = Arc::downgrade(&text);
+    let mut work = LayoutWorkingSet::default();
+    work.publish(
+        world(Some(text)),
+        DocumentLayoutServices::new().font_inputs(),
+        0,
+        0,
+        1,
+    );
+    assert_eq!(work.stats().retained_text_bytes, 512 * 1024);
+    assert!(weak.upgrade().is_some());
+    work.clear();
+    assert!(weak.upgrade().is_none());
 }

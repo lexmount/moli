@@ -158,10 +158,6 @@ pub(super) async fn execute_owner_maintenance_task_on_local_lane(
             match task.action() {
                 RendererOwnerMaintenanceAction::MemoryPressure => {
                     let vm = entry.page_vm_mut().vm_mut();
-                    // Native retention consumes only explicit pool requests.
-                    // The helper releases its Host/working-set borrows before
-                    // V8 enters GC, independently of V8's heap-pressure threshold.
-                    let _ = vm.maintain_realtime_layout_working_set_budget();
                     vm.renderer_document_isolate_ops()
                         .notify_renderer_document_isolate_memory_pressure()
                 }

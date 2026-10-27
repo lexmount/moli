@@ -164,7 +164,7 @@ fn table_anonymous_repair_keeps_using_the_shared_cold_constructor() {
 }
 
 #[test]
-fn table_compact_admission_and_eviction_preserve_complete_output() {
+fn table_compact_restoration_and_clear_preserve_complete_output() {
     let (source, mut styles) = fixture();
     let mut services = DocumentLayoutServices::new();
     let mut work = LayoutWorkingSet::default();
@@ -174,13 +174,8 @@ fn table_compact_admission_and_eviction_preserve_complete_output() {
     let mut retained = work.take().unwrap();
     retained.compact_graph();
     let compact = retained.estimated_retention().total();
-    drop(retained);
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: compact + (owned - compact) / 2,
-        ..Default::default()
-    });
-    compare_with_cold(&source, &mut styles, &mut services, &mut work);
-    assert_eq!(work.stats().retained_owned_boxes, 0);
+    assert!(compact < owned);
+    work.retained = Some(retained);
     styles.base.first_width = 170.0;
     let warm = compare_with_cold(&source, &mut styles, &mut services, &mut work);
     assert!(work.stats().reused_construction_boxes > 0);

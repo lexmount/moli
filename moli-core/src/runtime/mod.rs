@@ -296,11 +296,7 @@ impl Browser {
         let js_runtime =
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         let renderer_owner = js_runtime.renderer_owner_handle();
-        renderer_owner.configure_layout_configuration_with_budget(
-            config.layout_configuration(),
-            config.layout_working_set_budget().cloned(),
-        )?;
-        config.set_layout_working_set_budget(renderer_owner.layout_working_set_budget());
+        renderer_owner.configure_layout_configuration(config.layout_configuration())?;
         let lifetime_owner = Rc::new(BrowserLifetimeOwner {
             js_runtime: Some(js_runtime.clone()),
             browser_context_owner,

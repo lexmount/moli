@@ -106,17 +106,13 @@ fn construction_world(source: &Source) -> LayoutWorld<usize> {
 }
 
 #[test]
-fn construction_dependency_capacity_counts_towards_retention_admission() {
+fn construction_dependency_capacity_is_reported_until_clear() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     let pass = construction_world(&Source::new());
     let count = pass.len();
     baseline.publish(pass, fonts.clone(), 0, 0, count);
     let baseline_stats = baseline.stats();
-    assert_eq!(
-        baseline_stats.admission,
-        LayoutWorkingSetAdmission::Retained
-    );
     assert!(baseline_stats.estimated_construction_bytes > 0);
 
     let source = Source::new();
@@ -128,31 +124,25 @@ fn construction_dependency_capacity_counts_towards_retention_admission() {
     assert!(dependency_bytes > baseline_stats.estimated_construction_bytes + 1024);
     drop(source);
 
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + 1024,
-        ..LayoutWorkingSetLimits::default()
-    });
+    let mut work = LayoutWorkingSet::default();
     let count = pass.len();
     work.publish(pass, fonts, 0, 0, count);
     let stats = work.stats();
-    assert_eq!(
-        stats.admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
-    assert_eq!(stats.retained_boxes, 0);
-    assert_eq!(stats.estimated_retained_bytes, 0);
+    assert_eq!(stats.retained_boxes, count);
+    assert!(stats.estimated_retained_bytes > baseline_stats.estimated_retained_bytes);
     assert_eq!(stats.estimated_construction_bytes, dependency_bytes);
-    assert!(stats.candidate_estimated_bytes > work.limits().max_estimated_retained_bytes);
     assert_eq!(
-        stats.candidate_estimated_bytes,
+        stats.estimated_retained_bytes,
         stats.estimated_graph_bytes
             + stats.estimated_inline_bytes
             + stats.estimated_font_metadata_bytes
     );
-    assert!(work.retained.is_none());
+    assert!(work.retained.is_some());
+    assert!(dependency.upgrade().is_some());
+    work.clear();
     assert!(
         dependency.upgrade().is_none(),
-        "rejection must release source dependencies"
+        "clear releases source dependencies"
     );
 }
 
@@ -179,7 +169,6 @@ fn clear_and_drop_release_dependencies_for_sources_without_boxes() {
             0,
             count,
         );
-        assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
         assert!(
             work.retained
                 .as_ref()
@@ -228,7 +217,6 @@ fn one_shot_and_unsupported_construction_do_not_retain_source_dependencies() {
             0,
             count,
         );
-        assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
         assert_eq!(work.stats().estimated_construction_bytes, 0);
         assert_eq!(work.stats().reused_construction_boxes, 0);
         assert!(

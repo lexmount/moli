@@ -1,7 +1,7 @@
 use super::*;
 use moli_layout::{
-    EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutWorkingSet, LayoutWorkingSetLimits,
-    WebFontFace, WebFontRegistration, build_layout_pass_with_working_set,
+    EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutWorkingSet, WebFontFace,
+    WebFontRegistration, build_layout_pass_with_working_set,
 };
 
 struct NoFrames;
@@ -371,31 +371,8 @@ fn retained_work_tracks_font_descriptors_with_identical_payloads() {
 }
 
 #[test]
-fn retained_work_limits_and_failed_passes_do_not_leave_stale_state() {
+fn failed_passes_do_not_leave_stale_retained_state() {
     let (source, mut styles, mut services) = fixture();
-    for limits in [
-        LayoutWorkingSetLimits {
-            max_boxes: 0,
-            max_text_bytes: usize::MAX,
-            ..Default::default()
-        },
-        LayoutWorkingSetLimits {
-            max_boxes: usize::MAX,
-            max_text_bytes: 1,
-            ..Default::default()
-        },
-        LayoutWorkingSetLimits {
-            max_estimated_retained_bytes: 1,
-            ..Default::default()
-        },
-    ] {
-        let mut work = LayoutWorkingSet::new(limits);
-        for _ in 0..2 {
-            compare_pass(&source, &mut styles, &mut services, &mut work, 100);
-            assert_eq!(work.stats().retained_boxes, 0);
-            assert_eq!(work.stats().reused_inline_contexts, 0);
-        }
-    }
     let mut work = LayoutWorkingSet::default();
     compare_pass(&source, &mut styles, &mut services, &mut work, 100);
     let root_style = styles.0.remove(&0).unwrap();
