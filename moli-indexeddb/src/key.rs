@@ -62,7 +62,11 @@ impl Key {
         KeyNumber::new(value).map(Self::Number)
     }
 
-    fn validate_depth(&self) -> Result<(), &'static str> {
+    /// Reject nesting that would exceed the supported native key depth.
+    pub fn validate_depth(&self) -> Result<(), &'static str> {
+        if !matches!(self, Self::Array(_)) {
+            return Ok(());
+        }
         let mut pending = vec![(self, 0)];
         while let Some((key, depth)) = pending.pop() {
             if let Self::Array(keys) = key {

@@ -48,6 +48,10 @@ pub(crate) fn resolve_key(
     key: Option<Key>,
 ) -> Result<Key, IndexedDbError> {
     if let Some(key) = key {
+        // Compound key paths can add nesting after individual components have
+        // been converted. Never admit an unserializable key to the working copy.
+        key.validate_depth()
+            .map_err(|message| IndexedDbError::Data(message.to_owned()))?;
         if store.auto_increment
             && let Key::Number(number) = &key
         {

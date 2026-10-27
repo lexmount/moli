@@ -1,6 +1,28 @@
 use super::pipe_disturbed::run_probe;
 use super::*;
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_compound_key_paths_bound_complete_keys_without_poisoning_commits() -> Result<()>
+{
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-compound-key-depth.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ncompoundDepthProbe('compound-depth-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: compoundDepthChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            34,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_keys_preserve_types_order_and_binary_snapshots() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

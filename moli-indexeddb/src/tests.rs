@@ -1691,6 +1691,83 @@ fn reverse_unique_index_cursor_keeps_first_primary_key_for_each_index_key() {
 }
 
 #[test]
+fn oversized_write_keys_cannot_poison_transactions_or_origin_commits() {
+    for persistent in [false, true] {
+        let dir = TestDir::new();
+        let mut manager = if persistent {
+            IndexedDbManager::new(&dir.path).unwrap()
+        } else {
+            IndexedDbManager::new_in_memory()
+        };
+        let options = OpenOptions {
+            origin: "https://depth-boundary.test".into(),
+            name: "keys".into(),
+            version: None,
+        };
+        let opened = manager.open(options.clone()).unwrap();
+        let tx = opened.upgrade_transaction.unwrap();
+        manager
+            .create_object_store(
+                tx,
+                "s",
+                ObjectStoreOptions {
+                    auto_increment: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        manager.commit_transaction(tx).unwrap();
+        let tx = manager
+            .begin_transaction(opened.database, &["s".into()], TransactionMode::ReadWrite)
+            .unwrap();
+        let mut invalid = Key::from(1);
+        for _ in 0..=MAX_KEY_DEPTH {
+            invalid = Key::Array(vec![invalid]);
+        }
+        for add_only in [false, true] {
+            for with_quota in [false, true] {
+                let quota = IndexedDbQuotaCheck {
+                    quota: u64::MAX,
+                    non_indexed_db_usage: 0,
+                };
+                let result = match (add_only, with_quota) {
+                    (false, false) => manager.put(tx, "s", Some(invalid.clone()), vec![1]),
+                    (true, false) => manager.add(tx, "s", Some(invalid.clone()), vec![1]),
+                    (false, true) => {
+                        manager.put_with_quota(tx, "s", Some(invalid.clone()), vec![1], quota)
+                    }
+                    (true, true) => {
+                        manager.add_with_quota(tx, "s", Some(invalid.clone()), vec![1], quota)
+                    }
+                };
+                assert!(matches!(result, Err(IndexedDbError::Data(_))));
+                assert!(manager.entries(tx, "s").unwrap().is_empty());
+            }
+        }
+        assert_eq!(manager.add(tx, "s", None, vec![2]).unwrap(), Key::from(1));
+        manager.commit_transaction(tx).unwrap();
+        let tx = manager
+            .begin_transaction(opened.database, &["s".into()], TransactionMode::ReadWrite)
+            .unwrap();
+        assert_eq!(manager.add(tx, "s", None, vec![3]).unwrap(), Key::from(2));
+        manager.commit_transaction(tx).unwrap();
+        if persistent {
+            drop(manager);
+            let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+            let opened = manager.open(options).unwrap();
+            let tx = manager
+                .begin_transaction(opened.database, &["s".into()], TransactionMode::ReadOnly)
+                .unwrap();
+            assert_eq!(
+                manager.get_all_keys(tx, "s").unwrap(),
+                RequestOutcome::Keys(vec![Key::from(1), Key::from(2)])
+            );
+            manager.commit_transaction(tx).unwrap();
+        }
+    }
+}
+
+#[test]
 fn all_key_types_survive_backend_reopen_and_remain_distinct() {
     let dir = TestDir::new();
     let options = OpenOptions {

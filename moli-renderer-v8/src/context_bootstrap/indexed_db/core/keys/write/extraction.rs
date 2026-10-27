@@ -14,7 +14,15 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_from_value<'s
             };
             keys.push(key);
         }
-        return vec![Key::Array(keys)];
+        let key = Key::Array(keys);
+        // The compound wrapper counts toward the same limit as each component.
+        // Invalid primary keys reject the write; invalid index keys are omitted.
+        return key
+            .validate_depth()
+            .is_ok()
+            .then_some(key)
+            .into_iter()
+            .collect();
     }
     let KeyPath::String(key_path) = key_path else {
         return Vec::new();
