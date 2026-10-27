@@ -476,6 +476,7 @@ struct IndexedDbDatabaseLifecycleState {
     metadata: BTreeMap<String, IndexedDbObjectStoreMetadata>,
     upgrade_transaction: Option<RealmValueHandle>,
     upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
+    handle_tables: Vec<std::rc::Weak<RefCell<IndexedDbRuntimeStateTable>>>,
 }
 
 impl IndexedDbDatabaseLifecycleState {
@@ -492,6 +493,7 @@ impl IndexedDbDatabaseLifecycleState {
             metadata: BTreeMap::new(),
             upgrade_transaction: None,
             upgrade_metadata: None,
+            handle_tables: Vec::new(),
         }
     }
 }
@@ -818,6 +820,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
+    track_indexed_db_handle_table(scope, database, &table);
 }
 
 pub(super) fn indexed_db_transaction_mode<'s>(
@@ -975,6 +978,7 @@ pub(super) fn register_indexed_db_object_store_lifecycle<'s>(
         IndexedDbObjectStoreLifecycleState::new(scope, store, transaction, database, metadata);
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     table.borrow_mut().object_stores.insert(id, state);
+    track_indexed_db_handle_table(scope, database, &table);
 }
 
 pub(super) fn register_indexed_db_index_lifecycle<'s>(
@@ -990,11 +994,15 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
         indexed_db_object_store_metadata(scope, object_store).is_some_and(|metadata| {
             metadata.created_in_upgrade || metadata.created_indexes.contains(&info.name)
         });
+    let database = indexed_db_object_store_database(scope, object_store);
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     table.borrow_mut().indexes.insert(
         id,
         IndexedDbIndexLifecycleState::new(scope, object_store, info, created_in_upgrade),
     );
+    if let Some(database) = database {
+        track_indexed_db_handle_table(scope, database, &table);
+    }
 }
 
 pub(super) fn indexed_db_typed_owner_scope<'s>(

@@ -21,6 +21,19 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_store_surface_from_metadata
     store: v8::Local<'s, v8::Object>,
     metadata: IndexedDbObjectStoreMetadata,
 ) -> Option<()> {
+    let context = store.get_creation_context(scope)?;
+    if context == scope.get_current_context() {
+        return sync_store_surface_in_current_context(scope, store, metadata);
+    }
+    let target_scope = &mut v8::ContextScope::new(scope, context);
+    sync_store_surface_in_current_context(target_scope, store, metadata)
+}
+
+fn sync_store_surface_in_current_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    metadata: IndexedDbObjectStoreMetadata,
+) -> Option<()> {
     let info = metadata.info().clone();
     let key_path_value = match &info.key_path {
         Some(value) => key_path_to_js_value(scope, value)?,
