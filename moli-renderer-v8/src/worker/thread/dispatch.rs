@@ -414,6 +414,19 @@ pub(super) fn perform_worker_microtask_checkpoint_and_report_pending_promise_rej
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
 }
 
+pub(crate) fn perform_callback_cleanup_checkpoint_if_worker(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> bool {
+    if scope
+        .get_slot::<WorkerPromiseRejectDispatchSlot>()
+        .is_none()
+    {
+        return false;
+    }
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    true
+}
+
 fn queue_pending_worker_promise_rejection_task(scope: &mut v8::PinScope<'_, '_>) {
     let Some((worker_wake_tx, pending_unhandled_rejections, task_queued)) =
         worker_promise_reject_task_state(scope)
