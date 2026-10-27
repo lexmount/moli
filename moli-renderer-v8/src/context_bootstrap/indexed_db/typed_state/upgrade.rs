@@ -324,9 +324,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_index<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     let table = table.borrow();
     table.indexes.values().find_map(|index| {
-        if !index.deleted
-            && &index.info.name == name
-            && index.object_store.to_local(scope) == store
+        if !index.deleted && &index.info.name == name && index.object_store.to_local(scope) == store
         {
             index.wrapper.to_local(scope)
         } else {
@@ -366,8 +364,8 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index_metadata
                 if index.deleted || &index.info.name != old_name {
                     return None;
                 }
-                let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
-                    .ok()?;
+                let store =
+                    v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope)).ok()?;
                 Some((*id, store))
             })
             .collect::<Vec<_>>();
@@ -397,9 +395,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_object_store<'
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let table = table.borrow();
     table.object_stores.values().find_map(|store| {
-        if !store.deleted
-            && &store.name == name
-            && store.transaction.to_local(scope) == transaction
+        if !store.deleted && &store.name == name && store.transaction.to_local(scope) == transaction
         {
             store.wrapper.to_local(scope)
         } else {

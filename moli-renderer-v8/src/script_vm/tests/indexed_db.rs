@@ -4091,7 +4091,6 @@ fn indexed_db_rejects_invalid_explicit_keys() {
     assert_eq!(result, "DataError|DataError|DataError|DataError");
 }
 
-
 #[test]
 fn indexed_db_explicit_integer_key_advances_auto_increment_generator() {
     let mut vm =

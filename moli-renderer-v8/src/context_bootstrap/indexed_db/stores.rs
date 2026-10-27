@@ -29,3 +29,24 @@ pub(super) use self::attributes::*;
 pub(super) use self::index::*;
 pub(super) use self::key_range::*;
 pub(super) use self::object_store::*;
+
+// Key conversion can run author code and abort the transaction. Create the
+// request afterwards; the result queue owns admission of accepted operations.
+fn create_operation_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+        .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "The transaction is not active.",
+            "TransactionInactiveError",
+        );
+        scope.throw_exception(error);
+        return None;
+    }
+    create_request_object(scope, source.into(), transaction)
+}

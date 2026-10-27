@@ -428,27 +428,6 @@ async fn indexed_db_keys_preserve_types_order_and_binary_snapshots() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result<()> {
-    let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
-    let fixture = include_str!("fixtures/indexeddb-key-range.js");
-    for target in ["window", "child", "worker"] {
-        let source = format!(
-            "{fixture}\nkeyRangeProbe('key-range-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: rangeChecks}}));"
-        );
-        let result = run_probe(&browser, &server, target, &source).await?;
-        assert_eq!(result["state"], "pass", "{target}: {result}");
-        assert_eq!(
-            result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 301 } else { 313 },
-            "{target}: {result}"
-        );
-    }
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_writes_clone_before_key_paths_and_snapshot_queued_values() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

@@ -29,15 +29,6 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_active_transaction<
     Some(transaction)
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn create_store_request<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
-    let transaction = object_store_active_transaction(scope, source)?;
-    let request = create_request_object(scope, source.into(), transaction)?;
-    Some((request, transaction))
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn object_store_operation_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,

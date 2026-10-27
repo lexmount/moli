@@ -1128,7 +1128,12 @@ pub(super) fn indexed_db_transaction_database<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let table = table.borrow();
     v8::Local::<v8::Object>::try_from(
-        table.transactions.get(&id)?.database.as_ref()?.to_local(scope),
+        table
+            .transactions
+            .get(&id)?
+            .database
+            .as_ref()?
+            .to_local(scope),
     )
     .ok()
 }
