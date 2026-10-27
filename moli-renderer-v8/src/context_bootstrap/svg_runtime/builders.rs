@@ -2991,17 +2991,18 @@ pub(super) fn svg_length_number_slot<'s>(
 pub(super) fn set_svg_length_numeric_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    value: f64,
+    value: f32,
     unit_type: u32,
 ) {
-    let value_as_string = serialize_svg_length_value(value, unit_type);
+    let unit = svg_length_unit_from_type(unit_type);
+    let value_as_string = format!("{value}{}", unit.suffix());
     set_svg_length_parsed_value(
         scope,
         object,
         SvgParsedLength {
-            value,
+            value: f64::from(value),
             unit_type,
-            unit: svg_length_unit_from_type(unit_type),
+            unit,
             raw: None,
         },
     );
@@ -3818,10 +3819,6 @@ pub(super) fn svg_length_unit_type(unit: SvgLengthUnit) -> u32 {
 
 pub(super) fn parse_svg_number_value(raw: &str) -> Option<f64> {
     svg_geometry::parse_number(raw)
-}
-
-pub(super) fn serialize_svg_length_value(value: f64, unit_type: u32) -> String {
-    SvgLength::new(value, svg_length_unit_from_type(unit_type)).serialize()
 }
 
 pub(super) fn svg_length_unit_from_type(unit_type: u32) -> SvgLengthUnit {

@@ -1514,7 +1514,7 @@ pub(super) fn svg_length_getter<'s>(
         }
         "value" => {
             let value = svg_length_value_in_user_units(scope, args.this());
-            rv.set(v8::Number::new(scope, value).into());
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "valueInSpecifiedUnits" => {
             let value = svg_length_number_slot(
@@ -1523,7 +1523,7 @@ pub(super) fn svg_length_getter<'s>(
                 SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
             )
             .unwrap_or(0.0);
-            rv.set(v8::Number::new(scope, value).into());
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "valueAsString" => {
             rv.set(
@@ -3740,12 +3740,7 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
         );
         return;
     }
-    set_svg_length_numeric_value(
-        scope,
-        args.this(),
-        f64::from(parsed.value),
-        parsed.unit_type as u32,
-    );
+    set_svg_length_numeric_value(scope, args.this(), parsed.value, parsed.unit_type as u32);
     reflect_svg_length_to_owner_attribute(scope, args.this());
     reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
     rv.set_undefined();
