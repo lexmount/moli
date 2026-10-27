@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::network::interception_output::ResourceInterceptionContext;
 use crate::network_host::{BlobUrlFetchEnvironment, CapturedBlobUrl};
+
 use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
 use crate::network_host::{HeadersGuard, validate_fetch_response_headers};
 use crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata;
@@ -1237,6 +1238,19 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::RedirectAdmission {
+            fetch_id,
+            admission,
+        } => {
+            if state
+                .borrow()
+                .pending_fetches
+                .get(&fetch_id)
+                .is_some_and(|pending| !pending.load.is_cancelled())
+            {
+                admission.grant();
+            }
+        }
         WorkerFetchEvent::ResourceTiming { fetch_id, timing } => {
             if !state.borrow().pending_fetches.contains_key(&fetch_id) {
                 timing.publish(scope);

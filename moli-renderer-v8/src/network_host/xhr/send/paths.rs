@@ -272,6 +272,7 @@ pub(super) fn spawn_network_xhr_fetch(
             cancel_handle,
             prepared.cors_preflight_request_headers,
         );
+        controlled = controlled.with_redirect_owner(host.window_redirect_owner(internal_id));
         host.append_live_turn_owner_action(controlled.prepare_initial_pause());
         runner.spawn(async move {
             use crate::network_host::controlled_resource::{
@@ -313,6 +314,7 @@ pub(super) fn spawn_network_xhr_fetch(
         prepared.method,
         prepared.request_headers,
         request_body_text(&prepared.send_body),
+        host.window_redirect_owner(internal_id),
     );
     internal_id
 }

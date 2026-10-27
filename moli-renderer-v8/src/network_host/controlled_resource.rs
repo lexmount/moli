@@ -39,6 +39,7 @@ enum ResourceResponsePolicy {
 
 pub(crate) struct ControlledResourceLoad {
     response_policy: ResourceResponsePolicy,
+    redirect_owner: Option<super::RedirectOwner>,
     blob_url_entry: Option<super::CapturedBlobUrl>,
     service_worker: Option<service_worker::WorkerServiceWorkerFetch>,
     response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -95,6 +96,10 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
+    pub(crate) fn with_redirect_owner(mut self, owner: Option<super::RedirectOwner>) -> Self {
+        self.redirect_owner = owner;
+        self
+    }
     pub(crate) fn with_blob_url_entry(mut self, entry: Option<super::CapturedBlobUrl>) -> Self {
         self.blob_url_entry = entry;
         self
@@ -118,6 +123,7 @@ impl ControlledResourceLoad {
     ) -> Self {
         Self {
             response_policy: ResourceResponsePolicy::Xhr,
+            redirect_owner: None,
             blob_url_entry: super::CapturedBlobUrl::capture(&request.url),
             service_worker: None,
             response_filter: None,
@@ -785,6 +791,9 @@ impl ControlledResourceLoad {
                     )
                     .await?;
                 return Ok((delivered, network_request_headers));
+            }
+            if let Some(owner) = &self.redirect_owner {
+                owner.admit(&self.cancel).await?;
             }
             self.preflight_headers = self.request.request_headers.to_byte_strings();
             // ExtraInfo describes the first on-wire request of the current hop.

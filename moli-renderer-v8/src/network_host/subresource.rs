@@ -300,6 +300,7 @@ impl SubresourceRequestDispatch {
             request_method,
             request_headers,
             request_body,
+            None,
         );
     }
 }

@@ -486,6 +486,7 @@ fn start_window_ping(
         info.method,
         info.request_headers,
         info.request_body,
+        None,
     );
     true
 }

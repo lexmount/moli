@@ -220,14 +220,23 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
         .filter(|value| value.is_finite() && *value > 0.0)
         .map(|value| value as u32)
         .unwrap_or(0);
+    apply_worker_xhr_timeout(scope, &state, xhr, scheduled_xhr_id);
+    rv.set_undefined();
+}
+
+fn apply_worker_xhr_timeout(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    xhr: v8::Local<'_, v8::Object>,
+    scheduled_xhr_id: u32,
+) {
     let active_xhr_id =
         xhr_state_number_property(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT).unwrap_or(0.0) as u32;
     if scheduled_xhr_id == 0 || scheduled_xhr_id != active_xhr_id {
-        rv.set_undefined();
         return;
     }
 
-    set_xhr_state_number(scope, xhr, XHR_TIMEOUT_TIMER_SLOT, 0.0);
+    cancel_worker_xhr_timeout(scope, xhr);
     let response_completed = state
         .borrow()
         .pending_xhrs
@@ -242,7 +251,6 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
                 && !pending.load.cancel_if_response_pending()
         });
     if response_completed {
-        rv.set_undefined();
         return;
     }
 
@@ -252,7 +260,6 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
         pending.load.cancel();
     }
     apply_xhr_timeout(scope, xhr);
-    rv.set_undefined();
 }
 
 pub(crate) fn try_worker_xhr_send_callback<'s>(
@@ -456,6 +463,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let completion_tx = state.borrow().xhr_completion_tx.clone();
     let info = worker_xhr_info(&prepared);
     let request = worker_xhr_request(&state.borrow(), &prepared);
+    let redirect_owner = crate::network_host::RedirectOwner::Worker(WorkerRedirectOwner::xhr(completion_tx.clone(), xhr_id, load.clone()));
     let timing = prepared.timing.clone();
     timing.begin_transport(cancel_handle.clone());
     load.task_runner().spawn(async move {
@@ -475,6 +483,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 cancel_handle,
                 prepared.request_headers.to_byte_strings(),
             )
+            .with_redirect_owner(Some(redirect_owner))
             .run()
             .await;
         if let Ok(response) = &completed.result {
@@ -715,6 +724,26 @@ pub(in crate::worker) fn drain_worker_xhr_event(
     event: WorkerXhrEvent,
 ) {
     match event {
+        WorkerXhrEvent::RedirectAdmission { xhr_id, admission } => {
+            let xhr = {
+                let state = state.borrow();
+                let Some(pending) = state.pending_xhrs.get(&xhr_id) else {
+                    return;
+                };
+                if pending.load.is_cancelled() {
+                    return;
+                }
+                v8::Local::new(scope, &pending.xhr)
+            };
+            // Worker timers are collected after the registering task. A
+            // queued redirect must still observe the XHR's elapsed timeout,
+            // including changes made before that task returns.
+            if worker_xhr_timeout_remaining_delay_ms(scope, xhr) == Some(0) {
+                apply_worker_xhr_timeout(scope, state, xhr, xhr_id);
+                return;
+            }
+            admission.grant();
+        }
         WorkerXhrEvent::ResourceTiming { xhr_id, timing } => {
             if xhr_id.is_none_or(|id| !state.borrow().pending_xhrs.contains_key(&id)) {
                 timing.publish(scope);

@@ -471,6 +471,7 @@ pub(crate) fn start_image_element_resource_fetch(
         "GET".to_owned(),
         Default::default(),
         None,
+        None,
     );
     Ok(ImageElementResourceFetchStart::Pending)
 }

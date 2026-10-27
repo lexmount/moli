@@ -1095,6 +1095,9 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    RedirectAdmission {
+        internal_id: u64,
+    },
     DocumentAbort {
         internal_id: u64,
     },
@@ -1129,6 +1132,10 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    RedirectAdmission {
+        internal_id: u64,
+        admission: crate::network_host::RedirectAdmission,
+    },
     InterceptionOutputReady(crate::network::interception_output::InterceptionOutputWake),
     InterceptedXhrCompleted(Box<crate::network_host::controlled_resource::XhrLoadResult>),
     InterceptedXhrStreamingStarted {
@@ -1163,6 +1170,11 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::RedirectAdmission { internal_id, .. } => {
+                AsyncSubresourceFetchEventTarget::RedirectAdmission {
+                    internal_id: *internal_id,
+                }
+            }
             Self::InterceptedXhrCompleted(completed) => {
                 AsyncSubresourceFetchEventTarget::Completion {
                     internal_id: completed.info.internal_id,

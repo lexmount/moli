@@ -87,10 +87,14 @@ pub(super) fn start<'s>(
     let service_worker = state.borrow().service_worker_runtime.clone();
     let service_worker_client = state.borrow().service_worker_client_id;
     let task_runner = load.task_runner();
+    let redirect_owner = (kind == WorkerFetchKind::Fetch).then(|| {
+        crate::network_host::RedirectOwner::Worker(WorkerRedirectOwner::fetch(completion.clone(), fetch_id, load.clone()))
+    });
     task_runner.spawn(async move {
         let integrity = metadata.integrity.clone();
         control
             .fetch_load(request, info, load, cancel, policy_context)
+            .with_redirect_owner(redirect_owner)
             .with_blob_url_entry(blob_url_entry)
             .with_service_worker(service_worker, service_worker_client, metadata)
             .run_fetch(completion, fetch_id, resource_timing, integrity, timing)
