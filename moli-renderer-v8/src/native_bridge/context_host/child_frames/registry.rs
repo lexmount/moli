@@ -1,6 +1,8 @@
 use super::super::child_documents::ChildInitialEmptyDocumentInit;
 use super::*;
-use crate::custom_elements::{CustomElementRegistryAssociation, CustomElementRegistryKey};
+use crate::custom_elements::{
+    ChildCustomElementRegistryKey, CustomElementRegistryAssociation, CustomElementRegistryKey,
+};
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -551,7 +553,7 @@ impl JsContextHost {
                     self.disconnect_shared_worker_clients_for_child_context(handle);
                     self.clear_custom_element_registry_associations_for_child_context(handle);
                     self.clear_child_browsing_context_current_document(handle);
-                    self.child_custom_elements.remove(&handle);
+                    self.clear_child_custom_elements_for_context(handle);
                     let initialization = self.initialize_child_frame_with_initial_empty_document(
                         handle,
                         initial_empty_document_init.expect(
@@ -610,7 +612,7 @@ impl JsContextHost {
                 self.detach_child_frame_owner_and_wake_parent(handle);
                 self.clear_live_child_window_proxy_records(handle);
                 self.clear_custom_element_registry_associations_for_child_context(handle);
-                self.child_custom_elements.remove(&handle);
+                self.clear_child_custom_elements_for_context(handle);
                 self.clear_child_window_event_listeners(handle);
                 self.close_broadcast_channels_for_child_context(handle);
                 self.disconnect_shared_worker_clients_for_child_context(handle);
@@ -804,11 +806,14 @@ impl JsContextHost {
                 self.set_custom_element_registry_association(
                     document_handle,
                     CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                        handle,
+                        ChildCustomElementRegistryKey {
+                            child_handle: handle,
+                            document_handle,
+                        },
                     )),
                 );
             }
-            self.child_custom_elements.remove(&handle);
+            self.clear_child_custom_elements_for_context(handle);
             self.clear_child_window_event_listeners(handle);
             self.close_broadcast_channels_for_child_context(handle);
             self.disconnect_shared_worker_clients_for_child_context(handle);
@@ -898,7 +903,11 @@ impl JsContextHost {
         let mut stale_registry_context_handles = self
             .child_browsing_context_document_handles
             .keys()
-            .chain(self.child_custom_elements.keys())
+            .chain(
+                self.child_custom_elements
+                    .keys()
+                    .map(|key| &key.child_handle),
+            )
             .copied()
             .filter(|handle| !live_handles.contains(handle))
             .collect::<HashSet<_>>();
@@ -906,9 +915,9 @@ impl JsContextHost {
             if let CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
                 handle,
             )) = association
-                && !live_handles.contains(handle)
+                && !live_handles.contains(&handle.child_handle)
             {
-                stale_registry_context_handles.insert(*handle);
+                stale_registry_context_handles.insert(handle.child_handle);
             }
         }
         for handle in stale_registry_context_handles {
@@ -918,7 +927,10 @@ impl JsContextHost {
                 self.set_custom_element_registry_association(
                     document_handle,
                     CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                        handle,
+                        ChildCustomElementRegistryKey {
+                            child_handle: handle,
+                            document_handle,
+                        },
                     )),
                 );
             }
@@ -970,7 +982,7 @@ impl JsContextHost {
         self.child_browsing_context_document_handles
             .retain(|handle, _| live_handles.contains(handle));
         self.child_custom_elements
-            .retain(|handle, _| live_handles.contains(handle));
+            .retain(|key, _| live_handles.contains(&key.child_handle));
         self.child_window_event_listeners
             .retain(|handle, _| live_handles.contains(handle));
         self.child_web_storage_opaque_context_nonces

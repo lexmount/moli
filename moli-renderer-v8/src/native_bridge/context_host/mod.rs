@@ -10,8 +10,9 @@ use crate::{
         },
         css_style::CssInlineStyleDeclarationState,
         custom_elements::{
-            CustomElementReactionCoordinator, CustomElementRegistryAssociation,
-            CustomElementRegistryKey, CustomElementStore, RegistryAssociationRetarget,
+            ChildCustomElementRegistryKey, CustomElementReactionCoordinator,
+            CustomElementRegistryAssociation, CustomElementRegistryKey, CustomElementStore,
+            RegistryAssociationRetarget,
         },
         document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle},
         document_script_scheduler::{
@@ -841,7 +842,7 @@ pub(crate) struct JsContextHost {
     selection_record_registry: selection_records::SelectionRecordRegistry,
     custom_elements: CustomElementStore,
     custom_element_reactions: CustomElementReactionCoordinator,
-    child_custom_elements: HashMap<DomHandle, CustomElementStore>,
+    child_custom_elements: HashMap<ChildCustomElementRegistryKey, CustomElementStore>,
     scoped_custom_elements: HashMap<u64, CustomElementStore>,
     parser_defined_autonomous_custom_elements: VecDeque<String>,
     // Parser-created direct construction leaves html5ever's open-stack

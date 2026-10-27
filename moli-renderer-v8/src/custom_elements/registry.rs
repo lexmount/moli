@@ -1,9 +1,15 @@
 use crate::document_runtime::DomHandle;
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct ChildCustomElementRegistryKey {
+    pub(crate) child_handle: DomHandle,
+    pub(crate) document_handle: DomHandle,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CustomElementRegistryKey {
     Global,
-    Child(DomHandle),
+    Child(ChildCustomElementRegistryKey),
     Scoped(u64),
 }
 
@@ -58,14 +64,19 @@ pub(crate) struct CustomElementAdoptionPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
+    use super::{
+        ChildCustomElementRegistryKey, CustomElementRegistryAssociation, CustomElementRegistryKey,
+    };
     use crate::document_runtime::DomHandle;
 
     #[test]
     fn classifies_registry_associations_for_detached_bridge_policy() {
         let global = CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global);
         let child = CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-            DomHandle::new(1),
+            ChildCustomElementRegistryKey {
+                child_handle: DomHandle::new(1),
+                document_handle: DomHandle::new(2),
+            },
         ));
         let scoped =
             CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(7));
