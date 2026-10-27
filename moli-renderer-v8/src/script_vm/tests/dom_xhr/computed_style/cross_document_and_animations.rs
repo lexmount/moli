@@ -1188,6 +1188,7 @@ getComputedStyle(document.querySelector('.animated')).animationName;
     )
     .expect("large stylesheet and loading skeleton should initialize");
     crate::live_stylesheet::reset_live_stylesheet_css_text_projection_count_for_test();
+    crate::live_stylesheet::reset_keyframe_index_metrics_for_test();
 
     assert!(
         vm.run_one_rendering_update_executor_turn(&loader)
@@ -1210,6 +1211,19 @@ getComputedStyle(document.querySelector('.animated')).animationName;
         crate::live_stylesheet::live_stylesheet_css_text_projection_count_for_test(),
         0,
         "animation scans and value reads must use native rules, without serializing full stylesheets"
+    );
+    let metrics = crate::live_stylesheet::keyframe_index_metrics_for_test();
+    assert_eq!(
+        metrics.builds, 1,
+        "the scan, per-event revalidation, and value reads must share one stylesheet index"
+    );
+    assert!(
+        metrics.rule_visits <= 300,
+        "unrelated rules must be traversed once, independently of the animated element count: {metrics:?}"
+    );
+    assert_eq!(
+        metrics.snapshots, 2,
+        "each queried keyframe is projected once"
     );
 }
 
@@ -1236,6 +1250,7 @@ addEventListener('animationstart', event => {
 "#,
     )
     .expect("reentrant animation listener should initialize");
+    crate::live_stylesheet::reset_keyframe_index_metrics_for_test();
 
     assert!(
         vm.run_one_rendering_update_executor_turn(&loader)
@@ -1247,6 +1262,11 @@ addEventListener('animationstart', event => {
             .expect("animation targets should be readable"),
         "first",
         "removing keyframes in the first listener must suppress the second element's stale event"
+    );
+    assert_eq!(
+        crate::live_stylesheet::keyframe_index_metrics_for_test().builds,
+        2,
+        "the listener's CSSOM mutation must invalidate the index before the next event"
     );
 }
 
