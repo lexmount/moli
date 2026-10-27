@@ -1,6 +1,6 @@
 use super::realtime_opportunity::run_opportunity;
 use super::*;
-use moli_layout::{LayoutWorkingSetAdmission, LayoutWorkingSetStats};
+use moli_layout::LayoutWorkingSetStats;
 use moli_page_types::LayoutPolicy;
 
 mod structure;
@@ -46,7 +46,6 @@ fn evict_work(page: &PageVm) {
 
 fn stats_json(stats: LayoutWorkingSetStats) -> serde_json::Value {
     serde_json::json!({
-        "admission": format!("{:?}", stats.admission),
         "retained_boxes": stats.retained_boxes,
         "retained_text_bytes": stats.retained_text_bytes,
         "estimated_retained_bytes": stats.estimated_retained_bytes,
@@ -54,13 +53,8 @@ fn stats_json(stats: LayoutWorkingSetStats) -> serde_json::Value {
         "reused_construction_boxes": stats.reused_construction_boxes,
         "reused_owned_boxes": stats.reused_owned_boxes,
         "retained_owned_boxes": stats.retained_owned_boxes,
-        "candidate_owned_bytes": stats.candidate_owned_bytes,
-        "owned_box_capacity_trimmed": stats.owned_box_capacity_trimmed,
         "reused_inline_contexts": stats.reused_inline_contexts,
         "reused_inline_numeric_layouts": stats.reused_inline_numeric_layouts,
-        "candidate_boxes": stats.candidate_boxes,
-        "candidate_text_bytes": stats.candidate_text_bytes,
-        "candidate_estimated_bytes": stats.candidate_estimated_bytes,
         "estimated_graph_bytes": stats.estimated_graph_bytes,
         "estimated_construction_bytes": stats.estimated_construction_bytes,
         "estimated_inline_bytes": stats.estimated_inline_bytes,
@@ -103,7 +97,6 @@ async fn run_frame(
     );
     assert_eq!(metrics.paint_operation_count, 0);
     let stats = main_stats(page);
-    assert_eq!(stats.admission, LayoutWorkingSetAdmission::Retained);
     assert!(stats.retained_boxes > 0 && stats.estimated_inline_numeric_bytes > 0);
     // These are characterization records, not a permanent requirement that
     // an append miss. A future optimization may legitimately increase hits.

@@ -225,10 +225,6 @@ impl InlineNumericReuse {
             .store(owner, inputs, style, output);
     }
 
-    pub(crate) fn discard_measurements(&mut self) {
-        self.measurements = None;
-    }
-
     pub(crate) fn lookup(
         &mut self,
         owner: LayoutBoxId,

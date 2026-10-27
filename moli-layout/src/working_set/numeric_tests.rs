@@ -61,7 +61,7 @@ fn numeric_world(
 }
 
 #[test]
-fn retained_processed_text_capacity_counts_towards_admission() {
+fn retained_processed_text_capacity_is_reported_while_retained() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     baseline.publish(
@@ -72,10 +72,7 @@ fn retained_processed_text_capacity_counts_towards_admission() {
         1,
     );
     let baseline_stats = baseline.stats();
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + 1024,
-        ..LayoutWorkingSetLimits::default()
-    });
+    let mut work = LayoutWorkingSet::default();
     let mut pass = numeric_world(0, true, taffy::Style::default());
     let text = &mut pass.inline_layouts[0].as_mut().unwrap().text;
     *text = String::with_capacity(8192);
@@ -83,21 +80,17 @@ fn retained_processed_text_capacity_counts_towards_admission() {
     assert!(text.is_empty());
     work.publish(pass, fonts, 0, 0, 1);
     let stats = work.stats();
-    assert_eq!(
-        stats.admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
-    assert_eq!(stats.retained_boxes, 0);
-    assert_eq!(stats.estimated_retained_bytes, 0);
+    assert_eq!(stats.retained_boxes, 1);
+    assert!(stats.estimated_retained_bytes > 0);
     assert_eq!(
         stats.estimated_inline_bytes,
         baseline_stats.estimated_inline_bytes + owned_text_bytes
     );
-    assert!(work.retained.is_none());
+    assert!(work.retained.is_some());
 }
 
 #[test]
-fn retained_numeric_output_capacity_counts_towards_admission() {
+fn retained_numeric_output_capacity_is_reported_while_retained() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     baseline.publish(
@@ -109,10 +102,7 @@ fn retained_numeric_output_capacity_counts_towards_admission() {
     );
     let baseline_stats = baseline.stats();
     assert!(baseline_stats.estimated_inline_numeric_bytes > 0);
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + 1024,
-        ..LayoutWorkingSetLimits::default()
-    });
+    let mut work = LayoutWorkingSet::default();
     let pass = numeric_world(1024, true, taffy::Style::default());
     let output_bytes = pass.inline_layouts[0]
         .as_ref()
@@ -123,27 +113,23 @@ fn retained_numeric_output_capacity_counts_towards_admission() {
         * std::mem::size_of::<InlineSourceFragment>();
     work.publish(pass, fonts, 0, 0, 1);
     let stats = work.stats();
-    assert_eq!(
-        stats.admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
-    assert_eq!(stats.retained_boxes, 0);
-    assert_eq!(stats.estimated_retained_bytes, 0);
+    assert_eq!(stats.retained_boxes, 1);
+    assert!(stats.estimated_retained_bytes > 0);
     assert_eq!(
         stats.estimated_inline_numeric_bytes,
         baseline_stats.estimated_inline_numeric_bytes + output_bytes
     );
     assert_eq!(
-        stats.candidate_estimated_bytes,
+        stats.estimated_retained_bytes,
         stats.estimated_graph_bytes
             + stats.estimated_inline_bytes
             + stats.estimated_font_metadata_bytes
     );
-    assert!(work.retained.is_none());
+    assert!(work.retained.is_some());
 }
 
 #[test]
-fn retained_numeric_style_key_capacity_counts_towards_admission() {
+fn retained_numeric_style_key_capacity_is_reported_while_retained() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     baseline.publish(
@@ -154,10 +140,7 @@ fn retained_numeric_style_key_capacity_counts_towards_admission() {
         1,
     );
     let baseline_stats = baseline.stats();
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + 1024,
-        ..LayoutWorkingSetLimits::default()
-    });
+    let mut work = LayoutWorkingSet::default();
     let names = Vec::<style::Atom>::with_capacity(1024);
     let owned_key_bytes = names.capacity() * std::mem::size_of::<style::Atom>();
     let numeric_style = taffy::Style {
@@ -166,19 +149,15 @@ fn retained_numeric_style_key_capacity_counts_towards_admission() {
     };
     work.publish(numeric_world(0, true, numeric_style), fonts, 0, 0, 1);
     let stats = work.stats();
-    assert_eq!(
-        stats.admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
     assert!(
         stats.estimated_inline_numeric_bytes
             >= baseline_stats.estimated_inline_numeric_bytes + owned_key_bytes
     );
-    assert!(work.retained.is_none());
+    assert!(work.retained.is_some());
 }
 
 #[test]
-fn measurement_capacity_is_charged_and_evicted_before_valid_final_results() {
+fn measurement_and_final_results_survive_until_explicit_clear() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     let mut baseline = LayoutWorkingSet::default();
     baseline.publish(
@@ -212,6 +191,7 @@ fn measurement_capacity_is_charged_and_evicted_before_valid_final_results() {
         grid_template_row_names: vec![Vec::with_capacity(2048)],
         ..taffy::Style::default()
     };
+    let lookup_style = numeric_style.clone();
     pass.inline_numeric_reuse
         .as_mut()
         .unwrap()
@@ -222,46 +202,20 @@ fn measurement_capacity_is_charged_and_evicted_before_valid_final_results() {
         .unwrap()
         .estimated_retained_bytes();
     assert!(measured > base_bytes + 1024);
-    let mut roomy = LayoutWorkingSet::default();
-    roomy.publish(pass, fonts.clone(), 0, 0, 1);
-    assert!(roomy.stats().estimated_retained_bytes > base_bytes + 1024);
-    let mut restored = roomy.take().unwrap();
-    restored.discard_inline_measurements();
-    assert_eq!(restored.estimated_retention().total(), base_bytes);
-
-    let mut pass = numeric_world(0, true, taffy::Style::default());
-    let numeric_style = taffy::Style {
-        grid_template_row_names: vec![Vec::with_capacity(2048)],
-        ..taffy::Style::default()
-    };
-    pass.inline_numeric_reuse
-        .as_mut()
-        .unwrap()
-        .store_measurement(owner, inputs, numeric_style, taffy::LayoutOutput::DEFAULT);
-    let mut limited = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: base_bytes + 1024,
-        ..Default::default()
-    });
-    limited.publish(pass, fonts, 0, 0, 1);
-    assert_eq!(
-        limited.stats().admission,
-        LayoutWorkingSetAdmission::Retained
-    );
-    assert_eq!(limited.stats().estimated_retained_bytes, base_bytes);
-    let retained = limited.retained.as_mut().unwrap();
+    let mut work = LayoutWorkingSet::default();
+    work.publish(pass, fonts, 0, 0, 1);
+    assert!(work.stats().estimated_retained_bytes > base_bytes + 1024);
+    let retained = work.retained.as_mut().unwrap();
     let numeric = retained.inline_numeric_reuse.as_mut().unwrap();
-    assert!(
-        numeric.contains(owner),
-        "the accepted final result must survive"
-    );
+    assert!(numeric.contains(owner));
     assert!(
         numeric
-            .lookup_measurement(owner, inputs, &taffy::Style::default())
-            .is_none()
+            .lookup_measurement(owner, inputs, &lookup_style)
+            .is_some()
     );
     assert!(retained.inline_contexts[0].1.laid_out.is_some());
-    limited.clear();
-    assert_eq!(limited.stats(), LayoutWorkingSetStats::default());
+    work.clear();
+    assert_eq!(work.stats(), LayoutWorkingSetStats::default());
 }
 
 #[test]
@@ -274,7 +228,6 @@ fn numeric_entries_without_accepted_outputs_release_their_retained_buffers() {
         }
         let mut work = LayoutWorkingSet::default();
         work.publish(pass, fonts.clone(), 0, 0, 1);
-        assert_eq!(work.stats().admission, LayoutWorkingSetAdmission::Retained);
         assert_eq!(work.stats().estimated_inline_numeric_bytes, 0);
         let retained = work.retained.as_ref().unwrap();
         assert!(retained.inline_numeric_reuse.is_none());
@@ -385,7 +338,7 @@ fn partial_numeric_owner_index_grows_shrinks_and_rejects_removed_entries() {
     );
 
     // Shrinking the logical graph keeps this allocation available for the
-    // next append. Its remaining capacity must still enter admission charge.
+    // next append. Its remaining capacity must still be reported.
     numeric.retain_owners_for_box_count(1, |_| true);
     let fonts = DocumentLayoutServices::new().font_inputs();
     let fresh = numeric_world(0, true, taffy::Style::default());
@@ -400,22 +353,15 @@ fn partial_numeric_owner_index_grows_shrinks_and_rejects_removed_entries() {
     baseline.publish(fresh, fonts.clone(), 0, 0, 1);
     let baseline_stats = baseline.stats();
     world.inline_numeric_reuse = Some(numeric);
-    let mut bounded = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + excess - 1,
-        ..LayoutWorkingSetLimits::default()
-    });
-    bounded.publish(world, fonts, 0, 0, 1);
+    let mut work = LayoutWorkingSet::default();
+    work.publish(world, fonts, 0, 0, 1);
     assert_eq!(
-        bounded.stats().admission,
-        LayoutWorkingSetAdmission::EstimatedByteLimit
-    );
-    assert_eq!(
-        bounded.stats().candidate_estimated_bytes,
+        work.stats().estimated_retained_bytes,
         baseline_stats.estimated_retained_bytes + excess
     );
     assert_eq!(
-        bounded.stats().estimated_inline_numeric_bytes,
+        work.stats().estimated_inline_numeric_bytes,
         baseline_stats.estimated_inline_numeric_bytes + excess
     );
-    assert!(bounded.retained.is_none());
+    assert!(work.retained.is_some());
 }

@@ -22,7 +22,6 @@ use tokio::sync::{mpsc, oneshot};
 
 mod auxiliary_pages;
 mod javascript_idle_admission;
-mod layout_working_set_budget;
 mod open_streaming;
 mod redirect_chain;
 

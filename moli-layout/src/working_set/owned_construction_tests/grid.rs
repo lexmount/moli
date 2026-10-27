@@ -171,7 +171,7 @@ fn grid_ignored_whitespace_and_positioned_items_match_cold_after_style_updates()
 }
 
 #[test]
-fn grid_compact_budget_fallback_and_eviction_preserve_current_answers() {
+fn grid_compact_restoration_and_clear_preserve_current_answers() {
     let source = Source::new();
     let mut styles = GridStyles::new();
     let mut services = DocumentLayoutServices::new();
@@ -182,14 +182,8 @@ fn grid_compact_budget_fallback_and_eviction_preserve_current_answers() {
     let mut compact = work.take().unwrap();
     compact.compact_graph();
     let compact_charge = compact.estimated_retention().total();
-    drop(compact);
     assert!(compact_charge < owned_charge);
-    let limit = compact_charge + (owned_charge - compact_charge) / 2;
-    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
-        max_estimated_retained_bytes: limit,
-        ..LayoutWorkingSetLimits::default()
-    });
-    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    work.retained = Some(compact);
     assert_eq!(work.stats().retained_owned_boxes, 0);
     assert!(
         work.retained

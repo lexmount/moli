@@ -118,64 +118,6 @@ The probe preserves partial failures and refuses to overwrite its JSON output.
 This finite functional comparison does not establish throughput, memory
 recovery, starvation freedom, or correctness for arbitrary DOM changes.
 
-### Shared layout retention under pressure
-
-The `layout_working_set_pressure` example exercises two real Realtime Pages in
-one Browser through public APIs. It checks actual retained charges, maintenance
-refunds, a queued handoff, pressure zero, recovery after a new mutation, and
-Page-close cleanup. It uses the default budget timings and waits for the known
-protection deadline before competing. A claim that cannot be verified within
-the original ticket's conservative time window is reported as unproven.
-
-Build it from a clean commit, embedding that commit's full SHA:
-
-```bash
-MOLI_PRESSURE_PROBE_SOURCE_SHA="$(git rev-parse HEAD)" \
-  cargo build --release -p moli --example layout_working_set_pressure --locked
-```
-
-Freeze independent copies of the binary and example source. Record their
-absolute paths and SHA-256 hashes in a build manifest with `source_sha`,
-`profile: "release"`, the exact `command`, `binary`, `binary_sha256`,
-`probe_source`, `probe_source_sha256`, and `tracked_diff: []`. Also retain the
-build log, Rust version, Cargo.lock hash, and build environment. Then run once:
-
-```bash
-python3 moli-benchmark/scripts/probe-layout-working-set-pressure.py \
-  --build /absolute/pressure-build.json \
-  --output /absolute/new-pressure-result.json
-```
-
-The driver verifies the frozen artifacts and embedded SHA, preserves JSONL
-events and stderr, samples process-tree resources, and rejects existing output
-files. It does not invoke Cargo or retry unsuccessful runs. This is a bounded
-diagnostic: estimated cache charges are distinct from RSS/PSS, sampled peaks
-can miss short allocations, and two static Pages do not establish long-term
-fairness or a busy-owner latency bound. Native build/frame/paint counts and
-exact per-Page FIFO identities are outside this public harness.
-
-For repeated contention among up to four Pages, use the same frozen build:
-
-```bash
-python3 moli-benchmark/scripts/probe-layout-working-set-pressure.py \
-  --build /absolute/pressure-build.json \
-  --pages 4 --rounds 8 \
-  --output /absolute/new-multi-page-pressure-result.json
-```
-
-This calibrates a target that fits any one retained Page, rotates the incumbent
-and waiter, and checks each original handoff before its claim window expires.
-Every round also releases all optional retention under zero pressure, checks
-that clean geometry reads do not repopulate it, and warms every Page again only
-after a mutation. All Pages must receive a turn in every round and acknowledge
-close. Default protection/claim timings remain unchanged; the outer process
-deadline scales with the requested number of handoffs. Each handoff has one
-waiter, so this does not claim a public census of multi-waiter FIFO identities
-or a bound for busy Pages. Freeze and hash the example's module sources along
-with its entry point when recording the build. List them as
-`probe_modules: [{"path": "/absolute/frozen/mod.rs", "sha256": "..."}]` in the
-manifest; repeated scenarios require these module hashes.
-
 ### WebMainBench fetch stability CI
 
 The `WebMainBench · 545 pages` job runs on pull requests, pushes to `main`, and

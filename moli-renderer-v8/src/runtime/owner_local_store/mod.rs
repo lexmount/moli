@@ -35,7 +35,6 @@ use super::page_vm::{
 };
 use super::phase_one::{ParseTimePageVmCreationOutcome, PendingPhaseOneResumeOutcome};
 use super::*;
-use crate::layout_working_set_budget::{PageRegistration, RegistrationError};
 use crate::page_task_queue::{
     PostParsePageOwnedWork, RendererPageOwnedTaskSources, RendererPageSchedulerTask,
 };
@@ -566,9 +565,6 @@ struct RendererOwnerLocalPageSlot {
     lifecycle_gate: Option<LifecycleGate>,
     page_creation_navigation_failure_publisher: PageCreationNavigationFailurePublisher,
     script_environment_pin: RendererPageScriptEnvironmentPin,
-    // The registration outlives every Document environment pin. Only the
-    // initial reservation may transfer this unique close authority here.
-    page_budget_registration: Option<PageRegistration>,
 }
 
 impl RendererOwnerLocalPageSlot {
@@ -579,7 +575,6 @@ impl RendererOwnerLocalPageSlot {
         lifecycle_gate: Option<PageVmInitStage>,
         page_creation_navigation_failure_publisher: PageCreationNavigationFailurePublisher,
         script_environment_pin: RendererPageScriptEnvironmentPin,
-        page_budget_registration: Option<PageRegistration>,
     ) -> Self {
         Self {
             owner_slot,
@@ -589,13 +584,6 @@ impl RendererOwnerLocalPageSlot {
             lifecycle_gate: lifecycle_gate.map(LifecycleGate::new),
             page_creation_navigation_failure_publisher,
             script_environment_pin,
-            page_budget_registration,
-        }
-    }
-
-    fn close_page_budget_registration(&mut self) {
-        if let Some(registration) = &mut self.page_budget_registration {
-            registration.close();
         }
     }
 
@@ -653,9 +641,6 @@ use super::earliest_deadline;
 
 impl Drop for RendererOwnerLocalPageSlot {
     fn drop(&mut self) {
-        // Revoke admission before any native payload drops. Existing leases
-        // remain charged until their actual buffers are destroyed.
-        self.close_page_budget_registration();
         // This is the stable Page lifetime boundary. A replacement PageVm
         // drops only Document-owned queues; retiring the slot also discards
         // V8 foreground work and typed Page source payloads.
@@ -681,55 +666,7 @@ struct RendererDocumentIsolateReservationEntry {
     /// A same-Page replacement reservation reuses the live slot's producer
     /// routes and therefore must not manufacture a second consumer set.
     initial_task_sources: Option<RendererPageOwnedTaskSources>,
-    // Initial reservation owns the unique Page guard until slot attachment.
-    // A replacement carries None and borrows the live slot's environment.
-    initial_page_budget_registration: Option<PageRegistration>,
     _accounting: RendererDocumentIsolateReservationAccounting,
-}
-
-impl RendererDocumentIsolateReservationEntry {
-    fn close_initial_page_budget_registration(&mut self) {
-        if let Some(registration) = &mut self.initial_page_budget_registration {
-            registration.close();
-        }
-    }
-}
-
-fn reserve_layout_working_set_page(
-    owner: &RendererOwnerLocalContext,
-    token: RendererPageToken,
-) -> Result<Option<PageRegistration>> {
-    let Some(pool) = owner.layout_working_set_budget() else {
-        return Ok(None);
-    };
-    match pool.register_page(token) {
-        Ok(registration) => Ok(Some(registration)),
-        Err(RegistrationError::Exhausted) => {
-            // Exhausted optional-cache identities cannot break page rendering.
-            // The Page environment remains explicitly managed with no handle.
-            tracing::debug!(?token, "layout working-set Page registration exhausted");
-            Ok(None)
-        }
-        Err(error) => Err(anyhow!(
-            "layout working-set Page registration invariant failed for {token:?}: {error:?}"
-        )),
-    }
-}
-
-fn ensure_layout_working_set_page_binding(
-    environment: &RendererPageScriptEnvironment,
-    registration: Option<&PageRegistration>,
-) -> Result<()> {
-    let matches = match (environment.layout_working_set_budget(), registration) {
-        (None, None) => true,
-        (Some(actual), Some(expected)) => actual.shares_registration_with(&expected.handle()),
-        _ => false,
-    };
-    ensure!(
-        matches,
-        "Page script environment does not retain its stable working-set registration"
-    );
-    Ok(())
 }
 
 #[derive(Clone)]
@@ -991,7 +928,6 @@ impl RendererOwnerLocalStoreSession<'_> {
             vm_creation_id: page_vm.creation_id,
             document: host.document_handle(),
             working_sets: host.realtime_layout_working_set_count_for_test(),
-            tickets: host.realtime_layout_working_set_ticket_count_for_test(),
             builds: host.layout_pass_observability_for_test().1,
             last_pass_paint_operations: host
                 .layout_pass_observability_for_test()
@@ -1012,33 +948,6 @@ impl RendererOwnerLocalStoreSession<'_> {
             ),
             maintenance_deadline,
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn layout_working_set_state_for_testing(
-        &mut self,
-        token: RendererPageToken,
-    ) -> Result<(usize, usize)> {
-        #[cfg(debug_assertions)]
-        RendererOwnerLocalStore::ensure_token_thread(&token)?;
-        let entry = self
-            .store
-            .page_hosts
-            .get(&token.local_host_id)
-            .and_then(|host| host.pages.get(&token.page_id))
-            .and_then(RendererOwnerLocalPageSlot::resident_entry)
-            .ok_or_else(|| anyhow!("layout working-set test Page is not resident"))?;
-        let host = entry
-            .page_vm()
-            .vm()
-            .context_host_weak_for_test()
-            .upgrade()
-            .ok_or_else(|| anyhow!("layout working-set test Host has retired"))?;
-        let host = host.borrow();
-        Ok((
-            host.realtime_layout_working_set_count_for_test(),
-            host.realtime_layout_working_set_ticket_count_for_test(),
-        ))
     }
 }
 
@@ -1397,7 +1306,7 @@ impl RendererOwnerLocalStore {
                     output_journal: environment.output_journal(),
                     retire_output_journal_on_drop: false,
                     initial_task_sources: None,
-                    initial_page_budget_registration: None,
+
                     _accounting: RendererDocumentIsolateReservationAccounting::new(),
                 });
             return Ok((
@@ -1411,7 +1320,7 @@ impl RendererOwnerLocalStore {
                 },
             ));
         }
-        let initial_page_budget_registration = reserve_layout_working_set_page(owner, token)?;
+
         let existing_page_routes = self
             .page_hosts
             .get(&owner.local_host_id)
@@ -1467,9 +1376,6 @@ impl RendererOwnerLocalStore {
             page_runtime_task_source,
             output_journal.clone(),
             window_identity,
-            initial_page_budget_registration
-                .as_ref()
-                .map(PageRegistration::handle),
         );
         page_script_environment
             .bind_auxiliary_allocator(RendererAuxiliaryPageAllocator::new(owner.clone(), page_id));
@@ -1483,7 +1389,7 @@ impl RendererOwnerLocalStore {
                 output_journal,
                 retire_output_journal_on_drop: true,
                 initial_task_sources,
-                initial_page_budget_registration,
+
                 _accounting: RendererDocumentIsolateReservationAccounting::new(),
             });
         Ok((
@@ -1553,29 +1459,10 @@ impl RendererOwnerLocalStore {
         }
     }
 
-    fn close_reserved_page_budget_registration(
-        &mut self,
-        token: RendererPageToken,
-        reservation_id: u64,
-    ) {
-        if let Some(reservation) = self
-            .page_hosts
-            .get_mut(&token.local_host_id)
-            .and_then(|host| {
-                host.reserved_renderer_document_isolates
-                    .get_mut(&token.page_id)
-            })
-            .and_then(|entries| entries.iter_mut().find(|entry| entry.id == reservation_id))
-        {
-            reservation.close_initial_page_budget_registration();
-        }
-    }
-
     fn retire_unattached_renderer_document_isolates(
         reservations: impl IntoIterator<Item = RendererDocumentIsolateReservationEntry>,
     ) {
-        for mut reservation in reservations {
-            reservation.close_initial_page_budget_registration();
+        for reservation in reservations {
             if reservation.retire_output_journal_on_drop {
                 reservation
                     .output_journal
@@ -2235,19 +2122,6 @@ impl RendererOwnerLocalStore {
         }
         // Revoke before canceling replacement preparation or dropping a Host.
         // A checked-out entry can keep payloads alive, but cannot retain again.
-        if let Some(host) = self.page_hosts.get_mut(&token.local_host_id) {
-            if let Some(page_slot) = host.pages.get_mut(&token.page_id) {
-                page_slot.close_page_budget_registration();
-            }
-            if let Some(reservations) = host
-                .reserved_renderer_document_isolates
-                .get_mut(&token.page_id)
-            {
-                for reservation in reservations {
-                    reservation.close_initial_page_budget_registration();
-                }
-            }
-        }
         if let Some(reservation) = self.page_replacement_reservations.remove(&token) {
             self.cancel_prepared_document(reservation);
         }
@@ -2578,10 +2452,6 @@ impl RendererOwnerLocalStore {
                     == page_script_environment.isolate_identity_key(),
                 "renderer page script environment does not match its isolate reservation"
             );
-            ensure_layout_working_set_page_binding(
-                &page_script_environment,
-                reserved_isolate.initial_page_budget_registration.as_ref(),
-            )?;
             let task_sources = reserved_isolate
                 .initial_task_sources
                 .as_ref()
@@ -2623,7 +2493,7 @@ impl RendererOwnerLocalStore {
         );
         let RendererDocumentIsolateReservationEntry {
             initial_task_sources,
-            initial_page_budget_registration,
+
             handle: _,
             output_journal: _,
             retire_output_journal_on_drop: _,
@@ -2642,7 +2512,6 @@ impl RendererOwnerLocalStore {
                 lifecycle_gate,
                 page_creation_navigation_failure_publisher,
                 script_environment_pin,
-                initial_page_budget_registration,
             ),
         );
         debug_assert!(
@@ -2773,18 +2642,10 @@ impl RendererOwnerLocalStore {
             reserved_isolate.initial_task_sources.is_none(),
             "replacement renderer isolate reservation unexpectedly owns a second Page consumer set"
         );
-        ensure!(
-            reserved_isolate.initial_page_budget_registration.is_none(),
-            "replacement renderer reservation unexpectedly owns another Page budget registration"
-        );
         let page_slot = host
             .pages
             .get(&token.page_id)
             .ok_or_else(|| anyhow!("restored page is missing its stable Page slot"))?;
-        ensure_layout_working_set_page_binding(
-            &page_script_environment,
-            page_slot.page_budget_registration.as_ref(),
-        )?;
         let page_task_sources = &page_slot.task_sources;
         ensure!(
             page_script_environment
@@ -2800,7 +2661,7 @@ impl RendererOwnerLocalStore {
         .expect("restored page preflight must retain its isolate reservation");
         let RendererDocumentIsolateReservationEntry {
             initial_task_sources,
-            initial_page_budget_registration,
+
             handle: _,
             output_journal: _,
             retire_output_journal_on_drop: _,
@@ -2808,7 +2669,6 @@ impl RendererOwnerLocalStore {
             _accounting: _,
         } = reserved_isolate;
         debug_assert!(initial_task_sources.is_none());
-        debug_assert!(initial_page_budget_registration.is_none());
         reservation.disarm_for_attach();
         Ok(Some(RendererPageScriptEnvironmentPin::new(
             page_script_environment,
@@ -3151,9 +3011,6 @@ impl RendererOwnerLocalStore {
                 .get(&token.page_id)
                 .is_none_or(|page_slot| page_slot.turn_scheduler.is_retiring());
             if retiring {
-                if let Some(page_slot) = host.pages.get_mut(&token.page_id) {
-                    page_slot.close_page_budget_registration();
-                }
                 entry.close_for_context_teardown();
                 entry.slot.remove_from_owner();
                 drop(entry);
@@ -3197,7 +3054,6 @@ impl RendererOwnerLocalStore {
                 match page_slot.turn_scheduler.restore(entry) {
                     RendererPageEntryRestore::Restored => restored = true,
                     RendererPageEntryRestore::Retire(mut entry) => {
-                        page_slot.close_page_budget_registration();
                         entry.close_for_context_teardown();
                         entry.slot.remove_from_owner();
                         drop(entry);
@@ -3237,18 +3093,6 @@ impl RendererOwnerLocalStore {
 
 impl Drop for RendererOwnerLocalStore {
     fn drop(&mut self) {
-        // Revoke the whole owner's Pages before releasing any old/replacement
-        // Host. Leases still account for every live payload during teardown.
-        for host in self.page_hosts.values_mut() {
-            for page_slot in host.pages.values_mut() {
-                page_slot.close_page_budget_registration();
-            }
-            for reservations in host.reserved_renderer_document_isolates.values_mut() {
-                for reservation in reservations {
-                    reservation.close_initial_page_budget_registration();
-                }
-            }
-        }
         self.retire_staged_auxiliary_pages();
         let prepared_documents = std::mem::take(&mut self.prepared_documents);
         for (_, residence) in prepared_documents {
