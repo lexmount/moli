@@ -624,128 +624,167 @@ fn popup_target_has_loaded_page(
         .is_some_and(|target| target.has_loaded_page())
 }
 
+pub(crate) struct PreparedPopupNavigation {
+    navigation: crate::domains::page::PreparedRendererNavigation,
+    completion: Option<(CommandOwnerScope, crate::conn::PageTargetHostIdentity)>,
+}
+
+impl PreparedPopupNavigation {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        action: PopupTargetNavigationOwnerAction,
+    ) -> Option<Self> {
+        let (
+            owner_scope,
+            browser_context_id,
+            target_id,
+            url,
+            kind,
+            mut document_response,
+            initial_document_environment,
+            mut navigation_initiator,
+        ) = action.into_parts();
+        let target_is_current = conn
+            .target_owner_identity_for_owner(&owner_scope)
+            .is_some_and(|(current_browser_context_id, current_target_id)| {
+                current_browser_context_id == browser_context_id
+                    && current_target_id.as_deref() == Some(target_id.as_str())
+            });
+        if !target_is_current
+            || !popup_target_has_loaded_page(conn, &browser_context_id, &target_id)
+        {
+            tracing::debug!(
+                browser_context_id,
+                target_id,
+                url,
+                ?kind,
+                "dropping popup navigation after its exact target owner retired"
+            );
+            return None;
+        }
+
+        match kind {
+            PopupTargetNavigationKind::InitialDocument
+            | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume => {
+                // Revalidate the barrier when the queued owner action actually
+                // runs. Another inspector session can attach after this action is
+                // scheduled; that new session must be able to pause the initial
+                // document before any target-URL request starts.
+                if conn.target_has_waiting_for_debugger_session(&target_id)
+                    || !conn.browser_context_by_id(&browser_context_id).is_some_and(
+                        |browser_context| {
+                            browser_context.target_needs_initial_document_navigation(&target_id)
+                        },
+                    )
+                {
+                    return None;
+                }
+            }
+            PopupTargetNavigationKind::NamedTargetReuse { .. }
+            | PopupTargetNavigationKind::WindowReference(_) => {}
+        }
+        if matches!(
+            kind,
+            PopupTargetNavigationKind::InitialDocument
+                | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
+        ) && let Some(pending) = conn
+            .browser_context_by_id_mut(&browser_context_id)
+            .and_then(|context| context.page_target_mut(&target_id))
+            .and_then(|target| target.owner_state.pending_popup_navigation.take())
+            .filter(|pending| pending.url == url)
+        {
+            document_response = pending.response;
+            navigation_initiator = pending.initiator;
+        }
+        let auxiliary_navigation = match kind {
+            PopupTargetNavigationKind::WindowReference(kind) => Some(kind),
+            PopupTargetNavigationKind::NamedTargetReuse { replace_current } => {
+                Some(if replace_current {
+                    moli_core::page::RendererAuxiliaryNavigationKind::Replace
+                } else {
+                    moli_core::page::RendererAuxiliaryNavigationKind::Assign
+                })
+            }
+            _ => None,
+        };
+        let request_kind = if matches!(
+            kind,
+            PopupTargetNavigationKind::WindowReference(
+                moli_core::page::RendererAuxiliaryNavigationKind::Reload
+            )
+        ) {
+            moli_fetch::BrowserNavigationRequestKind::Reload
+        } else {
+            moli_fetch::BrowserNavigationRequestKind::Navigate
+        };
+        let completion = matches!(
+            kind,
+            PopupTargetNavigationKind::InitialDocument
+                | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
+        )
+        .then(|| {
+            conn.page_target_host_identity_for_owner(&owner_scope)
+                .map(|host| (owner_scope.clone(), host))
+        })
+        .flatten();
+        let navigation = crate::domains::page::prepare_renderer_navigation_request(
+            conn,
+            owner_scope,
+            &url,
+            "GET",
+            None,
+            &[],
+            request_kind,
+            None,
+            auxiliary_navigation,
+            document_response,
+            initial_document_environment,
+            navigation_initiator,
+        );
+        Some(Self {
+            navigation,
+            completion,
+        })
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        self.navigation.run(driver, context).await?;
+        if let Some((owner, host)) = self.completion {
+            let events = driver
+                .with_state(move |state| state.finish_popup_navigation(owner, host))
+                .await?;
+            context.context_mut().protocol_events_mut().extend(events);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn complete_popup_target_navigation_owner_action_async(
     conn: &mut CdpConnection,
     action: PopupTargetNavigationOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (
-        owner_scope,
-        browser_context_id,
-        target_id,
-        url,
-        kind,
-        mut document_response,
-        initial_document_environment,
-        mut navigation_initiator,
-    ) = action.into_parts();
-    let target_is_current = conn
-        .target_owner_identity_for_owner(&owner_scope)
-        .is_some_and(|(current_browser_context_id, current_target_id)| {
-            current_browser_context_id == browser_context_id
-                && current_target_id.as_deref() == Some(target_id.as_str())
-        });
-    if !target_is_current || !popup_target_has_loaded_page(conn, &browser_context_id, &target_id) {
-        tracing::debug!(
-            browser_context_id,
-            target_id,
-            url,
-            ?kind,
-            "dropping popup navigation after its exact target owner retired"
-        );
-        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            Vec::new(),
-            conn.take_scheduler_events(),
-        );
-    }
-
-    let mut protocol_events = Vec::new();
-    match kind {
-        PopupTargetNavigationKind::InitialDocument
-        | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume => {
-            // Revalidate the barrier when the queued owner action actually
-            // runs. Another inspector session can attach after this action is
-            // scheduled; that new session must be able to pause the initial
-            // document before any target-URL request starts.
-            if conn.target_has_waiting_for_debugger_session(&target_id)
-                || !conn
-                    .browser_context_by_id(&browser_context_id)
-                    .is_some_and(|browser_context| {
-                        browser_context.target_needs_initial_document_navigation(&target_id)
-                    })
-            {
-                return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-                    Vec::new(),
-                    conn.take_scheduler_events(),
-                );
-            }
+    let target_id = Some(action.target_id().to_owned());
+    let mut command = crate::conn::CommandDispatchContext::default();
+    if let Some(prepared) = PreparedPopupNavigation::prepare(conn, action) {
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+        if let Err(error) = Box::pin(prepared.run(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+            &mut context,
+        ))
+        .await
+        {
+            tracing::warn!(?error, "popup navigation failed");
         }
-        PopupTargetNavigationKind::NamedTargetReuse { .. }
-        | PopupTargetNavigationKind::WindowReference(_) => {}
-    }
-    if matches!(
-        kind,
-        PopupTargetNavigationKind::InitialDocument
-            | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
-    ) && let Some(pending) = conn
-        .browser_context_by_id_mut(&browser_context_id)
-        .and_then(|context| context.page_target_mut(&target_id))
-        .and_then(|target| target.owner_state.pending_popup_navigation.take())
-        .filter(|pending| pending.url == url)
-    {
-        document_response = pending.response;
-        navigation_initiator = pending.initiator;
-    }
-    let auxiliary_navigation = match kind {
-        PopupTargetNavigationKind::WindowReference(kind) => Some(kind),
-        PopupTargetNavigationKind::NamedTargetReuse { replace_current } => {
-            Some(if replace_current {
-                moli_core::page::RendererAuxiliaryNavigationKind::Replace
-            } else {
-                moli_core::page::RendererAuxiliaryNavigationKind::Assign
-            })
-        }
-        _ => None,
-    };
-    let request_kind = if matches!(
-        kind,
-        PopupTargetNavigationKind::WindowReference(
-            moli_core::page::RendererAuxiliaryNavigationKind::Reload
-        )
-    ) {
-        moli_fetch::BrowserNavigationRequestKind::Reload
-    } else {
-        moli_fetch::BrowserNavigationRequestKind::Navigate
-    };
-    crate::domains::page::navigate_command_owner_from_renderer_request_background_events_async(
-        conn,
-        &mut protocol_events,
-        owner_scope,
-        &url,
-        "GET",
-        None,
-        &[],
-        request_kind,
-        None,
-        auxiliary_navigation,
-        document_response,
-        initial_document_environment,
-        navigation_initiator,
-    )
-    .await;
-    if matches!(
-        kind,
-        PopupTargetNavigationKind::InitialDocument
-            | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
-    ) {
-        emit_target_info_changed_for_target_background_event(
-            conn,
-            &mut protocol_events,
-            &browser_context_id,
-            &target_id,
-        );
+        context.finish_projection_inline(conn, &mut command);
     }
     crate::conn::CdpTurnOutcome::new_with_protocol_events(
-        protocol_events,
+        conn.finish_protocol_output_projection(command, target_id),
         conn.take_scheduler_events(),
     )
 }
@@ -762,6 +801,7 @@ pub(crate) fn prepare_popup_target_activation(
     super::activation::prepare_target_activation_for_target(conn, action.target_id())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn complete_popup_target_activation_action_async(
     conn: &mut CdpConnection,
     action: PopupTargetActivationAction,

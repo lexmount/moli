@@ -489,10 +489,13 @@ impl ProtocolSchedulerWork {
         else {
             return None;
         };
-        Some(DeferredMainDocumentLoadCompletionOutputInterest::new(
-            completion.renderer_page_residence_identity(),
-            completion.renderer_document_identity(),
-        ))
+        Some(
+            DeferredMainDocumentLoadCompletionOutputInterest::new(
+                completion.renderer_page_residence_identity(),
+                completion.renderer_document_identity(),
+            )
+            .with_owner(completion.owner_scope().clone()),
+        )
     }
 
     pub fn main_document_load_observation_id(
@@ -596,7 +599,7 @@ pub(crate) enum ReadyProtocolSchedulerWork {
     RendererFencedOutput(RendererFencedProtocolOutput),
     ProtocolObservation(ProtocolOutputWork),
     MainDocumentLoadOwnerAction(
-        Box<super::main_document::CompletedDeferredMainDocumentLoadCompletionActivity>,
+        Box<super::main_document::DeferredMainDocumentLoadCompletionActivity>,
     ),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelNavigationOwnerAction(TopLevelNavigationOwnerAction),
@@ -619,12 +622,7 @@ impl ProtocolSchedulerWork {
                 ReadyProtocolSchedulerWork::ProtocolObservation(output)
             }
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                let completion = completion.try_complete().unwrap_or_else(|_| {
-                    panic!(
-                        "pending main-document load work cannot be completed by a nonblocking scheduler turn"
-                    )
-                });
-                ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(Box::new(completion))
+                ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion)
             }
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(action) => {
                 ReadyProtocolSchedulerWork::BidiChannelOwnerAction(action)

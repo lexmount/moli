@@ -14,13 +14,11 @@ use moli_protocol::{
     BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
     CdpInitialStoragePartition, CdpRendererCommandAccess, CdpSchedulerEvent,
     CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
-    CompletedDeferredMainDocumentLoadCompletion, DeferredMainDocumentLoadCompletionOutputAction,
-    DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
+    DeferredMainDocumentLoadCompletionOutputAction, DeferredMainDocumentLoadObservationId,
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentResidenceIdentity,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
-    PendingDeferredMainDocumentLoadCompletion, PendingPageScreencastCapture,
-    ProtocolSchedulerWorkKind,
+    PendingPageScreencastCapture, ProtocolSchedulerWorkKind,
     automation::{AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait},
     conn::{RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender},
 };
@@ -50,9 +48,7 @@ pub(crate) use adapter_scheduler::{
 };
 pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
-use protocol_residence::{
-    ClientTurnPredecessor, ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,
-};
+use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
 pub(crate) use runtime_dispatch::{
     DevToolsRuntimeCommandProgress, PendingDevToolsRuntimeDeferredReplyExecution,
@@ -1859,6 +1855,7 @@ impl CdpScheduler {
                 ProtocolSchedulerResidence::ProtocolWork { work, .. }
                     if work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
                         && !work.is_ready()
+                        && self.protocol_tasks.is_none()
             );
             if has_pending_target_predecessor
                 || has_pending_scheduler_predecessor
@@ -2159,7 +2156,13 @@ impl CdpScheduler {
         let Some(tasks) = &mut self.protocol_tasks else {
             return Err(Box::new(work));
         };
+        let load = work
+            .main_document_load_observation_id()
+            .zip(work.main_document_load_output_interest());
         if let Some(pending) = self.conn.try_start_owned_protocol_scheduler_work(work)? {
+            if let Some((observation, interest)) = load {
+                self.queues.start_main_document_load(observation, interest);
+            }
             tasks.start(pending);
         }
         Ok(())
@@ -2179,7 +2182,11 @@ impl CdpScheduler {
         };
         let source = completed.renderer_output_source();
         let projection = completed.renderer_projection_cursor();
+        let load = completed.main_document_load_observation_id();
         let outcome = self.conn.complete_owned_protocol_scheduler_work(completed);
+        if let Some(observation) = load {
+            self.queues.finish_main_document_load(observation);
+        }
         let Some(source) = source else {
             return Ok(self.apply_protocol_only_turn_outcome(outcome));
         };
@@ -2259,7 +2266,11 @@ impl CdpScheduler {
         &self,
         context: &moli_protocol::automation::AutomationContext,
     ) -> bool {
-        self.queues.protocol_residences.iter().any(|residence| {
+        self.queues.pending_loads.iter().any(|pending| {
+            pending
+                .output_interest
+                .observes_devtools_context(&self.conn, context)
+        }) || self.queues.protocol_residences.iter().any(|residence| {
             matches!(
                 residence,
                 ProtocolSchedulerResidence::ProtocolWork { work, .. }
@@ -2730,23 +2741,6 @@ impl CdpScheduler {
             .await
     }
 
-    pub(crate) async fn ingest_renderer_publication_after_loads(
-        &mut self,
-        publication: RendererOutputTransportMessage,
-        observation_ids: Vec<DeferredMainDocumentLoadObservationId>,
-    ) -> ProtocolOutputSequence {
-        let future_load_predecessor = observation_ids
-            .is_empty()
-            .then(|| {
-                DeferredMainDocumentLoadPredecessorCandidate::from_renderer_publication(
-                    &publication,
-                )
-            })
-            .flatten();
-        self.ingest_renderer_publication(publication, observation_ids, future_load_predecessor)
-            .await
-    }
-
     pub(crate) async fn finish_command_dispatch_output_flush(
         &mut self,
         post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
@@ -2814,30 +2808,6 @@ impl CdpScheduler {
             return;
         };
         self.queues.satisfy_client_turn_predecessor_at(index);
-    }
-
-    fn next_ready_protocol_residence_is_main_document_load_action(&self) -> bool {
-        let Some(index) = self.next_ungated_protocol_residence_index() else {
-            return false;
-        };
-        matches!(
-            self.queues.protocol_residences.get(index),
-            Some(ProtocolSchedulerResidence::ProtocolWork {
-                work,
-                client_turn_predecessor: ClientTurnPredecessor::Satisfied,
-                load_predecessors,
-                ..
-            }) if load_predecessors.is_empty()
-                && work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-        )
-    }
-
-    pub(crate) fn route_renderer_output_for_deferred_load_completion(
-        &self,
-        output: &RendererOutputTransportMessage,
-        interest: &DeferredMainDocumentLoadCompletionOutputInterest,
-    ) -> DeferredMainDocumentLoadCompletionOutputAction {
-        interest.route_output_while_waiting(output)
     }
 
     pub(crate) async fn complete_next_protocol_residence(&mut self) -> ProtocolOutputSequence {
@@ -2913,10 +2883,22 @@ impl CdpScheduler {
                     Err(work) => *work,
                 };
                 let load_observation_id = work.main_document_load_observation_id();
-                let outcome = self
-                    .conn
-                    .complete_ready_protocol_scheduler_work_turn(work)
-                    .await;
+                let outcome = match self.conn.try_complete_protocol_scheduler_work_turn(work) {
+                    Ok(outcome) => outcome,
+                    Err(work) => {
+                        #[cfg(test)]
+                        {
+                            Box::pin(self.conn.complete_ready_protocol_scheduler_work_turn(*work))
+                                .await
+                        }
+                        #[cfg(not(test))]
+                        {
+                            panic!(
+                                "owner work requires the installed protocol task supervisor: {work:?}"
+                            )
+                        }
+                    }
+                };
                 out.append(self.apply_protocol_only_turn_outcome(outcome));
                 if let Some(observation_id) = load_observation_id {
                     self.queues.satisfy_load_predecessor(observation_id);
@@ -2951,7 +2933,8 @@ impl CdpScheduler {
         &self,
         output: &RendererOutputTransportMessage,
     ) -> Vec<DeferredMainDocumentLoadObservationId> {
-        self.queues
+        let mut observations: Vec<_> = self
+            .queues
             .protocol_residences
             .iter()
             .filter_map(|residence| match residence {
@@ -2963,69 +2946,13 @@ impl CdpScheduler {
                 }
                 _ => None,
             })
-            .collect()
-    }
-
-    pub(crate) fn start_next_deferred_load_completion(
-        &mut self,
-    ) -> Option<PendingDeferredMainDocumentLoadCompletion> {
-        let index = self.next_ungated_protocol_residence_index()?;
-        let should_start = matches!(
-            self.queues.protocol_residences.get(index),
-            Some(ProtocolSchedulerResidence::ProtocolWork {
-                work,
-                client_turn_predecessor: ClientTurnPredecessor::Satisfied,
-                load_predecessors,
-                ..
-            }) if load_predecessors.is_empty()
-                && work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-        );
-        if !should_start {
-            return None;
-        }
-        let Some(ProtocolSchedulerResidence::ProtocolWork { work, .. }) =
-            self.queues.take_protocol_residence_at(index)
-        else {
-            return None;
-        };
-        if moli_trace::command_probe_enabled() {
-            tracing::info!(
-                observation_sequence = work.publish_sequence().get(),
-                "CMD_PROBE_DEFERRED_LOAD_START"
-            );
-        }
-        if moli_trace::cdp_runtime_trace_enabled() {
-            tracing::info!(
-                target: "moli_cdp_runtime",
-                stage = "deferred_load_completion_start",
-                publish_sequence = work.publish_sequence().get(),
-                protocol_residence_len = self.queues.protocol_residence_len(),
-            );
-        }
-        Some(work.start_main_document_load_wait())
-    }
-
-    pub(crate) async fn complete_deferred_load_completion(
-        &mut self,
-        completion: CompletedDeferredMainDocumentLoadCompletion,
-    ) -> ProtocolOutputSequence {
-        let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let observation_id = completion.observation_id();
-        let outcome = self
-            .conn
-            .complete_deferred_main_document_load_completion_for_scheduler(completion)
-            .await;
-        let output = self.apply_protocol_only_turn_outcome(outcome);
-        self.queues.satisfy_load_predecessor(observation_id);
-        if let Some(started) = trace_started {
-            tracing::info!(
-                target: "moli_cdp_runtime",
-                stage = "deferred_load_completion_done",
-                messages = output.len(),
-                elapsed_us = %started.elapsed().as_micros(),
-            );
-        }
-        output
+            .collect();
+        observations.extend(self.queues.pending_loads.iter().filter_map(|pending| {
+            (pending.output_interest.route_output_while_waiting(output)
+                == DeferredMainDocumentLoadCompletionOutputAction::Queue)
+                .then_some(pending.observation_id)
+        }));
+        observations
     }
 
     pub(crate) async fn drain_background_navigation_completion(

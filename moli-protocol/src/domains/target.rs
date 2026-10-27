@@ -48,13 +48,16 @@ pub(crate) enum TargetCommandFailureCleanup {
 
 pub(in crate::domains) use browser_context::devtools_client_window_info_for_target;
 pub(crate) use popup::{
-    NewPopupTarget, PopupTargetCreation, PopupTargetOpenerIdentity, PreparedPopupTarget,
-    complete_popup_target_activation_action_async,
-    complete_popup_target_navigation_owner_action_async,
-    emit_target_info_changed_for_owner_background_event, finish_popup_target, prepare_popup_target,
-    prepare_popup_target_activation,
+    NewPopupTarget, PopupTargetCreation, PopupTargetOpenerIdentity, PreparedPopupNavigation,
+    PreparedPopupTarget, emit_target_info_changed_for_owner_background_event, finish_popup_target,
+    prepare_popup_target, prepare_popup_target_activation,
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use popup::{
+    complete_popup_target_activation_action_async,
+    complete_popup_target_navigation_owner_action_async,
 };
 pub(crate) fn popup_activation_creates_new_target_for_owner(
     conn: &CdpConnection,

@@ -1251,6 +1251,7 @@ pub(in crate::domains) fn publish_prepared_top_level_history_traversal_owner_act
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn navigate_page_owned_top_level_location_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -1342,6 +1343,44 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
     .await;
 }
 
+pub(in crate::domains) fn prepare_renderer_navigation_request(
+    conn: &mut CdpConnection,
+    owner: CommandOwnerScope,
+    url: &str,
+    request_method: &str,
+    request_body: Option<&bytes::Bytes>,
+    request_headers: &[(String, String)],
+    browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
+    auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
+    document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+) -> PreparedRendererNavigation {
+    let start = navigation::start_session_owner_navigation_from_renderer(
+        conn,
+        &owner,
+        url,
+        request_method,
+        request_body,
+        request_headers,
+        browser_navigation_kind,
+        web_mcp_invocation,
+        auxiliary_navigation,
+        document_response,
+        initial_document_environment,
+        navigation_initiator,
+    );
+    let step = navigation::finish_started_navigation_command_for_parts(
+        conn,
+        None,
+        owner.clone(),
+        start,
+        &[],
+    );
+    PreparedRendererNavigation::prepare(conn, owner, step)
+}
+
 pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -1357,9 +1396,9 @@ pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_bac
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) {
-    let start = navigation::start_session_owner_navigation_from_renderer(
+    let prepared = prepare_renderer_navigation_request(
         conn,
-        &owner,
+        owner,
         url,
         request_method,
         request_body,
@@ -1371,11 +1410,10 @@ pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_bac
         initial_document_environment,
         navigation_initiator,
     );
-    let step =
-        navigation::finish_started_navigation_command_for_parts(conn, None, owner, start, &[]);
-    complete_renderer_navigation_step_background_events_async(conn, out, step).await;
+    run_renderer_navigation_inline(conn, out, prepared).await;
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn traverse_session_owner_history_from_renderer_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -1383,35 +1421,29 @@ pub(crate) async fn traverse_session_owner_history_from_renderer_background_even
     delta: i64,
 ) {
     let step = navigation::start_session_owner_history_traversal_from_renderer(conn, owner, delta);
-    complete_renderer_navigation_step_background_events_async(conn, out, step).await;
+    let prepared = PreparedRendererNavigation::prepare(conn, owner.clone(), step);
+    run_renderer_navigation_inline(conn, out, prepared).await;
 }
 
-async fn complete_renderer_navigation_step_background_events_async(
+async fn run_renderer_navigation_inline(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    mut step: PageCommandTaskStep,
+    prepared: PreparedRendererNavigation,
 ) {
-    let mut command_context = CommandDispatchContext::default();
-    loop {
-        match step {
-            PageCommandTaskStep::Complete(plan) => {
-                let (_, background_events) = plan.into_command_status_and_background_events();
-                out.extend(background_events);
-                return;
-            }
-            PageCommandTaskStep::Pending(pending) => {
-                // Navigation futures carry the response and renderer setup.
-                // Keep them out of each enclosing target-navigation future.
-                let completed = Box::pin(pending.wait()).await;
-                step = Box::pin(complete_pending_page_command(
-                    conn,
-                    completed,
-                    &mut command_context,
-                ))
-                .await;
-            }
-        }
+    let target_id = prepared.target_id(conn);
+    let mut command = CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    if let Err(error) = Box::pin(prepared.run(
+        &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+        &mut context,
+    ))
+    .await
+    {
+        tracing::warn!(?error, "renderer navigation failed");
     }
+    context.finish_projection_inline(conn, &mut command);
+    out.extend(conn.finish_protocol_output_projection(command, target_id));
 }
 
 pub(crate) fn emit_page_window_open_background_events_for_owner(

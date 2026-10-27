@@ -9,7 +9,7 @@ use futures_util::{
 use super::*;
 #[cfg(test)]
 use crate::conn::BackgroundProtocolEvent;
-use crate::conn::{ProtocolStateAccess, ProtocolWorkflowDriver};
+use crate::conn::{PreparedCommandWorkflow, ProtocolStateAccess, ProtocolWorkflowDriver};
 use crate::domains::activity::{ProtocolSchedulerWork, ProtocolSchedulerWorkKind};
 use crate::domains::page::{CompletedTargetTermination, TargetTermination};
 use crate::domains::target::activation::TargetActivationOutput;
@@ -140,6 +140,15 @@ impl std::fmt::Debug for PendingProtocolSchedulerWork {
 }
 
 impl CompletedProtocolSchedulerWork {
+    pub fn main_document_load_observation_id(
+        &self,
+    ) -> Option<crate::conn::DeferredMainDocumentLoadObservationId> {
+        match &self.work {
+            CompletedProtocolWork::Workflow(workflow, _) => workflow.load_observation(),
+            _ => None,
+        }
+    }
+
     pub fn renderer_projection_cursor(&self) -> Option<moli_core::RendererOutputCursor> {
         match &self.work {
             CompletedProtocolWork::RendererOutputProjection(projection, _) => {
@@ -218,6 +227,8 @@ impl PendingProtocolSchedulerWork {
         matches!(
             kind,
             ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                | ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
+                | ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
                 | ProtocolSchedulerWorkKind::TopLevelNavigationOwnerAction
                 | ProtocolSchedulerWorkKind::PopupTargetActivationAction
                 | ProtocolSchedulerWorkKind::BidiChannelOwnerAction
@@ -280,6 +291,69 @@ impl CdpConnection {
             return Err(Box::new(work));
         }
         let prepared = match work.into_ready() {
+            ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
+                let observation_id = completion.observation_id();
+                let target_id = Some(completion.target_id().to_owned());
+                let workflow_access = access.clone();
+                let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
+                    let completed = (*completion).start_scheduler_step().wait().await;
+                    let mut driver = ProtocolWorkflowDriver::owned(workflow_access);
+                    let pending = match context
+                        .with_state(&mut driver, move |state, context| {
+                            state.prepare_deferred_load_emission(completed, context)
+                        })
+                        .await
+                    {
+                        Ok(pending) => pending,
+                        Err(error) => {
+                            return context.fail(
+                                crate::domains::command_output::CommandOutputPlan::error(
+                                    -32000, error,
+                                ),
+                            );
+                        }
+                    };
+                    if let Some(pending) = pending {
+                        let mut events = Vec::new();
+                        pending.run(&mut events, context.context_mut()).await;
+                        context.context_mut().protocol_events_mut().extend(events);
+                    }
+                    context.complete(crate::domains::command_output::CommandOutputPlan::default())
+                });
+                Some(PendingProtocolWork::Workflow(
+                    super::workflow::PendingProtocolWorkflow::prepare(workflow, target_id)
+                        .with_load_observation(observation_id),
+                ))
+            }
+            ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action) => {
+                let target_id = Some(action.target_id().to_owned());
+                let workflow_access = access.clone();
+                crate::domains::target::PreparedPopupNavigation::prepare(self, action).map(
+                    |prepared| {
+                        let workflow =
+                            PreparedCommandWorkflow::new(move |mut context| async move {
+                                if let Err(error) = prepared
+                                    .run(
+                                        &mut ProtocolWorkflowDriver::owned(workflow_access),
+                                        &mut context,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        ?error,
+                                        "popup navigation owner workflow failed"
+                                    );
+                                }
+                                context.complete(
+                                    crate::domains::command_output::CommandOutputPlan::default(),
+                                )
+                            });
+                        PendingProtocolWork::Workflow(
+                            super::workflow::PendingProtocolWorkflow::prepare(workflow, target_id),
+                        )
+                    },
+                )
+            }
             ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action) => {
                 let target_id = action.target_id().map(str::to_owned);
                 let navigation_access = access.clone();

@@ -1,6 +1,74 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn explicit_child_navigation_does_not_depend_on_projected_attachment_events() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-frame-routing",
+        "TID-frame-routing",
+        "SID-frame-routing",
+        "about:blank",
+    );
+    ctx.enable_page_events_for_test(Some("SID-frame-routing"));
+    let parent =
+        "data:text/html,<p id=parent>retained</p><iframe srcdoc='<p>initial</p>'></iframe>";
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 200, "method": "Page.navigate", "sessionId": "SID-frame-routing", "params": {"url": parent}
+    })).await;
+    wait_until_frame_stopped_loading(&mut ctx, "TID-frame-routing").await;
+    ctx.process_async(
+        json!({"id":201,"method":"Page.getFrameTree","sessionId":"SID-frame-routing"}),
+    )
+    .await;
+    let tree = take_response_by_id(&mut ctx, 201);
+    let child = tree["result"]["frameTree"]["childFrames"][0]["frame"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The Native tree is authoritative even while its frameAttached output
+    // has not reached the protocol observation index.
+    ctx.conn
+        .with_target_owner_state_for_session_mut(Some("SID-frame-routing"), |state| {
+            state.clear_attached_child_frame_ids()
+        })
+        .unwrap();
+    assert!(!ctx.conn.has_attached_child_frame_id(&child));
+    let child_url = "data:text/html,<p>child replacement</p>";
+    ctx.process_and_wait_for_response_async(json!({
+        "id":202,"method":"Page.navigate","sessionId":"SID-frame-routing", "params":{"frameId":child,"url":child_url}
+    })).await;
+    let response = take_response_by_id(&mut ctx, 202);
+    assert_eq!(response["result"]["frameId"], child, "{response}");
+    ctx.process_async(
+        json!({"id":203,"method":"Page.getFrameTree","sessionId":"SID-frame-routing"}),
+    )
+    .await;
+    let tree = take_response_by_id(&mut ctx, 203);
+    assert_eq!(tree["result"]["frameTree"]["frame"]["url"], parent);
+    assert_eq!(
+        tree["result"]["frameTree"]["childFrames"][0]["frame"]["url"],
+        child_url
+    );
+    ctx.process_and_wait_for_response_async(json!({
+        "id":204,"method":"Page.navigate","sessionId":"SID-frame-routing", "params":{"frameId":"missing-frame","url":"data:text/html,unexpected root replacement"}
+    })).await;
+    let response = take_response_by_id(&mut ctx, 204);
+    assert!(
+        response["error"].is_object(),
+        "unknown frame IDs must not navigate the root: {response}"
+    );
+    ctx.process_async(
+        json!({"id":205,"method":"Page.getFrameTree","sessionId":"SID-frame-routing"}),
+    )
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 205)["result"]["frameTree"]["frame"]["url"],
+        parent
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn navigate_emits_frame_and_load_events_in_order() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");

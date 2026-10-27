@@ -6,6 +6,26 @@ use crate::conn::{
 use crate::domains::target::{NewPopupTarget, PreparedPopupTarget};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn finish_popup_navigation(
+        self,
+        owner: CommandOwnerScope,
+        host: crate::conn::PageTargetHostIdentity,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        if self
+            .connection
+            .page_target_host_identity_for_owner(&owner)
+            .is_some_and(|current| host.matches(&current))
+        {
+            crate::domains::target::emit_target_info_changed_for_owner_background_event(
+                self.connection,
+                &mut events,
+                &owner,
+            );
+        }
+        events
+    }
+
     pub(crate) fn prepare_page_output_close(
         self,
         browser_context_id: String,

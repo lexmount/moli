@@ -329,41 +329,6 @@ impl PreparedDownloadActivationDelivery {
 }
 
 impl CdpConnection {
-    pub(crate) async fn handle_pending_download_activation_inline_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
-        activation: RendererPendingDownloadActivation,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<()> {
-        self.handle_pending_download_activation_with_event_route_async(
-            out,
-            owner,
-            activation,
-            false,
-            command_context,
-        )
-        .await
-    }
-
-    async fn handle_pending_download_activation_with_event_route_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
-        activation: RendererPendingDownloadActivation,
-        allow_background_events: bool,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<()> {
-        self.prepare_pending_download_activation_delivery(
-            owner,
-            activation,
-            allow_background_events,
-        )?
-        .run(out, command_context)
-        .await;
-        Ok(())
-    }
-
     pub(crate) fn prepare_pending_download_activation_delivery(
         &mut self,
         owner: &CommandOwnerScope,

@@ -510,14 +510,9 @@ impl BidiSocketActor {
         input: ProtocolAdapterSchedulerInput,
     ) -> bool {
         let output = match adapter_scheduler.advance_input(scheduler, input).await {
-            ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output)
-            | ProtocolAdapterSchedulerAdvance::DeferredLoadCompleted { output, .. } => output,
+            ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output) => output,
             ProtocolAdapterSchedulerAdvance::Idle
-            | ProtocolAdapterSchedulerAdvance::ClientTurnYielded
-            | ProtocolAdapterSchedulerAdvance::DeferredLoadStarted { .. }
-            | ProtocolAdapterSchedulerAdvance::StaleDeferredLoadCompletion { .. } => {
-                ProtocolOutputSequence::empty()
-            }
+            | ProtocolAdapterSchedulerAdvance::ClientTurnYielded => ProtocolOutputSequence::empty(),
         };
         self.send_or_route_protocol_output(scheduler, receivers, output, None)
             .await

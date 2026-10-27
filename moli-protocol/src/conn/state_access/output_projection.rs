@@ -2,6 +2,30 @@ use super::ProtocolWorkflowState;
 use crate::conn::CommandWorkflowContext;
 
 impl ProtocolWorkflowState<'_> {
+    #[cfg(test)]
+    pub(crate) fn ingest_renderer_lifecycle_for_test(
+        self,
+        owner: crate::conn::CommandOwnerScope,
+        event: moli_core::page::RendererDocumentLifecycleEvent,
+    ) {
+        self.connection
+            .ingest_renderer_document_lifecycle_events_for_owner(&owner, vec![event]);
+    }
+
+    pub(crate) fn prepare_deferred_load_emission(
+        self,
+        completed: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
+        context: &mut CommandWorkflowContext,
+    ) -> Option<crate::conn::PreparedDownloadActivationDelivery> {
+        let mut events = crate::domains::command_output::BackgroundProtocolEventBuffer::default();
+        let pending = completed.prepare_emission(self.connection, &mut events);
+        context
+            .context_mut()
+            .protocol_events_mut()
+            .extend(events.into_events());
+        pending
+    }
+
     pub(crate) fn prepare_renderer_projection_batch(
         self,
         projection: crate::domains::activity::RendererOutputProjection,

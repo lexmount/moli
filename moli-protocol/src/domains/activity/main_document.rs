@@ -260,13 +260,13 @@ impl MainDocumentNavigationActivity {
         );
     }
 
-    async fn emit_deferred_load_completion_async(
+    fn prepare_deferred_load_completion(
         &mut self,
         conn: &mut CdpConnection,
         out: &mut BackgroundProtocolEventBuffer,
         pending_download: Option<RendererPendingDownloadActivation>,
         renderer_document: Option<RendererDocumentLifecycleIdentity>,
-    ) {
+    ) -> Option<crate::conn::PreparedDownloadActivationDelivery> {
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let timing_started = std::time::Instant::now();
         if !self.is_still_current(conn) {
@@ -282,11 +282,10 @@ impl MainDocumentNavigationActivity {
                     reason = "stale_navigation",
                 );
             }
-            return;
+            return None;
         }
-        let post_load_observation_armed = self
-            .emit_renderer_load_completion_async(conn, out, renderer_document)
-            .await;
+        let post_load_observation_armed =
+            self.emit_renderer_load_completion(conn, out, renderer_document);
         if post_load_observation_armed {
             conn.settle_root_frame_stopped_loading_observation_for_owner(&self.state.owner)
             .expect(
@@ -302,9 +301,21 @@ impl MainDocumentNavigationActivity {
             );
         }
 
-        if pending_download.is_some() {
-            self.activate_pending_download_async(conn, out, pending_download)
-                .await;
+        let download = pending_download?;
+        match conn.prepare_pending_download_activation_delivery(&self.state.owner, download, false)
+        {
+            Ok(pending) => Some(pending),
+            Err(error) => {
+                let mut output = CommandOutputBuffer::default();
+                self.emit_navigation_error_into_buffer(&mut output, &format!("{error:#}"));
+                out.extend_background_events(
+                    output.into_plan().into_background_events(
+                        self.state.navigate_id,
+                        self.state.owner.session_id(),
+                    ),
+                );
+                None
+            }
         }
     }
 
@@ -461,7 +472,7 @@ impl MainDocumentNavigationActivity {
         }
     }
 
-    async fn emit_renderer_load_completion_async(
+    fn emit_renderer_load_completion(
         &mut self,
         conn: &mut CdpConnection,
         out: &mut BackgroundProtocolEventBuffer,
@@ -560,43 +571,6 @@ impl MainDocumentNavigationActivity {
             out,
             &mut self.progress_gate,
         );
-    }
-
-    async fn activate_pending_download_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut BackgroundProtocolEventBuffer,
-        pending_download: Option<RendererPendingDownloadActivation>,
-    ) {
-        let mut command_context = CommandDispatchContext::default();
-        let error = if let Some(download) = pending_download {
-            let mut download_events = Vec::new();
-            let error = conn
-                .handle_pending_download_activation_inline_async(
-                    &mut download_events,
-                    &self.state.owner,
-                    download,
-                    &mut command_context,
-                )
-                .await
-                .err();
-            out.extend_background_events(download_events);
-            error
-        } else {
-            None
-        };
-        if let Some(error) = error {
-            let navigate_id = self.state.navigate_id;
-            let navigate_session_id = self.state.owner.session_id().map(str::to_owned);
-            let mut command_output = CommandOutputBuffer::default();
-            self.emit_navigation_error_into_buffer(&mut command_output, &format!("{error:#}"));
-            out.extend_background_events(
-                command_output
-                    .into_plan()
-                    .into_background_events(navigate_id, navigate_session_id.as_deref()),
-            );
-        }
-        out.extend_background_events(command_context.take_protocol_events());
     }
 
     fn emit_pre_domcontentloaded_network_backlog_background_events(
@@ -723,6 +697,7 @@ impl DeferredMainDocumentLoadCompletionActivity {
         self.lifecycle_observer.observation().is_terminal()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn try_complete(
         self: Box<Self>,
     ) -> Result<CompletedDeferredMainDocumentLoadCompletionActivity, Box<Self>> {
@@ -748,18 +723,6 @@ impl DeferredMainDocumentLoadCompletionState {
         self.renderer_document_binding
             .as_ref()
             .map(CommittedRendererDocumentBinding::renderer_document_identity)
-    }
-
-    async fn emit_load_completion_after_lifecycle_ready_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut BackgroundProtocolEventBuffer,
-    ) {
-        let pending_download = self.pending_download.take();
-        let renderer_document = self.renderer_document_identity();
-        self.navigation_activity
-            .emit_deferred_load_completion_async(conn, out, pending_download, renderer_document)
-            .await;
     }
 }
 
@@ -809,11 +772,11 @@ impl CompletedDeferredMainDocumentLoadCompletionActivity {
         self.observation_id
     }
 
-    pub(crate) async fn emit_async(
+    pub(crate) fn prepare_emission(
         mut self,
         conn: &mut CdpConnection,
         out: &mut BackgroundProtocolEventBuffer,
-    ) {
+    ) -> Option<crate::conn::PreparedDownloadActivationDelivery> {
         match self.observation {
             RendererDocumentLifecycleObservation::Reached => {}
             RendererDocumentLifecycleObservation::Pending => {
@@ -823,7 +786,7 @@ impl CompletedDeferredMainDocumentLoadCompletionActivity {
                 self.state
                     .navigation_activity
                     .emit_renderer_load_boundary_facts(conn, out);
-                return;
+                return None;
             }
             RendererDocumentLifecycleObservation::Superseded
             | RendererDocumentLifecycleObservation::Unavailable => {
@@ -831,12 +794,29 @@ impl CompletedDeferredMainDocumentLoadCompletionActivity {
                     self.owner_scope(),
                     &self.state.navigation_activity.state.loader_id,
                 );
-                return;
+                return None;
             }
         }
+        let pending_download = self.state.pending_download.take();
+        let renderer_document = self.state.renderer_document_identity();
         self.state
-            .emit_load_completion_after_lifecycle_ready_async(conn, out)
-            .await;
+            .navigation_activity
+            .prepare_deferred_load_completion(conn, out, pending_download, renderer_document)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) async fn emit_async(
+        self,
+        conn: &mut CdpConnection,
+        out: &mut BackgroundProtocolEventBuffer,
+    ) {
+        if let Some(pending) = self.prepare_emission(conn, out) {
+            let mut context = CommandDispatchContext::default();
+            let mut events = Vec::new();
+            pending.run(&mut events, &mut context).await;
+            out.extend_background_events(events);
+            out.extend_background_events(context.take_protocol_events());
+        }
     }
 }
 
@@ -1611,6 +1591,96 @@ mod tests {
             observer.wait().await,
             RendererDocumentLifecycleObservation::Reached
         );
+    }
+
+    #[tokio::test]
+    async fn owned_load_wait_rejoins_its_original_observer_and_output_after_ready_loss() {
+        use crate::conn::{CommandDispatchContext, ParsedCdpCommand, ProtocolStateOwner};
+        use futures_util::FutureExt as _;
+        for lose_ready in [false, true] {
+            let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_domain_enabled = true;
+            assert!(
+                conn.begin_renderer_document_load_visibility_barrier_for_owner(
+                    &CommandOwnerScope::for_session("SID-nav"),
+                    "LID-1"
+                )
+            );
+            conn.enqueue_deferred_main_document_load_completion(deferred_load_admission_for_test(
+                binding,
+            ));
+            let work = take_deferred_load_work_for_test(&mut conn);
+            let observation = work.main_document_load_observation_id().unwrap();
+            drop(conn.take_protocol_state_requests());
+            let owner = ProtocolStateOwner::new(conn);
+            let handle = owner.handle();
+            let pending = handle
+                .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+                .unwrap()
+                .unwrap_or_else(|_| {
+                    panic!("the production owner admits the complete load workflow")
+                })
+                .unwrap();
+            assert!(
+                pending.clone().wait().now_or_never().is_none(),
+                "DOMContentLoaded cannot finish the load workflow"
+            );
+            let peer =
+                ParsedCdpCommand::parse_str(r#"{"id":50,"method":"Browser.getVersion"}"#).unwrap();
+            assert!(matches!(
+                handle
+                    .with_state(|state| state.start_parsed_command_dispatch_with_context(
+                        &peer,
+                        &mut CommandDispatchContext::default()
+                    ))
+                    .unwrap(),
+                crate::conn::CdpCommandTaskStep::Complete(_)
+            ));
+            handle
+                .with_state(|state| {
+                    state.ingest_renderer_lifecycle_for_test(
+                        CommandOwnerScope::for_session("SID-nav"),
+                        renderer_load_event_for_test(started),
+                    );
+                })
+                .unwrap();
+            let completed = pending.clone().wait().await;
+            assert_eq!(
+                completed.main_document_load_observation_id(),
+                Some(observation)
+            );
+            let completed = if lose_ready {
+                drop(completed);
+                pending.clone().wait().await
+            } else {
+                completed
+            };
+            let outcome = handle
+                .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                .unwrap();
+            let (events, _) = outcome.into_protocol_event_parts();
+            assert!(
+                events
+                    .into_iter()
+                    .any(|event| event.into_protocol_message()["method"] == "Page.loadEventFired"),
+                "the original load boundary reaches its output handoff"
+            );
+            let duplicate = pending.wait().await;
+            let (events, scheduler) = handle
+                .with_state(|state| state.complete_owned_protocol_scheduler_work(duplicate))
+                .unwrap()
+                .into_protocol_event_parts();
+            assert!(
+                events.is_empty() && scheduler.is_empty(),
+                "ready loss cannot emit load twice"
+            );
+        }
     }
 
     #[tokio::test]

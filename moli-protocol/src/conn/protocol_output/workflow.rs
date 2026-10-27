@@ -20,6 +20,7 @@ pub(super) struct PendingProtocolWorkflow {
     context: Rc<RefCell<CommandDispatchContext>>,
     target_id: Option<String>,
     source_cursor: Option<moli_core::RendererOutputCursor>,
+    load_observation: Option<crate::conn::DeferredMainDocumentLoadObservationId>,
 }
 
 impl PendingProtocolWorkflow {
@@ -33,6 +34,7 @@ impl PendingProtocolWorkflow {
             context: Rc::new(RefCell::new(context)),
             target_id,
             source_cursor: None,
+            load_observation: None,
         }
     }
 
@@ -46,6 +48,20 @@ impl PendingProtocolWorkflow {
 
     pub(super) fn renderer_source(&self) -> Option<moli_core::RendererOutputCursor> {
         self.source_cursor
+    }
+
+    pub(super) fn with_load_observation(
+        mut self,
+        observation: crate::conn::DeferredMainDocumentLoadObservationId,
+    ) -> Self {
+        self.load_observation = Some(observation);
+        self
+    }
+
+    pub(super) fn load_observation(
+        &self,
+    ) -> Option<crate::conn::DeferredMainDocumentLoadObservationId> {
+        self.load_observation
     }
 
     pub(super) async fn wait(&self) -> SharedProtocolWorkflowResult {
@@ -73,6 +89,21 @@ impl PendingProtocolWorkflow {
             None,
             None,
         );
+        let events = conn.finish_protocol_output_projection(context, self.target_id);
+        if let Some(source) = self.source_cursor {
+            conn.scheduler_state
+                .bind_renderer_output_source_since(scheduler_start, source);
+        }
+        CdpTurnOutcome::new_with_protocol_events(events, conn.take_scheduler_events())
+    }
+}
+
+impl CdpConnection {
+    pub(crate) fn finish_protocol_output_projection(
+        &mut self,
+        mut context: CommandDispatchContext,
+        target_id: Option<String>,
+    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
         let (mut events, boundary, mut after) = context.take_renderer_fenced_protocol_events();
         after.extend(context.take_post_response_events());
         let predecessor = context.take_renderer_output_predecessor();
@@ -80,42 +111,34 @@ impl PendingProtocolWorkflow {
             if let Some(predecessor) = predecessor.as_ref()
                 && !events.is_empty()
             {
-                conn.publish_renderer_fenced_protocol_output(
+                self.publish_renderer_fenced_protocol_output(
                     std::mem::take(&mut events),
                     predecessor.clone(),
-                    self.target_id.clone(),
+                    target_id.clone(),
                 );
             }
             if !after.is_empty() {
                 let mut predecessors = Vec::new();
                 predecessors.extend(predecessor);
                 predecessors.push(boundary);
-                conn.publish_renderer_fenced_protocol_output_after(
-                    after,
-                    predecessors,
-                    self.target_id,
-                );
+                self.publish_renderer_fenced_protocol_output_after(after, predecessors, target_id);
             }
         } else {
             events.extend(after);
             if let Some(predecessor) = predecessor
                 && !events.is_empty()
             {
-                conn.publish_renderer_fenced_protocol_output(
+                self.publish_renderer_fenced_protocol_output(
                     std::mem::take(&mut events),
                     predecessor,
-                    self.target_id,
+                    target_id,
                 );
             }
         }
-        conn.finish_runtime_output_projection_permits(
+        self.finish_runtime_output_projection_permits(
             context.take_runtime_output_projection_permits(),
         );
-        if let Some(source) = self.source_cursor {
-            conn.scheduler_state
-                .bind_renderer_output_source_since(scheduler_start, source);
-        }
-        CdpTurnOutcome::new_with_protocol_events(events, conn.take_scheduler_events())
+        events
     }
 }
 

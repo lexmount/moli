@@ -1045,7 +1045,13 @@ fn start_protocol_neutral_navigation_command(
     let result_kind = DevToolsNavigationCommandResultKind::Navigate;
     let mut direct_result = match &command {
         AutomationCommand::Navigate(command) => {
-            let loader_id = if child_frame_navigation_target_id(conn, command).is_some() {
+            let loader_id = if child_frame_navigation_target_id(
+                conn,
+                &CommandOwnerScope::for_route(route.clone()),
+                command,
+            )
+            .is_some()
+            {
                 None
             } else {
                 Some(LOADER_ID)
@@ -1446,7 +1452,7 @@ fn start_devtools_navigate_command(
     result_projection: NavigationResultProjection,
     allow_background_navigation: bool,
 ) -> NavigateCommandStart {
-    if let Some(frame_id) = child_frame_navigation_target_id(conn, command) {
+    if let Some(frame_id) = child_frame_navigation_target_id(conn, owner, command) {
         return start_child_frame_navigate_command(
             conn,
             command_id,
@@ -1549,14 +1555,18 @@ fn start_top_level_same_document_navigate(
 
 fn child_frame_navigation_target_id<'a>(
     conn: &CdpConnection,
+    owner: &CommandOwnerScope,
     command: &'a DevToolsNavigateCommand,
 ) -> Option<&'a str> {
     let target_id = command.context.target_id.as_ref()?.as_str();
-    if conn.target_session_route_for_target_id(target_id).is_some() {
-        return None;
-    }
-    conn.has_attached_child_frame_id(target_id)
-        .then_some(target_id)
+    let root = conn
+        .target_owner_identity_for_owner(owner)
+        .and_then(|(_, target)| target)?;
+    // Attachment observations may still be queued after a Native frame-tree
+    // reply. Preserve the requested frame and let that Page validate it;
+    // missing observation history must never turn a child request into a
+    // navigation of the root document.
+    (root != target_id).then_some(target_id)
 }
 
 fn start_child_frame_navigate_command(

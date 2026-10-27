@@ -263,6 +263,11 @@ impl PreparedRendererNavigation {
         }
     }
 
+    pub(super) fn target_id(&self, conn: &CdpConnection) -> Option<String> {
+        conn.target_owner_identity_for_owner(&self.owner)
+            .and_then(|(_, target)| target)
+    }
+
     pub(crate) async fn run(
         self,
         driver: &mut ProtocolWorkflowDriver<'_>,

@@ -245,6 +245,36 @@ impl CdpConnection {
     /// current target state. The work owns both. Completion performs only the
     /// exact attachment authorization required to prevent a detached session
     /// or replacement Page from receiving historical output.
+    pub fn try_complete_protocol_scheduler_work_turn(
+        &mut self,
+        work: crate::domains::activity::ProtocolSchedulerWork,
+    ) -> Result<CdpTurnOutcome, Box<crate::domains::activity::ProtocolSchedulerWork>> {
+        if work.kind() != crate::domains::activity::ProtocolSchedulerWorkKind::ProtocolObservation {
+            return Err(Box::new(work));
+        }
+        let events = match work.into_ready() {
+            ReadyProtocolSchedulerWork::RendererFencedOutput(output) => {
+                assert!(
+                    output
+                        .predecessors
+                        .iter()
+                        .all(|fence| self.renderer_output_cursor_is_projected(fence.cursor())),
+                    "materialized protocol output cannot cross its concrete renderer predecessor"
+                );
+                output.events
+            }
+            ReadyProtocolSchedulerWork::ProtocolObservation(work) => {
+                work.into_background_events(self)
+            }
+            _ => unreachable!("only finite protocol observations were admitted"),
+        };
+        Ok(CdpTurnOutcome::new_with_protocol_events(
+            events,
+            self.take_scheduler_events(),
+        ))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn complete_ready_protocol_scheduler_work_turn(
         &mut self,
         work: crate::domains::activity::ProtocolSchedulerWork,
@@ -275,7 +305,11 @@ impl CdpConnection {
             }
             ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
                 self.complete_deferred_main_document_load_completion_for_scheduler(
-                    super::CompletedDeferredMainDocumentLoadCompletion::new(*completion),
+                    super::CompletedDeferredMainDocumentLoadCompletion::new(
+                        completion.try_complete().unwrap_or_else(|_| {
+                            panic!("inline load completion requires a terminal lifecycle observer")
+                        }),
+                    ),
                 )
                 .await
             }

@@ -184,9 +184,17 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
             .await
             .expect("the child lifecycle wait must allow same-Page Fetch continuation"),
         );
+        let continuation_ack = observed
+            .iter()
+            .find(|message| message["id"] == 8)
+            .expect("Fetch continuation must reply");
+        assert!(
+            continuation_ack.get("error").is_none(),
+            "same-Page Fetch continuation failed: {observed:#?}"
+        );
         timeout(Duration::from_secs(5), resumed.notified())
             .await
-            .expect("same-Page HTTP work must resume before child script release");
+            .unwrap_or_else(|error| panic!("same-Page HTTP work must resume before child script release: {error:?}; observed={observed:#?}"));
     }
     let progress = timeout(
         Duration::from_secs(5),

@@ -214,6 +214,7 @@ impl ProtocolSchedulerResidence {
 
 #[derive(Debug)]
 pub(super) struct SchedulerQueues {
+    pub(super) pending_loads: Vec<PendingMainDocumentLoadObservation>,
     /// Concrete protocol output and owner work in scheduler admission order.
     ///
     /// Renderer source publications are concrete before admission. A projected
@@ -233,12 +234,47 @@ impl Default for SchedulerQueues {
     fn default() -> Self {
         Self {
             protocol_residences: VecDeque::new(),
+            pending_loads: Vec::new(),
             next_protocol_work_publish_sequence: 1,
         }
     }
 }
 
 impl SchedulerQueues {
+    pub(super) fn start_main_document_load(
+        &mut self,
+        observation_id: DeferredMainDocumentLoadObservationId,
+        output_interest: moli_protocol::DeferredMainDocumentLoadCompletionOutputInterest,
+    ) {
+        assert!(
+            !self
+                .pending_loads
+                .iter()
+                .any(|pending| pending.observation_id == observation_id),
+            "one exact load observation cannot be started twice"
+        );
+        self.pending_loads.push(PendingMainDocumentLoadObservation {
+            observation_id,
+            output_interest,
+        });
+    }
+
+    pub(super) fn finish_main_document_load(
+        &mut self,
+        observation_id: DeferredMainDocumentLoadObservationId,
+    ) -> bool {
+        let Some(index) = self
+            .pending_loads
+            .iter()
+            .position(|pending| pending.observation_id == observation_id)
+        else {
+            return false;
+        };
+        self.pending_loads.remove(index);
+        self.satisfy_load_predecessor(observation_id);
+        true
+    }
+
     pub(super) fn protocol_residence_len(&self) -> usize {
         self.protocol_residences.len()
     }
@@ -704,6 +740,12 @@ impl SchedulerQueues {
         }
         insertion_index
     }
+}
+
+#[derive(Debug)]
+pub(super) struct PendingMainDocumentLoadObservation {
+    pub(super) observation_id: DeferredMainDocumentLoadObservationId,
+    pub(super) output_interest: moli_protocol::DeferredMainDocumentLoadCompletionOutputInterest,
 }
 
 fn protocol_residence_is_command_followup_activity(residence: &ProtocolSchedulerResidence) -> bool {

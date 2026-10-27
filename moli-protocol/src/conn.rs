@@ -20,7 +20,9 @@ use serde_json::json;
 use crate::automation::{
     AutomationContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
 };
-use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
+#[cfg(any(test, feature = "test-support"))]
+use crate::domains::command_output::BackgroundProtocolEventBuffer;
+use crate::domains::command_output::CommandOutputBuffer;
 
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
@@ -728,6 +730,7 @@ impl DeferredMainDocumentLoadObservationId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredMainDocumentLoadCompletionOutputInterest {
+    owner: Option<CommandOwnerScope>,
     renderer_page: Option<RendererPageResidenceIdentity>,
     renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
 }
@@ -824,6 +827,7 @@ impl PendingDeferredMainDocumentLoadCompletion {
 }
 
 impl CompletedDeferredMainDocumentLoadCompletion {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new(
         inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
     ) -> Self {
@@ -845,9 +849,27 @@ impl DeferredMainDocumentLoadCompletionOutputInterest {
         renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     ) -> Self {
         Self {
+            owner: None,
             renderer_page,
             renderer_document,
         }
+    }
+
+    pub(crate) fn with_owner(mut self, owner: CommandOwnerScope) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    pub fn observes_devtools_context(
+        &self,
+        conn: &CdpConnection,
+        context: &crate::automation::AutomationContext,
+    ) -> bool {
+        self.owner.as_ref().is_some_and(|owner| {
+            conn.command_owner_scope_for_devtools_context(context)
+                .as_ref()
+                == Some(owner)
+        })
     }
 
     #[cfg(feature = "test-support")]
@@ -2368,7 +2390,10 @@ impl CdpConnection {
         true
     }
 
-    pub fn devtools_context_routes_to_top_level_target(&self, context: &AutomationContext) -> bool {
+    pub fn devtools_context_routes_to_top_level_target(
+        &self,
+        context: &crate::automation::AutomationContext,
+    ) -> bool {
         context.target_id.as_ref().is_some_and(|target_id| {
             self.target_session_route_for_target_id(target_id.as_str())
                 .is_some()
@@ -2850,6 +2875,7 @@ impl CdpConnection {
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn complete_deferred_main_document_load_completion_for_scheduler(
         &mut self,
         completion: CompletedDeferredMainDocumentLoadCompletion,
