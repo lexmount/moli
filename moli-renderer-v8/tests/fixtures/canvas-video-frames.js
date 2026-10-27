@@ -3,17 +3,26 @@
   const progress=globalThis.__videoFrameProgress={stage:'setup',checks};
   const assert=(condition,message)=>{if(!condition)throw Error(message);};
   const set=(realm,media,name,value)=>Object.getOwnPropertyDescriptor(realm.HTMLMediaElement.prototype,name).set.call(media,value);
+  // Each independently completed native operation has the same deadline.
+  // A completed load or bitmap must not consume a later seek's waiting budget.
+  function nativeOperation(promise,video,operation) {
+    let timeout;
+    const started=performance.now();
+    return Promise.race([promise,new Promise((_,reject)=>{
+      timeout=setTimeout(()=>reject(Error('video operation timeout '+JSON.stringify({operation,elapsed:performance.now()-started,stage:progress.stage,currentTime:video.currentTime,seeking:video.seeking,readyState:video.readyState,error:video.error?.code,native:globalThis.__videoFrameNativeState?.(video)}))),2500);
+    })]).finally(()=>clearTimeout(timeout));
+  }
   // Read frames in the completion event's Promise reaction, before another
   // timer task can run. The native event must already expose the decoded frame.
   function ready(owner,callee,video,url) {
-    return new Promise((resolve,reject)=>{
+    return nativeOperation(new Promise((resolve,reject)=>{
       video.oncanplaythrough=event=>{
         video.oncanplaythrough=video.onerror=null;
         try{assert(event.isTrusted && event.target===video && event instanceof owner.Event,'native media event identity');resolve();}catch(error){reject(error);}
       };
       video.onerror=()=>reject(Error('video resource failed '+url.slice(0,80)));
       set(callee,video,'preload','auto');set(callee,video,'src',url);
-    });
+    }),video,'ready');
   }
   function context(realm,offscreen,width=20,height=20) {
     const canvas=offscreen?new realm.OffscreenCanvas(width,height):realm.document.createElement('canvas');
@@ -37,10 +46,10 @@
     return true;
   }
   function seek(callee,video,time) {
-    return new Promise((resolve,reject)=>{
+    return nativeOperation(new Promise((resolve,reject)=>{
       video.onseeked=()=>{progress.operation='seeked/'+time;video.onseeked=null;try{assert(video.currentTime===time && !video.seeking,'seek position '+video.currentTime+' expected '+time+' seeking '+video.seeking);resolve();}catch(error){reject(error);}};
       set(callee,video,'currentTime',time);
-    });
+    }),video,'seek/'+time);
   }
   const cases=[
     ['decoded dimensions and Canvas pixels',async(owner,callee,video,url,ctx)=>{
@@ -54,13 +63,13 @@
       Object.defineProperty(video,'videoHeight',{value:999,configurable:true});
       const promise=callee.createImageBitmap(video,{imageOrientation:'flipY'});
       assert(promise instanceof callee.Promise,'bitmap promise realm');
-      const bitmap=await promise;
+      const bitmap=await nativeOperation(promise,video,'bitmap flip');
       assert(bitmap instanceof callee.ImageBitmap && bitmap.width===20 && bitmap.height===20,'native snapshot dimensions and realm');
       ctx.drawImage(bitmap,0,0);corners(ctx,[colors[2],colors[3],colors[0],colors[1]]);
       bitmap.close();
       const expected=context(callee,offscreen);expected.imageSmoothingEnabled=false;
       expected.drawImage(video,10,0,10,10,0,0,20,20);
-      const crop=await callee.createImageBitmap(video,10,0,10,10,{resizeWidth:20,resizeHeight:20,resizeQuality:'pixelated'});
+      const crop=await nativeOperation(callee.createImageBitmap(video,10,0,10,10,{resizeWidth:20,resizeHeight:20,resizeQuality:'pixelated'}),video,'bitmap crop');
       ctx.clearRect(0,0,20,20);ctx.drawImage(crop,0,0);
       const actual=ctx.getImageData(0,0,20,20).data,reference=expected.getImageData(0,0,20,20).data;
       assert(actual.every((value,index)=>value===reference[index]),'pixelated bitmap crop matches the Canvas source crop');crop.close();
@@ -73,12 +82,12 @@
     }],
     ['reload and clone discard resource state but retain snapshots',async(owner,callee,video,url,ctx)=>{
       await ready(owner,callee,video,url);
-      const bitmap=await callee.createImageBitmap(video);
+      const bitmap=await nativeOperation(callee.createImageBitmap(video),video,'bitmap before reload');
       const clone=video.cloneNode();
       assert(clone.readyState===0 && clone.videoWidth===0 && clone.videoHeight===0,'clones do not inherit decoded resources');
       video.removeAttribute('src');callee.HTMLMediaElement.prototype.load.call(video);
       assert(video.readyState===0 && video.videoWidth===0 && video.videoHeight===0,'load resets resource dimensions');
-      let error;await callee.createImageBitmap(video).catch(value=>error=value);
+      let error;await nativeOperation(callee.createImageBitmap(video),video,'bitmap after reload').catch(value=>error=value);
       assert(error instanceof callee.DOMException && error.name==='InvalidStateError','an empty video cannot be snapshotted');
       ctx.drawImage(bitmap,0,0);corners(ctx);bitmap.close();
     }],
@@ -86,24 +95,24 @@
       progress.operation='counting-ready';
       await ready(owner,callee,video,__videoFrameSources[transport].counting);
       progress.operation='first-bitmap';
-      const first=await callee.createImageBitmap(video),initial=bytes(ctx,first);
+      const first=await nativeOperation(callee.createImageBitmap(video),video,'bitmap first'),initial=bytes(ctx,first);
       progress.operation='forward-seek';
       await seek(callee,video,2.5);
       progress.operation='later-bitmap';
-      const later=await callee.createImageBitmap(video);
+      const later=await nativeOperation(callee.createImageBitmap(video),video,'bitmap later');
       assert(!sameBytes(bytes(ctx,later),initial),'seek must produce a genuinely different decoded frame');
       assert(sameBytes(bytes(ctx,first),initial),'an earlier bitmap remains immutable');
       progress.operation='rewind-seek';
       await seek(callee,video,0);
       progress.operation='rewound-bitmap';
-      const rewound=await callee.createImageBitmap(video);
+      const rewound=await nativeOperation(callee.createImageBitmap(video),video,'bitmap rewound');
       assert(sameBytes(bytes(ctx,rewound),initial),'rewinding replays codec references');
       first.close();later.close();rewound.close();
     }],
     ['VP9 frames share native allocation limits and timestamps',async(owner,callee,video,url,ctx,transport)=>{
       await ready(owner,callee,video,__videoFrameSources[transport].vp9);
       assert(video.videoWidth===16 && video.videoHeight===16,'VP9 dimensions');
-      const initial=await callee.createImageBitmap(video);
+      const initial=await nativeOperation(callee.createImageBitmap(video),video,'bitmap VP9');
       for(const [time,value] of [[0,0],[1,130],[2,255]]) {
         if(time)await seek(callee,video,time);
         ctx.clearRect(0,0,20,20);ctx.drawImage(video,0,0);
@@ -124,13 +133,13 @@
         for(const [name,body] of cases) {
           const video=doc.createElement('video');doc.body.appendChild(video);
           const label=`${ownerName}/${calleeName}/${transport}/${windowless?'windowless':'live'}/${offscreen?'offscreen':'html'}/${name}`;
-          progress.stage=label;let timeout;
+          progress.stage=label;
           try {
-            await Promise.race([body(owner,callee,video,__videoFrameSources[transport].pattern,context(callee,offscreen),transport,offscreen),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('video case timeout '+JSON.stringify({operation:progress.operation,currentTime:video.currentTime,seeking:video.seeking,readyState:video.readyState,error:video.error?.code,ownerClosed:owner.closed,calleeClosed:callee.closed,native:globalThis.__videoFrameNativeState?.(video)}))),2500);})]);
+            await body(owner,callee,video,__videoFrameSources[transport].pattern,context(callee,offscreen),transport,offscreen);
             if(windowless)assert(doc.defaultView===null && doc.hidden,'video resources do not create a synthetic Window');
             checks.push({name:label,category:windowless?'windowless':'live',passed:true});
           }catch(error){checks.push({name:label,category:windowless?'windowless':'live',passed:false,detail:String(error)});}
-          finally{clearTimeout(timeout);video.remove();video.removeAttribute('src');callee.HTMLMediaElement.prototype.load.call(video);}
+          finally{video.remove();video.removeAttribute('src');callee.HTMLMediaElement.prototype.load.call(video);}
         }
       }
   }catch(error){checks.push({name:'video fixture setup',passed:false,detail:String(error)});}
