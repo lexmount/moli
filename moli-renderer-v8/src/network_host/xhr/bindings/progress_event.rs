@@ -37,6 +37,30 @@ struct ProgressEventConstructorArgs {
     init: ProgressEventInitArgs,
 }
 
+pub(in crate::network_host::xhr) fn construct_native_progress_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    length_computable: bool,
+    loaded: f64,
+    total: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = crate::context_bootstrap::new_event_state(scope);
+    crate::context_bootstrap::initialize_event_object(scope, state, event_type, false, false);
+    ProgressEventInitArgs {
+        length_computable,
+        loaded,
+        total,
+        ..Default::default()
+    }
+    .initialize_snapshot(scope, state)?;
+    web_api_interfaces::ProgressEvent::DESCRIPTOR
+        .initialize(scope, state)
+        .ok()?;
+    let event = crate::context_bootstrap::new_event_wrapper(scope, state)?;
+    crate::context_bootstrap::mark_event_trusted(scope, event);
+    Some(event)
+}
+
 pub(crate) fn progress_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
