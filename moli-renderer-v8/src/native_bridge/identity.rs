@@ -552,6 +552,7 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
     include_shared_default_world: bool,
 ) {
     let context = scope.get_current_context();
+    crate::network_host::retire_window_xhrs_in_current_context(scope);
     let _ = crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
     crate::context_bootstrap::retire_idle_detectors_in_current_context(scope);
     crate::util::detach_document_page_context(context);
