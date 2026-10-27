@@ -560,6 +560,7 @@ impl TargetControlPlane {
             .attached_session_cascade_for_owner(owner_session_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn attached_session_cascade_for_root_frontend(&self) -> Vec<String> {
         self.sessions.attached_session_cascade_for_root_frontend()
     }

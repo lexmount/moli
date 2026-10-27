@@ -1,4 +1,31 @@
 use crate::conn::{AutoAttachOwnerPolicy, CdpConnection, CdpTargetFilter};
+use std::rc::{Rc, Weak};
+
+/// Identity of one installed policy. Replacing even an equal policy retires
+/// the previous sweep without keeping its owner or configuration alive.
+#[derive(Clone, Debug)]
+pub(crate) struct AutoAttachPolicyIdentity {
+    owner: Option<String>,
+    policy: Weak<AutoAttachOwnerPolicy>,
+}
+
+impl AutoAttachPolicyIdentity {
+    pub(crate) fn capture(conn: &CdpConnection, owner: Option<&str>) -> Option<Self> {
+        let owner = owner.map(str::to_owned);
+        let policy = Rc::downgrade(conn.auto_attach_owner_sessions.get(&owner)?);
+        Some(Self { owner, policy })
+    }
+
+    pub(crate) fn is_current(&self, conn: &CdpConnection) -> bool {
+        self.owner
+            .as_deref()
+            .is_none_or(|owner| !conn.session_is_closing(owner))
+            && conn
+                .auto_attach_owner_sessions
+                .get(&self.owner)
+                .is_some_and(|policy| Weak::ptr_eq(&Rc::downgrade(policy), &self.policy))
+    }
+}
 
 impl CdpConnection {
     pub(crate) fn auto_attach_enabled(&self) -> bool {
@@ -48,10 +75,10 @@ impl CdpConnection {
             self.target_control.ensure_owner(session_id);
             self.auto_attach_owner_sessions.insert(
                 key,
-                AutoAttachOwnerPolicy {
+                Rc::new(AutoAttachOwnerPolicy {
                     wait_for_debugger_on_start,
                     target_filter,
-                },
+                }),
             );
         } else {
             self.auto_attach_owner_sessions.shift_remove(&key);

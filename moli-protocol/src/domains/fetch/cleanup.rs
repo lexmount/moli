@@ -57,6 +57,7 @@ impl FetchCleanupOutput {
         plan
     }
 
+    #[cfg(test)]
     pub(in crate::domains) fn into_disposal_result(
         self,
         events: &mut Vec<crate::conn::BackgroundProtocolEvent>,
@@ -228,6 +229,7 @@ impl PreparedFetchCleanup {
         self.finish_using(driver, output).await
     }
 
+    #[cfg(test)]
     pub(super) async fn wait_inline(self, conn: &mut CdpConnection) -> FetchCleanupOutput {
         self.run_using(&mut ProtocolWorkflowDriver::inline(conn))
             .await

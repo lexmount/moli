@@ -221,6 +221,18 @@ pub(crate) struct PendingInitialDocumentPageBuild {
     kind: PendingInitialDocumentPageBuildKind,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum InitialDocumentBuildError {
+    #[error("InitialDocumentPageBuildInProgressWithoutWaiter")]
+    MissingWaiter,
+    #[error("TargetNotLoaded")]
+    TargetNotLoaded,
+    #[error("initial document Page reservation no longer matches its target build")]
+    ReservationMismatch,
+    #[error("initial document Page reservation lost its target owner")]
+    ReservationOwnerLost,
+}
+
 enum PendingInitialDocumentPageBuildKind {
     Build {
         owner: InitialDocumentPageOwner,
@@ -1983,7 +1995,7 @@ impl CdpConnection {
     pub(crate) fn start_initial_document_page_ensure_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
+    ) -> Result<Option<PendingInitialDocumentPageBuild>> {
         let Some(runtime_slot) = self.runtime_session_owner_slot_for_owner(owner) else {
             return Ok(None);
         };
@@ -2106,7 +2118,7 @@ impl CdpConnection {
     fn start_initial_empty_document_page_build_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
+    ) -> Result<Option<PendingInitialDocumentPageBuild>> {
         let Some(runtime_slot) = self.runtime_session_owner_slot_for_owner(owner) else {
             return Ok(None);
         };
@@ -2116,7 +2128,7 @@ impl CdpConnection {
         if runtime_slot.has_initial_document_page_build_in_progress() {
             let waiter = runtime_slot
                 .initial_document_page_build_waiter()
-                .ok_or_else(|| "InitialDocumentPageBuildInProgressWithoutWaiter".to_owned())?;
+                .ok_or(InitialDocumentBuildError::MissingWaiter)?;
             return Ok(Some(PendingInitialDocumentPageBuild {
                 kind: PendingInitialDocumentPageBuildKind::Join { waiter },
             }));
@@ -2124,7 +2136,7 @@ impl CdpConnection {
 
         let page_owner = self
             .initial_document_page_owner_for_owner(owner)
-            .ok_or_else(|| "TargetNotLoaded".to_owned())?;
+            .ok_or(InitialDocumentBuildError::TargetNotLoaded)?;
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let requested_url = self
             .runtime_session_owner_initial_empty_document_url_for_owner(owner)
@@ -2136,11 +2148,11 @@ impl CdpConnection {
         let top_level_storage_key =
             self.runtime_session_owner_initial_empty_document_storage_key_for_owner(owner);
         self.runtime_session_owner_slot_mut_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .context(NoDocumentLoaded)?
             .start_initial_document_page_build();
         let pending_auxiliary_page = self
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .context(NoDocumentLoaded)?
             .take_auxiliary_page();
         let page_reservation = pending_auxiliary_page
             .as_ref()
@@ -2152,11 +2164,11 @@ impl CdpConnection {
         );
         if !self
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .context(NoDocumentLoaded)?
             .bind_initial_document_page_build_renderer_page(renderer_page)
         {
-            let message =
-                "initial document Page reservation no longer matches its target build".to_owned();
+            let error = InitialDocumentBuildError::ReservationMismatch;
+            let message = error.to_string();
             let _ = self
                 .runtime_session_owner_slot_mut_for_owner(owner)
                 .map(|slot| {
@@ -2165,7 +2177,7 @@ impl CdpConnection {
                         TargetPageAbsenceReason::InitialDocumentPageBuildPending,
                     );
                 });
-            return Err(message);
+            return Err(error.into());
         }
         // The renderer command below can open the Page output stream and
         // publish bootstrap observations before this protocol turn regains
@@ -2174,7 +2186,7 @@ impl CdpConnection {
         // where the concrete FIFO receives its first publication ownerless.
         let renderer_page_owner = self
             .pending_target_page_residence_identity_for_owner(owner)
-            .ok_or_else(|| "initial document Page reservation lost its target owner".to_owned())?;
+            .ok_or(InitialDocumentBuildError::ReservationOwnerLost)?;
         self.bind_renderer_page_output_owner(renderer_page, renderer_page_owner.clone());
         let page_owner = InitialDocumentPageOwner {
             page_owner: Some(renderer_page_owner),
@@ -2211,7 +2223,8 @@ impl CdpConnection {
                 None,
             )
             .map_err(|error| {
-                let message = format!("failed to start initial document page build: {error}");
+                let error = error.context("failed to start initial document page build");
+                let message = format!("{error:#}");
                 let _ = self
                     .runtime_session_owner_slot_mut_for_owner(owner)
                     .map(|slot| {
@@ -2220,7 +2233,7 @@ impl CdpConnection {
                             TargetPageAbsenceReason::InitialDocumentPageBuildPending,
                         );
                     });
-                message
+                error
             })?;
         Ok(Some(PendingInitialDocumentPageBuild {
             kind: PendingInitialDocumentPageBuildKind::Build {
@@ -2374,6 +2387,7 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn complete_initial_document_page_build_for_owner(
         &mut self,
         completed: CompletedInitialDocumentPageBuild,

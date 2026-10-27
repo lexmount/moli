@@ -87,28 +87,32 @@ impl DetachedTargetSession {
     }
 }
 
-#[cfg(test)]
 impl CommittedAttachSession {
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id
     }
 
+    #[cfg(test)]
     pub(crate) fn owner_session_id(&self) -> Option<&str> {
         self.owner_session_id.as_deref()
     }
 
+    #[cfg(test)]
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
     }
 
+    #[cfg(test)]
     pub(crate) fn route(&self) -> &CdpSessionRoute {
         &self.route
     }
 
+    #[cfg(test)]
     pub(crate) fn auto_attached(&self) -> bool {
         self.auto_attached
     }
 
+    #[cfg(test)]
     pub(crate) fn waiting_for_debugger(&self) -> bool {
         self.waiting_for_debugger
     }
@@ -514,6 +518,7 @@ impl TargetSessionRegistry {
         session_ids
     }
 
+    #[cfg(test)]
     pub(crate) fn attached_session_cascade_for_root_frontend(&self) -> Vec<String> {
         let mut session_ids = Vec::new();
         let mut visited = HashSet::new();

@@ -13,6 +13,7 @@ use super::{
     ParsedCdpCommand,
 };
 
+mod auto_attach;
 mod direct;
 mod target_opening;
 pub use direct::{ProtocolStateHandle, ProtocolStateOwner};

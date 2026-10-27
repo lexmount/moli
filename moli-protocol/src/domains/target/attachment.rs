@@ -549,7 +549,8 @@ struct DetachParams {
 }
 
 mod detachment;
-pub(super) use detachment::{TargetDetachment, TargetDetachmentOutput};
+pub(super) use detachment::TargetDetachment;
+pub(crate) use detachment::TargetDetachmentOutput;
 pub(crate) use detachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 
 pub(super) fn start_detach_from_target_command(

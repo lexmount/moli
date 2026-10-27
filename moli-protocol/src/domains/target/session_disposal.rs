@@ -75,6 +75,7 @@ pub(in crate::domains::target) fn prepare_session_disposal(
     Ok((plan, detachment))
 }
 
+#[cfg(test)]
 fn prepare_browser_session_disposal(
     conn: &CdpConnection,
     session_id: &str,
@@ -91,11 +92,13 @@ fn prepare_browser_session_disposal(
     Ok(plan)
 }
 
+#[cfg(test)]
 pub(super) struct TargetSessionDisposalOutcome {
     event_plan: TargetEventPlan,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
 }
 
+#[cfg(test)]
 impl TargetSessionDisposalOutcome {
     pub(super) fn into_parts(self) -> (TargetEventPlan, Option<moli_core::RendererOutputFence>) {
         (self.event_plan, self.renderer_output_predecessor)
@@ -404,6 +407,7 @@ impl SessionDisposalIdentity {
     }
 }
 
+#[cfg(test)]
 async fn dispose_live_session_domains_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,
@@ -419,6 +423,7 @@ async fn dispose_live_session_domains_async(
         .await
 }
 
+#[cfg(test)]
 pub(super) async fn dispose_browser_session_without_event_async(
     conn: &mut CdpConnection,
     session_id: &str,
@@ -436,6 +441,7 @@ pub(super) async fn dispose_browser_session_without_event_async(
     conn.commit_browser_session_disposal_without_event(&plan)
 }
 
+#[cfg(test)]
 pub(super) async fn dispose_target_session_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,
@@ -454,6 +460,7 @@ pub(super) async fn dispose_target_session_async(
     })
 }
 
+#[cfg(test)]
 pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,

@@ -357,7 +357,9 @@ impl CommandWorkflowContext {
     }
 
     pub fn complete(mut self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
-        self.context_mut().take_command_failure_cleanup();
+        if self.state_completion.is_none() {
+            self.context_mut().take_command_failure_cleanup();
+        }
         self.complete_retaining_cleanup(plan)
     }
 

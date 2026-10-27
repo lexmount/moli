@@ -783,6 +783,7 @@ impl CdpConnection {
         self.tracing_state.cancel(&owner).is_some()
     }
 
+    #[cfg(test)]
     pub(crate) async fn cancel_tracing_for_session_owner_async(
         &mut self,
         session_id: Option<&str>,

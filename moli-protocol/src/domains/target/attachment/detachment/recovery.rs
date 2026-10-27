@@ -39,7 +39,7 @@ impl TargetDetachmentFailureCleanup {
         }
     }
 
-    pub(in crate::domains::target) fn prepare(
+    pub(crate) fn prepare(
         self,
         conn: &mut CdpConnection,
         context: &mut CommandDispatchContext,
@@ -78,7 +78,7 @@ impl TargetDetachmentFailureCleanup {
 }
 
 impl TargetDetachmentRecovery {
-    pub(in crate::domains::target) async fn wait(mut self) -> Self {
+    pub(crate) async fn wait(mut self) -> Self {
         for page in std::mem::take(&mut self.pages) {
             // Failure recovery belongs to the same command supervision entry.
             // Observe close before removing a binding, just as normal disposal.
@@ -87,7 +87,7 @@ impl TargetDetachmentRecovery {
         self
     }
 
-    pub(in crate::domains::target) fn finish(self, conn: &mut CdpConnection) -> CommandOutputPlan {
+    pub(crate) fn finish(self, conn: &mut CdpConnection) -> CommandOutputPlan {
         let mut output = CommandOutputPlan::default();
         for event in self.background_events {
             output.push_background_event(event);

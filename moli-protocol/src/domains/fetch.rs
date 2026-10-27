@@ -67,6 +67,7 @@ pub(crate) use subresource::{
     subresource_fetch_pause_prepared_outputs_for_renderer_record,
 };
 
+#[cfg(test)]
 pub(in crate::domains) async fn dispose_owner_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,

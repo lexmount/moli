@@ -17,8 +17,8 @@ use super::page;
 
 pub(crate) mod activation;
 mod attachment;
-pub(crate) use attachment::TargetDetachmentFailureCleanup;
 pub(crate) use attachment::commit_target_attachment;
+pub(crate) use attachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 mod auto_attach;
 mod browser_context;
 mod browser_context_disposal;
@@ -27,7 +27,10 @@ mod creation;
 mod events;
 mod info;
 mod opening;
+pub(crate) use attachment::TargetDetachmentOutput;
+pub(crate) use auto_attach::{AutoAttachSweepRollback, PreparedAutoAttachSweep};
 pub(crate) use opening::prepare_creation_outputs;
+#[cfg(test)]
 pub(crate) use opening::rollback_attachment;
 mod popup;
 #[cfg(test)]
@@ -216,6 +219,7 @@ pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, sess
 impl CdpConnection {
     /// Releases root-owned Target control state after its transport frontend
     /// disconnects, while preserving sessions owned by direct page frontends.
+    #[cfg(test)]
     pub async fn release_root_target_frontend_state_async(&mut self) {
         let previously_active_browser_context_id = previously_active_browser_context_id(self);
         let mut side_effects = events::TargetProtocolSideEffects::default();
@@ -261,11 +265,7 @@ enum PendingTargetCommandKind {
         activation: activation::PreparedTargetActivation,
         access: Option<crate::conn::ProtocolStateAccess>,
     },
-    SetAutoAttach {
-        auto_attach: bool,
-        owner_session_id: Option<String>,
-        initial_document: Option<crate::conn::InitialDocumentPageBuildWaiter>,
-    },
+    SetAutoAttach(Box<auto_attach::PreparedAutoAttachCommand>),
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
@@ -306,10 +306,7 @@ enum CompletedTargetCommandKind {
     },
     ActivateTarget(Result<activation::TargetActivationOutput>),
     InlineActivateTarget(activation::PreparedTargetActivation),
-    SetAutoAttach {
-        auto_attach: bool,
-        owner_session_id: Option<String>,
-    },
+    SetAutoAttach(Box<auto_attach::PreparedAutoAttachCommand>),
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
@@ -400,23 +397,9 @@ impl PendingTargetCommandDispatch {
                 ),
                 None => CompletedTargetCommandKind::InlineActivateTarget(activation),
             },
-            PendingTargetCommandKind::SetAutoAttach {
-                auto_attach,
-                owner_session_id,
-                initial_document,
-            } => {
-                // The Page's original attach owns installation. Joining it
-                // inside actor completion would prevent that attach's ready
-                // result from ever being consumed by the same actor.
-                if let Some(initial_document) = initial_document
-                    && let Err(error) = initial_document.wait().await
-                {
-                    tracing::debug!(%error, "auto-attach initial Page dependency retired");
-                }
-                CompletedTargetCommandKind::SetAutoAttach {
-                    auto_attach,
-                    owner_session_id,
-                }
+            PendingTargetCommandKind::SetAutoAttach(mut command) => {
+                command.wait_initial_document().await;
+                CompletedTargetCommandKind::SetAutoAttach(command)
             }
             PendingTargetCommandKind::CreateTarget {
                 response_plan,
@@ -921,19 +904,22 @@ pub(crate) async fn complete_pending_target_command(
                 .await;
             TargetCommandTaskStep::Complete(activation::activation_result_plan(conn, output))
         }
-        CompletedTargetCommandKind::SetAutoAttach {
-            auto_attach,
-            owner_session_id,
-        } => {
-            return TargetCommandTaskStep::Complete(
-                auto_attach::complete_set_auto_attach_command_async(
-                    conn,
-                    auto_attach,
-                    owner_session_id.as_deref(),
-                    command_context,
-                )
-                .await,
+        CompletedTargetCommandKind::SetAutoAttach(command) => {
+            let (mut context, _scope) = crate::conn::CommandWorkflowContext::take_from(
+                command_context,
+                completed.command_id,
+                completed.session_id,
             );
+            let result = Box::pin(command.run(
+                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+                &mut context,
+            ))
+            .await;
+            let completed = match result {
+                Ok(()) => context.complete(CommandOutputPlan::default()),
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+            };
+            TargetCommandTaskStep::Complete(completed.finish(conn, command_context))
         }
         CompletedTargetCommandKind::CreateTarget {
             response_plan,
@@ -1049,24 +1035,6 @@ fn pending_activate_target_command(
         kind: Box::new(PendingTargetCommandKind::ActivateTarget {
             activation,
             access: conn.protocol_state_access(),
-        }),
-    })
-}
-
-fn pending_set_auto_attach_command(
-    command_id: Option<u64>,
-    session_id: Option<&str>,
-    auto_attach: bool,
-    owner_session_id: Option<&str>,
-    initial_document: Option<crate::conn::InitialDocumentPageBuildWaiter>,
-) -> TargetCommandTaskStep {
-    TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-        command_id,
-        session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::SetAutoAttach {
-            auto_attach,
-            owner_session_id: owner_session_id.map(str::to_owned),
-            initial_document,
         }),
     })
 }

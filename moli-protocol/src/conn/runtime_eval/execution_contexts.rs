@@ -394,6 +394,7 @@ impl CdpConnection {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn apply_runtime_binding_state_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,

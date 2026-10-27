@@ -600,6 +600,7 @@ impl BrowserContext {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn release_primary_session_binding_preserving_frontend_state(
         &mut self,
         session_id: &str,

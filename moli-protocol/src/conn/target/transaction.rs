@@ -79,7 +79,6 @@ impl TargetEventPlan {
             .extend(other.rolled_back_session_ids);
     }
 
-    #[cfg(test)]
     pub(crate) fn committed_sessions(&self) -> &[CommittedAttachSession] {
         &self.committed_sessions
     }
@@ -321,7 +320,6 @@ impl PreparedTargetAttach {
         &self.target_info
     }
 
-    #[cfg(test)]
     pub(crate) fn sessions(&self) -> &[TargetAttachSessionCommit] {
         &self.sessions
     }
@@ -493,12 +491,14 @@ impl TargetAttachRollbackPlan {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TargetAutoAttachedSessionDetachPlan {
     Rollback { session_id: String },
     Detach { cleanup_plan: SessionDisposalPlan },
 }
 
+#[cfg(test)]
 impl TargetAutoAttachedSessionDetachPlan {
     pub(crate) fn from_session_route(
         session_id: impl Into<String>,

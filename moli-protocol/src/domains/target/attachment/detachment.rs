@@ -30,7 +30,7 @@ enum SessionDetachmentCommit {
     Target(TargetSessionDetachCleanupPlan),
 }
 
-pub(in crate::domains::target) struct TargetDetachmentOutput {
+pub(crate) struct TargetDetachmentOutput {
     sessions: Vec<SessionDetachmentOutput>,
 }
 
@@ -45,6 +45,40 @@ struct SessionDetachmentOutput {
 }
 
 impl TargetDetachment {
+    pub(in crate::domains::target) fn prepare_auto_attached_sessions(
+        conn: &mut CdpConnection,
+        owner_session_id: Option<&str>,
+    ) -> Self {
+        let declarations = conn.auto_attached_session_cascade_for_owner(owner_session_id);
+        let sessions = declarations
+            .into_iter()
+            .filter_map(|session| {
+                let route = conn.session_route(Some(&session))?;
+                let plan = SessionDisposalPlan::for_session_route(&session, &route)?;
+                let commit = match plan.target() {
+                    SessionDisposalTarget::Browser => {
+                        SessionDetachmentCommit::Browser { emit_event: false }
+                    }
+                    _ => SessionDetachmentCommit::Target(TargetSessionDetachCleanupPlan::new(
+                        plan.target_id()?,
+                        &session,
+                        None,
+                        None,
+                    )),
+                };
+                let disposal = PreparedSessionDisposal::prepare(conn, plan);
+                Some(SessionDetachment {
+                    identity: disposal.identity(),
+                    disposal,
+                    commit,
+                    child: true,
+                    response_before_event: false,
+                })
+            })
+            .collect();
+        Self { sessions }
+    }
+
     pub(in crate::domains::target) fn failure_cleanup(&self) -> TargetDetachmentFailureCleanup {
         TargetDetachmentFailureCleanup::new(&self.sessions)
     }
@@ -192,7 +226,7 @@ impl TargetDetachment {
 }
 
 impl TargetDetachmentOutput {
-    pub(in crate::domains::target) fn finish(
+    pub(crate) fn finish(
         self,
         conn: &mut CdpConnection,
         command_context: &mut CommandDispatchContext,

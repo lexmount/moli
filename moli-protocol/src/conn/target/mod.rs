@@ -1,5 +1,6 @@
 mod activation;
 mod auto_attach_owner;
+pub(crate) use auto_attach_owner::AutoAttachPolicyIdentity;
 mod control;
 mod default_target;
 mod graph;
@@ -25,7 +26,9 @@ pub(crate) use session::{
 pub(crate) use transaction::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
     SessionDisposalTarget, TargetAttachRollbackPlan, TargetAttachSessionCommit,
-    TargetAutoAttachedSessionDetachPlan, TargetClosureCleanupPlan, TargetEventPlan,
-    TargetSessionDetachCleanupPlan,
+    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
 pub(crate) use worker_session::TargetWorkerProtocolAttachmentIdentity;
+
+#[cfg(test)]
+pub(crate) use transaction::TargetAutoAttachedSessionDetachPlan;

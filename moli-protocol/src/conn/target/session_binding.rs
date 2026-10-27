@@ -8,8 +8,8 @@ use crate::conn::CdpConnection;
 
 use super::{
     CdpSessionRoute, PreparedTargetAttach, SessionDisposalPlan, SessionDisposalTarget,
-    TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetAutoAttachedSessionDetachPlan,
-    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
+    TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
+    TargetSessionDetachCleanupPlan,
 };
 
 impl CdpConnection {
@@ -309,6 +309,7 @@ impl CdpConnection {
         Ok(event_plan)
     }
 
+    #[cfg(test)]
     pub(crate) fn release_root_target_frontend_owner_without_event(&mut self) {
         self.download_behavior
             .set_browser_events_enabled_for_session(None, false);
@@ -318,6 +319,7 @@ impl CdpConnection {
         self.target_control.remove_owner(None);
     }
 
+    #[cfg(test)]
     pub(crate) fn release_primary_target_session_binding_without_event(
         &mut self,
         session_id: &str,
@@ -893,6 +895,7 @@ impl CdpConnection {
         plan
     }
 
+    #[cfg(test)]
     pub(crate) async fn rollback_prepared_attach_session_without_event_async(
         &mut self,
         prepared: &TargetAttachSessionCommit,
@@ -988,6 +991,7 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn auto_attached_session_detach_plan(
         &self,
         session_id: &str,
@@ -998,6 +1002,7 @@ impl CdpConnection {
         TargetAutoAttachedSessionDetachPlan::from_session_route(session_id, route)
     }
 
+    #[cfg(test)]
     pub(crate) fn rollback_auto_attached_session_detach_plan_without_event(
         &mut self,
         detach_plan: &TargetAutoAttachedSessionDetachPlan,
@@ -1180,6 +1185,7 @@ impl CdpConnection {
             .attached_session_cascade_for_owner(owner_session_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn attached_session_cascade_for_root_frontend(&self) -> Vec<String> {
         self.target_control
             .attached_session_cascade_for_root_frontend()
@@ -1193,3 +1199,6 @@ impl CdpConnection {
             .auto_attached_session_cascade_for_owner(owner_session_id)
     }
 }
+
+#[cfg(test)]
+use super::TargetAutoAttachedSessionDetachPlan;

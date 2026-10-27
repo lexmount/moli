@@ -172,8 +172,8 @@ pub use owned_wait_task::{
 pub(crate) use state::PageTargetHostIdentity;
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
-    CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition, TargetHandlerAccessMode,
-    TargetSurfaceUpdate, TargetWorkerProtocolAttachmentIdentity,
+    AutoAttachPolicyIdentity, CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition,
+    TargetHandlerAccessMode, TargetSurfaceUpdate, TargetWorkerProtocolAttachmentIdentity,
 };
 
 #[derive(Clone, Debug)]
@@ -1294,7 +1294,7 @@ pub struct CdpConnection {
     // the primary auto-attached Page session, while later owners contribute
     // additional attached sessions. A randomized HashMap iteration order made that
     // choice vary between otherwise identical processes.
-    auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
+    auto_attach_owner_sessions: IndexMap<Option<String>, Rc<AutoAttachOwnerPolicy>>,
     target_control: TargetControlPlane,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
