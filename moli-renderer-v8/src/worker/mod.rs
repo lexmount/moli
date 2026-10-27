@@ -40,6 +40,7 @@ pub(crate) use codec_tasks::queue_worker_codec_task;
 pub(crate) use file_reading_tasks::{
     queue_worker_file_reading_task, take_worker_file_reading_task,
 };
+pub(crate) use global_scope::WorkerRedirectOwner;
 pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 pub(crate) use websocket_events::signal_worker_websocket_stream_pull;

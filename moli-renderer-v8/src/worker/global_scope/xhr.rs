@@ -221,14 +221,23 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
         .filter(|value| value.is_finite() && *value > 0.0)
         .map(|value| value as u32)
         .unwrap_or(0);
+    apply_worker_xhr_timeout(scope, &state, xhr, scheduled_xhr_id);
+    rv.set_undefined();
+}
+
+fn apply_worker_xhr_timeout(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    xhr: v8::Local<'_, v8::Object>,
+    scheduled_xhr_id: u32,
+) {
     let active_xhr_id =
         xhr_state_number_property(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT).unwrap_or(0.0) as u32;
     if scheduled_xhr_id == 0 || scheduled_xhr_id != active_xhr_id {
-        rv.set_undefined();
         return;
     }
 
-    set_xhr_state_number(scope, xhr, XHR_TIMEOUT_TIMER_SLOT, 0.0);
+    cancel_worker_xhr_timeout(scope, xhr);
     let response_completed = state
         .borrow()
         .pending_xhrs
@@ -243,7 +252,6 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
                 && !pending.load.cancel_if_response_pending()
         });
     if response_completed {
-        rv.set_undefined();
         return;
     }
 
@@ -281,7 +289,6 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
         }
     }
     apply_xhr_timeout(scope, xhr);
-    rv.set_undefined();
 }
 
 pub(crate) fn try_worker_xhr_send_callback<'s>(
@@ -694,6 +701,7 @@ fn send_synchronous_worker_xhr(
                             worker_cancel_handle,
                             preflight_headers,
                             &worker_timing,
+                            None,
                         ))
                         .0
                 });
@@ -1015,6 +1023,26 @@ pub(in crate::worker) fn drain_worker_xhr_event(
     event: WorkerXhrEvent,
 ) {
     match event {
+        WorkerXhrEvent::RedirectAdmission { xhr_id, admission } => {
+            let xhr = {
+                let state = state.borrow();
+                let Some(pending) = state.pending_xhrs.get(&xhr_id) else {
+                    return;
+                };
+                if pending.load.is_cancelled() {
+                    return;
+                }
+                v8::Local::new(scope, &pending.xhr)
+            };
+            // Worker timers are collected after the registering task. A
+            // queued redirect must still observe the XHR's elapsed timeout,
+            // including changes made before that task returns.
+            if worker_xhr_timeout_remaining_delay_ms(scope, xhr) == Some(0) {
+                apply_worker_xhr_timeout(scope, state, xhr, xhr_id);
+                return;
+            }
+            admission.grant();
+        }
         WorkerXhrEvent::ResourceTiming { xhr_id, timing } => {
             if xhr_id.is_none_or(|id| !state.borrow().pending_xhrs.contains_key(&id)) {
                 timing.publish(scope);

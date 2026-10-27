@@ -348,6 +348,7 @@ pub(super) fn spawn_network_fetch(
         prepared.method,
         prepared.request_headers,
         request_body_text(&prepared.body),
+        host.window_redirect_owner(internal_id),
     );
     Ok(internal_id)
 }

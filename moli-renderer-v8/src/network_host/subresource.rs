@@ -206,6 +206,7 @@ impl PreparedSubresourceFetch {
             info.method,
             info.request_headers,
             info.request_body,
+            None,
         );
     }
 }

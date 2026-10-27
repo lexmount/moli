@@ -283,6 +283,7 @@ impl ServiceWorkerRuntimeService {
             job.request.method,
             job.request.request_headers.clone(),
             request_body_text(&job.request.body),
+            None,
         );
     }
 

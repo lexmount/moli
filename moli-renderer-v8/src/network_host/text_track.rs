@@ -221,6 +221,7 @@ pub(crate) fn start_text_track_resource_fetch(
         "GET".to_owned(),
         Default::default(),
         None,
+        None,
     );
     Ok(TextTrackResourceFetchStart::Pending)
 }

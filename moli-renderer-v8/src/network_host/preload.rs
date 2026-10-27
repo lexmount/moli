@@ -331,6 +331,7 @@ fn start_resource_preload(
             "GET".into(),
             Default::default(),
             None,
+            None,
         );
     }
     Ok(())

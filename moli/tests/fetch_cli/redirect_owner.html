@@ -1,0 +1,68 @@
+<!doctype html>
+<body>
+<script>
+async function probeRedirects(scope, base, offset) {
+  const cases=[
+    {api:'xhr'},
+    {api:'fetch'},
+    {api:'fetch',keepalive:true},
+    {api:'fetch',mode:'no-cors'},
+    {api:'fetch',mode:'same-origin'},
+    {api:'xhr',timeout:300},
+    {api:'xhr',timeout:300,afterTimeout:0},
+    {api:'xhr',abort:true},
+    {api:'xhr',sync:true}
+  ];
+  let passed=0;
+  for(let index=0;index<cases.length;index++) {
+    const config=cases[index],id=offset+index;
+    // This independent request must start even while a redirect awaits its
+    // requesting owner. The snapshot itself uses a separate synchronous XHR.
+    const direct=fetch(base+'/direct/'+id).then(response=>response.text());
+    let xhr;
+    const outcome=config.api==='fetch'
+      ? fetch(base+'/redirect/'+id,{keepalive:!!config.keepalive,mode:config.mode||'cors'}).then(async response=>({event:'load',status:response.status,text:await response.text()}))
+      : new Promise((resolve,reject)=>{
+          xhr=new XMLHttpRequest();
+          if(!config.sync) {
+            for(const event of ['load','timeout','abort','error'])xhr.addEventListener(event,()=>resolve({event,status:xhr.status,text:xhr.responseText}));
+          }
+          xhr.open('GET',base+'/redirect/'+id,!config.sync);
+          if(!config.sync)xhr.timeout=config.timeout||0;
+          try {
+            xhr.send();
+            if(config.sync)resolve({event:'load',status:xhr.status,text:xhr.responseText});
+          } catch(error) {reject(error);}
+        });
+    const until=performance.now()+650;while(performance.now()<until){}
+    if(xhr&&'afterTimeout' in config)xhr.timeout=config.afterTimeout;
+    const sample=new XMLHttpRequest();sample.open('GET',base+'/observed/'+id,false);sample.send();
+    const immediate=config.sync||(scope==='window'&&config.keepalive);
+    const expected=immediate?'yes:yes:yes':'yes:no:yes';
+    if(sample.responseText!==expected)throw Error(JSON.stringify({scope,config,snapshot:sample.responseText,expected}));
+    if(config.abort)xhr.abort();
+    const [result,directResult]=await Promise.all([outcome,direct]);
+    const expectedEvent=config.abort?'abort':config.timeout&&config.afterTimeout!==0?'timeout':'load';
+    if(result.event!==expectedEvent||result.status!==(expectedEvent==='load'?200:0)||result.text!==(expectedEvent==='load'?'body':'')||directResult!=='direct') {
+      throw Error(JSON.stringify({scope,config,result,directResult,expectedEvent}));
+    }
+    passed++;
+  }
+  return scope+':'+passed+'/'+cases.length;
+}
+(async()=>{
+  const base=location.origin;
+  const windowResult=await probeRedirects('window',base,0);
+  const worker=new Worker(URL.createObjectURL(new Blob([
+    probeRedirects.toString(),
+    '\nonmessage=async event=>{try{postMessage({result:await probeRedirects("worker",event.data,9)});}catch(error){postMessage({error:String(error)});}};'
+  ],{type:'text/javascript'})));
+  try {
+    const workerResult=await new Promise((resolve,reject)=>{
+      worker.onmessage=event=>event.data.error?reject(Error(event.data.error)):resolve(event.data.result);
+      worker.onerror=event=>reject(Error(event.message));worker.postMessage(base);
+    });
+    document.body.dataset.redirectOwners=windowResult+'|'+workerResult;
+  }finally{worker.terminate();}
+})().catch(error=>{document.body.dataset.redirectOwners='error:'+error;});
+</script>

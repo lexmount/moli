@@ -246,6 +246,7 @@ pub(crate) fn start_media_element_resource_fetch(
         "GET".to_owned(),
         Default::default(),
         None,
+        None,
     );
     Ok(MediaElementResourceFetchStart::Pending)
 }
