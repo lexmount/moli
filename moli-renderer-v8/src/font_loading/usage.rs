@@ -4,9 +4,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use moli_layout::{
-    LayoutDisplay, LayoutFormControlKind, LayoutInputControlKind, LayoutListMarkerType,
-    TextCharacter, TextTransform, TextTransformState, TextWhiteSpaceCollapse,
-    classify_text_character, form_control_text, list_marker_text, select_control_texts,
+    ChildBoxPolicy, LayoutDisplay, LayoutElementCategory, LayoutFormControlKind,
+    LayoutInputControlKind, LayoutListMarkerType, TextCharacter, TextTransform, TextTransformState,
+    TextWhiteSpaceCollapse, classify_text_character, form_control_text, list_marker_text,
+    select_control_texts,
 };
 use style::{
     computed_values::{list_style_position::T as MarkerPosition, position::T as Position},
@@ -21,8 +22,7 @@ use style::{
 use crate::{
     document_runtime::DomHandle,
     dom_presentation::{
-        element_generates_child_boxes, flat_children, layout_element_classification,
-        select_control_data,
+        element_child_box_policy, flat_children, layout_element_classification, select_control_data,
     },
     native_bridge::{
         JsContextHost,
@@ -85,10 +85,10 @@ pub(crate) fn collect_font_uses(
                 let saved = collector.enter(&style, false, separate);
                 // Columns discard text children; column groups retain only
                 // column boxes. Their principal boxes still form boundaries.
-                if !matches!(
-                    LayoutDisplay::from(&*style),
-                    LayoutDisplay::TableColumn | LayoutDisplay::TableColumnGroup
-                ) {
+                if LayoutElementCategory::Generic
+                    .child_box_policy(false, LayoutDisplay::from(&*style))
+                    == ChildBoxPolicy::All
+                {
                     collector.generated_text(&style);
                     if let Some(text) = default_text {
                         collector.text(&style, &text);
@@ -120,30 +120,29 @@ pub(crate) fn collect_font_uses(
         let Some(style) = read.computed_values() else {
             continue;
         };
-        if style.clone_display().is_none()
-            || (style.clone_display().is_contents()
-                && !element_generates_child_boxes(element, LayoutDisplay::Contents))
+        let display = LayoutDisplay::from(&*style);
+        let (category, replaced) = layout_element_classification(element);
+        let children = element_child_box_policy(element, category, replaced.is_some(), display);
+        if display == LayoutDisplay::None
+            || (display == LayoutDisplay::Contents && children == ChildBoxPolicy::None)
             || (scripting && host.dom_host().is_html_element_named(node, "noscript"))
         {
             continue;
         }
-        if host.dom_host().is_html_element_named(node, "br") {
+        if category == LayoutElementCategory::LineBreak {
             collector.context = TextContext::default();
             continue;
         }
-        let control = if element.is_html_input() {
-            let kind = LayoutInputControlKind::from_type_attribute(element.attribute("type"));
-            if kind == LayoutInputControlKind::Hidden {
-                continue;
-            }
-            Some(LayoutFormControlKind::Input(kind))
-        } else if element.is_html_textarea() {
-            Some(LayoutFormControlKind::TextArea)
-        } else {
-            None
+        let control = match category {
+            LayoutElementCategory::FormControl(LayoutFormControlKind::Input(
+                LayoutInputControlKind::Hidden,
+            )) => continue,
+            LayoutElementCategory::FormControl(
+                kind @ (LayoutFormControlKind::Input(_) | LayoutFormControlKind::TextArea),
+            ) => Some(kind),
+            _ => None,
         };
-        let replaced = layout_element_classification(element).1.is_some();
-        if let Some(context) = collector.enter(&style, replaced, false) {
+        if let Some(context) = collector.enter(&style, replaced.is_some(), false) {
             pending.push(Work::Restore(context));
         }
         // Hidden contents still leave a principal box and its text boundary.
@@ -155,7 +154,7 @@ pub(crate) fn collect_font_uses(
         {
             continue;
         }
-        if element.is_html_select() {
+        if category == LayoutElementCategory::FormControl(LayoutFormControlKind::Select) {
             let data = select_control_data(host.dom_host(), node, element);
             for text in select_control_texts(&data) {
                 // Each rendered listbox row has its own inline text context.
@@ -183,10 +182,7 @@ pub(crate) fn collect_font_uses(
         // Collect control labels above, but omit pseudo/DOM fallback streams
         // that the box builder never renders. Column groups retain only leaf
         // column boxes, so none of their descendants contribute text either.
-        let display = LayoutDisplay::from(&*style);
-        if display == LayoutDisplay::TableColumnGroup
-            || !element_generates_child_boxes(element, display)
-        {
+        if children != ChildBoxPolicy::All {
             continue;
         }
         let marker = style

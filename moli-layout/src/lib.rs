@@ -94,12 +94,12 @@ pub use snapshot::{
     pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
 };
 pub use source::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutHyperlink, LayoutImageResource, LayoutInputControlKind,
-    LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind,
-    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
-    LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
-    html_display_contents_is_none,
+    ChildBoxPolicy, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
+    LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
+    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

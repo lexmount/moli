@@ -2,9 +2,9 @@
 //! These helpers do not build layout boxes or query geometry.
 
 use moli_layout::{
-    LayoutDisplay, LayoutElementCategory, LayoutFormControlData, LayoutFormControlKind,
-    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutReplacedKind,
-    LayoutTableRole, html_display_contents_is_none,
+    ChildBoxPolicy, LayoutDisplay, LayoutElementCategory, LayoutFormControlData,
+    LayoutFormControlKind, LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace,
+    LayoutReplacedKind, LayoutTableRole, html_display_contents_is_none,
 };
 
 use crate::{
@@ -33,17 +33,19 @@ pub(crate) fn layout_element_classification(
 }
 
 /// Mirrors source-box child construction without allocating layout metadata.
-pub(crate) fn element_generates_child_boxes(element: &Element, display: LayoutDisplay) -> bool {
-    match display {
-        LayoutDisplay::None => false,
-        LayoutDisplay::Contents => {
-            element.namespace() != LayoutNamespace::HTML_URI
-                || !html_display_contents_is_none(element.local_name())
-        }
-        _ => {
-            let (category, replaced) = layout_element_classification(element);
-            !category.is_leaf(replaced.is_some(), display)
-        }
+pub(crate) fn element_child_box_policy(
+    element: &Element,
+    category: LayoutElementCategory,
+    replaced: bool,
+    display: LayoutDisplay,
+) -> ChildBoxPolicy {
+    if display == LayoutDisplay::Contents
+        && element.namespace() == LayoutNamespace::HTML_URI
+        && html_display_contents_is_none(element.local_name())
+    {
+        ChildBoxPolicy::None
+    } else {
+        category.child_box_policy(replaced, display)
     }
 }
 

@@ -3,11 +3,15 @@ use std::collections::HashMap;
 use crate::{
     document_runtime::DomHandle,
     dom_presentation::{
-        element_generates_child_boxes, flat_children, flat_parent, is_list_container, list_data,
+        element_child_box_policy, flat_children, flat_parent, is_list_container,
+        layout_element_classification, list_data,
     },
     native_bridge::{JsContextHost, element::StyleObservation},
 };
-use moli_layout::{LayoutDisplay, LayoutInputControlKind, ListCounter};
+use moli_layout::{
+    ChildBoxPolicy, LayoutDisplay, LayoutElementCategory, LayoutFormControlKind,
+    LayoutInputControlKind, ListCounter,
+};
 use style::{properties::ComputedValues, servo_arc::Arc, values::computed::Content};
 
 enum Work {
@@ -78,16 +82,26 @@ impl ListCounters {
         scripting: bool,
     ) {
         let dom = host.dom_host();
-        let data = dom
-            .node(container)
-            .and_then(|node| node.as_element())
-            .and_then(list_data)
-            .unwrap_or_default();
+        let Some(element) = dom.node(container).and_then(|node| node.as_element()) else {
+            return;
+        };
+        let data = list_data(element).unwrap_or_default();
         let mut items = Vec::new();
-        let Some((_, before, after)) = observation.read(container).into_element_computed_values()
+        let Some((style, before, after)) =
+            observation.read(container).into_element_computed_values()
         else {
             return;
         };
+        let (category, replaced) = layout_element_classification(element);
+        if element_child_box_policy(
+            element,
+            category,
+            replaced.is_some(),
+            LayoutDisplay::from(&*style),
+        ) != ChildBoxPolicy::All
+        {
+            return;
+        }
         let mut pending = Vec::new();
         push_children(&mut pending, host, root, container, before, after);
         while let Some(work) = pending.pop() {
@@ -107,13 +121,20 @@ impl ListCounters {
                 continue;
             };
             let display = style.clone_display();
+            let (category, replaced) = layout_element_classification(element);
+            let children = element_child_box_policy(
+                element,
+                category,
+                replaced.is_some(),
+                LayoutDisplay::from(&*style),
+            );
             if display.is_none()
-                || (display.is_contents()
-                    && !element_generates_child_boxes(element, LayoutDisplay::Contents))
+                || (display.is_contents() && children == ChildBoxPolicy::None)
                 || (scripting && element.is_html_element("noscript"))
-                || (element.is_html_input()
-                    && LayoutInputControlKind::from_type_attribute(element.attribute("type"))
-                        == LayoutInputControlKind::Hidden)
+                || category
+                    == LayoutElementCategory::FormControl(LayoutFormControlKind::Input(
+                        LayoutInputControlKind::Hidden,
+                    ))
             {
                 continue;
             }
@@ -130,10 +151,7 @@ impl ListCounters {
             // descendant list-item boxes survive their child filtering.
             // Leaf principal boxes omit pseudo children as well as DOM children.
             // Keep the element's own list-item box counted above, if present.
-            let layout_display = LayoutDisplay::from(&*style);
-            if layout_display == LayoutDisplay::TableColumnGroup
-                || !element_generates_child_boxes(element, layout_display)
-            {
+            if children != ChildBoxPolicy::All {
                 continue;
             }
             push_children(&mut pending, host, root, node, before, after);

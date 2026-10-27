@@ -56,11 +56,24 @@ pub enum LayoutElementCategory {
     FormControl(LayoutFormControlKind),
 }
 
+/// Retention of source and generated children, before further normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildBoxPolicy {
+    None,
+    All,
+    ColumnsOnly,
+}
+
 impl LayoutElementCategory {
-    /// Whether a principal box omits both source and generated children.
-    /// `display: contents` suppression is handled before principal construction.
-    pub const fn is_leaf(self, replaced: bool, display: LayoutDisplay) -> bool {
-        replaced || matches!(self, Self::LineBreak) || matches!(display, LayoutDisplay::TableColumn)
+    /// DOM-specific `display: contents` suppression is applied by the adapter.
+    pub const fn child_box_policy(self, replaced: bool, display: LayoutDisplay) -> ChildBoxPolicy {
+        match display {
+            LayoutDisplay::None | LayoutDisplay::TableColumn => ChildBoxPolicy::None,
+            LayoutDisplay::Contents => ChildBoxPolicy::All,
+            _ if replaced || matches!(self, Self::LineBreak) => ChildBoxPolicy::None,
+            LayoutDisplay::TableColumnGroup => ChildBoxPolicy::ColumnsOnly,
+            _ => ChildBoxPolicy::All,
+        }
     }
 
     pub const fn debug_name(self) -> &'static str {

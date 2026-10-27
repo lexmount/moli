@@ -210,3 +210,82 @@ fn automatic_fonts_column_pseudos_preserve_outer_text_boundaries() {
         }
     }
 }
+
+#[test]
+fn font_usage_matches_retained_box_text_for_child_box_policy() {
+    use std::collections::{BTreeSet, HashSet};
+
+    fn collect_text(node: &moli_layout::NormalizedBoxNode, characters: &mut BTreeSet<char>) {
+        if let Some(text) = &node.text {
+            characters.extend(text.chars());
+        }
+        for child in &node.children {
+            collect_text(child, characters);
+        }
+    }
+
+    for (tag, display, pseudo_display, expected) in [
+        ("div", "block", "inline", "ABC"),
+        ("div", "inline", "inline", "ABC"),
+        ("div", "inline", "block", "ABC"),
+        ("div", "contents", "inline", "ABC"),
+        ("div", "none", "inline", ""),
+        ("div", "table-column", "inline", ""),
+        ("div", "table-column-group", "inline", ""),
+        ("div", "block", "table-column", "A"),
+        ("div", "block", "table-column-group", "A"),
+        ("div", "contents", "table-column", "A"),
+        ("canvas", "block", "inline", ""),
+        ("canvas", "contents", "inline", ""),
+        ("object", "block", "inline", "ABC"),
+        ("object", "contents", "inline", ""),
+        ("br", "block", "inline", ""),
+        ("br", "contents", "inline", ""),
+    ] {
+        let mut vm = font_usage_vm();
+        vm.eval(&format!(
+            r#"
+            const target=document.createElement('{tag}');
+            target.id='target';target.append(document.createTextNode('A'));
+            document.body.replaceChildren(target);
+            const style=document.createElement('style');
+            style.textContent=`
+                #target {{display:{display};font-family:ContractFace}}
+                #target::before {{content:"B";display:{pseudo_display}}}
+                #target::after {{content:"C";display:{pseudo_display}}}
+            `;
+            document.head.replaceChildren(style);
+        "#
+        ))
+        .unwrap();
+        let host = vm._context_host.borrow();
+        let document = host.document_handle();
+        let root = host
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+            .unwrap();
+        let families = HashSet::from(["contractface".to_owned()]);
+        let discovered = crate::font_loading::usage::collect_font_uses(&host, document, &families)
+            .into_values()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(vm.layout_pass_observability_for_test().1, 0);
+
+        // Construct boxes only in the test oracle. Both paths must match the
+        // independent expected characters, even when they share a policy.
+        let tree =
+            crate::layout_renderer::build_normalized_native_box_tree_for_test(&host, root).unwrap();
+        let mut retained = BTreeSet::new();
+        collect_text(&tree.root, &mut retained);
+        let expected = expected.chars().collect::<BTreeSet<_>>();
+        assert_eq!(
+            discovered, expected,
+            "discovery: {tag}/{display}/{pseudo_display}"
+        );
+        assert_eq!(
+            retained, expected,
+            "box construction: {tag}/{display}/{pseudo_display}"
+        );
+    }
+}

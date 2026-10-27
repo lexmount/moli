@@ -13,7 +13,7 @@ use std::{
 };
 
 use crate::{
-    LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind,
+    ChildBoxPolicy, LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind,
     LayoutCapabilityDiagnostic, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
     LayoutError, LayoutPseudo, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutWorld,
     ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
@@ -176,7 +176,10 @@ where
         if !matches!(
             root_style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents
-        ) && !is_leaf_element(&root_semantics, &root_style)
+        ) && root_semantics
+            .category
+            .child_box_policy(root_semantics.is_replaced(), root_style.display())
+            != ChildBoxPolicy::None
         {
             self.populate_root(
                 &mut world,
@@ -353,7 +356,11 @@ where
                     }
                     world.map_source(source_node, id);
 
-                    if is_leaf_element(&semantics, &style) {
+                    if semantics
+                        .category
+                        .child_box_policy(semantics.is_replaced(), style.display())
+                        == ChildBoxPolicy::None
+                    {
                         return Ok(vec![id]);
                     }
 
@@ -577,23 +584,28 @@ where
         // parent for containing-block and CSSOM ancestry.
         world.record_structural_children(box_id, &children)?;
         let table_role = self.table_role(world, box_id)?;
-        let children = if table_role == Some(TableBoxRole::Column) {
-            Vec::new()
-        } else if table_role == Some(TableBoxRole::ColumnGroup) {
-            self.normalize_table_column_group(world, children)?
-        } else if matches!(
-            table_role,
-            Some(TableBoxRole::Root | TableBoxRole::RowGroup | TableBoxRole::Row)
-        ) {
-            self.normalize_structural_table_children(
-                world,
-                owner,
-                parent_style,
-                table_role.expect("matched structural table role"),
-                children,
-            )?
-        } else {
-            self.normalize_missing_table_parents(world, owner, parent_style, children)?
+        let children = match LayoutElementCategory::Generic
+            .child_box_policy(false, parent_style.display())
+        {
+            ChildBoxPolicy::None => Vec::new(),
+            ChildBoxPolicy::ColumnsOnly => self.normalize_table_column_group(world, children)?,
+            ChildBoxPolicy::All
+                if matches!(
+                    table_role,
+                    Some(TableBoxRole::Root | TableBoxRole::RowGroup | TableBoxRole::Row)
+                ) =>
+            {
+                self.normalize_structural_table_children(
+                    world,
+                    owner,
+                    parent_style,
+                    table_role.expect("matched structural table role"),
+                    children,
+                )?
+            }
+            ChildBoxPolicy::All => {
+                self.normalize_missing_table_parents(world, owner, parent_style, children)?
+            }
         };
 
         if allow_inline_split
@@ -1483,12 +1495,6 @@ fn principal_kind(
         LayoutDisplay::TableRow => LayoutBoxKind::TableRow,
         LayoutDisplay::TableCell => LayoutBoxKind::TableCell,
     }
-}
-
-fn is_leaf_element(semantics: &LayoutElementSemantics, style: &ResolvedLayoutStyle) -> bool {
-    semantics
-        .category
-        .is_leaf(semantics.is_replaced(), style.display())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
