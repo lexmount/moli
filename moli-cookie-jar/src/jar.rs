@@ -364,6 +364,39 @@ impl BrowserCookieStore {
         cookies
     }
 
+    /// Deletes only the exact identities selected by a predicate over stored cookies.
+    ///
+    /// An absent partition key identifies an unpartitioned cookie. Site and
+    /// opaque partition keys retain their full identity throughout deletion.
+    pub fn delete_cookies_matching(
+        &mut self,
+        mut matches: impl FnMut(&StoredCookie) -> bool,
+    ) -> usize {
+        let mut removed = 0;
+        for cookie in self.cookies() {
+            if matches(&cookie) {
+                let partition_key = cookie
+                    .partition_key
+                    .as_ref()
+                    .map(core_partition_key_from_stored);
+                removed += usize::from(
+                    self.full_core
+                        .remove_with_partition_key(
+                            &cookie.domain,
+                            &cookie.path,
+                            &cookie.name,
+                            partition_key.as_ref(),
+                        )
+                        .is_some(),
+                );
+            }
+        }
+        if removed > 0 {
+            self.bump_document_cookie_generation();
+        }
+        removed
+    }
+
     /// Deletes cookies matching optional CDP-style name/domain/path/url filters.
     pub fn delete_cookies(
         &mut self,

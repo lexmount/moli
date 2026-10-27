@@ -1,6 +1,136 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_bidi_delete_cookies_preserves_unselected_partition_identities() {
+    use moli_cookie_jar::StoredCookiePartitionKey;
+
+    let profile = TempDir::new("bidi-cookie-delete-identity");
+    let values = [
+        "global", "site-a", "site-b", "ancestor", "opaque-a", "opaque-b",
+    ];
+    let keys = [
+        None,
+        Some(StoredCookiePartitionKey::site("https://a.com".into(), true)),
+        Some(StoredCookiePartitionKey::site("https://b.com".into(), true)),
+        Some(StoredCookiePartitionKey::site(
+            "https://a.com".into(),
+            false,
+        )),
+        Some(StoredCookiePartitionKey::opaque(1, true)),
+        Some(StoredCookiePartitionKey::opaque(2, true)),
+    ];
+    let cookies = values
+        .iter()
+        .zip(keys)
+        .map(|(value, partition_key)| {
+            let mut cookie = stored_cookie("sid", value);
+            cookie.secure = true;
+            cookie.same_site = StoredCookieSameSite::None;
+            cookie.source_scheme = StoredCookieSourceScheme::Secure;
+            cookie.partition_key = partition_key;
+            cookie
+        })
+        .chain([stored_cookie("unrelated", "keep")])
+        .collect();
+    let (addr, server) =
+        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), cookies)
+            .await;
+    let (mut socket, _) = connect_async(format!("ws://{addr}/session"))
+        .await
+        .expect("connect BiDi websocket");
+    let session = send_bidi_command(&mut socket, 1, "session.new", json!({})).await;
+    assert_eq!(session["type"], "success", "{session}");
+    let create = send_bidi_command(
+        &mut socket,
+        2,
+        "browsingContext.create",
+        json!({"type": "tab"}),
+    )
+    .await;
+    assert_eq!(create["type"], "success", "{create}");
+    let partition = json!({"type": "context", "context": create["result"]["context"]});
+    let before = send_bidi_command(
+        &mut socket,
+        3,
+        "storage.getCookies",
+        json!({"partition": partition}),
+    )
+    .await;
+    assert_eq!(
+        before["result"]["cookies"]
+            .as_array()
+            .expect("seeded cookies")
+            .len(),
+        7,
+        "{before}"
+    );
+
+    for (index, value) in values.iter().enumerate() {
+        let filter = json!({"name": "sid", "value": {"type": "string", "value": value}});
+        let selected = send_bidi_command(
+            &mut socket,
+            4,
+            "storage.getCookies",
+            json!({"partition": partition, "filter": filter}),
+        )
+        .await;
+        let selected_cookies = selected["result"]["cookies"]
+            .as_array()
+            .expect("selected cookies");
+        assert_eq!(selected_cookies.len(), 1, "{selected}");
+        assert_eq!(selected_cookies[0]["value"]["value"], *value);
+
+        let deleted = send_bidi_command(
+            &mut socket,
+            5,
+            "storage.deleteCookies",
+            json!({"partition": partition, "filter": filter}),
+        )
+        .await;
+        assert_eq!(deleted["type"], "success", "{deleted}");
+        let after = send_bidi_command(
+            &mut socket,
+            6,
+            "storage.getCookies",
+            json!({"partition": partition}),
+        )
+        .await;
+        let mut actual = after["result"]["cookies"]
+            .as_array()
+            .expect("remaining cookies")
+            .iter()
+            .map(|cookie| cookie["value"]["value"].as_str().expect("cookie value"))
+            .collect::<Vec<_>>();
+        let mut expected = values[index + 1..].to_vec();
+        expected.push("keep");
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(
+            actual, expected,
+            "deleting {value} must preserve every unselected cookie"
+        );
+    }
+    let cleared = send_bidi_command(
+        &mut socket,
+        7,
+        "storage.deleteCookies",
+        json!({"partition": partition}),
+    )
+    .await;
+    assert_eq!(cleared["type"], "success", "{cleared}");
+    let after = send_bidi_command(
+        &mut socket,
+        8,
+        "storage.getCookies",
+        json!({"partition": partition}),
+    )
+    .await;
+    assert_eq!(after["result"]["cookies"], json!([]));
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn websocket_bidi_network_add_and_remove_intercept_return_wpt_shape() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))

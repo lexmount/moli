@@ -1092,15 +1092,8 @@ pub(crate) fn complete_devtools_delete_cookies_result(
             Ok(browser_context_id) => Some(browser_context_id),
             Err((code, message)) => return Err(devtools_error_from_code_message(code, message)),
         };
-    let result = if command.filter.is_some() {
-        delete_cookies_for_browser_context_by_filter(
-            conn,
-            browser_context_id,
-            command.name,
-            command.domain,
-            command.path,
-            command.filter.as_ref(),
-        )
+    let result = if let Some(filter) = command.filter.as_ref() {
+        delete_cookies_for_browser_context_by_filter(conn, browser_context_id, filter)
     } else {
         delete_cookies_for_browser_context_with_partition_filter(
             conn,
@@ -1212,41 +1205,24 @@ fn cdp_cookie_same_site_for_filter(cookie: &Value) -> &str {
 fn delete_cookies_for_browser_context_by_filter(
     conn: &mut CdpConnection,
     browser_context_id: Option<String>,
-    name: Option<String>,
-    domain: Option<String>,
-    path: Option<String>,
-    filter: Option<&crate::automation::DevToolsCookieFilter>,
+    filter: &crate::automation::DevToolsCookieFilter,
 ) -> Result<(), (i32, &'static str)> {
-    let cookies = get_cookies_for_browser_context(conn, Ok(browser_context_id.clone()))?;
-    let cookies = filter_cookies_by_devtools_filter(cookies, filter);
-    for cookie in cookies {
-        delete_cookies_for_browser_context(
-            conn,
-            DeleteCookiesParams {
-                name: name.clone().or_else(|| {
-                    cookie
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                }),
-                url: None,
-                domain: domain.clone().or_else(|| {
-                    cookie
-                        .get("domain")
-                        .and_then(Value::as_str)
-                        .map(|domain| domain.trim_start_matches('.').to_owned())
-                }),
-                path: path.clone().or_else(|| {
-                    cookie
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                }),
-                partition_key: None,
-                browser_context_id: browser_context_id.clone(),
-            },
-        )?;
-    }
+    let bc = match browser_context_id.as_deref() {
+        Some(id) => conn
+            .browser_context_by_id(id)
+            .ok_or((-31998, "UnknownBrowserContextId"))?,
+        None => conn
+            .browser_context
+            .as_ref()
+            .ok_or((-31998, "BrowserContextNotLoaded"))?,
+    };
+    // Keep selection and removal under one store lock. Reconstructing a broad
+    // name/domain/path filter loses the selected cookie's partition identity.
+    bc.with_cookie_store_mut(|store| {
+        store.delete_cookies_matching(|cookie| {
+            cookie_matches_devtools_filter(&storage_cookie_to_json(cookie), filter)
+        })
+    });
     Ok(())
 }
 
@@ -1413,24 +1389,6 @@ fn devtools_error_from_code_message(code: i32, message: impl Into<String>) -> De
         _ => DevToolsErrorKind::Internal,
     };
     DevToolsError::new(kind, message)
-}
-
-pub(crate) fn delete_cookies_for_browser_context(
-    conn: &mut CdpConnection,
-    params: DeleteCookiesParams,
-) -> Result<(), (i32, &'static str)> {
-    let partition_key = normalize_partition_key(params.partition_key.as_ref(), false)
-        .map_err(|_| (-32602, "InvalidParams"))?;
-    let partition_filter = partition_key.map_or(
-        moli_cookie_jar::StoredCookiePartitionFilter::All,
-        moli_cookie_jar::StoredCookiePartitionFilter::Partition,
-    );
-    delete_cookies_for_browser_context_with_partition_filter(
-        conn,
-        params,
-        partition_filter,
-        moli_cookie_jar::StoredCookieDomainMatch::Canonical,
-    )
 }
 
 fn delete_cookies_for_browser_context_with_partition_filter(

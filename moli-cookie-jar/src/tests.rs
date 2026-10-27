@@ -1758,6 +1758,40 @@ fn cdp_upsert_host_only_cookie_preserves_explicit_domain_without_request_hint() 
 }
 
 #[test]
+fn delete_cookies_matching_preserves_partitions_and_invalidates_document_cookie() {
+    let mut store = BrowserCookieStore::default();
+    let url = parse("https://example.com/");
+    store.store_response_headers(
+        &url,
+        &[("set-cookie".into(), b"sid=global; Secure; Path=/".to_vec())],
+    );
+    let mut partitioned = store.cookies()[0].clone();
+    partitioned.value = "partitioned".into();
+    partitioned.partition_key = Some(StoredCookiePartitionKey::site("https://a.com".into(), true));
+    assert!(
+        store
+            .upsert_with_request_url_report(partitioned, Some(&url), CookieSource::Cdp)
+            .is_accepted()
+    );
+    let generation = store.document_cookie_generation();
+    assert_eq!(
+        store.delete_cookies_matching(|cookie| cookie.value == "missing"),
+        0
+    );
+    assert_eq!(store.document_cookie_generation(), generation);
+    assert_eq!(
+        store.delete_cookies_matching(|cookie| cookie.value == "global"),
+        1
+    );
+    assert!(store.document_cookie_generation() > generation);
+    assert_eq!(store.document_cookie(&url), "");
+    let remaining = store.cookies();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].value, "partitioned");
+    assert!(remaining[0].partition_key.is_some());
+}
+
+#[test]
 fn delete_cookies_updates_network_visible_cookie_header() {
     let mut store = BrowserCookieStore::default();
     let response_url = parse("https://sub.example.com/app/index.html");
