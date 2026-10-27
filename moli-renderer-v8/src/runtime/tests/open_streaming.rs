@@ -21,6 +21,147 @@ struct OpenStreamingPage {
     activity_wake_rx: RendererExternalActivityTestReceiver,
 }
 
+async fn recv_timer_console_publication(
+    receiver: &mut RendererExternalActivityTestReceiver,
+    page: &RendererPageHandle,
+    marker: &str,
+) -> RendererOutputPublication {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(publication) = receiver.recv().await {
+            if !publication_is_for_page(&publication, page) {
+                continue;
+            }
+            let contains_marker = publication.records().iter().any(|record| {
+                let RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
+                    batch,
+                )) = record.item()
+                else {
+                    return false;
+                };
+                batch.messages.iter().any(|message| {
+                    let RendererRuntimeInspectorMessage::Protocol(message) = message else {
+                        return false;
+                    };
+                    let message = message.as_json().expect("scalar console fixture");
+                    message["method"] == "Runtime.consoleAPICalled"
+                        && message["params"]["args"][0]["value"] == marker
+                })
+            });
+            if contains_marker {
+                return publication;
+            }
+        }
+        panic!("renderer output closed before timer console marker {marker}");
+    })
+    .await
+    .expect("the timer must autonomously publish its console output")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn timer_console_output_during_open_stream_does_not_wait_for_load() {
+    let mut source = OpenStreamingPage::create(
+        "https://timer-output-before-load.test",
+        "<!doctype html><body>open stream",
+    )
+    .await;
+    dispatch_runtime_protocol_for_test(
+        &source.page,
+        serde_json::json!({"id": 1, "method": "Runtime.enable"}),
+    )
+    .await
+    .expect("Runtime.enable should dispatch while the parser is waiting for input");
+    source
+        .page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "setTimeout(() => console.log('timer-before-load'), 0)".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("timer should schedule without closing the source stream");
+    let publication = recv_timer_console_publication(
+        &mut source.activity_wake_rx,
+        &source.page,
+        "timer-before-load",
+    )
+    .await;
+    let ordering = publication.ordering();
+    assert!(
+        !source.body_tx.is_closed(),
+        "the original parser must still be waiting for more input"
+    );
+    source.finish().await;
+    assert_eq!(
+        ordering,
+        super::super::RendererOutputPublicationOrdering::Unconstrained,
+        "a timer that ran before Load must not acquire a Load predecessor"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn timer_console_output_after_load_keeps_source_document_when_callback_replaces_it() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://timer-output-after-load.test/").unwrap(),
+        "<!doctype html><body>loaded document",
+    )
+    .await;
+    let (source_snapshot, _) = page
+        .run_async_command(RendererPageCommand::PageDiagnosticsSnapshot)
+        .await
+        .expect("loaded page identity should be available");
+    let RendererPageReply::PageDiagnosticsSnapshot(source_snapshot) = source_snapshot else {
+        panic!("expected the loaded Document's diagnostics");
+    };
+    let source_document = source_snapshot
+        .document_lifecycle_identity()
+        .expect("loaded page must retain its exact Document identity");
+    dispatch_runtime_protocol_for_test(
+        &page,
+        serde_json::json!({"id": 1, "method": "Runtime.enable"}),
+    )
+    .await
+    .expect("Runtime.enable should dispatch after Load");
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: r#"setTimeout(() => {
+            document.open();
+            document.write('<!doctype html><body>replacement');
+            console.log('timer-after-load-replacement');
+        }, 0)"#
+            .to_owned(),
+        await_promise: false,
+    })
+    .await
+    .expect("replacement timer should schedule");
+    let publication =
+        recv_timer_console_publication(&mut output_rx, &page, "timer-after-load-replacement").await;
+    let (replacement_snapshot, _) = page
+        .run_async_command(RendererPageCommand::PageDiagnosticsSnapshot)
+        .await
+        .expect("replacement page identity should be available");
+    let RendererPageReply::PageDiagnosticsSnapshot(replacement_snapshot) = replacement_snapshot
+    else {
+        panic!("expected the replacement Document's diagnostics");
+    };
+    let replacement_document = replacement_snapshot
+        .document_lifecycle_identity()
+        .expect("replacement must retain its exact Document identity");
+    page.close_async()
+        .await
+        .expect("the replacement stream should close with the page");
+    assert_ne!(source_document, replacement_document);
+    assert_eq!(
+        publication.ordering(),
+        super::super::RendererOutputPublicationOrdering::AfterPendingPageLoad { source_document },
+        "a post-load timer must keep its source Document's fence across replacement"
+    );
+}
+
 const SELF_REPLACE_WHILE_PARSING_HTML: &str = r#"<!doctype html><script>
 globalThis.__sourceDocument = true;
 setTimeout(() => location.replace(location.href), 0);
