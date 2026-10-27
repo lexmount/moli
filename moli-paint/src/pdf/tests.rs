@@ -498,8 +498,7 @@ fn page_graphic_contents(doc: &lopdf::Document) -> Vec<(&lopdf::Stream, lopdf::c
     let Ok(graphics) = doc.get_dict_in_dict(resources, b"XObject") else {
         return Vec::new();
     };
-    // Inspect graphics drawn by the page, excluding the Type3 glyph resources
-    // of the invisible semantic text. Those can contain hidden filled outlines.
+    // Inspect graphics drawn by the page, excluding artwork embedded in fonts.
     let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
     let names: std::collections::BTreeSet<_> = content
         .operations
@@ -693,36 +692,58 @@ fn hollow_synthetic_fallback_text_never_uses_visible_native_fill() {
             let doc = document(&snapshot, &options());
             assert_eq!(extracted_type3_unicode(&doc), label);
             let page = doc.get_pages()[&1];
-            let resources = doc
-                .get_dict_in_dict(doc.get_dictionary(page).unwrap(), b"Resources")
-                .unwrap();
-            let states = doc.get_dict_in_dict(resources, b"ExtGState").ok();
             let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
-            let mut opacity = 1.0;
             let mut mode = 0;
             let mut saved = Vec::new();
             for operation in &content.operations {
                 match operation.operator.as_str() {
-                    "q" => saved.push((opacity, mode)),
-                    "Q" => (opacity, mode) = saved.pop().unwrap(),
+                    "q" => saved.push(mode),
+                    "Q" => mode = saved.pop().unwrap(),
                     "Tr" => mode = operation.operands[0].as_i64().unwrap(),
-                    "gs" => {
-                        let name = operation.operands[0].as_name().unwrap();
-                        let state = doc
-                            .dereference(states.unwrap().get(name).unwrap())
-                            .unwrap()
-                            .1
-                            .as_dict()
-                            .unwrap();
-                        if let Ok(alpha) = state.get(b"ca") {
-                            opacity = alpha.as_float().unwrap();
+                    "Tj" | "TJ" => {
+                        assert_eq!(mode, 3, "semantic text needs 3 Tr, not ca=0: {label}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unused_svg_records_do_not_change_colr_fill_or_semantics() {
+    for bytes in [
+        include_bytes!("../../tests/fixtures/moli-text-stroke-colr.ttf").as_slice(),
+        include_bytes!("../../tests/fixtures/moli-text-stroke-colr-svg.ttf").as_slice(),
+    ] {
+        for size in [20.0, 32.0] {
+            for alpha in [0.0, 0.5, 1.0] {
+                for paint_first in [false, true] {
+                    for label in ["AA", "AB", "BA"] {
+                        let mut snapshot = snapshot();
+                        let mut run = synthetic_stroke_run(&mut snapshot, bytes, label, size);
+                        run.color = PaintColor::new(0.0, 0.0, 1.0, alpha);
+                        run.stroke.as_mut().unwrap().paint_first = paint_first;
+                        for (i, glyph) in run.glyphs.iter_mut().enumerate() {
+                            glyph.x = 40.0 + i as f32 * 60.0;
+                        }
+                        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+                        let doc = document(&snapshot, &options());
+                        assert_eq!(extracted_type3_unicode(&doc), label);
+                        let page = doc.get_pages()[&1];
+                        let content =
+                            lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+                        let invisible = content
+                            .operations
+                            .iter()
+                            .any(|op| op.operator == "Tr" && op.operands[0].as_i64().unwrap() == 3);
+                        if label == "AA" && alpha == 1.0 {
+                            assert!(
+                                !invisible,
+                                "native COLR fill already carries the text, including in a font with unrelated SVG data"
+                            );
                         }
                     }
-                    "Tj" | "TJ" => assert!(
-                        opacity == 0.0 || mode == 3,
-                        "hollow fallback glyphs need one invisible text layer, independent of neighbors: {label}"
-                    ),
-                    _ => {}
                 }
             }
         }

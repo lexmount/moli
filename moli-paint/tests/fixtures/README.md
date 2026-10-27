@@ -14,6 +14,11 @@ against the UPEM 1000 font to test the local CSS pixel contract.
 `moli-text-stroke-svg.ttf` preserves those outlines and adds an OpenType SVG
 record only for R. It checks PDF fallback to the rectangle when the SVG renderer
 is unavailable, both alone and next to ordinary outline glyphs.
+`moli-text-stroke-colr.ttf` adds a COLR v0 rectangle for A with a 50% red
+palette entry, retaining its base outline. `moli-text-stroke-colr-svg.ttf`
+adds the independent SVG record for R to the same font. Actual PDF reader
+regressions check that neither semantic text, fill/stroke fallback nor an
+unused SVG record composites A's translucent artwork more than once.
 
 `moli-pdf.ttf` is derived from the project's generated Ahem font by
 `uv run scripts/generate-pdf-test-font.py`, under the same license.

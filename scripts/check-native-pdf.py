@@ -6,6 +6,7 @@
 
 Run after building Moli:
     uv run scripts/check-native-pdf.py --moli target/debug/moli
+Requires Poppler's pdftoppm (poppler-utils).
 Unlike lopdf's basic extractor, MuPDF interprets ActualText, reversed text and
 colored Type3 glyphs. Keep these reader checks separate from the Rust structural
 and plain-text regressions. Artifacts and observed process costs are retained.
@@ -13,10 +14,12 @@ and plain-text regressions. Artifacts and observed process costs are retained.
 
 import argparse
 import base64
+from collections import Counter
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 import time
@@ -251,11 +254,82 @@ display:block;width:100px;height:30px;background:#c2d8ff}</style><a href="child-
     return info
 
 
+def check_translucent_colr(binary, output, pdftoppm):
+    """Inspect actual pixels: Type3 CharProcs can override a caller's ca=0."""
+    results = {}
+    reference = {}
+    for svg in [False, True]:
+        suffix = "-svg" if svg else ""
+        font = data_url((ROOT / "moli-paint/tests/fixtures" /
+                         f"moli-text-stroke-colr{suffix}.ttf").read_bytes(), "font/ttf")
+        for weight in [400, 700]:
+            for order in ["normal", "stroke fill"]:
+                for label, alpha, filtered in [
+                    ("AA", 0, False), ("AA", 1, False),
+                    ("AB", 0, False), ("AB", 1, False),
+                    ("AA", 0, True),
+                ]:
+                    name = f"colr{suffix}-{weight}-{order.replace(' ', '-')}-{label}-{alpha}-{filtered}"
+                    html = f"""<style>
+@font-face{{font-family:Color;src:url({font});font-weight:400}}
+body{{margin:0;background:white}}
+div{{position:absolute;left:60px;top:60px;font:100px/1 Color;font-weight:{weight};
+color:rgba(0,0,255,{alpha});-webkit-text-stroke:4px blue;paint-order:{order};
+filter:{'opacity(.5)' if filtered else 'none'}}}
+</style><div>{label}</div>"""
+                    text, info = capture(binary, output, name, html)
+                    assert text == label, (name, text)
+                    expected = 127
+                    if filtered:
+                        # The filter already contains CPU-rendered artwork.
+                        # PDF semantics must not paint over that image. Color
+                        # stroke support in the CPU renderer is a separate task.
+                        image = screenshot(binary, output, name, html)
+                        rgb = image.samples
+                        red = Counter(tuple(rgb[i:i + 3]) for i in range(0, len(rgb), image.n)
+                                      if rgb[i] == 255 and rgb[i + 1] == rgb[i + 2] < 250)
+                        expected = red.most_common(1)[0][0][1]
+                    target = output / f"{name}-poppler"
+                    subprocess.run([str(pdftoppm), "-r", "144", "-singlefile", "-png",
+                                    str(output / f"{name}.pdf"), str(target)],
+                                   check=True, capture_output=True)
+                    pixmaps = {"Poppler": pymupdf.Pixmap(str(target) + ".png")}
+                    with pymupdf.open(output / f"{name}.pdf") as document:
+                        pixmaps["MuPDF"] = document[0].get_pixmap(matrix=pymupdf.Matrix(2, 2))
+                    colors = {}
+                    for reader, pixmap in pixmaps.items():
+                        rgb = pixmap.samples
+                        red = Counter(tuple(rgb[i:i + 3]) for i in range(0, len(rgb), pixmap.n)
+                                      if rgb[i] == 255 and rgb[i + 1] == rgb[i + 2] < 250)
+                        assert red, (name, reader, "missing COLR layer")
+                        interior, pixels = red.most_common(1)[0]
+                        assert max(abs(channel - expected) for channel in interior[1:]) <= 1, (
+                            name, reader, interior, "PDF must not composite extra COLR artwork")
+                        assert min(color[1] for color in red) >= expected - 1, (
+                            name, reader, "extra translucent painting")
+                        assert pixels > 100, (name, reader, "missing COLR interior")
+                        colors[reader] = list(interior)
+                        # An unused SVG record and synthetic weight must not
+                        # change the COLR glyph's palette opacity.
+                        key = (reader, label, alpha, order, filtered)
+                        if key in reference:
+                            assert max(abs(a - b) for a, b in zip(interior, reference[key])) <= 1, (
+                                name, reader, interior, reference[key])
+                        else:
+                            reference[key] = interior
+                    results[name] = {**info, "interior_rgb": colors}
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--moli", type=Path, default=ROOT / "target/debug/moli")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "target/native-pdf-check")
+    parser.add_argument("--pdftoppm", type=Path, default=shutil.which("pdftoppm"),
+                        help="Poppler renderer required for translucent Type3 regressions")
     args = parser.parse_args()
+    if args.pdftoppm is None or not args.pdftoppm.is_file():
+        parser.error("pdftoppm is required; install poppler-utils or use --pdftoppm")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     font = data_url((ROOT / "moli-paint/tests/fixtures/moli-pdf.ttf").read_bytes(), "font/ttf")
     cjk = data_url((ROOT / "moli-layout/tests/fixtures/moli-cjk.ttf").read_bytes(), "font/ttf")
@@ -312,8 +386,9 @@ color:white;background:#325dff;border:0;border-radius:12px;font:20px PDFTest}
     for name, info in results.items():
         assert all(font.split("+")[-1] in {"MoliPDFTest", "DroidSansFallback"}
                    for font in info["fonts"]), ("unexpected system font", name, info["fonts"])
+    color_stroke = check_translucent_colr(args.moli.resolve(), args.output_dir, args.pdftoppm)
     report = {"binary": str(args.moli.resolve()), "binary_bytes": args.moli.stat().st_size,
-              "reader": pymupdf.version[0], "cases": results}
+              "reader": pymupdf.version[0], "cases": results, "translucent_colr": color_stroke}
     (args.output_dir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 

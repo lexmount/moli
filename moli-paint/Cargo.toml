@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-krilla = { git = "https://github.com/LaurenzV/krilla", rev = "5eb4e1fb24a24ce78b533c23b080969917530c32", default-features = false, features = ["raster-images"] }
+krilla = { git = "https://github.com/lexmount/krilla", rev = "c1f42beeb7fcefd958c27e3a72c5f120eba071b7", default-features = false, features = ["raster-images"] }
 skrifa = "0.44.0"
 anyrender = { git = "https://github.com/ldm0/anyrender", rev = "916ef982d2175081dafc1ba0f7489396124d9496" }
 anyrender_svg = { git = "https://github.com/ldm0/anyrender", rev = "916ef982d2175081dafc1ba0f7489396124d9496", default-features = false, features = ["text"] }

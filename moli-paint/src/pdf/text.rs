@@ -113,18 +113,21 @@ impl<'a> GlyphGeometry<'a> {
         })
     }
 
-    fn expanded_outline(&self, id: skrifa::GlyphId, coords: &'a [NormalizedCoord]) -> Option<Path> {
-        use skrifa::outline::pen::PathElement as E;
-        // COLR and bitmap glyphs use their native artwork. Moli does not install
-        // Krilla's SVG renderer, so an SVG record still falls back to this base
-        // outline. Cacheability does not depend on a run's clip or transform.
-        if self.font.color_glyphs().get(id).is_some()
+    fn native_artwork(&self, id: skrifa::GlyphId) -> bool {
+        self.font.color_glyphs().get(id).is_some()
             || self
                 .font
                 .bitmap_strikes()
                 .glyph_for_size(Size::unscaled(), id)
                 .is_some()
-        {
+    }
+
+    fn expanded_outline(&self, id: skrifa::GlyphId, coords: &'a [NormalizedCoord]) -> Option<Path> {
+        use skrifa::outline::pen::PathElement as E;
+        // COLR and bitmap glyphs use their native artwork. Moli does not install
+        // Krilla's SVG renderer, so an SVG record still falls back to this base
+        // outline. Cacheability does not depend on a run's clip or transform.
+        if self.native_artwork(id) {
             return None;
         }
         let outline = self.font.outline_glyphs().get(id)?;
@@ -468,11 +471,21 @@ pub(super) fn draw(
     let synthesized = embolden != Diagonal2::new(0.0, 0.0);
     let fallback_embolden = embolden.xx.max(embolden.yy) as f32;
     // Native fill-and-stroke can represent an opaque isotropic expansion.
-    // SVG tables route glyphs through Krilla's force-filled Type3 fonts even
-    // when its SVG callback is unavailable. Use the fallback contour for this
-    // font instead, preserving the fill color and synthetic expansion.
-    let native_fill = !synthesized
-        || (embolden.xx == embolden.yy && run.color.alpha >= 1.0 && geometry.font.svg().is_err());
+    // Color artwork has no expandable base contour and must be painted once.
+    // SVG fallback depends on this glyph's record, not the font's other glyphs.
+    // Keep translucent fills on the outline/artwork pass: Krilla splits a
+    // translucent native fill-and-stroke into two operations, including COLR.
+    let native_fill = |id: skrifa::GlyphId| {
+        !synthesized
+            || (run.color.alpha >= 1.0
+                && (geometry.native_artwork(id)
+                    || (embolden.xx == embolden.yy
+                        && !geometry
+                            .font
+                            .svg()
+                            .and_then(|table| table.glyph_data(id))
+                            .is_ok_and(|data| data.is_some()))))
+    };
     let mut batches: Vec<(bool, Vec<usize>)> = Vec::new();
     let mut start = 0;
     while start < run.glyphs.len() {
@@ -563,12 +576,13 @@ pub(super) fn draw(
     let stroke_key = visible_stroke.map(|stroke| ExpandedPaint::Stroke(stroke_paint(stroke)));
     if synthesized && !invisible {
         for (outlined, indices) in &batches {
-            let path_fill = has_fill && (*outlined || !native_fill);
-            if !path_fill && visible_stroke.is_none() {
-                continue;
-            }
             for &i in indices {
                 let glyph = run.glyphs[i];
+                let id = skrifa::GlyphId::new(glyph.id);
+                let path_fill = has_fill && (*outlined || !native_fill(id));
+                if geometry.native_artwork(id) || (!path_fill && visible_stroke.is_none()) {
+                    continue;
+                }
                 let entry = fonts.expanded.entry(key(glyph.id)).or_insert_with(|| {
                     #[cfg(test)]
                     fonts.expanded_glyphs.push(glyph.id);
@@ -626,29 +640,48 @@ pub(super) fn draw(
                 }
             })
             .collect();
+        if invisible {
+            if !outlined {
+                surface.draw_invisible_glyphs(
+                    Point::from_xy(0.0, 0.0),
+                    &glyphs,
+                    font.clone(),
+                    source_text,
+                    font_size,
+                );
+            }
+            surface.pop();
+            continue;
+        }
         // Choose the synthetic passes from the style, then resolve each
         // glyph's contour or native outline fallback independently below.
         // A neighboring glyph must not change a fallback glyph's paint mode.
         let expanded_stroke = synthesized && visible_stroke.is_some();
-        let expanded_fill = synthesized && !invisible && has_fill && (outlined || !native_fill);
+        let expanded_fill = synthesized
+            && has_fill
+            && indices.iter().any(|&i| {
+                let id = skrifa::GlyphId::new(run.glyphs[i].id);
+                (outlined && !geometry.native_artwork(id)) || !native_fill(id)
+            });
         let semantic_copy = !outlined && (expanded_fill || (!has_fill && expanded_stroke));
         if semantic_copy {
-            let mut semantic = fill(run.color);
-            semantic.opacity = krilla::num::NormalizedF32::ZERO;
-            surface.set_fill(Some(semantic));
-            surface.set_stroke(None);
-            surface.draw_glyphs(
+            surface.draw_invisible_glyphs(
                 Point::from_xy(0.0, 0.0),
                 &glyphs,
                 font.clone(),
                 source_text,
                 font_size,
-                false,
             );
         }
         let draw_paths = |surface: &mut Surface<'_>, filling: bool| {
             for &i in &indices {
                 let glyph = run.glyphs[i];
+                // Krilla's COLR/bitmap stroke fallback paints the artwork as a
+                // fill. If a fill pass already paints it, do not composite the
+                // same translucent layers again in the stroke pass.
+                if !filling && has_fill && geometry.native_artwork(skrifa::GlyphId::new(glyph.id)) {
+                    continue;
+                }
                 let dy = glyph.y - first.y;
                 surface.push_transform(&transform(Affine::translate((
                     f64::from(glyph.x - first.x + skew * dy),
@@ -713,7 +746,12 @@ pub(super) fn draw(
         };
         let draw_stroke = |surface: &mut Surface<'_>| {
             if let Some(stroke) = visible_stroke {
-                if expanded_stroke {
+                if expanded_stroke
+                    || (has_fill
+                        && indices.iter().any(|&i| {
+                            geometry.native_artwork(skrifa::GlyphId::new(run.glyphs[i].id))
+                        }))
+                {
                     draw_paths(surface, false);
                 } else {
                     surface.set_fill(None);
@@ -736,15 +774,12 @@ pub(super) fn draw(
         if stroke_first || !has_fill {
             draw_stroke(surface);
         }
-        if has_fill || invisible {
+        if has_fill {
             if expanded_fill {
                 draw_paths(surface, true);
             } else {
-                let mut paint = fill(run.color);
-                if invisible {
-                    paint.opacity = krilla::num::NormalizedF32::ZERO;
-                }
-                surface.set_stroke((synthesized && !invisible).then(|| Stroke {
+                let paint = fill(run.color);
+                surface.set_stroke(synthesized.then(|| Stroke {
                     paint: paint.paint.clone(),
                     opacity: paint.opacity,
                     width: 2.0 * fallback_embolden,

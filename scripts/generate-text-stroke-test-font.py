@@ -6,6 +6,7 @@
 
 from pathlib import Path
 
+from fontTools.colorLib.builder import buildCOLR, buildCPAL
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont, newTable
@@ -99,3 +100,17 @@ svg_font["SVG "].docList = [
     )
 ]
 svg_font.save(fixtures / "moli-text-stroke-svg.ttf")
+
+# A half-transparent COLR rectangle makes repeated painting observable in the
+# interior, independently of anti-aliasing or the base triangle's outline.
+for svg in [False, True]:
+    color_font = TTFont(
+        fixtures / ("moli-text-stroke-svg.ttf" if svg else "moli-text-stroke.ttf"),
+        recalcTimestamp=False,
+    )
+    color_font["COLR"] = buildCOLR(
+        {"A": [("R", 0)]}, version=0, glyphMap=color_font.getReverseGlyphMap()
+    )
+    color_font["CPAL"] = buildCPAL([[(1.0, 0.0, 0.0, 0.5)]])
+    suffix = "-svg" if svg else ""
+    color_font.save(fixtures / f"moli-text-stroke-colr{suffix}.ttf")

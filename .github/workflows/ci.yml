@@ -512,6 +512,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: scripts/check-native-pdf.py.lock
+      - name: Install Poppler for translucent color glyph regressions
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y poppler-utils
       - name: Check rendered pixels, text and link targets and regions
         run: >-
           uv run --locked --script scripts/check-native-pdf.py
