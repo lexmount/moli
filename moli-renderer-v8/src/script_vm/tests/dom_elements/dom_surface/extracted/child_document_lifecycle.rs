@@ -294,7 +294,7 @@ async fn iframe_javascript_url_non_string_completion_does_not_replace_child_docu
     assert_eq!(result, "true|text/html||false|1");
 }
 #[tokio::test]
-async fn iframe_javascript_url_exception_does_not_replace_child_document_or_load() {
+async fn iframe_javascript_url_exception_preserves_the_initial_child_document_load() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url-exception.test/");
 
     vm.eval(
@@ -328,9 +328,9 @@ async fn iframe_javascript_url_exception_does_not_replace_child_document_or_load
     )
     .await;
     assert!(
-        !vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::HostLoad)
+        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::HostLoad)
             .await,
-        "failed javascript URL execution should not synthesize a load"
+        "failed javascript URL execution must preserve the initial document load"
     );
 
     let result = vm
@@ -351,7 +351,7 @@ async fn iframe_javascript_url_exception_does_not_replace_child_document_or_load
         )
         .expect("iframe javascript URL exception document should evaluate");
 
-    assert_eq!(result, "true|text/html||false|0");
+    assert_eq!(result, "true|text/html||false|1");
 }
 #[tokio::test]
 async fn child_frame_load_dispatches_document_readiness_before_pageshow() {
