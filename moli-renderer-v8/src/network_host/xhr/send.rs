@@ -281,7 +281,9 @@ pub(crate) fn dispatch_xhr_loadstart(
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     // The XHR loadstart listener can abort before upload.loadstart runs.
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, send_body.is_some());
+    let upload_in_progress = send_body.is_some()
+        || xhr_state_bool_property(scope, xhr, XHR_UPLOAD_LISTENER_SLOT).unwrap_or(false);
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, upload_in_progress);
     set_xhr_state_number(scope, xhr, XHR_UPLOAD_LOADED_SLOT, 0.0);
     xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
     if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {

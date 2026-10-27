@@ -340,6 +340,23 @@ impl<Entry> PageTurnScheduler<Entry> {
                 descriptor.source_kind(),
             )
         })?;
+        // A delayed timer wake must not overtake network notifications that
+        // accumulated while page code was running. Apply this priority before
+        // source fairness, including when older V8 foreground work is present:
+        // its round-robin override could otherwise choose the timer first.
+        // Select only the exposed FIFO head; the usual source fairness still
+        // bounds consecutive networking turns.
+        let oldest = if descriptors
+            .iter()
+            .any(|descriptor| matches!(descriptor, RendererPageReadyDescriptor::Timer { .. }))
+        {
+            descriptors.iter().copied().find(|descriptor| matches!(
+                descriptor,
+                RendererPageReadyDescriptor::Networking { owner, .. } if owner.precedes_delayed_timer()
+            )).unwrap_or(oldest)
+        } else {
+            oldest
+        };
         let oldest_source = oldest.source_kind();
         let should_apply_fairness = self.arbitration.last_selected_source == Some(oldest_source)
             && self.arbitration.consecutive_from_source >= MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE
@@ -929,6 +946,18 @@ mod tests {
                         LocalWindowId(100),
                         DocumentId(101),
                     ),
+                ),
+            ),
+        }
+    }
+
+    fn upload_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::Networking {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageNetworkingOwner::ResourceCompletion(
+                RendererPageResourceCompletionOwner::async_subresource(
+                    RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                    crate::types::AsyncSubresourceFetchEventTarget::Upload { internal_id: order },
                 ),
             ),
         }
@@ -1525,6 +1554,84 @@ mod tests {
             .expect("one ready descriptor should be selected");
 
         assert_eq!(selected.source_kind(), RendererPageTaskSourceKind::Timer);
+    }
+
+    #[test]
+    fn foreground_fairness_cannot_skip_queued_upload_for_a_delayed_timer() {
+        let mut scheduler = PageTurnScheduler::new(());
+        let base = Instant::now();
+        let foreground =
+            descriptor_for_source(RendererPageTaskSourceKind::V8ForegroundTask, base, 1);
+        let resource = resource_descriptor(base + std::time::Duration::from_millis(1), 2);
+        for _ in 0..MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE {
+            assert_eq!(
+                scheduler.select_ready_descriptor([foreground, resource]),
+                Some(foreground)
+            );
+        }
+        assert_eq!(
+            scheduler.select_ready_descriptor([foreground, resource]),
+            Some(resource)
+        );
+        for _ in 0..MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE {
+            assert_eq!(
+                scheduler.select_ready_descriptor([foreground]),
+                Some(foreground)
+            );
+        }
+
+        // A previous networking turn left the fairness cursor immediately
+        // before timers. Older V8 work must not let that cursor wake an elapsed
+        // XHR timeout before its already-queued upload notification.
+        let upload = upload_descriptor(base + std::time::Duration::from_millis(2), 3);
+        assert_eq!(
+            scheduler.select_ready_descriptor([
+                foreground,
+                upload,
+                RendererPageReadyDescriptor::Timer {
+                    deadline: base + std::time::Duration::from_millis(1),
+                    selection: RendererPageTimerSelection::AnyReady,
+                },
+            ]),
+            Some(upload)
+        );
+    }
+
+    #[test]
+    fn queued_uploads_still_yield_to_a_waiting_timer_at_the_fairness_bound() {
+        let mut scheduler = PageTurnScheduler::new(());
+        let base = Instant::now();
+        let upload = upload_descriptor(base + std::time::Duration::from_millis(1), 1);
+        let timer = RendererPageReadyDescriptor::Timer {
+            deadline: base,
+            selection: RendererPageTimerSelection::AnyReady,
+        };
+        for _ in 0..MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE {
+            assert_eq!(
+                scheduler.select_ready_descriptor([timer, upload]),
+                Some(upload)
+            );
+        }
+        assert_eq!(
+            scheduler.select_ready_descriptor([timer, upload]),
+            Some(timer),
+            "continuous network notifications must not starve timers"
+        );
+    }
+
+    #[test]
+    fn queued_upload_without_delayed_timer_preserves_foreground_order() {
+        let mut scheduler = PageTurnScheduler::new(());
+        let base = Instant::now();
+        let foreground =
+            descriptor_for_source(RendererPageTaskSourceKind::V8ForegroundTask, base, 1);
+        assert_eq!(
+            scheduler.select_ready_descriptor([
+                foreground,
+                upload_descriptor(base + std::time::Duration::from_millis(1), 2),
+            ]),
+            Some(foreground)
+        );
     }
 
     #[test]

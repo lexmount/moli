@@ -1005,7 +1005,7 @@ pub(super) enum AsyncSubresourceFetchEvent {
     },
     Upload {
         internal_id: u64,
-        event: moli_fetch::UploadEvent,
+        report: moli_fetch::UploadReport,
     },
     Completion(Box<AsyncSubresourceFetchCompletion>),
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),

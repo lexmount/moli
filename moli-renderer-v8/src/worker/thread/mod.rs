@@ -595,6 +595,7 @@ pub(super) struct ActiveTimer {
     is_interval: bool,
     extra_args: Vec<v8::Global<v8::Value>>,
     next_fire: tokio::time::Instant,
+    explicit_deadline: bool,
 }
 
 fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
@@ -2027,6 +2028,7 @@ async fn worker_main(
     // ── Event loop ─────────────────────────────────────────────────────────
     // Process incoming messages and timers until closed or terminated.
     let mut active_timers: Vec<ActiveTimer> = Vec::new();
+    let mut deferred_browser_deadline_turns = 0;
 
     loop {
         if termination_requested.load(Ordering::Acquire) {
@@ -2050,7 +2052,10 @@ async fn worker_main(
                     delay,
                     is_interval: timer.is_interval,
                     extra_args: timer.extra_args,
-                    next_fire: tokio::time::Instant::now() + delay,
+                    next_fire: timer
+                        .first_deadline
+                        .unwrap_or_else(|| tokio::time::Instant::now() + delay),
+                    explicit_deadline: timer.first_deadline.is_some(),
                 });
             }
         }
@@ -2059,9 +2064,7 @@ async fn worker_main(
         {
             let cancelled_timers = worker_timer_queues.drain_cancelled();
             if !cancelled_timers.is_empty() {
-                let cancelled: std::collections::HashSet<u32> =
-                    cancelled_timers.into_iter().collect();
-                active_timers.retain(|t| !cancelled.contains(&t.id));
+                active_timers.retain(|t| !cancelled_timers.contains(&t.id));
             }
         }
 
@@ -2118,6 +2121,28 @@ async fn worker_main(
             WorkerLoopWake::Message(Some(message))
         } else if has_runnable_module_runtime_activity {
             WorkerLoopWake::ModuleRuntime
+        } else if active_timers
+            .iter()
+            .any(|timer| timer.explicit_deadline && timer.next_fire <= tokio::time::Instant::now())
+        {
+            // Network/browser notifications already queued during a long
+            // script task precede its delayed timer wake. If none are ready,
+            // run the expired browser deadline immediately, rather than
+            // waiting a second timeout interval after that task returns.
+            tokio::select! {
+                biased;
+                msg = rx.recv() => WorkerLoopWake::Message(msg),
+                completion = fetch_completion_rx.recv() => WorkerLoopWake::Fetch(completion),
+                completion = xhr_completion_rx.recv() => WorkerLoopWake::Xhr(completion),
+                completion = module_graph_fetch_rx.recv() => WorkerLoopWake::ModuleGraphFetch(completion),
+                completion = module_evaluation_rx.recv() => WorkerLoopWake::ModuleEvaluation(completion),
+                wake = worker_runtime_wake_rx.recv() => WorkerLoopWake::RuntimeWake(wake),
+                event = websocket_events.recv() => WorkerLoopWake::WebSocket(event),
+                completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
+                completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
+                _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
+                _ = async {} => WorkerLoopWake::Timer,
+            }
         } else if let Some(deadline) = nearest_timer {
             tokio::select! {
                 msg = rx.recv() => WorkerLoopWake::Message(msg),
@@ -3614,11 +3639,31 @@ async fn worker_main(
             }
         }
 
+        // A browser callback or its microtasks can disable/reschedule a timer
+        // or close the worker. Retire cancellations before another callback;
+        // draining also removes cancelled timers still awaiting admission.
+        let cancelled = worker_timer_queues.drain_cancelled();
+        if !cancelled.is_empty() {
+            active_timers.retain(|timer| !cancelled.contains(&timer.id));
+        }
         // Fire any timers that are ready.
         let now = tokio::time::Instant::now();
+        // A previous request's timing/header notification can precede the
+        // current upload in the same FIFO. Give queued network notifications
+        // a bounded run before waking an expired browser deadline.
+        let defer_browser_deadline = active_timers
+            .iter()
+            .any(|timer| timer.explicit_deadline && now >= timer.next_fire)
+            && (!xhr_completion_rx.is_empty() || !fetch_completion_rx.is_empty())
+            && deferred_browser_deadline_turns < 8;
+        if defer_browser_deadline {
+            deferred_browser_deadline_turns += 1;
+        } else {
+            deferred_browser_deadline_turns = 0;
+        }
         let mut fired_ids: Vec<usize> = Vec::new();
         for (i, timer) in active_timers.iter().enumerate() {
-            if now >= timer.next_fire {
+            if now >= timer.next_fire && !(timer.explicit_deadline && defer_browser_deadline) {
                 fired_ids.push(i);
             }
         }
@@ -3628,6 +3673,9 @@ async fn worker_main(
         // can become ready before this loop wakes.
         for &idx in &fired_ids {
             let timer = &active_timers[idx];
+            if state.borrow().closed || worker_timer_queues.is_cancelled(timer.id) {
+                continue;
+            }
             fire_timer_callback(
                 worker_isolate.worker_isolate_mut(),
                 timer,
