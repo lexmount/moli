@@ -555,6 +555,7 @@ impl BackgroundMainDocumentBodyCompletion {
 pub enum BackgroundNavigationCompletion {
     Lifecycle(Box<BackgroundNavigationLifecycleCompletion>),
     PreparedDocument(Box<crate::conn::BackgroundPreparedNavigationCommit>),
+    ProtocolWorkflowReady(Box<crate::conn::BackgroundNavigationProtocolReady>),
     MainDocumentBody(Box<BackgroundMainDocumentBodyCompletion>),
 }
 
@@ -563,6 +564,7 @@ impl BackgroundNavigationCompletion {
         match self {
             Self::Lifecycle(completion) => completion.state.requested_url.as_str(),
             Self::PreparedDocument(completion) => completion.requested_url(),
+            Self::ProtocolWorkflowReady(completion) => completion.requested_url(),
             Self::MainDocumentBody(completion) => completion.state.requested_url.as_str(),
         }
     }
@@ -571,6 +573,7 @@ impl BackgroundNavigationCompletion {
         match self {
             Self::Lifecycle(_) => "lifecycle",
             Self::PreparedDocument(_) => "prepared_document",
+            Self::ProtocolWorkflowReady(_) => "protocol_workflow_ready",
             Self::MainDocumentBody(_) => "main_document_body",
         }
     }
@@ -3497,6 +3500,7 @@ pub(crate) async fn complete_prepared_navigation_into_buffer_async(
         // cleanup of that old reply may mutate the replacement navigation.
         push_superseded_navigation_result(out, &state);
         finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, &token).await;
+        conn.abandon_unbound_prepared_document_navigation_for_owner(&state.owner, &token);
         return;
     }
     let owner = state.owner.clone();

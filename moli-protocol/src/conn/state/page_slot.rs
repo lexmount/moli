@@ -867,16 +867,34 @@ impl TargetPageSlot {
             .dedup_by_key(|event| event.sequence);
     }
 
+    fn prepared_document_navigation_handoff(&self) -> Option<&PendingNavigationRequest> {
+        self.pending_navigation_request.as_ref().filter(|request| {
+            request.renderer_commit.is_some()
+                && (!request.committed
+                    || self
+                        .renderer_document_lifecycle
+                        .binding
+                        .as_ref()
+                        .is_none_or(|binding| binding.navigation.as_ref() != Some(&request.token)))
+        })
+    }
+
+    pub(crate) fn owns_prepared_document_handoff(&self, token: &DocumentNavigationToken) -> bool {
+        self.prepared_document_navigation_handoff()
+            .is_some_and(|request| request.matches(token))
+    }
+
     pub(crate) fn observe_prepared_renderer_document_commit(
         &mut self,
         attachment: Option<moli_core::page::RendererAgentAttachmentId>,
         fact: &moli_core::page::RendererMainDocumentCommit,
         native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     ) -> Option<bool> {
+        let handoff_pending = self.prepared_document_navigation_handoff().is_some();
         let commit = self
             .pending_navigation_request
             .as_mut()
-            .filter(|request| !request.committed)
+            .filter(|_| handoff_pending)
             .and_then(|request| request.renderer_commit.as_mut())?;
         if Some(commit.attachment) != attachment
             || commit.fact.as_ref() != fact
@@ -887,7 +905,8 @@ impl TargetPageSlot {
             return Some(false);
         }
         // Native commit visibility is distinct from Page-handle adoption and
-        // overall navigation completion. Document access remains suspended.
+        // final protocol binding. Its exact native source remains authorized
+        // throughout that handoff, including after protocol marks commit.
         commit.observed = true;
         commit.native_document = native_document;
         Some(true)
@@ -899,10 +918,9 @@ impl TargetPageSlot {
         source: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<bool> {
         let commit = self
-            .pending_navigation_request
-            .as_ref()
-            .filter(|request| !request.committed)
-            .and_then(|request| request.renderer_commit.as_ref())?;
+            .prepared_document_navigation_handoff()?
+            .renderer_commit
+            .as_ref()?;
         Some(Some(commit.attachment) == attachment && commit.native_document == Some(source))
     }
 
@@ -912,19 +930,22 @@ impl TargetPageSlot {
         RendererPageResidenceIdentity,
         CommittedRendererDocumentBinding,
     )> {
-        let request = self
-            .pending_navigation_request
-            .as_ref()
-            .filter(|request| !request.committed)?;
+        let request = self.prepared_document_navigation_handoff()?;
         let document = request.renderer_commit.as_ref()?.native_document?;
-        let pending = self.pending_renderer_page.as_ref()?;
-        if pending.page_attachment_id() != request.page_attachment_id
-            || pending.renderer_page().page_id() != document.frame.page_id
+        let (renderer_page, page_attachment_id) = match self.pending_renderer_page.as_ref() {
+            Some(pending) => (pending.renderer_page(), pending.page_attachment_id()),
+            None => (
+                RendererPageResidenceIdentity::from_page(self.loaded_page.as_ref()?),
+                self.page_attachment_id()?,
+            ),
+        };
+        if page_attachment_id != request.page_attachment_id
+            || renderer_page.page_id() != document.frame.page_id
         {
             return None;
         }
         Some((
-            pending.renderer_page(),
+            renderer_page,
             CommittedRendererDocumentBinding {
                 renderer_frame: document.frame,
                 renderer_document: document.document,
@@ -1105,6 +1126,21 @@ impl TargetPageSlot {
             self.pending_navigation_request = None;
         }
         true
+    }
+
+    /// A failed protocol tail no longer owns an unbound lifecycle prefix.
+    /// Retire only its original request; the installed Page stays with the target.
+    pub(crate) fn abandon_unbound_prepared_document_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        let owns_prefix = self
+            .prepared_document_navigation_handoff()
+            .is_some_and(|request| request.matches(token) && request.committed);
+        if owns_prefix {
+            self.pending_navigation_request = None;
+        }
+        owns_prefix
     }
 
     fn retire_bound_prepared_document_navigation(&mut self) {
@@ -1357,9 +1393,11 @@ impl TargetPageSlot {
                         self.committed_document_navigation.as_ref() == Some(navigation)
                     })
             });
+        let handoff_pending = self.prepared_document_navigation_handoff().is_some();
         if let Some(commit) = self
             .pending_navigation_request
             .as_mut()
+            .filter(|_| handoff_pending)
             .and_then(|request| request.renderer_commit.as_mut())
         {
             let binding = self.renderer_document_lifecycle.binding.as_ref();

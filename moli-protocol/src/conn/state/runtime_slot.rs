@@ -253,8 +253,7 @@ impl TargetRuntimeSlot {
                     .navigation
                     .as_ref()
                     .is_some_and(|navigation| {
-                        self.page_slot
-                            .accepts_pending_document_navigation_event(navigation)
+                        self.page_slot.owns_prepared_document_handoff(navigation)
                     })
                     && self.page_slot.accepts_prepared_parser_script_source(
                         self.devtools_renderer_channel
@@ -799,6 +798,14 @@ impl TargetRuntimeSlot {
                     .renderer_document_lifecycle_binding()
                     .is_some_and(|binding| binding.renderer_document_identity() == source)
             })
+    }
+
+    pub(crate) fn abandon_unbound_prepared_document_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.page_slot
+            .abandon_unbound_prepared_document_navigation(token)
     }
 
     pub(crate) fn merge_prepared_document_lifecycle_events(

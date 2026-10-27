@@ -27,6 +27,7 @@ enum PendingProtocolWork {
     Termination(TargetTermination),
     PopupActivation(PendingPopupActivation),
     BidiChannel(PendingBidiChannel),
+    Navigation(super::navigation::PendingBackgroundNavigationProtocol),
 }
 
 #[derive(Clone)]
@@ -105,6 +106,10 @@ enum CompletedProtocolWork {
     Termination(Box<CompletedTargetTermination>),
     PopupActivation(PendingPopupActivation, Option<TargetActivationOutput>),
     BidiChannel(PendingBidiChannel, crate::conn::BidiChannelOutput),
+    Navigation(
+        super::navigation::PendingBackgroundNavigationProtocol,
+        super::navigation::SharedNavigationResult,
+    ),
 }
 
 impl CompletedProtocolSchedulerWork {
@@ -123,11 +128,18 @@ impl PendingProtocolSchedulerWork {
             ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
                 | ProtocolSchedulerWorkKind::PopupTargetActivationAction
                 | ProtocolSchedulerWorkKind::BidiChannelOwnerAction
+                | ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
         )
     }
 
     pub async fn wait(self) -> CompletedProtocolSchedulerWork {
         match self.work {
+            PendingProtocolWork::Navigation(navigation) => {
+                let ready = navigation.wait().await;
+                CompletedProtocolSchedulerWork {
+                    work: CompletedProtocolWork::Navigation(navigation, ready),
+                }
+            }
             PendingProtocolWork::BidiChannel(channel) => {
                 let events = channel.pending.clone().await;
                 CompletedProtocolSchedulerWork {
@@ -163,6 +175,9 @@ impl CdpConnection {
             return Err(Box::new(work));
         }
         let prepared = match work.into_ready() {
+            ReadyProtocolSchedulerWork::NavigationProtocolCompletion(work) => {
+                Some(PendingProtocolWork::Navigation(work))
+            }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
                 TargetTermination::prepare(self, action).map(PendingProtocolWork::Termination)
             }
@@ -184,6 +199,10 @@ impl CdpConnection {
         completed: CompletedProtocolSchedulerWork,
     ) -> CdpTurnOutcome {
         match completed.work {
+            CompletedProtocolWork::Navigation(navigation, ready) => {
+                navigation.hand_off_ready(ready);
+                CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
+            }
             CompletedProtocolWork::BidiChannel(channel, events) => {
                 // Native state completion already authorized and materialized
                 // these envelopes. Retain their original payloads/routes;

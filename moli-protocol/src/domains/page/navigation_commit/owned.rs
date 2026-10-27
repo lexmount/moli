@@ -1,11 +1,12 @@
 use std::{cell::RefCell, rc::Rc};
 
+use anyhow::Context as _;
 use anyhow::Result;
 
 use super::*;
 use crate::conn::{
     BackgroundPreparedNavigationCommit, CommandWorkflowContext, InstalledNavigationPage,
-    ProtocolWorkflowDriver, SessionDisposalWait,
+    NoDocumentLoaded, ProtocolWorkflowDriver, SessionDisposalWait,
 };
 use crate::domains::{
     command_output::CommandOutputPlan,
@@ -18,8 +19,6 @@ enum NavigationProtocolCommitError {
     MissingAttachment,
     #[error("prepared navigation's renderer attachment is no longer current")]
     SupersededAttachment,
-    #[error("navigation's Page was removed")]
-    PageRemoved,
 }
 
 enum PreparedPageInstallation {
@@ -175,7 +174,7 @@ impl PreparedNavigationProtocolCompletion {
                         LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction),
                         &target_url,
                     )
-                    .ok_or(NavigationProtocolCommitError::PageRemoved)??,
+                    .context(NoDocumentLoaded)??,
                 )
             }
             CommittedNavigationPage::Replaced(expected) => PreparedPageInstallation::Existing(
@@ -185,7 +184,7 @@ impl PreparedNavigationProtocolCompletion {
                     transaction,
                     &target_url,
                 )
-                .ok_or(NavigationProtocolCommitError::PageRemoved)??,
+                .context(NoDocumentLoaded)??,
             ),
         };
         Ok(PreparedLoadedNavigation {
@@ -380,6 +379,10 @@ impl CompletedNavigationProtocolCompletion {
         }
         output.extend_background_events_after_messages(self.finish_events);
         if current {
+            conn.abandon_unbound_prepared_document_navigation_for_owner(
+                &self.state.owner,
+                &self.token,
+            );
             conn.clear_pending_document_navigation_for_owner_if_loader_matches(
                 &self.state.owner,
                 &self.state.loader_id,

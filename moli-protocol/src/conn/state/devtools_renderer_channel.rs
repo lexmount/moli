@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fmt;
 
 use moli_core::page::{
     RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererRuntimeInspectorMessageBatch,
@@ -415,46 +414,27 @@ impl DevToolsRendererChannel {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum DevToolsRendererChannelError {
+    #[error("renderer channel is closed")]
     Closed,
+    #[error("renderer channel navigation is already in flight")]
     DuplicateNavigation,
+    #[error("renderer channel navigation is not in flight")]
     UnknownNavigation,
+    #[error("renderer channel navigation was superseded by a newer navigation")]
     SupersededNavigation,
+    #[error("renderer channel navigation candidate was already committed")]
     NavigationAlreadyCommitted,
+    #[error("renderer Inspector output belongs to a stale attachment")]
     StaleAttachment,
+    #[error("renderer Inspector output agent does not match its attachment")]
     MismatchedAgent,
+    #[error("navigation candidate attachment does not match its Page")]
     CandidatePageAttachmentMismatch,
+    #[error("committed renderer candidate transaction no longer matches the channel")]
     CommittedCandidateMismatch,
 }
-
-impl fmt::Display for DevToolsRendererChannelError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Closed => "renderer channel is closed",
-            Self::DuplicateNavigation => "renderer channel navigation is already in flight",
-            Self::UnknownNavigation => "renderer channel navigation is not in flight",
-            Self::SupersededNavigation => {
-                "renderer channel navigation was superseded by a newer navigation"
-            }
-            Self::NavigationAlreadyCommitted => {
-                "renderer channel navigation candidate was already committed"
-            }
-            Self::StaleAttachment => "renderer Inspector output belongs to a stale attachment",
-            Self::MismatchedAgent => {
-                "renderer Inspector output agent does not match its attachment"
-            }
-            Self::CandidatePageAttachmentMismatch => {
-                "navigation candidate attachment does not match its Page"
-            }
-            Self::CommittedCandidateMismatch => {
-                "committed renderer candidate transaction no longer matches the channel"
-            }
-        })
-    }
-}
-
-impl std::error::Error for DevToolsRendererChannelError {}
 
 #[cfg(test)]
 mod tests {

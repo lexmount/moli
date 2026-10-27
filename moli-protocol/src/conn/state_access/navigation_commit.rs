@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use anyhow::Result;
 
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
@@ -12,10 +13,22 @@ use moli_core::{
 use super::{ProtocolStateAccess, ProtocolWorkflowDriver, ProtocolWorkflowState};
 use crate::conn::{
     CdpConnection, CommandOwnerScope, CommittedNavigationPage, CommittedRendererAgentAttachment,
-    DocumentNavigationToken, LoadedNavigation, NavigationDispatchState, ResponseCommitReady,
-    StablePageNavigationCommitTarget, spawn_owned_protocol_wait,
+    DocumentNavigationToken, LoadedNavigation, NavigationDispatchState, NoDocumentLoaded,
+    ResponseCommitReady, StablePageNavigationCommitTarget, spawn_owned_protocol_wait,
 };
 use crate::domains::page::BackgroundNavigationCompletion;
+
+#[derive(Debug, thiserror::Error)]
+enum PreparedDocumentCommitError {
+    #[error("NavigationRequestNotCurrent")]
+    RequestNotCurrent,
+    #[error("prepared Document is missing its frozen main Document commit identity")]
+    MissingCommitIdentity,
+    #[error("navigation commit lost its attachment transaction")]
+    MissingAttachmentTransaction,
+    #[error("navigation commit was superseded before adoption")]
+    SupersededBeforeAdoption,
+}
 
 #[derive(Default)]
 struct NavigationAttachmentTransaction {
@@ -146,7 +159,7 @@ impl ProtocolWorkflowState<'_> {
         let conn = self.connection;
         if !conn.accepts_pending_document_navigation_for_owner(owner, token) {
             return Err(RendererPageReplacementError::document_preserved(
-                anyhow::anyhow!("NavigationRequestNotCurrent"),
+                PreparedDocumentCommitError::RequestNotCurrent.into(),
             ));
         }
         // Configuration and native admission share this synchronous state
@@ -165,18 +178,14 @@ impl ProtocolWorkflowState<'_> {
                 token,
                 navigation.renderer_devtools_agent_token(),
             )
-            .map_err(|error| {
-                RendererPageReplacementError::document_preserved(anyhow::anyhow!(error))
-            })?;
+            .map_err(RendererPageReplacementError::document_preserved)?;
         let transaction = match expected.as_ref() {
             Some(expected) => {
                 conn.commit_renderer_agent_candidate_for_existing_page(owner, candidate, expected)
             }
             None => conn.commit_renderer_agent_candidate_for_owner(owner, candidate, renderer_page),
         }
-        .map_err(|error| {
-            RendererPageReplacementError::document_preserved(anyhow::anyhow!(error))
-        })?;
+        .map_err(RendererPageReplacementError::document_preserved)?;
         let attachment = transaction.current().id();
         // Register the transaction before returning even an immediately-ready
         // native reply. The supervisor owns rollback if delivery is cancelled.
@@ -185,26 +194,25 @@ impl ProtocolWorkflowState<'_> {
             attachment: Some(transaction),
         };
         let fact = navigation.main_document_commit().ok_or_else(|| {
-            RendererPageReplacementError::document_preserved(anyhow::anyhow!(
-                "prepared Document is missing its frozen main Document commit identity"
-            ))
+            RendererPageReplacementError::document_preserved(
+                PreparedDocumentCommitError::MissingCommitIdentity.into(),
+            )
         })?;
         if !conn
             .runtime_session_owner_slot_mut_for_owner(owner)
             .is_some_and(|slot| slot.register_renderer_document_commit(token, attachment, fact))
         {
             return Err(RendererPageReplacementError::document_preserved(
-                anyhow::anyhow!("NavigationRequestNotCurrent"),
+                PreparedDocumentCommitError::RequestNotCurrent.into(),
             ));
         }
         let permit = navigation.issue_commit_permit();
         let native = match expected {
             Some(_) => {
-                let page = conn.loaded_page_mut_for_owner(owner).ok_or_else(|| {
-                    RendererPageReplacementError::document_preserved(anyhow::anyhow!(
-                        "navigation's Page was removed"
-                    ))
-                })?;
+                let page = conn
+                    .loaded_page_mut_for_owner(owner)
+                    .context(NoDocumentLoaded)
+                    .map_err(RendererPageReplacementError::document_preserved)?;
                 NativeDocumentCommit::Replacement(navigation.start_page_replacement(
                     permit,
                     page,
@@ -234,9 +242,9 @@ impl ProtocolWorkflowState<'_> {
         let conn = self.connection;
         let transaction = transaction_slot.borrow();
         let transaction = transaction.attachment.as_ref().ok_or_else(|| {
-            RendererPageReplacementError::document_unavailable(anyhow::anyhow!(
-                "navigation commit lost its attachment transaction"
-            ))
+            RendererPageReplacementError::document_unavailable(
+                PreparedDocumentCommitError::MissingAttachmentTransaction.into(),
+            )
         })?;
         if !conn.accepts_pending_document_navigation_for_owner(owner, token)
             || conn
@@ -249,14 +257,13 @@ impl ProtocolWorkflowState<'_> {
                 != Some(transaction.current().id())
         {
             return Err(RendererPageReplacementError::document_unavailable(
-                anyhow::anyhow!("navigation commit was superseded before adoption"),
+                PreparedDocumentCommitError::SupersededBeforeAdoption.into(),
             ));
         }
-        let page = conn.loaded_page_mut_for_owner(owner).ok_or_else(|| {
-            RendererPageReplacementError::document_unavailable(anyhow::anyhow!(
-                "navigation's Page was removed"
-            ))
-        })?;
+        let page = conn
+            .loaded_page_mut_for_owner(owner)
+            .context(NoDocumentLoaded)
+            .map_err(RendererPageReplacementError::document_unavailable)?;
         completed.adopt(page)
     }
 }

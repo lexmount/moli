@@ -5,6 +5,9 @@ use crate::domains::activity::{
 };
 use moli_core::RendererOutputTransportMessage;
 
+mod navigation;
+pub use navigation::BackgroundNavigationProtocolReady;
+pub(crate) use navigation::PendingBackgroundNavigationProtocol;
 mod task;
 pub use task::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
 
@@ -179,6 +182,9 @@ impl CdpConnection {
         work: crate::domains::activity::ProtocolSchedulerWork,
     ) -> CdpTurnOutcome {
         match work.into_ready() {
+            ReadyProtocolSchedulerWork::NavigationProtocolCompletion(_) => {
+                unreachable!("navigation protocol waits retain the existing owner-work supervisor")
+            }
             ReadyProtocolSchedulerWork::RendererFencedOutput(output) => {
                 assert!(
                     self.renderer_output_cursor_is_projected(output.predecessor.cursor()),

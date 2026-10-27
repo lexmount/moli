@@ -2857,10 +2857,26 @@ impl CdpScheduler {
         Option<moli_core::RendererOutputFence>,
     ) {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let outcome = self
-            .conn
-            .drain_background_navigation_completion_turn_async(completion)
-            .await;
+        let owned = if self.owned_protocol_work_tx.is_some()
+            || matches!(
+                &completion,
+                BackgroundNavigationCompletion::ProtocolWorkflowReady(_)
+            ) {
+            self.conn
+                .try_start_background_navigation_completion_turn(completion)
+        } else {
+            // Direct adapters retain their inline driver until they also own
+            // the actor's protocol-work supervisor and state-request receiver.
+            Err(completion)
+        };
+        let outcome = match owned {
+            Ok(outcome) => outcome,
+            Err(completion) => {
+                self.conn
+                    .drain_background_navigation_completion_turn_async(completion)
+                    .await
+            }
+        };
         let (out, post_renderer_output, renderer_output_boundary, renderer_output_predecessor) =
             self.materialize_renderer_owner_turn_outcome(outcome);
         if let Some(started) = trace_started {

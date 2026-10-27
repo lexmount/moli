@@ -73,7 +73,10 @@ mod page_state;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
-pub use protocol_output::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
+pub(crate) use protocol_output::PendingBackgroundNavigationProtocol;
+pub use protocol_output::{
+    BackgroundNavigationProtocolReady, CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork,
+};
 mod renderer_command_turn;
 mod resource_runtime_support;
 mod runtime_eval;
@@ -1871,6 +1874,15 @@ impl CdpConnection {
             })
     }
 
+    pub(crate) fn abandon_unbound_prepared_document_navigation_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.runtime_session_owner_slot_mut_for_owner(owner)
+            .is_some_and(|slot| slot.abandon_unbound_prepared_document_navigation(token))
+    }
+
     pub(crate) fn ensure_document_accessible_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -2591,6 +2603,12 @@ impl CdpConnection {
         &mut self,
         completion: crate::domains::page::BackgroundNavigationCompletion,
     ) -> CdpRendererOwnerTurnOutcome {
+        let completion = match completion {
+            crate::domains::page::BackgroundNavigationCompletion::ProtocolWorkflowReady(ready) => {
+                return self.finish_background_navigation_protocol(*ready);
+            }
+            completion => completion,
+        };
         let mut command_context = CommandDispatchContext::default();
         let protocol_events = self
             .drain_background_navigation_completion_events_with_context(
@@ -2618,6 +2636,9 @@ impl CdpConnection {
         command_context: &mut CommandDispatchContext,
     ) -> Vec<BackgroundProtocolEvent> {
         let completion = match completion {
+            crate::domains::page::BackgroundNavigationCompletion::ProtocolWorkflowReady(_) => {
+                unreachable!("ready navigation publication is consumed by the finite owner turn")
+            }
             crate::domains::page::BackgroundNavigationCompletion::Lifecycle(completion) => {
                 completion
             }

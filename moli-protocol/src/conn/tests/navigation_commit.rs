@@ -4,6 +4,7 @@ use crate::conn::{
     ProtocolStateRequestReceiver, ResponseCommitReady,
 };
 use crate::domains::page::BackgroundNavigationCompletion;
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 struct CommitFixture {
@@ -77,6 +78,217 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
     assert!(ctx.take_response_by_id(id)["result"]["product"].is_string());
 }
 
+async fn drain_owned_background_turns(
+    ctx: &mut TestContext,
+    requests: &mut ProtocolStateRequestReceiver,
+    completions: &mut mpsc::UnboundedReceiver<BackgroundNavigationCompletion>,
+    initial: crate::conn::CdpRendererOwnerTurnOutcome,
+) -> Vec<Value> {
+    use crate::domains::activity::ProtocolSchedulerWorkKind;
+    let mut turns = std::collections::VecDeque::from([initial]);
+    let mut messages = Vec::new();
+    loop {
+        if let Some(turn) = turns.pop_front() {
+            let (events, scheduler_events) =
+                ctx.route_completed_command_outcome_for_test(turn).await;
+            messages.extend(events);
+            let mut other_events = Vec::new();
+            for event in scheduler_events {
+                match event {
+                    crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
+                        if work.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction => {
+                        let pending = ctx.conn.try_start_owned_protocol_scheduler_work(work)
+                            .unwrap_or_else(|_| panic!("navigation uses its existing supervisor")).unwrap();
+                        let mut wait = Box::pin(pending.wait());
+                        let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                            loop { tokio::select! {
+                                completed = &mut wait => break completed,
+                                request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                            }}
+                        }).await.unwrap();
+                        let handoff = ctx.conn.complete_owned_protocol_scheduler_work(completed);
+                        turns.push_back(handoff.with_renderer_output_predecessor(None));
+                    }
+                    event => other_events.push(event),
+                }
+            }
+            ctx.route_direct_command_output_for_test(Vec::new(), other_events)
+                .await;
+        } else if let Ok(completion) = completions.try_recv() {
+            let Ok(turn) = ctx
+                .conn
+                .try_start_background_navigation_completion_turn(completion)
+            else {
+                panic!("background workflow completion retains its finite owner boundary");
+            };
+            turns.push_back(turn);
+        } else {
+            return messages;
+        }
+    }
+}
+
+#[tokio::test]
+async fn failed_background_protocol_handoff_retires_only_its_original_unbound_request() {
+    use futures_util::FutureExt as _;
+    tokio::task::LocalSet::new().run_until(async {
+        for start_successor in [false, true] {
+            let CommitFixture { mut ctx, token, navigation, prepared, mut requests, mut completions } = commit_fixture(true).await;
+            ctx.conn.start_background_prepared_navigation_commit(token.clone(), navigation.clone(), prepared);
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            requests.recv().await.unwrap().apply(&mut ctx.conn);
+            let native = completions.recv().await.unwrap();
+            let Ok(started) = ctx.conn.try_start_background_navigation_completion_turn(native) else { panic!("owned native completion") };
+            let (_, events, _) = started.into_protocol_event_parts();
+            let work = events.into_iter().find_map(|event| match event {
+                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
+                _ => None,
+            }).unwrap();
+            let pending = ctx.conn.try_start_owned_protocol_scheduler_work(work)
+                .unwrap_or_else(|_| panic!("owned protocol tail")).unwrap();
+            let mut wait = Box::pin(pending.wait());
+            for _ in 0..3 {
+                tokio::select! {
+                    _ = &mut wait => panic!("installation and protocol commit precede final publication"),
+                    request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                }
+            }
+            assert!(!ctx.conn.accepts_pending_document_navigation_for_owner(&navigation.owner, &token));
+            // Reject the real queued state operation after commit, before
+            // lifecycle binding. No test-only production fault hook is needed.
+            assert!(wait.as_mut().now_or_never().is_none());
+            drop(requests.recv().await.unwrap());
+            let completed = wait.await;
+            let handoff = ctx.conn.complete_owned_protocol_scheduler_work(completed);
+            let (events, _) = handoff.into_protocol_event_parts();
+            assert!(events.is_empty());
+            let ready = completions.recv().await.unwrap();
+            let successor = start_successor.then(|| ctx.conn.start_document_navigation_for_owner(
+                &navigation.owner, "LID-after-failed-handoff".into(),
+            ).unwrap());
+            let Ok(recovery) = ctx.conn.try_start_background_navigation_completion_turn(ready) else { panic!("finite failure recovery") };
+            let messages = drain_owned_background_turns(&mut ctx, &mut requests, &mut completions, recovery).await;
+            let source = messages.iter().filter(|message| message["id"] == 1).collect::<Vec<_>>();
+            assert_eq!(source.len(), 1, "{messages:?}");
+            assert_eq!(source[0]["result"]["errorText"], moli_fetch::NET_ERR_ABORTED_ERROR_TEXT);
+            assert!(!ctx.conn.abandon_unbound_prepared_document_navigation_for_owner(&navigation.owner, &token), "the failed source has already released its unbound request");
+            if let Some(successor) = successor {
+                assert!(ctx.conn.accepts_pending_document_navigation_for_owner(&navigation.owner, &successor));
+                assert!(ctx.conn.renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1")));
+            } else {
+                ctx.process_async(json!({"id":330,"sessionId":"SID-1","method":"Runtime.evaluate","params":{"expression":"document.title","returnByValue":true}})).await;
+                assert_eq!(ctx.take_response_by_id(330)["result"]["result"]["value"], "prepared");
+            }
+            assert!(completions.try_recv().is_err());
+        }
+    }).await;
+}
+
+#[tokio::test]
+async fn background_protocol_completion_rejoins_waits_and_keeps_its_original_publication_boundary()
+{
+    use crate::domains::activity::{ProtocolNavigationDependency, ProtocolSchedulerWorkKind};
+    use futures_util::FutureExt as _;
+    tokio::task::LocalSet::new().run_until(async {
+        for replace_existing in [false, true] {
+            for already_acked in [false, true] {
+                for cancel_phase in 0..3 {
+                    let CommitFixture { mut ctx, token, mut navigation, prepared, mut requests, mut completions } = commit_fixture(replace_existing).await;
+                    if already_acked { navigation.navigate_id = None; }
+                    ctx.enable_page_events_for_test(Some("SID-1"));
+                    ctx.process_async(json!({"id":180,"sessionId":"SID-1","method":"Network.enable"})).await;
+                    ctx.expect_result(180, json!({}), Some("SID-1"));
+                    ctx.conn.start_background_prepared_navigation_commit(token, navigation.clone(), prepared);
+                    for _ in 0..if replace_existing { 2 } else { 1 } {
+                        requests.recv().await.unwrap().apply(&mut ctx.conn);
+                    }
+                    let native = completions.recv().await.unwrap();
+                    let Ok(started) = ctx.conn.try_start_background_navigation_completion_turn(native) else {
+                        panic!("production admission owns the prepared protocol tail");
+                    };
+                    let (events, scheduler_events, predecessor) = started.into_protocol_event_parts();
+                    assert!(predecessor.is_none());
+                    assert!(events.is_empty(), "the finite admission does not publish a source result");
+                    let mut work = None;
+                    let mut other_events = Vec::new();
+                    for event in scheduler_events {
+                        match event {
+                            crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work: candidate }
+                                if candidate.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction => {
+                                assert_eq!(candidate.navigation_dependency(), ProtocolNavigationDependency::ReplacesPendingLoad);
+                                assert_eq!(candidate.navigation_gate_target_id(), Some("TID-1"));
+                                assert!(work.replace(candidate).is_none());
+                            }
+                            event => other_events.push(event),
+                        }
+                    }
+                    ctx.route_direct_command_output_for_test(Vec::new(), other_events).await;
+                    let pending = ctx.conn.try_start_owned_protocol_scheduler_work(work.unwrap())
+                        .unwrap_or_else(|_| panic!("navigation uses the existing owner-work supervisor"))
+                        .expect("the prepared tail has native work");
+                    let original = pending.clone();
+                    let mut wait = Box::pin(pending.wait());
+                    if cancel_phase == 1 {
+                        assert!(wait.as_mut().now_or_never().is_none());
+                        requests.recv().await.unwrap().apply(&mut ctx.conn);
+                        assert!(wait.as_mut().now_or_never().is_none());
+                    }
+                    if cancel_phase == 2 {
+                        let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                            loop { tokio::select! {
+                                completed = &mut wait => break completed,
+                                request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                            }}
+                        }).await.unwrap();
+                        drop(completed);
+                    }
+                    drop(wait);
+                    for id in 210..218 { independent_command(&mut ctx, id).await; }
+                    let mut wait = Box::pin(original.clone().wait());
+                    let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                        loop { tokio::select! {
+                            completed = &mut wait => break completed,
+                            request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                        }}
+                    }).await.unwrap();
+                    let handoff = ctx.conn.complete_owned_protocol_scheduler_work(completed);
+                    let (events, _) = handoff.into_protocol_event_parts();
+                    assert!(events.is_empty(), "the generic supervisor does not flatten a navigation cursor");
+                    let ready = completions.recv().await.unwrap();
+                    assert_eq!(ready.kind(), "protocol_workflow_ready");
+                    drop(ready);
+                    let ready = completions.recv().await.unwrap();
+                    assert_eq!(ready.kind(), "protocol_workflow_ready", "delivery loss retains actual success and the same finalizer");
+                    // A second ready notification can only observe the same
+                    // already-claimed result; it cannot enqueue another source.
+                    let duplicate = original.wait().await;
+                    ctx.conn.complete_owned_protocol_scheduler_work(duplicate);
+                    assert!(completions.try_recv().is_err());
+                    let Ok(outcome) = ctx.conn.try_start_background_navigation_completion_turn(ready) else {
+                        panic!("final source publication is a finite background owner turn");
+                    };
+                    let (mut messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                    let sent_start = ctx.sent.len();
+                    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events).await;
+                    if !messages.iter().any(|message| message["method"] == "Page.frameStoppedLoading") {
+                        crate::testing::wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+                    }
+                    messages.extend(ctx.sent.drain(sent_start..));
+                    assert_eq!(messages.iter().filter(|message| message["id"] == 1).count(), usize::from(!already_acked));
+                    for method in ["Network.responseReceived", "Page.frameNavigated", "Page.domContentEventFired", "Page.loadEventFired"] {
+                        assert_eq!(messages.iter().filter(|message| message["method"] == method).count(), 1, "{method}: {messages:?}");
+                    }
+                    let metadata = messages.iter().position(|message| message["method"] == "Network.responseReceived").unwrap();
+                    let commit = messages.iter().position(|message| message["method"] == "Page.frameNavigated").unwrap();
+                    let load = messages.iter().position(|message| message["method"] == "Page.loadEventFired").unwrap();
+                    assert!(metadata < commit && commit < load);
+                    assert!(completions.try_recv().is_err(), "the completed source obligation is disarmed");
+                }
+            }
+        }
+    }).await;
+}
+
 fn start_owned_protocol_tail(
     conn: &mut CdpConnection,
     completion: crate::conn::BackgroundPreparedNavigationCommit,
@@ -118,133 +330,175 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
     tokio::task::LocalSet::new()
         .run_until(async {
             for settle_in_gap in [false, true] {
-                let CommitFixture {
-                    mut ctx,
-                    token,
-                    navigation,
-                    prepared,
-                    mut requests,
-                    mut completions,
-                } = commit_fixture(true).await;
-                ctx.process_async(
-                    json!({"id": 189, "sessionId": "SID-1", "method": "Page.enable"}),
-                )
-                .await;
-                ctx.expect_result(189, json!({}), Some("SID-1"));
-                ctx.conn.start_background_prepared_navigation_commit(
-                    token.clone(),
-                    navigation.clone(),
-                    prepared,
-                );
-                requests.recv().await.unwrap().apply(&mut ctx.conn);
-                requests.recv().await.unwrap().apply(&mut ctx.conn);
-                let BackgroundNavigationCompletion::PreparedDocument(mut completion) =
-                    completions.recv().await.unwrap()
-                else {
-                    panic!("native commit expected")
-                };
-                if !settle_in_gap {
-                    assert!(ctx.conn.settle_background_navigation_completion(&token));
-                }
-                let loaded = completion.navigation.as_mut().unwrap();
-                let snapshot = loaded.page_creation_artifacts.lifecycle_snapshot;
-                let dcl = snapshot.dom_content_loaded.unwrap();
-                let facts =
-                    std::iter::once((dcl, RendererDocumentLifecycleMilestone::DomContentLoaded))
-                        .chain(
-                            snapshot
-                                .load
-                                .map(|stamp| (stamp, RendererDocumentLifecycleMilestone::Load)),
-                        )
-                        .map(|(stamp, milestone)| RendererDocumentLifecycleEvent {
-                            frame: snapshot.frame,
-                            document: snapshot.document,
-                            epoch: snapshot.epoch,
-                            sequence: stamp.sequence,
-                            timestamp_micros: stamp.timestamp_micros,
-                            kind: RendererDocumentLifecycleEventKind::Milestone(milestone),
-                        })
-                        .collect();
-                loaded
-                    .page_creation_artifacts
-                    .initial_lifecycle_events
-                    .retain(|event| {
-                        !matches!(event.kind, RendererDocumentLifecycleEventKind::Milestone(_))
-                    });
-                loaded
-                    .page_creation_artifacts
-                    .lifecycle_snapshot
-                    .dom_content_loaded = None;
-                loaded.page_creation_artifacts.lifecycle_snapshot.load = None;
-                let predecessor = loaded.renderer_output_predecessor.clone().unwrap();
-                ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
+                for observe_commit_in_gap in [false, true] {
+                    let CommitFixture {
+                        mut ctx,
+                        token,
+                        navigation,
+                        prepared,
+                        mut requests,
+                        mut completions,
+                    } = commit_fixture(true).await;
+                    ctx.process_async(
+                        json!({"id": 189, "sessionId": "SID-1", "method": "Page.enable"}),
+                    )
                     .await;
-                let mut context = CommandDispatchContext::default();
-                let pending = start_owned_protocol_tail(&mut ctx.conn, *completion, &mut context);
-                let mut wait = Box::pin(pending.wait());
-                // The first three operations install the Page, claim original workers,
-                // and commit protocol identity. Hold the next state operation so live
-                // facts arrive after commit but before lifecycle publication.
-                for _ in 0..3 {
-                    assert!(wait.as_mut().now_or_never().is_none());
+                    ctx.expect_result(189, json!({}), Some("SID-1"));
+                    ctx.conn.start_background_prepared_navigation_commit(
+                        token.clone(),
+                        navigation.clone(),
+                        prepared,
+                    );
                     requests.recv().await.unwrap().apply(&mut ctx.conn);
-                }
-                assert!(
-                    !ctx.conn
-                        .accepts_pending_document_navigation_for_owner(&navigation.owner, &token)
-                );
-                if settle_in_gap {
-                    assert!(ctx.conn.settle_background_navigation_completion(&token));
-                }
-                let (_, visible) = ctx
-                    .conn
-                    .ingest_renderer_document_lifecycle_events_for_owner(&navigation.owner, facts);
-                assert!(visible.is_empty());
-                independent_command(&mut ctx, 191).await;
-                let completed = loop {
-                    tokio::select! {
-                        completed = &mut wait => break completed,
-                        request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                    requests.recv().await.unwrap().apply(&mut ctx.conn);
+                    let BackgroundNavigationCompletion::PreparedDocument(mut completion) =
+                        completions.recv().await.unwrap()
+                    else {
+                        panic!("native commit expected")
+                    };
+                    if !settle_in_gap {
+                        assert!(ctx.conn.settle_background_navigation_completion(&token));
                     }
-                };
-                let CdpCommandTaskStep::Complete(outcome) = ctx
-                    .conn
-                    .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-                    .unwrap_or_else(|_| panic!("final publication is finite"))
-                else {
-                    panic!("no wait remains")
-                };
-                let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
-                for method in std::iter::once("Page.domContentEventFired")
-                    .chain(snapshot.load.map(|_| "Page.loadEventFired"))
-                {
-                    assert_eq!(
-                        messages
-                            .iter()
-                            .filter(|message| message["method"] == method)
-                            .count(),
-                        1,
-                        "{method}"
+                    let loaded = completion.navigation.as_mut().unwrap();
+                    let snapshot = loaded.page_creation_artifacts.lifecycle_snapshot;
+                    let dcl = snapshot.dom_content_loaded.unwrap();
+                    let facts = std::iter::once((
+                        dcl,
+                        RendererDocumentLifecycleMilestone::DomContentLoaded,
+                    ))
+                    .chain(
+                        snapshot
+                            .load
+                            .map(|stamp| (stamp, RendererDocumentLifecycleMilestone::Load)),
+                    )
+                    .map(|(stamp, milestone)| RendererDocumentLifecycleEvent {
+                        frame: snapshot.frame,
+                        document: snapshot.document,
+                        epoch: snapshot.epoch,
+                        sequence: stamp.sequence,
+                        timestamp_micros: stamp.timestamp_micros,
+                        kind: RendererDocumentLifecycleEventKind::Milestone(milestone),
+                    })
+                    .collect();
+                    loaded
+                        .page_creation_artifacts
+                        .initial_lifecycle_events
+                        .retain(|event| {
+                            !matches!(event.kind, RendererDocumentLifecycleEventKind::Milestone(_))
+                        });
+                    loaded
+                        .page_creation_artifacts
+                        .lifecycle_snapshot
+                        .dom_content_loaded = None;
+                    loaded.page_creation_artifacts.lifecycle_snapshot.load = None;
+                    let predecessor = loaded.renderer_output_predecessor.clone().unwrap();
+                    if !observe_commit_in_gap {
+                        ctx.route_direct_command_renderer_predecessor_for_test(predecessor.clone())
+                            .await;
+                    }
+                    let mut context = CommandDispatchContext::default();
+                    let pending =
+                        start_owned_protocol_tail(&mut ctx.conn, *completion, &mut context);
+                    let mut wait = Box::pin(pending.wait());
+                    // The first three operations install the Page, claim original workers,
+                    // and commit protocol identity. Hold the next state operation so live
+                    // facts arrive after commit but before lifecycle publication.
+                    for _ in 0..3 {
+                        assert!(wait.as_mut().now_or_never().is_none());
+                        requests.recv().await.unwrap().apply(&mut ctx.conn);
+                    }
+                    assert!(
+                        !ctx.conn.accepts_pending_document_navigation_for_owner(
+                            &navigation.owner,
+                            &token
+                        )
+                    );
+                    if settle_in_gap {
+                        assert!(ctx.conn.settle_background_navigation_completion(&token));
+                    }
+                    if observe_commit_in_gap {
+                        ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
+                            .await;
+                    }
+                    let source = moli_core::RendererDocumentLifecycleIdentity {
+                        frame: snapshot.frame,
+                        document: snapshot.document,
+                        epoch: snapshot.epoch,
+                    };
+                    let slot = ctx
+                        .conn
+                        .runtime_session_owner_slot_for_owner(&navigation.owner)
+                        .unwrap();
+                    assert!(
+                        slot.accepts_parser_script_fetch_source(source),
+                        "the original parser retains progress authority until binding handoff"
+                    );
+                    let (page, binding) = slot
+                        .page_slot()
+                        .prepared_document_output_binding()
+                        .expect("committed but unbound Document keeps its temporary output route");
+                    assert_eq!(page.page_id(), snapshot.frame.page_id);
+                    assert_eq!(binding.renderer_document_identity(), source);
+                    let (_, visible) = ctx
+                        .conn
+                        .ingest_renderer_document_lifecycle_events_for_owner(
+                            &navigation.owner,
+                            facts,
+                        );
+                    assert!(visible.is_empty());
+                    independent_command(&mut ctx, 191).await;
+                    let completed = loop {
+                        tokio::select! {
+                            completed = &mut wait => break completed,
+                            request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                        }
+                    };
+                    let CdpCommandTaskStep::Complete(outcome) = ctx
+                        .conn
+                        .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                        .unwrap_or_else(|_| panic!("final publication is finite"))
+                    else {
+                        panic!("no wait remains")
+                    };
+                    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                    for method in std::iter::once("Page.domContentEventFired")
+                        .chain(snapshot.load.map(|_| "Page.loadEventFired"))
+                    {
+                        assert_eq!(
+                            messages
+                                .iter()
+                                .filter(|message| message["method"] == method)
+                                .count(),
+                            1,
+                            "{method}"
+                        );
+                    }
+                    for id in [1, 190] {
+                        assert_eq!(
+                            messages
+                                .iter()
+                                .filter(|message| message["id"] == id)
+                                .count(),
+                            1
+                        );
+                    }
+                    let response = messages
+                        .iter()
+                        .position(|message| message["id"] == 190)
+                        .unwrap();
+                    let dcl = messages
+                        .iter()
+                        .position(|message| message["method"] == "Page.domContentEventFired")
+                        .unwrap();
+                    assert!(response < dcl);
+                    assert!(
+                        !ctx.conn
+                            .runtime_session_owner_slot_for_owner(&navigation.owner)
+                            .unwrap()
+                            .page_slot()
+                            .owns_prepared_document_handoff(&token)
                     );
                 }
-                for id in [1, 190] {
-                    assert_eq!(
-                        messages
-                            .iter()
-                            .filter(|message| message["id"] == id)
-                            .count(),
-                        1
-                    );
-                }
-                let response = messages
-                    .iter()
-                    .position(|message| message["id"] == 190)
-                    .unwrap();
-                let dcl = messages
-                    .iter()
-                    .position(|message| message["method"] == "Page.domContentEventFired")
-                    .unwrap();
-                assert!(response < dcl);
             }
         })
         .await;
