@@ -470,6 +470,7 @@ fn spawn_content_security_policy_report_fetch(
         request.method,
         request.request_headers.clone(),
         request_body_text,
+        None,
     );
 }
 

@@ -32,6 +32,10 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(in crate::worker) enum WorkerFetchEvent {
+    RedirectAdmission {
+        fetch_id: u32,
+        admission: crate::network_host::RedirectAdmission,
+    },
     ContentSecurityPolicyViolation(
         Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
     ),
@@ -288,6 +292,10 @@ pub(super) fn merge_worker_request_headers(
 }
 
 pub(in crate::worker) enum WorkerXhrEvent {
+    RedirectAdmission {
+        xhr_id: u32,
+        admission: crate::network_host::RedirectAdmission,
+    },
     ResourceTiming {
         xhr_id: Option<u32>,
         timing: WorkerResourceTiming,

@@ -60,14 +60,17 @@ impl ScriptVm {
             state.pending.blob_url_entry.as_ref(),
         )
         .map(|result| result.map_err(|error| error.into_message()));
-        let source_policy_error = {
+        let (source_policy_error, redirect_owner) = {
             let mut host = self._context_host.borrow_mut();
             host.begin_active_subresource_request();
             host.record_running_subresource_fetch(state);
             if let Some(check) = host.window_fetch_redirect_check(internal_id) {
                 request = request.with_redirect_check(check);
             }
-            host.window_subresource_replacement_url_error(internal_id, &request.url)
+            (
+                host.window_subresource_replacement_url_error(internal_id, &request.url),
+                host.window_redirect_owner(internal_id),
+            )
         };
         let request =
             crate::network_host::observe_async_xhr_upload(request, &completion_tx, internal_id);
@@ -77,10 +80,13 @@ impl ScriptVm {
             } else if let Some(result) = local_response {
                 result.map(crate::protocol_types::NavigationResponse::from)
             } else {
-                crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
+                let preflight_request_headers = request.request_headers.to_byte_strings();
+                crate::network_host::fetch_browser_subresource_for_owner(
                     request_client,
                     request,
                     cancel_handle,
+                    preflight_request_headers,
+                    redirect_owner.as_ref(),
                 )
                 .await
                 .map(|observed| {
@@ -411,6 +417,19 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::RedirectAdmission {
+                internal_id,
+                admission,
+            } => {
+                if self
+                    ._context_host
+                    .borrow()
+                    .admit_subresource_redirect(internal_id)
+                {
+                    admission.grant();
+                }
+                Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
+            }
             AsyncSubresourceFetchEvent::ResponseLinks(links) => {
                 self.start_subresource_response_links(*links)
             }

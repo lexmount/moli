@@ -303,6 +303,11 @@ impl FetchCancelHandle {
         self.state.cancellation.is_cancelled()
     }
 
+    /// Waits for this request or an ancestor to request cancellation.
+    pub async fn cancelled(&self) {
+        self.state.cancellation.cancelled().await;
+    }
+
     /// Creates cancellation authority for one preflight or redirect hop.
     /// Parent cancellation propagates to this child; cancelling the child does
     /// not cancel its parent or siblings. Completion facts remain independent.

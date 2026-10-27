@@ -774,6 +774,13 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::RedirectAdmission { internal_id, .. } => {
+            AsyncSubresourceTraceFields {
+                event_kind: Some("redirect_admission"),
+                internal_id: Some(*internal_id),
+                ..AsyncSubresourceTraceFields::default()
+            }
+        }
         AsyncSubresourceFetchEvent::ResponseLinks(_) => AsyncSubresourceTraceFields {
             event_kind: Some("response_links"),
             ..AsyncSubresourceTraceFields::default()

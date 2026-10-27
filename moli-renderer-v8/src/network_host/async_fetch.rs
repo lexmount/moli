@@ -29,6 +29,7 @@ pub(crate) async fn fetch_cors_script_text(
         Some(cancel_handle),
         Vec::new(),
         None,
+        None,
     )
     .await?;
     observed
@@ -49,7 +50,8 @@ pub(crate) async fn fetch_browser_subresource_with_preflight(
         .map(NetworkFetchResult::into_response)
 }
 
-pub(crate) async fn fetch_browser_subresource_with_preflight_and_network_metadata(
+#[cfg(test)]
+async fn fetch_browser_subresource_with_preflight_and_network_metadata(
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
@@ -60,6 +62,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_and_network_metadat
         request,
         cancel_handle,
         preflight_request_headers,
+        None,
         None,
     )
     .await
@@ -81,7 +84,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_headers(
     .map(NetworkFetchResult::into_response)
 }
 
-pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_network_metadata(
+async fn fetch_browser_subresource_with_preflight_headers_and_network_metadata(
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
@@ -93,6 +96,25 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_network
         cancel_handle,
         preflight_request_headers,
         None,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn fetch_browser_subresource_for_owner(
+    loader: ResourceRequestClient,
+    request: Request,
+    cancel_handle: Option<FetchCancelHandle>,
+    preflight_request_headers: Vec<(String, String)>,
+    redirect_owner: Option<&RedirectOwner>,
+) -> Result<NetworkFetchResult<Response>, String> {
+    fetch_browser_subresource_with_preflight_headers_and_observer(
+        loader,
+        request,
+        cancel_handle,
+        preflight_request_headers,
+        None,
+        redirect_owner,
     )
     .await
 }
@@ -103,18 +125,20 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
+    redirect_owner: Option<&RedirectOwner>,
 ) -> Result<NetworkFetchResult<Response>, String> {
     if let Some(preload) = loader.consume_document_preload(&request) {
         let response = preload.response().await?.response.into();
         return Ok(NetworkFetchResult::without_request_observation(response));
     }
-    if browser_request_needs_cors_redirect_checks(&request) {
+    if browser_request_needs_cors_redirect_checks(&request) || redirect_owner.is_some() {
         return fetch_browser_subresource_with_cors_redirect_checks(
             loader,
             request,
             cancel_handle,
             preflight_request_headers,
             preflight_observer,
+            redirect_owner,
         )
         .await;
     }
@@ -344,6 +368,7 @@ async fn fetch_browser_subresource_with_cors_redirect_checks(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
+    redirect_owner: Option<&RedirectOwner>,
 ) -> Result<NetworkFetchResult<Response>, String> {
     if !request.auth_requires_buffered_transport() {
         let redirect_mode = request.redirect_mode();
@@ -353,6 +378,7 @@ async fn fetch_browser_subresource_with_cors_redirect_checks(
             cancel_handle,
             preflight_request_headers,
             preflight_observer,
+            redirect_owner,
         )
         .await?;
         let (response, journal) = observed.into_parts_with_observation_journal();
@@ -416,7 +442,11 @@ async fn fetch_browser_subresource_with_cors_redirect_checks(
                     response, journal,
                 ));
             }
-            ManualCorsRedirectTransition::FollowedRedirect => {}
+            ManualCorsRedirectTransition::FollowedRedirect => {
+                if let Some(owner) = redirect_owner {
+                    owner.admit(&cancel_handle).await?;
+                }
+            }
         }
     }
 }
@@ -427,6 +457,7 @@ async fn fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
+    redirect_owner: Option<&RedirectOwner>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
     let cancel_handle = cancel_handle.unwrap_or_default();
@@ -475,6 +506,9 @@ async fn fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
         // Keep completed connections reusable without waiting for an unused,
         // unfinished redirect body or cancelling the logical request.
         response.discard_unused().await;
+        if let Some(owner) = redirect_owner {
+            owner.admit(&cancel_handle).await?;
+        }
     }
 }
 
@@ -530,6 +564,25 @@ pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_
         cancel_handle,
         preflight_request_headers,
         None,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn fetch_browser_subresource_raw_stream_for_owner(
+    loader: &ResourceRequestClient,
+    request: Request,
+    cancel_handle: Option<FetchCancelHandle>,
+    preflight_request_headers: Vec<(String, String)>,
+    redirect_owner: Option<&RedirectOwner>,
+) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+        loader,
+        request,
+        cancel_handle,
+        preflight_request_headers,
+        None,
+        redirect_owner,
     )
     .await
 }
@@ -540,6 +593,7 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
+    redirect_owner: Option<&RedirectOwner>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
     if let Some(preload) = loader.consume_document_preload(&request) {
         let response = crate::network::streaming_raw_response_from_local_response(
@@ -548,13 +602,14 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
         .map_err(format_network_error)?;
         return Ok(NetworkFetchResult::without_request_observation(response));
     }
-    if browser_request_needs_cors_redirect_checks(&request) {
+    if browser_request_needs_cors_redirect_checks(&request) || redirect_owner.is_some() {
         return fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
             loader,
             request,
             cancel_handle,
             preflight_request_headers,
             preflight_observer,
+            redirect_owner,
         )
         .await;
     }
@@ -743,6 +798,7 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_method: String,
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
+    redirect_owner: Option<RedirectOwner>,
 ) {
     let parkable_image_manager = matches!(
         request.browser_request_metadata(),
@@ -832,6 +888,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 cancel_handle,
                 preflight_request_headers,
                 Some(&preflight_observer),
+                redirect_owner.as_ref(),
             )
             .await
             .map(|observed| {
@@ -867,6 +924,7 @@ pub(crate) fn spawn_async_subresource_fetch(
             cancel_handle,
             preflight_request_headers,
             Some(&preflight_observer),
+            redirect_owner.as_ref(),
             internal_id,
             request_url_for_event,
             request_method_for_event,
@@ -911,6 +969,7 @@ async fn fetch_browser_image_into_parkable(
         cancel_handle,
         preflight_request_headers,
         preflight_observer,
+        None,
     )
     .await?;
     collect_image_response_into_parkable(observed, manager).await
@@ -952,6 +1011,7 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
+    redirect_owner: Option<&RedirectOwner>,
     internal_id: u64,
     request_url: url::Url,
     request_method: String,
@@ -965,6 +1025,7 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
         cancel_handle,
         preflight_request_headers,
         preflight_observer,
+        redirect_owner,
     )
     .await?;
     let (mut response, request_observation) = observed.into_parts();
@@ -1700,6 +1761,7 @@ mod tests {
                 Some(cancel.clone()),
                 headers,
                 None,
+                None,
             ),
         )
         .await?
@@ -1932,6 +1994,7 @@ mod tests {
             "GET".to_owned(),
             request_headers.into(),
             None,
+            None,
         );
 
         match next_async_subresource_event(&mut queue).await? {
@@ -2054,6 +2117,7 @@ mod tests {
             "GET".to_owned(),
             request_headers.clone(),
             None,
+            None,
         );
 
         let AsyncSubresourceFetchEvent::Completion(completion) =
@@ -2154,6 +2218,7 @@ mod tests {
             "GET".to_owned(),
             Vec::new().into(),
             None,
+            None,
         );
 
         let body_source_id = match next_async_subresource_event(&mut queue).await? {
@@ -2239,6 +2304,7 @@ mod tests {
                 "GET".to_owned(),
                 Default::default(),
                 None,
+                None,
             );
             match next_async_subresource_event(&mut queue).await? {
                 AsyncSubresourceFetchEvent::Completion(completion) => {
@@ -2315,6 +2381,7 @@ mod tests {
             request_url,
             "GET".to_owned(),
             Vec::new().into(),
+            None,
             None,
         );
 
@@ -2422,6 +2489,7 @@ mod tests {
             "POST".to_owned(),
             request_headers.into(),
             Some("payload".to_owned()),
+            None,
         );
 
         head_sent_rx
@@ -2586,6 +2654,7 @@ mod tests {
             "POST".to_owned(),
             request_headers.into(),
             Some("payload".to_owned()),
+            None,
         );
 
         head_sent_rx

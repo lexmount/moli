@@ -1,7 +1,9 @@
 use super::*;
 use crate::network_host::{
-    BlobUrlFetchEnvironment, CapturedBlobUrl, FetchArgumentError, convert_fetch_arguments,
-    local_url_response_with_blob_entry, normalized_headers_entries,
+    BlobUrlFetchEnvironment, CapturedBlobUrl, FetchArgumentError, RedirectOwner,
+    convert_fetch_arguments, fetch_browser_subresource_for_owner,
+    fetch_browser_subresource_raw_stream_for_owner, local_url_response_with_blob_entry,
+    normalized_headers_entries,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
@@ -269,6 +271,14 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         &headers.to_byte_strings(),
         blob_url_entry.as_ref(),
     );
+    let redirect_owner = match kind {
+        WorkerFetchKind::Fetch => Some(RedirectOwner::Worker(WorkerRedirectOwner::fetch(
+            completion_tx.clone(),
+            fetch_id,
+            load.clone(),
+        ))),
+        WorkerFetchKind::Font => None,
+    };
     // IO holds only native state. The lease cancels ordinary work at teardown
     // while its captured executor keeps detached keepalive transport running.
     load.task_runner().spawn(async move {
@@ -325,11 +335,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     if request.auth_requires_buffered_transport()
                         || !request.transport_follows_redirects()
                     {
-                        match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
+                        match fetch_browser_subresource_for_owner(
                             loader.clone(),
                             request,
                             Some(cancel_handle),
                             cors_preflight_request_headers,
+                            redirect_owner.as_ref(),
                         )
                         .await
                         {
@@ -352,11 +363,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         // Worker fetch still resolves after the full response, but ordinary
                         // transfers can keep their body in the same chunked/pooled carrier that
                         // CDP Network capture uses instead of forcing a single buffered Response.
-                        match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                        match fetch_browser_subresource_raw_stream_for_owner(
                             &loader,
                             request,
                             Some(cancel_handle),
                             cors_preflight_request_headers,
+                            redirect_owner.as_ref(),
                         )
                         .await
                         {
@@ -365,10 +377,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                     worker_network_result_parts(observed);
                                 let head = response.head();
                                 timing.observe_head(&head);
-                                let mut body_writer =
-                                    SubresourceResponseBodyWriter::with_disk_pool(
-                                        loader.disk_pool(),
-                                    );
+                                let mut body_writer = SubresourceResponseBodyWriter::with_disk_pool(
+                                    loader.disk_pool(),
+                                );
                                 while let Some(chunk) = response.next_chunk().await {
                                     timing.observe_chunk(chunk.len());
                                     body_writer.append(&chunk);
@@ -385,11 +396,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                             Err(error) => (Err(format!("fetch: {error}")), None),
                         }
                     } else {
-                        match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                        match fetch_browser_subresource_raw_stream_for_owner(
                             &loader,
                             request,
                             Some(cancel_handle),
                             cors_preflight_request_headers,
+                            redirect_owner.as_ref(),
                         )
                         .await
                         {
@@ -408,10 +420,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                         network_request_headers,
                                     },
                                 ));
-                                let mut body_writer =
-                                    SubresourceResponseBodyWriter::with_disk_pool(
-                                        loader.disk_pool(),
-                                    );
+                                let mut body_writer = SubresourceResponseBodyWriter::with_disk_pool(
+                                    loader.disk_pool(),
+                                );
                                 while let Some(chunk) = response.next_chunk().await {
                                     timing.observe_chunk(chunk.len());
                                     body_writer.append(&chunk);
@@ -437,7 +448,8 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                         result,
                                     },
                                 ));
-                                let _ = completion_tx.send(WorkerFetchEvent::ResourceTiming { fetch_id, timing });
+                                let _ = completion_tx
+                                    .send(WorkerFetchEvent::ResourceTiming { fetch_id, timing });
                                 return;
                             }
                             Err(error) => (Err(format!("fetch: {error}")), None),
@@ -679,6 +691,11 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) {
     timing.begin_transport(cancel_handle.clone());
+    let redirect_owner = RedirectOwner::Worker(WorkerRedirectOwner::xhr(
+        completion_tx.clone(),
+        xhr_id,
+        load.clone(),
+    ));
     load.task_runner().spawn(async move {
         let cors_preflight_request_headers = headers.to_byte_strings();
         let request = Request::new_browser_bytes(
@@ -728,6 +745,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
                     cancel_handle,
                     cors_preflight_request_headers,
                     &timing,
+                    Some(&redirect_owner),
                 )
                 .await
             }
@@ -752,6 +770,7 @@ pub(super) async fn load_worker_xhr_response(
     cancel_handle: FetchCancelHandle,
     cors_preflight_request_headers: Vec<(String, String)>,
     timing: &WorkerResourceTiming,
+    redirect_owner: Option<&RedirectOwner>,
 ) -> (
     Result<WorkerXhrResponse, String>,
     Option<Vec<(String, String)>>,
@@ -759,11 +778,12 @@ pub(super) async fn load_worker_xhr_response(
     let loader = load.request_client();
     let result = match request {
         request if request.auth_requires_buffered_transport() => {
-            match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
+            match fetch_browser_subresource_for_owner(
                 loader.clone(),
                 request,
                 Some(cancel_handle),
                 cors_preflight_request_headers,
+                redirect_owner,
             )
             .await
             {
@@ -782,11 +802,12 @@ pub(super) async fn load_worker_xhr_response(
         request => {
             // Ordinary worker XHR can keep the network/cache path streaming
             // and pool large bodies until the XHR DONE boundary.
-            match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+            match fetch_browser_subresource_raw_stream_for_owner(
                 &loader,
                 request,
                 Some(cancel_handle),
                 cors_preflight_request_headers,
+                redirect_owner,
             )
             .await
             {
@@ -2908,6 +2929,19 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::RedirectAdmission {
+            fetch_id,
+            admission,
+        } => {
+            if state
+                .borrow()
+                .pending_fetches
+                .get(&fetch_id)
+                .is_some_and(|pending| !pending.load.is_cancelled())
+            {
+                admission.grant();
+            }
+        }
         WorkerFetchEvent::ResourceTiming { fetch_id, timing } => {
             if !state.borrow().pending_fetches.contains_key(&fetch_id) {
                 timing.publish(scope);

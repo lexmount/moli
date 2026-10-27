@@ -61,6 +61,8 @@ mod markdown;
 mod readiness;
 #[path = "fetch_cli/redirect_chain.rs"]
 mod redirect_chain;
+#[path = "fetch_cli/redirect_owner.rs"]
+mod redirect_owner;
 #[path = "fetch_cli/resource_io.rs"]
 mod resource_io;
 #[path = "fetch_cli/subprocess.rs"]
