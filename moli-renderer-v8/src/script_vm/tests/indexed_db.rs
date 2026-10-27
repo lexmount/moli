@@ -4442,6 +4442,110 @@ async fn indexed_db_transaction_stays_active_through_creation_task_microtasks() 
 }
 
 #[tokio::test]
+async fn indexed_db_transaction_stays_active_past_legacy_resize_observer_microtasks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://indexeddb-resize-observer-microtasks-active.test/",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbResizeObserverMicrotaskResult = "pending";
+  const target = document.body.appendChild(document.createElement("div"));
+  const open = indexedDB.open("app", 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("kv");
+  open.onsuccess = () => {
+    const tx = open.result.transaction("kv", "readwrite");
+    new ResizeObserver(() => {}).observe(target);
+    Promise.resolve().then(() => {
+      try {
+        const request = tx.objectStore("kv").put("value", 1);
+        request.onsuccess = () => {
+          globalThis.__indexedDbResizeObserverMicrotaskResult = "success";
+        };
+        request.onerror = () => {
+          globalThis.__indexedDbResizeObserverMicrotaskResult =
+            `request-error:${request.error && request.error.name}`;
+        };
+      } catch (error) {
+        globalThis.__indexedDbResizeObserverMicrotaskResult = `throw:${error && error.name}`;
+      }
+    });
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("IndexedDB/ResizeObserver microtask workflow should schedule");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbResizeObserverMicrotaskResult)",
+        "success",
+        "legacy ResizeObserver delivery must not end the surrounding checkpoint early",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn indexed_db_transaction_created_by_real_resize_observer_survives_callback_microtasks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://indexeddb-real-resize-observer-microtasks-active.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbRealResizeObserverMicrotaskResult = "pending";
+  const target = document.body.appendChild(document.createElement("div"));
+  const open = indexedDB.open("app", 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("kv");
+  open.onsuccess = () => {
+    const db = open.result;
+    const observer = new ResizeObserver(() => {
+      observer.disconnect();
+      const tx = db.transaction("kv", "readwrite");
+      Promise.resolve().then(() => {
+        try {
+          const request = tx.objectStore("kv").put("value", 1);
+          request.onsuccess = () => {
+            globalThis.__indexedDbRealResizeObserverMicrotaskResult = "success";
+          };
+          request.onerror = () => {
+            globalThis.__indexedDbRealResizeObserverMicrotaskResult =
+              `request-error:${request.error && request.error.name}`;
+          };
+        } catch (error) {
+          globalThis.__indexedDbRealResizeObserverMicrotaskResult =
+            `throw:${error && error.name}`;
+        }
+      });
+    });
+    observer.observe(target);
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("IndexedDB/real ResizeObserver microtask workflow should schedule");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbRealResizeObserverMicrotaskResult)",
+        "success",
+        "real ResizeObserver callback microtasks must run before transaction deactivation",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn indexed_db_object_store_open_key_cursor_rejects_after_transaction_inactive_task() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(

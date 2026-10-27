@@ -6,8 +6,9 @@ pub enum LayoutPolicy {
     /// such as renderer screenshots that require a real layout backend.
     #[default]
     Mock,
-    /// Only screenshot, screencast, and PDF output build layout.
-    /// Screenshots and screencasts publish layout; print projections are temporary.
+    /// Screenshots, screencasts, PDF output, and rendering updates for an
+    /// active ResizeObserver may build layout. Screenshots, screencasts, and
+    /// ResizeObserver updates publish layout; print projections are temporary.
     /// Geometry queries and input read the last published layout, if any.
     OnDemand,
 }

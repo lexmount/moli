@@ -278,9 +278,20 @@ impl HostTimeoutScheduler {
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
     ) {
+        let _ = self.queue_internal_task_after(scope, callback, 0);
+    }
+
+    /// Schedule browser-owned work after a delay without exposing a
+    /// clearTimeout-cancellable page timer.
+    pub(crate) fn queue_internal_task_after<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+        delay_ms: u64,
+    ) -> bool {
         let receiver = scope.get_current_context().global(scope);
         let Some(callback) = scheduled_timer_function(scope, callback, receiver) else {
-            return;
+            return false;
         };
         let Some(owner) = scheduled_timer_owner_for_target(
             scope,
@@ -288,7 +299,7 @@ impl HostTimeoutScheduler {
             Some(receiver),
             scope.get_current_context(),
         ) else {
-            return;
+            return false;
         };
         self.scheduler.schedule_after(
             ScheduledTimerTask {
@@ -297,9 +308,10 @@ impl HostTimeoutScheduler {
                 is_interval: false,
                 extra_args: Vec::new(),
             },
-            0,
+            delay_ms,
             Instant::now(),
         );
+        true
     }
 
     pub(crate) fn queue_once<'s>(

@@ -4,7 +4,26 @@ use crate::{
     document_runtime::EventTargetHandle,
     frame_owner_model::FrameDocumentTaskOwner,
     page_task_queue::{RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind},
+    util::context_host_ptr_from_global_bridge,
 };
+
+const RESIZE_OBSERVER_RETRY_DELAY_MS: u64 = 16;
+
+fn resize_observer_rendering_retry_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let Some(target) = host.current_window_document_task_target(scope) else {
+        return;
+    };
+    host.resize_observer_retry_targets.remove(&target);
+    host.queue_resize_observer_rendering_update_for_target(target, 0);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PendingRenderingUpdatePayload {
@@ -14,6 +33,9 @@ pub(super) enum PendingRenderingUpdatePayload {
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
     EnvironmentChange(PendingEnvironmentChange),
+    ResizeObserver {
+        minimum_depth: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,6 +64,28 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn is_broadcasting_resize_observers_for(
+        &self,
+        target: Option<WindowDocumentTaskTarget>,
+    ) -> bool {
+        self.resize_observer_rendering_update_target.is_some()
+            && self.resize_observer_rendering_update_target == target
+    }
+
+    pub(crate) fn begin_resize_observer_broadcast(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+    ) -> Option<WindowDocumentTaskTarget> {
+        self.resize_observer_rendering_update_target.replace(target)
+    }
+
+    pub(crate) fn restore_resize_observer_broadcast(
+        &mut self,
+        previous: Option<WindowDocumentTaskTarget>,
+    ) {
+        self.resize_observer_rendering_update_target = previous;
+    }
+
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document that just completed DOMContentLoaded.
     ///
@@ -170,6 +214,142 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn broadcast_resize_observers_for_target(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: WindowDocumentTaskTarget,
+        minimum_depth: usize,
+    ) -> (Option<usize>, bool) {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return (None, false);
+        };
+        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let previous = target.dispatch_scope().enter(scope);
+        let result = crate::context_bootstrap::broadcast_resize_observer_rendering_update(
+            scope,
+            minimum_depth,
+        );
+        target.dispatch_scope().restore(scope, previous);
+        result
+    }
+
+    pub(crate) fn resize_observer_target_has_observations(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let previous = target.dispatch_scope().enter(scope);
+        let result = crate::context_bootstrap::has_resize_observer_targets(scope);
+        target.dispatch_scope().restore(scope, previous);
+        result
+    }
+
+    pub(crate) fn report_resize_observer_loop_error_for_target(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        target: WindowDocumentTaskTarget,
+    ) -> Result<(), String> {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return Ok(());
+        };
+        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let previous = target.dispatch_scope().enter(scope);
+        let result = crate::context_bootstrap::dispatch_window_error_event_with_details(
+            scope,
+            host_ptr,
+            "ResizeObserver loop completed with undelivered notifications.",
+            "",
+            0,
+            0,
+            None,
+        );
+        target.dispatch_scope().restore(scope, previous);
+        result
+    }
+
+    pub(crate) fn queue_resize_observer_rendering_update(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) {
+        let Some(target) = self.current_window_document_task_target(scope) else {
+            return;
+        };
+        self.queue_resize_observer_rendering_update_for_target(target, 0);
+    }
+
+    pub(crate) fn queue_resize_observer_rendering_update_for_target(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        minimum_depth: usize,
+    ) {
+        if self.is_broadcasting_resize_observers_for(Some(target)) {
+            return;
+        }
+        if let Some(index) = self.rendering_updates.find_slot_index(
+            target,
+            RendererPageRenderingUpdateTaskKind::ResizeObserver,
+            |_| true,
+        ) {
+            let PendingRenderingUpdatePayload::ResizeObserver {
+                minimum_depth: pending_depth,
+            } = self.rendering_updates.at_mut(index).payload_mut()
+            else {
+                unreachable!("ResizeObserver task kind must retain its matching payload")
+            };
+            *pending_depth = (*pending_depth).min(minimum_depth);
+            return;
+        }
+        self.queue_rendering_update(
+            target,
+            RendererPageRenderingUpdateTaskKind::ResizeObserver,
+            PendingRenderingUpdatePayload::ResizeObserver { minimum_depth },
+        );
+    }
+
+    /// Retry skipped same-depth observations at a later rendering opportunity
+    /// instead of immediately spinning the rendering source.
+    pub(crate) fn schedule_resize_observer_rendering_retry_for_target(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let previous = target.dispatch_scope().enter(scope);
+        let scheduled = if self.resize_observer_retry_targets.contains(&target) {
+            true
+        } else {
+            v8::Function::builder(resize_observer_rendering_retry_callback)
+                .build(scope)
+                .is_some_and(|callback| {
+                    self.resize_observer_retry_targets.insert(target);
+                    if self.queue_internal_task_after(
+                        scope,
+                        callback,
+                        RESIZE_OBSERVER_RETRY_DELAY_MS,
+                    ) {
+                        true
+                    } else {
+                        self.resize_observer_retry_targets.remove(&target);
+                        false
+                    }
+                })
+        };
+        target.dispatch_scope().restore(scope, previous);
+        scheduled
+    }
+
     fn queue_rendering_update(
         &mut self,
         target: WindowDocumentTaskTarget,
@@ -237,25 +417,37 @@ impl JsContextHost {
         task_id: RendererPageRenderingUpdateTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageRenderingUpdateTaskKind,
-    ) -> Option<bool> {
+    ) -> Option<(bool, usize)> {
         let payload = self
             .rendering_updates
             .remove_exact(task_id, target, kind)?
             .into_payload();
-        Some(match payload {
-            PendingRenderingUpdatePayload::DocumentScrollEvents => {
-                self.dispatch_authorized_document_scroll_events(scope, host_ptr, target)
-            }
-            PendingRenderingUpdatePayload::AnimationStartScan(event_target) => {
-                self.dispatch_authorized_animation_start_scan(scope, host_ptr, target, event_target)
-            }
-            PendingRenderingUpdatePayload::PostParseAutofocus => {
-                self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
-            }
-            PendingRenderingUpdatePayload::EnvironmentChange(change) => {
-                self.dispatch_authorized_environment_change(scope, host_ptr, target, change)
-            }
-        })
+        let minimum_depth = match payload {
+            PendingRenderingUpdatePayload::ResizeObserver { minimum_depth } => minimum_depth,
+            _ => 0,
+        };
+        Some((
+            match payload {
+                PendingRenderingUpdatePayload::ResizeObserver { .. } => true,
+                PendingRenderingUpdatePayload::DocumentScrollEvents => {
+                    self.dispatch_authorized_document_scroll_events(scope, host_ptr, target)
+                }
+                PendingRenderingUpdatePayload::AnimationStartScan(event_target) => self
+                    .dispatch_authorized_animation_start_scan(
+                        scope,
+                        host_ptr,
+                        target,
+                        event_target,
+                    ),
+                PendingRenderingUpdatePayload::PostParseAutofocus => {
+                    self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
+                }
+                PendingRenderingUpdatePayload::EnvironmentChange(change) => {
+                    self.dispatch_authorized_environment_change(scope, host_ptr, target, change)
+                }
+            },
+            minimum_depth,
+        ))
     }
 
     pub(crate) fn discard_pending_rendering_update_task(
