@@ -2244,7 +2244,7 @@ async fn handle_pending_command_completion(
                     .await;
                 }
                 Err(error) if !recovering => {
-                    tracing::warn!(token = identity.token, %error, "protocol workflow failed; rejoining admitted teardown");
+                    tracing::warn!(token = identity.token, %error, "protocol workflow failed; rejoining admitted owner work");
                     let recovery = pending.clone();
                     let task = spawn_command_wait(
                         CommandWaitIdentity {
@@ -2265,7 +2265,7 @@ async fn handle_pending_command_completion(
                     return true;
                 }
                 Err(error) => {
-                    tracing::error!(token = identity.token, %error, "native protocol teardown failed during recovery");
+                    tracing::error!(token = identity.token, %error, "protocol owner work failed during recovery");
                     return false;
                 }
             }

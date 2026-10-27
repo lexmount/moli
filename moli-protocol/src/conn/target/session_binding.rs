@@ -12,6 +12,13 @@ use super::{
 };
 
 impl CdpConnection {
+    pub(crate) fn session_binding_lifetime(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.target_control.session_binding_lifetime(session_id)
+    }
+
     pub(crate) fn session_disposal_wait(
         &self,
         session_id: &str,

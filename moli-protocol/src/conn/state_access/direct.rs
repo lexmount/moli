@@ -18,12 +18,14 @@ use super::{CdpConnection, ProtocolWorkflowState};
 /// asynchronous connection borrows have migrated.
 pub struct ProtocolStateOwner {
     connection: Rc<RefCell<CdpConnection>>,
+    deferred_cleanup: Rc<RefCell<Vec<super::StateOperation>>>,
 }
 
 impl ProtocolStateOwner {
     pub fn new(connection: CdpConnection) -> Self {
         let owner = Self {
             connection: Rc::new(RefCell::new(connection)),
+            deferred_cleanup: Rc::default(),
         };
         owner.connection.borrow_mut().state_mailbox.direct = Some(owner.handle());
         owner
@@ -32,6 +34,7 @@ impl ProtocolStateOwner {
     pub fn handle(&self) -> ProtocolStateHandle {
         ProtocolStateHandle {
             connection: Rc::downgrade(&self.connection),
+            deferred_cleanup: Rc::downgrade(&self.deferred_cleanup),
         }
     }
 }
@@ -41,9 +44,47 @@ impl ProtocolStateOwner {
 #[derive(Clone)]
 pub struct ProtocolStateHandle {
     connection: Weak<RefCell<CdpConnection>>,
+    deferred_cleanup: Weak<RefCell<Vec<super::StateOperation>>>,
+}
+
+// A task-local cancellation guard may be dropped by a state operation. The
+// cleanup is finite, but must run after that operation releases its borrow.
+struct DrainCleanupOnExit<'a>(&'a ProtocolStateHandle);
+
+impl Drop for DrainCleanupOnExit<'_> {
+    fn drop(&mut self) {
+        self.0.drain_deferred_cleanup();
+    }
 }
 
 impl ProtocolStateHandle {
+    pub(super) fn defer_cleanup(&self, operation: super::StateOperation) {
+        let Some(cleanup) = self.deferred_cleanup.upgrade() else {
+            return;
+        };
+        cleanup.borrow_mut().push(operation);
+        self.drain_deferred_cleanup();
+    }
+
+    fn drain_deferred_cleanup(&self) {
+        let Some(cleanup) = self.deferred_cleanup.upgrade() else {
+            return;
+        };
+        if cleanup.borrow().is_empty() {
+            return;
+        }
+        let Some(connection) = self.connection.upgrade() else {
+            return;
+        };
+        let Ok(mut connection) = connection.try_borrow_mut() else {
+            return;
+        };
+        let operations = std::mem::take(&mut *cleanup.borrow_mut());
+        for operation in operations {
+            operation(&mut connection);
+        }
+    }
+
     /// Runs a finite operation immediately and releases the connection borrow
     /// before returning owned work. Reentrant access returns an error.
     ///
@@ -95,7 +136,9 @@ impl ProtocolStateHandle {
         &self,
         operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
     ) -> Result<T> {
+        self.drain_deferred_cleanup();
         let connection = self.connection.upgrade().context("protocol owner closed")?;
+        let _cleanup = DrainCleanupOnExit(self);
         let mut connection = connection
             .try_borrow_mut()
             .context("protocol state access is already active")?;
@@ -129,6 +172,53 @@ mod tests {
             assert!(handle.with_state(|_| ran = true).is_err());
             assert!(!ran);
         }
+    }
+
+    #[test]
+    fn cancellation_cleanup_waits_for_state_release_and_survives_unwinding() {
+        for panic in [false, true] {
+            let owner = ProtocolStateOwner::new(CdpConnection::new());
+            let handle = owner.handle();
+            let access = super::super::ProtocolStateAccess::Direct(handle.clone());
+            let completed = Rc::new(std::cell::Cell::new(0));
+            let marker = completed.clone();
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                handle
+                    .with_state(|_| {
+                        access.defer_cleanup(Box::new(move |connection| {
+                            assert!(connection.browser_context.is_none());
+                            marker.set(marker.get() + 1);
+                        }));
+                        assert_eq!(
+                            completed.get(),
+                            0,
+                            "cleanup cannot reenter an active state borrow"
+                        );
+                        assert!(handle.with_state(|_| ()).is_err());
+                        assert_eq!(completed.get(), 0);
+                        if panic {
+                            panic!("controlled state-operation unwind");
+                        }
+                    })
+                    .unwrap();
+            }));
+            assert_eq!(result.is_err(), panic);
+            assert_eq!(completed.get(), 1);
+            handle.with_state(|_| ()).unwrap();
+        }
+    }
+
+    #[test]
+    fn cancellation_cleanup_cannot_keep_an_exited_owner_alive() {
+        let owner = ProtocolStateOwner::new(CdpConnection::new());
+        let handle = owner.handle();
+        let access = super::super::ProtocolStateAccess::Direct(handle.clone());
+        drop(owner);
+        let called = Rc::new(std::cell::Cell::new(false));
+        let marker = called.clone();
+        access.defer_cleanup(Box::new(move |_| marker.set(true)));
+        assert!(!called.get());
+        assert!(handle.with_state(|_| ()).is_err());
     }
 
     #[test]

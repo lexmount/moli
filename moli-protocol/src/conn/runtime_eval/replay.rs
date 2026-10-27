@@ -76,8 +76,7 @@ impl PendingRendererCallReplay {
             Ok(RendererCallReplayOperation::Inspector(pending)) => pending
                 .wait()
                 .await
-                .map(|completed| Some(Box::new(completed)))
-                .map_err(anyhow::Error::msg),
+                .map(|completed| Some(Box::new(completed))),
             Ok(RendererCallReplayOperation::Io { pending, operation }) => pending
                 .wait()
                 .await
@@ -278,7 +277,7 @@ impl CdpConnection {
                     send_renderer_replacement_error(
                         &context.response_sender,
                         context.correlation,
-                        &format!("runtime inspector replay dispatch failed: {error}"),
+                        &format!("runtime inspector replay dispatch failed: {error:#}"),
                     );
                     return events;
                 }

@@ -88,6 +88,54 @@ impl<'a> ProtocolWorkflowDriver<'a> {
 }
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_runtime_helper(
+        self,
+        owner: super::CommandOwnerScope,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<super::PreparedRuntimeHelper> {
+        super::PreparedRuntimeHelper::prepare(self.connection, owner, method, params)
+    }
+
+    pub(crate) fn cancel_runtime_helper(self, identity: super::RuntimeHelperIdentity) {
+        identity.cancel(self.connection);
+    }
+
+    pub(crate) fn finish_runtime_helper_dispatch(
+        self,
+        identity: super::RuntimeHelperIdentity,
+        command_id: u64,
+        object_group: Option<String>,
+        completed: super::CompletedRuntimeProtocolMessageDispatch,
+    ) -> Result<Option<super::BackgroundCommandResponsePayload>> {
+        identity.finish_dispatch(self.connection, command_id, object_group, completed)
+    }
+
+    pub(crate) fn finish_runtime_helper_response(
+        self,
+        identity: super::RuntimeHelperIdentity,
+        command_id: u64,
+        object_group: Option<String>,
+        response: moli_core::RendererRuntimeInspectorAsyncCompletion,
+    ) -> Result<super::BackgroundCommandResponsePayload> {
+        identity.finish_response(self.connection, command_id, object_group, response)
+    }
+
+    pub(crate) fn prepare_runtime_realm_inventory(
+        self,
+        owner: &super::CommandOwnerScope,
+    ) -> Result<super::PreparedRuntimeRealmInventory> {
+        super::PreparedRuntimeRealmInventory::prepare(self.connection, owner)
+    }
+
+    pub(crate) fn finish_runtime_realm_inventory(
+        self,
+        prepared: super::PreparedRuntimeRealmInventory,
+        completed: moli_core::page::CompletedPageCommand,
+    ) -> Result<Vec<crate::automation::RuntimeExecutionContextEvent>> {
+        prepared.finish(self.connection, completed)
+    }
+
     pub fn try_start_owned_protocol_scheduler_work(
         self,
         work: crate::domains::activity::ProtocolSchedulerWork,
@@ -206,6 +254,17 @@ impl Default for ProtocolStateMailbox {
 }
 
 impl ProtocolStateAccess {
+    pub(super) fn defer_cleanup(&self, operation: StateOperation) {
+        match self {
+            Self::Direct(handle) => handle.defer_cleanup(operation),
+            Self::Mailbox(sender) => {
+                if let Some(sender) = sender.upgrade() {
+                    let _ = sender.send(ProtocolStateRequest(operation));
+                }
+            }
+        }
+    }
+
     pub(crate) async fn with_state<T: 'static>(
         &self,
         operation: impl for<'a> FnOnce(ProtocolWorkflowState<'a>) -> T + 'static,

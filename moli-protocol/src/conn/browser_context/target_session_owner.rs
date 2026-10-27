@@ -13,10 +13,10 @@ use crate::conn::state::{
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
     DocumentStartScript, EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, LoadedNavigationPageCommit,
-    LoadedNavigationRendererAttachmentCommit, NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation,
-    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    InitialDocumentPageInstallResult, InitialDocumentPageOwner, InstalledNavigationPage,
+    LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NETWORK_ERROR_PAGE_URL,
+    NetworkErrorPageNavigation, PausedDocumentTransfer, PendingFetchAuthNavigation,
+    PendingFetchNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
 };
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
@@ -1195,12 +1195,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         Some(())
     }
 
-    pub(super) async fn commit_loaded_navigation_page_async(
+    pub(super) fn install_loaded_navigation_page(
         &mut self,
         page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
-    ) -> Option<Result<LoadedNavigationPageCommit>> {
+    ) -> Option<Result<InstalledNavigationPage>> {
         let browser_context_id = self.browser_context.id.clone();
         let group = self
             .browser_context
@@ -1211,14 +1211,13 @@ impl<'a> TargetSessionOwnerMut<'a> {
             self.browser_context
                 .page_target_mut(&self.target_id)
                 .expect("resolved Page target owner must remain live")
-                .commit_loaded_navigation_page_async(
+                .install_loaded_navigation_page(
                     &browser_context_id,
                     page,
                     renderer_attachment_commit,
                     history_url,
                     group,
-                )
-                .await,
+                ),
         )
     }
 }
@@ -1396,9 +1395,28 @@ impl CdpConnection {
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
     ) -> Option<Result<LoadedNavigationPageCommit>> {
+        Some(
+            match self.install_loaded_navigation_page_for_owner(
+                owner,
+                page,
+                renderer_attachment_commit,
+                history_url,
+            )? {
+                Ok(installed) => Ok(installed.close_previous().await),
+                Err(error) => Err(error),
+            },
+        )
+    }
+
+    pub(crate) fn install_loaded_navigation_page_for_owner(
+        &mut self,
+        owner: &crate::conn::CommandOwnerScope,
+        page: Page,
+        renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
+        history_url: &Url,
+    ) -> Option<Result<InstalledNavigationPage>> {
         self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation_page_async(page, renderer_attachment_commit, history_url)
-            .await
+            .install_loaded_navigation_page(page, renderer_attachment_commit, history_url)
     }
 
     pub(crate) fn commit_existing_page_navigation_for_owner(
@@ -3713,15 +3731,15 @@ mod tests {
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
-            owner
-                .commit_loaded_navigation_page_async(
+            let installed = owner
+                .install_loaded_navigation_page(
                     page,
                     LoadedNavigationRendererAttachmentCommit::Prepare(None),
                     &page_url,
                 )
-                .await
                 .expect("background page owner should exist")
                 .expect("background page Inspector binding should activate");
+            installed.close_previous().await;
         }
 
         let target = background

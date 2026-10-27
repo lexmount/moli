@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
@@ -305,7 +307,7 @@ enum PendingRuntimeCommandKind {
 
 enum CompletedRuntimeCommandKind {
     Inspector {
-        completed: Result<CompletedRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedRuntimeProtocolMessageDispatch>,
     },
     InspectorDeferredReplyReady {
         routed_output: RuntimeInspectorRoutedOutput,
@@ -321,7 +323,7 @@ enum CompletedRuntimeCommandKind {
     Enable(Result<CompletedRuntimeEnableEventsDispatch, String>),
     BindingInspector {
         task: RuntimeBindingCommandTask,
-        completed: Result<CompletedRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedRuntimeProtocolMessageDispatch>,
     },
     BindingContextLookup {
         task: RuntimeBindingCommandTask,

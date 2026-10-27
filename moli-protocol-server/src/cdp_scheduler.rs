@@ -2711,8 +2711,7 @@ impl CdpScheduler {
                     load_predecessors.is_empty(),
                     "scheduler selected protocol work before its exact load predecessor"
                 );
-                let work = if work.kind()
-                    == ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                let work = if moli_protocol::PendingProtocolSchedulerWork::handles(work.kind())
                     && let Some(sender) = &self.owned_protocol_work_tx
                 {
                     match self.conn.try_start_owned_protocol_scheduler_work(work) {

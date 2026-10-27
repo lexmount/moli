@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::{collections::hash_map::Entry, future::Future, pin::Pin};
 
 use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
@@ -610,20 +612,22 @@ fn collect_moli_diagnostics_pending_snapshots(
 }
 
 impl PendingRuntimeProtocolMessageDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeProtocolMessageDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeProtocolMessageDispatch> {
+        use anyhow::Context as _;
+
         let completion = match self.pending {
             PendingRuntimeProtocolMessageDispatchKind::Page(pending) => {
                 moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(Box::new(
                     pending
                         .wait()
                         .await
-                        .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?,
+                        .context("runtime inspector dispatch failed")?,
                 ))
             }
             PendingRuntimeProtocolMessageDispatchKind::Routable(pending) => pending
                 .wait()
                 .await
-                .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?,
+                .context("runtime inspector dispatch failed")?,
         };
         Ok(CompletedRuntimeProtocolMessageDispatch {
             owner: self.owner,
@@ -882,7 +886,15 @@ fn bidi_channel_listener_call_function_json(
     .to_string()
 }
 
+mod page_scope;
+use page_scope::RuntimePageScope;
+
+mod helper_workflow;
+pub(crate) use helper_workflow::{
+    PreparedRuntimeHelper, RuntimeHelperIdentity, dispatch_runtime_helper_using,
+};
 mod execution_contexts;
+pub(crate) use execution_contexts::{PreparedRuntimeRealmInventory, runtime_realm_inventory_using};
 mod inspector_awaits;
 mod inspector_routing;
 mod protocol_dispatch;

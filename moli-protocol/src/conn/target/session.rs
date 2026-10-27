@@ -224,6 +224,12 @@ impl TargetSessionRegistry {
             .is_some_and(|session| session.closing)
     }
 
+    pub(crate) fn session_binding_lifetime(&self, session_id: &str) -> Option<SessionDisposalWait> {
+        self.attached_sessions
+            .get(session_id)
+            .map(|session| SessionDisposalWait(session.closed.0.subscribe()))
+    }
+
     pub(crate) fn session_disposal_wait(&self, session_id: &str) -> Option<SessionDisposalWait> {
         let session = self.attached_sessions.get(session_id)?;
         session

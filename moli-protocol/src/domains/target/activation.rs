@@ -41,8 +41,45 @@ pub(super) fn build_cdp_activate_target_command(
 
 pub(crate) struct PreparedTargetActivation {
     updates: Vec<crate::conn::TargetSurfaceUpdate>,
-    selection: Option<(String, String)>,
+    selection: Option<TargetActivationSelection>,
     visibility: Vec<TargetVisibilityChange>,
+}
+
+pub(crate) struct TargetActivationSelection {
+    browser_context_id: String,
+    target_id: String,
+    host: crate::conn::PageTargetHostIdentity,
+}
+
+impl TargetActivationSelection {
+    pub(crate) fn complete(
+        selection: Option<Self>,
+        conn: &mut CdpConnection,
+    ) -> Result<Vec<crate::conn::TargetSurfaceUpdate>> {
+        if let Some(selection) = selection {
+            let current = conn
+                .browser_context_by_id(&selection.browser_context_id)
+                .filter(|context| context.is_active_target(&selection.target_id))
+                .and_then(|context| context.page_target(&selection.target_id))
+                .is_some_and(|target| {
+                    !target.closing && selection.host.matches(&target.host_identity())
+                });
+            if current {
+                let restore = conn
+                    .browser_context
+                    .as_ref()
+                    .map(|context| context.id.clone());
+                conn.activate_browser_context_by_id(&selection.browser_context_id);
+                conn.apply_active_engine_fetch_overrides();
+                conn.invalidate_resource_runtime();
+                conn.notify_target_host_activated(&selection.target_id);
+                if let Some(restore) = restore {
+                    conn.activate_browser_context_by_id(&restore);
+                }
+            }
+        }
+        conn.start_browser_document_activity_updates()
+    }
 }
 
 #[derive(Clone)]
@@ -174,7 +211,15 @@ pub(crate) fn prepare_target_activation_for_target(
         }
         Ok(Some(PreparedTargetActivation {
             updates,
-            selection: changed.then_some((browser_context_id, target_id)),
+            selection: changed.then(|| TargetActivationSelection {
+                host: conn
+                    .browser_context_by_id(&browser_context_id)
+                    .and_then(|context| context.page_target(&target_id))
+                    .expect("the selected target remains live during preparation")
+                    .host_identity(),
+                browser_context_id,
+                target_id,
+            }),
             visibility,
         }))
     })();

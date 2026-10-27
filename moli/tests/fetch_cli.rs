@@ -3499,19 +3499,120 @@ fn cli_load_follows_five_same_url_replacements_after_403() -> Result<()> {
 #[test]
 fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
-    let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--timeout", "250"])?;
-    runtime.block_on(server.shutdown());
-
-    assert!(!output.status.success());
+    const FINAL_HTML: &str = r#"<!doctype html><html><head></head><body><script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const script = document.createElement('script');
+            script.src = '/load-tail.js';
+            script.onload = () => document.body.setAttribute('data-loaded', 'true');
+            document.head.appendChild(script);
+        });
+    </script></body></html>"#;
+    let hits = Arc::new([
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ]);
+    let (base, task) = runtime.block_on(async {
+        let app =
+            Router::new()
+                .route(
+                    "/challenge",
+                    get(
+                        |State(hits): State<Arc<[AtomicUsize; 3]>>,
+                         headers: axum::http::HeaderMap| async move {
+                            if headers
+                                .get("cookie")
+                                .and_then(|value| value.to_str().ok())
+                                .is_some_and(|value| value.contains("shared-deadline=passed"))
+                            {
+                                hits[1].fetch_add(1, Ordering::SeqCst);
+                                return Html(FINAL_HTML).into_response();
+                            }
+                            hits[0].fetch_add(1, Ordering::SeqCst);
+                            // Spend part of the single budget before the 403 document is ready.
+                            // Its replacement grace is explicitly longer than this response.
+                            tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                            (
+                                StatusCode::FORBIDDEN,
+                                Html(
+                                    r#"<!doctype html><html><head></head><body><script>
+                    window.addEventListener('load', () => setTimeout(() => {
+                        document.cookie = 'shared-deadline=passed; Path=/';
+                        location.reload();
+                    }, 75));
+                </script></body></html>"#,
+                                ),
+                            )
+                                .into_response()
+                        },
+                    ),
+                )
+                .route(
+                    "/replacement",
+                    get(|State(hits): State<Arc<[AtomicUsize; 3]>>| async move {
+                        hits[1].fetch_add(1, Ordering::SeqCst);
+                        Html(FINAL_HTML)
+                    }),
+                )
+                .route(
+                    "/load-tail.js",
+                    get(|State(hits): State<Arc<[AtomicUsize; 3]>>| async move {
+                        hits[2].fetch_add(1, Ordering::SeqCst);
+                        // This fits a fresh 5s budget, but not the budget left after the 403.
+                        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                        (
+                            [("content-type", "text/javascript")],
+                            "window.loadTailCompleted = true;",
+                        )
+                    }),
+                )
+                .with_state(hits.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        Ok::<_, anyhow::Error>((base, task))
+    })?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &format!("{base}/challenge"),
+        "html",
+        &["--timeout", "5000", "--redirect-wait-ms", "5000"],
+    )?;
+    assert!(
+        !output.status.success(),
+        "stdout={} stderr={} hits={:?}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr),
+        hits.each_ref().map(|count| count.load(Ordering::SeqCst))
+    );
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("fetch readiness timed out after 250 ms while waiting for load"),
+        stderr.contains("fetch readiness timed out after 5000 ms while waiting for load"),
         "stderr={stderr}"
     );
+    assert_eq!(
+        hits.each_ref().map(|count| count.load(Ordering::SeqCst)),
+        [1, 1, 1],
+        "the shared deadline must reach the replacement's load wait"
+    );
+    // Positive control: resetting the deadline at replacement would make this
+    // exact document succeed, so the preceding failure detects an additive budget.
+    let direct = run_fetch_cli_with_dump_and_args(
+        &format!("{base}/replacement"),
+        "html",
+        &["--timeout", "5000", "--redirect-wait-ms", "5000"],
+    )?;
+    assert!(
+        direct.status.success(),
+        "stderr={}",
+        clean_output(&direct.stderr)
+    );
+    assert!(clean_output(&direct.stdout).contains("data-loaded=\"true\""));
+    task.abort();
+    let _ = runtime.block_on(task);
     Ok(())
 }
 
@@ -4351,7 +4452,11 @@ fn cli_meta_refresh_shutdown_exits_without_renderer_abort() -> Result<()> {
     // Load does not freeze the Page. Wait for the successor explicitly so the
     // DOM assertion cannot race a zero-delay refresh against the dump command.
     for (destination, ready, expected_html) in [
-        ("about:blank", "location.href === 'about:blank'", ""),
+        (
+            "about:blank",
+            "location.href === 'about:blank' && document.documentElement !== null && document.querySelector('meta') === null",
+            "<html><head></head><body></body></html>",
+        ),
         (
             target.as_str(),
             "Boolean(document.getElementById('meta-refresh-target'))",

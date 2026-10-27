@@ -15,6 +15,21 @@ pub(crate) struct LoadedNavigationPageCommit {
         Option<RendererPageCommandPostResponseContinuation>,
 }
 
+/// Installation is finite; only the retired Page remains to be closed.
+pub(crate) struct InstalledNavigationPage {
+    commit: LoadedNavigationPageCommit,
+    previous: Option<Page>,
+}
+
+impl InstalledNavigationPage {
+    pub(crate) async fn close_previous(self) -> LoadedNavigationPageCommit {
+        if let Some(page) = self.previous {
+            BrowserContext::close_page_best_effort(page).await;
+        }
+        self.commit
+    }
+}
+
 pub(crate) enum LoadedNavigationRendererAttachmentCommit {
     Prepare(Option<PreparedRendererAgentAttachment>),
     AlreadyCommitted(CommittedRendererAgentAttachment),
@@ -129,14 +144,14 @@ impl BrowserContext {
 }
 
 impl PageTargetHost {
-    pub(crate) async fn commit_loaded_navigation_page_async(
+    pub(crate) fn install_loaded_navigation_page(
         &mut self,
         browser_context_id: &str,
         mut page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
-    ) -> Result<LoadedNavigationPageCommit> {
+    ) -> Result<InstalledNavigationPage> {
         let committed_document_post_response_continuation =
             page.take_committed_document_post_response_continuation();
         let previous_page_owner =
@@ -193,12 +208,12 @@ impl PageTargetHost {
         let previous = self.replace_loaded_page(Some(page));
         self.runtime_slot.finish_loaded_document_network_adoption();
         let replaced_page_owner = previous.as_ref().and(previous_page_owner);
-        if let Some(page) = previous {
-            BrowserContext::close_page_best_effort(page).await;
-        }
-        Ok(LoadedNavigationPageCommit {
-            replaced_page_owner,
-            committed_document_post_response_continuation,
+        Ok(InstalledNavigationPage {
+            previous,
+            commit: LoadedNavigationPageCommit {
+                replaced_page_owner,
+                committed_document_post_response_continuation,
+            },
         })
     }
 

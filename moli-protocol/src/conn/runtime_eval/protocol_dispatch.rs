@@ -112,10 +112,9 @@ impl CdpConnection {
         let pending = self.start_runtime_protocol_message_for_owner_with_deferred_response(
             &owner, descriptor, command_id,
         )?;
-        let completed = pending.wait().await.map_err(anyhow::Error::msg)?;
+        let completed = pending.wait().await?;
         self.complete_runtime_helper_protocol_message_for_session_owner_async(completed, command_id)
             .await
-            .map_err(anyhow::Error::msg)
     }
 
     pub(crate) async fn await_registered_runtime_inspector_response_for_session_owner_async(
@@ -379,10 +378,10 @@ impl CdpConnection {
         })
     }
 
-    pub(crate) async fn complete_runtime_protocol_message_async(
+    pub(crate) fn complete_runtime_protocol_message(
         &mut self,
         completed: CompletedRuntimeProtocolMessageDispatch,
-    ) -> Result<Option<RendererCommandTurnOutput>, String> {
+    ) -> Result<Option<RendererCommandTurnOutput>> {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         let owner = completed.owner().clone();
         let completion = match completed.completion {
@@ -423,9 +422,9 @@ impl CdpConnection {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
-        let runtime_messages = output.runtime_inspector_output_mut().ok_or_else(|| {
-            "runtime inspector dispatch completed with a non-Runtime renderer reply".to_owned()
-        })?;
+        let runtime_messages = output
+            .runtime_inspector_output_mut()
+            .context("runtime inspector dispatch completed with a non-Runtime renderer reply")?;
         runtime_messages
             .bind_renderer_agent_attachment(completed.route.renderer_agent_attachment_id);
         let runtime_messages = runtime_messages.messages_mut();
@@ -532,12 +531,10 @@ impl CdpConnection {
         &mut self,
         mut completed: CompletedRuntimeProtocolMessageDispatch,
         command_id: u64,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let response_rx = completed.take_deferred_response_receiver();
         let session_id = completed.owner().session_id().map(str::to_owned);
-        let output = self
-            .complete_runtime_protocol_message_async(completed)
-            .await?;
+        let output = self.complete_runtime_protocol_message(completed)?;
         let response_in_output = output.as_ref().is_some_and(|output| {
             renderer_command_turn_frontend_protocol_response(output, command_id).is_some()
         });
@@ -546,9 +543,8 @@ impl CdpConnection {
         if let Some(output) = output {
             let (completion, _) = output.into_completion_and_predecessor();
             let Some(runtime_output) = completion.into_runtime_inspector_output() else {
-                return Err(
+                anyhow::bail!(
                     "runtime inspector dispatch completed with a non-Runtime renderer reply"
-                        .to_owned(),
                 );
             };
             runtime_messages = runtime_output.into_messages();
@@ -668,10 +664,7 @@ impl CdpConnection {
             }
         };
         let mut renderer_response_rx = completed.take_deferred_response_receiver();
-        let messages = match self
-            .complete_runtime_protocol_message_async(completed)
-            .await
-        {
+        let messages = match self.complete_runtime_protocol_message(completed) {
             Ok(messages) => messages,
             Err(error) => {
                 self.forget_pending_inspector_await_for_owner(command_id, owner);
@@ -817,10 +810,7 @@ impl CdpConnection {
             }
         };
         let mut renderer_response_rx = completed.take_deferred_response_receiver();
-        let messages = match self
-            .complete_runtime_protocol_message_async(completed)
-            .await
-        {
+        let messages = match self.complete_runtime_protocol_message(completed) {
             Ok(messages) => messages,
             Err(error) => {
                 let object_group = self

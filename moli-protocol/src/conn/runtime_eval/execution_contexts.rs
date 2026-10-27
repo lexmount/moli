@@ -3,21 +3,52 @@ use anyhow::Result;
 use super::*;
 use anyhow::Context as _;
 
-impl CdpConnection {
-    pub(crate) async fn runtime_realm_inventory_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
+pub(crate) struct PreparedRuntimeRealmInventory {
+    scope: RuntimePageScope,
+    pending: Option<moli_core::page::PendingPageCommand>,
+}
+
+impl PreparedRuntimeRealmInventory {
+    pub(crate) fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Result<Self> {
+        let scope = RuntimePageScope::capture(conn, owner)?;
+        let pending = conn
+            .loaded_page_mut_for_protocol_access_for_owner(scope.owner())?
+            .start_runtime_realm_inventory()?;
+        Ok(Self {
+            scope,
+            pending: Some(pending),
+        })
+    }
+
+    pub(crate) async fn run(
+        mut self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
     ) -> Result<Vec<RuntimeExecutionContextEvent>> {
-        let target_id = self
-            .target_owner_identity_for_owner(owner)
-            .and_then(|(_, target_id)| target_id);
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        let target_id = target_id.as_deref();
-        let devtools_target_id = target_id.map(DevToolsTargetId::from);
-        let realms = page
-            .runtime_realm_inventory_async()
+        let pending = self
+            .pending
+            .take()
+            .expect("one inventory query owns one renderer wait");
+        let completed = pending
+            .wait()
             .await
             .context("runtime realm inventory failed")?;
+        driver
+            .with_state(move |state| state.finish_runtime_realm_inventory(self, completed))
+            .await?
+    }
+
+    pub(crate) fn finish(
+        self,
+        conn: &mut CdpConnection,
+        completed: moli_core::page::CompletedPageCommand,
+    ) -> Result<Vec<RuntimeExecutionContextEvent>> {
+        let realms = self
+            .scope
+            .page_mut(conn)?
+            .finish_runtime_realm_inventory(completed)
+            .context("runtime realm inventory failed")?;
+        let target_id = self.scope.target_id();
+        let devtools_target_id = target_id.map(DevToolsTargetId::from);
         Ok(realms
             .into_iter()
             .map(|realm| {
@@ -28,6 +59,30 @@ impl CdpConnection {
                 )
             })
             .collect())
+    }
+}
+
+pub(crate) async fn runtime_realm_inventory_using(
+    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    owner: CommandOwnerScope,
+) -> Result<Vec<RuntimeExecutionContextEvent>> {
+    driver
+        .with_state(move |state| state.prepare_runtime_realm_inventory(&owner))
+        .await??
+        .run(driver)
+        .await
+}
+
+impl CdpConnection {
+    pub(crate) async fn runtime_realm_inventory_for_owner_async(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<Vec<RuntimeExecutionContextEvent>> {
+        crate::conn::runtime_realm_inventory_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            owner.clone(),
+        )
+        .await
     }
 
     pub async fn runtime_default_execution_context_id_async(&mut self) -> Result<Option<i64>> {

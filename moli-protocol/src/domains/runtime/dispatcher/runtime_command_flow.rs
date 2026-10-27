@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::*;
 
 pub(super) fn prepare_runtime_inspector_payload(
@@ -445,7 +447,7 @@ pub(super) fn route_inspector_messages_into_routed_output(
 pub(super) async fn complete_pending_runtime_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
-    completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch, String>,
+    completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch>,
     timing_started: Option<std::time::Instant>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> RuntimeCommandTaskStep {
@@ -461,10 +463,7 @@ pub(super) async fn complete_pending_runtime_inspector_command(
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let response_delivery = completed_protocol.response_delivery();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_runtime_protocol_message_async(completed_protocol)
-                .await
-            {
+            match conn.complete_runtime_protocol_message(completed_protocol) {
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,
@@ -905,7 +904,7 @@ pub(super) async fn complete_pending_runtime_binding_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     mut task: RuntimeBindingCommandTask,
-    completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch, String>,
+    completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> RuntimeCommandTaskStep {
     let (
@@ -920,10 +919,7 @@ pub(super) async fn complete_pending_runtime_binding_inspector_command(
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_runtime_protocol_message_async(completed_protocol)
-                .await
-            {
+            match conn.complete_runtime_protocol_message(completed_protocol) {
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,

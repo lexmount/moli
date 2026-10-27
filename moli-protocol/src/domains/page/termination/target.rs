@@ -373,9 +373,9 @@ mod tests {
                 .await;
             let messages = handle
                 .with_state(|state| {
-                    state.complete_owned_protocol_scheduler_work(CompletedProtocolSchedulerWork {
-                        termination: Box::new(completed),
-                    })
+                    state.complete_owned_protocol_scheduler_work(
+                        CompletedProtocolSchedulerWork::for_termination(completed),
+                    )
                 })
                 .unwrap()
                 .into_parts()
@@ -405,9 +405,7 @@ mod tests {
             assert!(
                 handle
                     .with_state(|state| state.complete_owned_protocol_scheduler_work(
-                        CompletedProtocolSchedulerWork {
-                            termination: Box::new(repeated)
-                        },
+                        CompletedProtocolSchedulerWork::for_termination(repeated),
                     ))
                     .unwrap()
                     .into_parts()

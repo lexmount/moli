@@ -1,3 +1,5 @@
+use anyhow::{Context as _, Result};
+
 use std::{
     collections::{HashMap, hash_map::Entry},
     fmt,
@@ -92,6 +94,19 @@ impl RendererCommandDescriptor {
             // Internal Classic/BiDi adapters own their reply channel. A
             // method being eligible for frontend session output must never
             // redirect a synthesized adapter command implicitly.
+            response_delivery: RendererInspectorResponseDelivery::AdapterReply,
+            frontend_payload,
+        })
+    }
+
+    /// Internal work tied to an exact Document must not replay an object or
+    /// context operation in a replacement runtime.
+    pub(crate) fn for_document_helper(frontend_payload: String) -> Result<Self> {
+        let command = ParsedCdpCommand::parse_str(&frontend_payload)
+            .context("invalid internal renderer Inspector command")?;
+        Ok(Self {
+            replacement: CdpRendererCommandReplacement::Terminate,
+            replay: RendererCommandReplay::Inspector(command.renderer_policy().replay_dispatch()),
             response_delivery: RendererInspectorResponseDelivery::AdapterReply,
             frontend_payload,
         })

@@ -44,7 +44,7 @@ pub(crate) use popup::{
     PopupTargetCreation, PopupTargetOpenerIdentity, complete_popup_target_activation_action_async,
     complete_popup_target_navigation_owner_action_async,
     create_popup_target_from_renderer_output_background_events_async,
-    emit_target_info_changed_for_owner_background_event,
+    emit_target_info_changed_for_owner_background_event, prepare_popup_target_activation,
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };

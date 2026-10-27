@@ -199,7 +199,7 @@ impl CdpConnection {
         &mut self,
         route: &RuntimeProtocolMessagePageRoute,
         completion: moli_core::page::CompletedPageCommand,
-    ) -> Result<RendererCommandTurnOutput, String> {
+    ) -> Result<RendererCommandTurnOutput> {
         let output = if let Ok(page) = self.runtime_protocol_message_started_page_mut(route) {
             page.finish_runtime_protocol_message_command_turn(completion)
         } else {
@@ -211,7 +211,7 @@ impl CdpConnection {
             // simply no current Page cache belonging to this route to update.
             completion.into_runtime_protocol_message_command_turn()
         };
-        output.map_err(|error| format!("runtime inspector dispatch failed: {error}"))
+        output.context("runtime inspector dispatch failed")
     }
 
     pub(super) fn ingest_runtime_protocol_message_started_route_output_updates(

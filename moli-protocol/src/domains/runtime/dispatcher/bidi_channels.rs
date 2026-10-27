@@ -121,34 +121,61 @@ pub(super) async fn bidi_preload_channel_proxy_handle_async(
     token: &str,
     channel_object_group: &str,
 ) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
-    let value = devtools_probe_remote_value_async(
-        conn,
-        target.clone(),
-        AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
-            context: AutomationContext {
-                protocol: FrontendProtocol::WebDriverBidi,
-                session_id: None,
-                target_id: None,
-                browser_context_id: None,
-            },
-            realm_id: realm_id.cloned(),
-            world_name: None,
-            object_id: None,
-            this_parameter: None,
-            function_declaration: bidi_preload_channel_proxy_handle_source().to_owned(),
-            arguments: vec![json!(handoff_id), json!(token)],
-            await_promise: false,
-            user_gesture: false,
-            webdriver_bidi_file_prompt_handler: None,
-            result_ownership: DevToolsResultOwnership::Root,
-            object_group: Some(channel_object_group.to_owned()),
-            preserve_remote_metadata: false,
-            materialize_bidi_script_result: false,
-            serialization_options: None,
-        }),
+    bidi_preload_channel_proxy_handle_using(
+        &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+        target,
+        realm_id,
+        handoff_id,
+        token,
+        channel_object_group,
     )
-    .await?;
-    Ok(value.and_then(|value| value.handle.or(value.shared_id)))
+    .await
+}
+
+pub(super) async fn bidi_preload_channel_proxy_handle_using(
+    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    target: &DevToolsRuntimeTarget,
+    realm_id: Option<&DevToolsRealmId>,
+    handoff_id: &str,
+    token: &str,
+    channel_object_group: &str,
+) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
+    let mut params = json!({
+        "functionDeclaration": bidi_preload_channel_proxy_handle_source(),
+        "arguments": [{"value":handoff_id},{"value":token}],
+        "awaitPromise":false,
+        "returnByValue":false,
+        "userGesture":false,
+        "objectGroup":channel_object_group,
+    });
+    if let Some(context_id) = target.execution_context_id {
+        params["executionContextId"] = json!(context_id);
+    } else if let Some(realm_id) = realm_id {
+        params["uniqueContextId"] = json!(realm_id.as_str());
+    }
+    let response = crate::conn::dispatch_runtime_helper_using(
+        driver,
+        CommandOwnerScope::for_route(target.route.clone()),
+        "Runtime.callFunctionOn",
+        params,
+    )
+    .await
+    .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
+    match response {
+        BackgroundCommandResponsePayload::Error { code, message, .. } => Err(
+            devtools_error_from_cdp_error_parts(Some(i64::from(code)), &message),
+        ),
+        BackgroundCommandResponsePayload::Success { result } => {
+            if result.get("exceptionDetails").is_some() {
+                return Ok(None);
+            }
+            Ok(result
+                .get("result")
+                .and_then(|result| result.get("objectId"))
+                .and_then(Value::as_str)
+                .map(DevToolsRemoteHandleId::from))
+        }
+    }
 }
 
 pub(super) fn bidi_preload_channel_properties_from_handoff(

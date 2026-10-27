@@ -67,7 +67,7 @@ pub(super) async fn dispatch_runtime_inspector_command_response_for_owner_async(
     let mut completed = pending
         .wait()
         .await
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
     let response_rx = completed.take_deferred_response_receiver().ok_or_else(|| {
         DevToolsError::new(
             DevToolsErrorKind::Internal,
@@ -75,9 +75,8 @@ pub(super) async fn dispatch_runtime_inspector_command_response_for_owner_async(
         )
     })?;
     let output = conn
-        .complete_runtime_protocol_message_async(completed)
-        .await
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
+        .complete_runtime_protocol_message(completed)
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
     if let Some(message) = output
         .as_ref()
         .and_then(|output| renderer_command_turn_frontend_protocol_response(output, command_id))

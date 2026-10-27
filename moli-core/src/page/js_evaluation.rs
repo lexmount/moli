@@ -286,16 +286,23 @@ impl Page {
         )
     }
 
-    pub async fn runtime_realm_inventory_async(&mut self) -> Result<Vec<RendererRuntimeRealmInfo>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::RuntimeRealmInventory)
-            .await?;
+    pub fn finish_runtime_realm_inventory(
+        &mut self,
+        completed: CompletedPageCommand,
+    ) -> Result<Vec<RendererRuntimeRealmInfo>> {
+        let reply = self.finish_page_command(completed);
         expect_page_reply!(
             reply,
             "runtime realm inventory page command",
             "runtime realm inventory",
             RendererPageReply::RuntimeRealmInventory(realms) => Ok(realms),
         )
+    }
+
+    pub async fn runtime_realm_inventory_async(&mut self) -> Result<Vec<RendererRuntimeRealmInfo>> {
+        let pending = self.start_runtime_realm_inventory()?;
+        let completed = pending.wait().await?;
+        self.finish_runtime_realm_inventory(completed)
     }
 
     pub async fn live_child_default_runtime_realm_inventory_async(

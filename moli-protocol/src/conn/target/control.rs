@@ -24,6 +24,13 @@ impl TargetControlPlane {
         self.sessions.close_session_waiters();
     }
 
+    pub(crate) fn session_binding_lifetime(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.sessions.session_binding_lifetime(session_id)
+    }
+
     pub(crate) fn session_disposal_wait(
         &self,
         session_id: &str,

@@ -576,16 +576,20 @@ pub(crate) use output::{
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
     build_command_success_response,
 };
-pub(crate) use page_state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use page_state::{
+    InstalledNavigationPage, LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit,
+};
 pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
 pub(crate) use runtime_eval::{
     ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, CompletedSessionWorkerCleanup,
-    PreparedRendererNavigationFinish, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
-    RuntimeEnableReplayEvent, SessionWorkerCleanup,
-    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
+    PreparedRendererNavigationFinish, PreparedRuntimeHelper, PreparedRuntimeRealmInventory,
+    RuntimeBindingCallEvent, RuntimeEnableEventsReplay, RuntimeEnableReplayEvent,
+    RuntimeHelperIdentity, SessionWorkerCleanup, dispatch_runtime_helper_using,
+    renderer_command_turn_frontend_protocol_response, runtime_realm_inventory_using,
+    runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,

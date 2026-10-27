@@ -711,83 +711,37 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
     )
 }
 
+pub(crate) fn prepare_popup_target_activation(
+    conn: &mut CdpConnection,
+    action: &PopupTargetActivationAction,
+) -> Result<Option<super::activation::PreparedTargetActivation>, crate::automation::DevToolsError> {
+    if !action.is_current(conn)
+        || !popup_target_has_loaded_page(conn, action.browser_context_id(), action.target_id())
+    {
+        return Ok(None);
+    }
+    super::activation::prepare_target_activation_for_target(conn, action.target_id())
+}
+
 pub(crate) async fn complete_popup_target_activation_action_async(
     conn: &mut CdpConnection,
     action: PopupTargetActivationAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (owner_scope, browser_context_id, target_id) = action.into_parts();
-    let target_is_current = conn
-        .target_owner_identity_for_owner(&owner_scope)
-        .is_some_and(|(current_browser_context_id, current_target_id)| {
-            current_browser_context_id == browser_context_id
-                && current_target_id.as_deref() == Some(target_id.as_str())
-        })
-        && popup_target_has_loaded_page(conn, &browser_context_id, &target_id);
-    if !target_is_current {
-        tracing::debug!(
-            browser_context_id,
-            target_id,
-            "dropping popup activation after its exact target owner retired"
-        );
-        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            Vec::new(),
-            conn.take_scheduler_events(),
-        );
-    }
-    let protocol_events =
-        match activate_popup_target_async(conn, &browser_context_id, &target_id).await {
-            Ok(events) => events,
-            Err(error) => {
-                tracing::debug!(
-                    browser_context_id,
-                    target_id,
-                    %error,
-                    "popup target could not be activated"
-                );
-                Vec::new()
-            }
-        };
-    crate::conn::CdpTurnOutcome::new_with_protocol_events(
-        protocol_events,
-        conn.take_scheduler_events(),
-    )
-}
-
-async fn activate_popup_target_async(
-    conn: &mut CdpConnection,
-    browser_context_id: &str,
-    target_id: &str,
-) -> Result<Vec<BackgroundProtocolEvent>> {
-    let restore_browser_context_id = previously_active_browser_context_id(conn);
-    let result = if let Err(message) = select_browser_context_for_target(conn, target_id) {
-        Err(message)
-    } else if conn
-        .browser_context
-        .as_ref()
-        .is_none_or(|browser_context| browser_context.id != browser_context_id)
-    {
-        Err(anyhow::anyhow!("PopupTargetBrowserContextChanged"))
-    } else if conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|browser_context| browser_context.is_active_target(target_id))
-    {
-        conn.select_browser_focus_for_target(target_id);
-        conn.apply_browser_document_activity_async()
-            .await
-            .map(|()| Vec::new())
-    } else {
-        match conn
-            .select_page_target_for_connection_async(target_id)
+    let prepared = prepare_popup_target_activation(conn, &action);
+    let mut events = Vec::new();
+    match prepared {
+        Ok(Some(prepared)) => match prepared
+            .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
             .await
         {
-            Ok(Some(activation)) => Ok(activation.into_protocol_events()),
-            Ok(None) => Err(anyhow::anyhow!("PopupTargetUnavailable")),
-            Err(error) => Err(error),
-        }
-    };
-    restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
-    result
+            Ok(output) if action.is_current(conn) => events.extend(output.finish(conn)),
+            Ok(_) => {}
+            Err(error) => tracing::debug!(%error, "popup target could not be activated"),
+        },
+        Ok(None) => {}
+        Err(error) => tracing::debug!(?error, "popup target could not be activated"),
+    }
+    crate::conn::CdpTurnOutcome::new_with_protocol_events(events, conn.take_scheduler_events())
 }
 
 pub(crate) fn emit_target_info_changed_for_owner_background_event(
