@@ -9,12 +9,6 @@ fn idb_index_open_cursor_impl<'s>(
 ) {
     let index = args.this();
     let Some((transaction, store_name, index_info)) = index_operation_state(scope, index) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let operation_name = if key_only {

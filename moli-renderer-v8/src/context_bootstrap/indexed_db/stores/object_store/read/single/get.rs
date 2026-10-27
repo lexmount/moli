@@ -17,12 +17,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_callback<'s
     };
     let store = args.this();
     let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let query = match parse_key_or_range(scope, parsed.query) {
