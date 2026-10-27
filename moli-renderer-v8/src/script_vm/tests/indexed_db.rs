@@ -5150,6 +5150,78 @@ fn indexed_db_aborted_upgrade_closes_provisional_connection_before_reopen_and_de
 }
 
 #[test]
+fn indexed_db_failed_upgrade_closes_connection_before_abort_listeners() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-abort-connection.test/");
+    vm.eval(
+        r#"
+globalThis.abortedConnections = [];
+function attempt(operation) {
+  try { operation(); return 'accepted'; } catch (error) { return error.name; }
+}
+function upgrade(name, oldVersion, next) {
+  const request = indexedDB.open(name, oldVersion + 1);
+  let db, tx;
+  request.onupgradeneeded = () => {
+    db = request.result;
+    tx = request.transaction;
+    if (!oldVersion) db.createObjectStore('s');
+    tx.onabort = () => abortedConnections.push([
+      'abort', db.version, request.transaction === tx, request.result === db,
+      attempt(() => db.transaction('s')),
+      attempt(() => db.transaction('s', 'readwrite')),
+      attempt(() => db.transaction('missing'))
+    ]);
+    tx.abort();
+  };
+  request.onerror = () => {
+    abortedConnections.push(['error', request.error.name,
+      request.transaction === null, request.result === undefined]);
+    next();
+  };
+}
+upgrade('initial', 0, () => {
+  const seed = indexedDB.open('existing', 1);
+  seed.onupgradeneeded = () => seed.result.createObjectStore('s');
+  seed.onsuccess = () => {
+    seed.result.close();
+    upgrade('existing', 1, () => abortedConnections.push('done'));
+  };
+});
+"#,
+    )
+    .expect("aborted upgrade connection probe should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(abortedConnections)")
+        .expect("aborted upgrade connection probe should finish");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([
+            [
+                "abort",
+                0,
+                true,
+                true,
+                "InvalidStateError",
+                "InvalidStateError",
+                "InvalidStateError"
+            ],
+            ["error", "AbortError", true, true],
+            [
+                "abort",
+                1,
+                true,
+                true,
+                "InvalidStateError",
+                "InvalidStateError",
+                "InvalidStateError"
+            ],
+            ["error", "AbortError", true, true],
+            "done"
+        ])
+    );
+}
+
+#[test]
 fn indexed_db_initial_upgrade_abort_restores_metadata_synchronously() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-initial-rollback.test/");
     vm.eval(r#"

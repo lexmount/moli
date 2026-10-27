@@ -11,6 +11,9 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_abort_task<'s>
     };
     let aborted_open = take_indexed_db_aborted_open(scope, transaction);
     if let Some((_, database)) = aborted_open {
+        // The failed upgrade connection is unusable during abort listeners,
+        // while the open request must retain its transaction until afterwards.
+        close_indexed_db_database_connection(scope, database);
         set_indexed_db_slot_value(
             scope,
             database,
