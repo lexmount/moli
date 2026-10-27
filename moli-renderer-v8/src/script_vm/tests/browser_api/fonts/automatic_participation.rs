@@ -100,3 +100,113 @@ fn automatic_fonts_hidden_boxes_preserve_outer_text_boundaries() {
         assert_participating_text(markup, "U+0042", expected);
     }
 }
+
+#[tokio::test]
+async fn automatic_fonts_column_pseudos_do_not_request_discarded_generated_text() {
+    use crate::protocol_types::OptionalResourceFetchMask;
+
+    for pseudo in ["before", "after"] {
+        for display in ["table-column", "table-column-group"] {
+            let (url, mut request_rx, release_tx, server) =
+                spawn_gated_font_resource_server().await;
+            let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+            loader.set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
+            let (mut vm, mut completions) =
+                new_parsed_test_vm_with_loader_and_resource_completion_queue(
+                    &url.replace("/print-only.woff2", "/page"),
+                    "<!doctype html><div id=target></div>",
+                    &loader,
+                );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+            vm.eval(&format!(r#"
+                globalThis.face=new FontFace('OnlyPseudo','url("{url}")',{{unicodeRange:'U+0041'}});
+                document.fonts.add(face);
+                globalThis.style=document.createElement('style');
+                style.textContent='#target::{pseudo} {{content:"A";display:{display};font-family:OnlyPseudo}}';
+                document.head.append(style);
+                globalThis.events=[];
+                document.fonts.addEventListener('loading',()=>events.push('loading'));
+            "#)).unwrap();
+            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            run_font_tasks(&mut vm);
+            assert_eq!(
+                vm.eval("face.status").unwrap(),
+                "unloaded",
+                "{pseudo}/{display}"
+            );
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .pending_subresource_request_count(),
+                0,
+            );
+            assert!(matches!(
+                request_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+            vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
+                .unwrap();
+            run_font_tasks(&mut vm);
+            assert_eq!(
+                vm.eval("JSON.stringify([ready,face.status,events])")
+                    .unwrap(),
+                r#"[true,"unloaded",[]]"#
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, 0);
+
+            // The same font and server must become active when the generated
+            // text is retained, without a FontFace.load() or FontFaceSet getter.
+            vm.eval("style.sheet.cssRules[0].style.display='inline'")
+                .unwrap();
+            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            run_font_tasks(&mut vm);
+            assert_eq!(vm.eval("face.status").unwrap(), "loading");
+            let request = tokio::time::timeout(Duration::from_secs(2), request_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(request.contains("GET /print-only.woff2 "), "{request}");
+            release_tx.send(()).unwrap();
+            server.await.unwrap();
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    completions.wait_for_arrival_without_timeout()
+                )
+                .await
+                .unwrap()
+            );
+            let completion = completions.pop_next_async_subresource_event().unwrap();
+            let activity = vm
+                .complete_async_subresource_fetch_event_body(completion)
+                .unwrap();
+            vm.finish_async_subresource_body_checkpoint_for_test(activity)
+                .unwrap();
+            run_font_tasks(&mut vm);
+            assert_eq!(vm.eval("face.status").unwrap(), "loaded");
+            assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), r#"["loading"]"#);
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .pending_subresource_request_count(),
+                0
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, 0);
+        }
+    }
+}
+
+#[test]
+fn automatic_fonts_column_pseudos_preserve_outer_text_boundaries() {
+    for pseudo in ["before", "after"] {
+        for display in ["table-column", "table-column-group"] {
+            assert_participating_text(
+                &format!(
+                    "<style>.boundary::{pseudo} {{content:'x';display:{display}}}</style><span style='text-transform:capitalize'>a<span class='boundary'></span>b</span>"
+                ),
+                "U+0042",
+                "loaded",
+            );
+        }
+    }
+}

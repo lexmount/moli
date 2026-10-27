@@ -83,9 +83,16 @@ pub(crate) fn collect_font_uses(
                     continue;
                 }
                 let saved = collector.enter(&style, false, separate);
-                collector.generated_text(&style);
-                if let Some(text) = default_text {
-                    collector.text(&style, &text);
+                // Columns discard text children; column groups retain only
+                // column boxes. Their principal boxes still form boundaries.
+                if !matches!(
+                    LayoutDisplay::from(&*style),
+                    LayoutDisplay::TableColumn | LayoutDisplay::TableColumnGroup
+                ) {
+                    collector.generated_text(&style);
+                    if let Some(text) = default_text {
+                        collector.text(&style, &text);
+                    }
                 }
                 if let Some(context) = saved {
                     collector.context = context;
