@@ -17,9 +17,10 @@ pub(crate) struct PreparedSharedWorkerRetirement {
 }
 
 #[derive(Clone)]
-struct RemovedSharedWorkerAttachment {
+pub(crate) struct RemovedSharedWorkerAttachment {
     retirement: TargetSharedWorkerProtocolAttachmentRetirement,
-    cleanup: Option<PreparedRemovedWorkerSession>,
+    cleanup: Rc<RefCell<Option<PreparedRemovedWorkerSession>>>,
+    captured: Option<TargetSessionDetachCleanupPlan>,
 }
 
 #[derive(Clone)]
@@ -72,17 +73,27 @@ impl PreparedSharedWorkerRetirement {
                     cleanup_plan,
                 } => {
                     if retirement.is_current() {
-                        let cleanup =
+                        let (cleanup, captured) = if conn
+                            .session_route(Some(cleanup_plan.session_id()))
+                            .is_none()
+                        {
+                            // The frozen attach may still be held by its original
+                            // Runtime output barrier. Its native scope, rather
+                            // than a later literal SID, identifies any late binding.
+                            (None, Some(cleanup_plan))
+                        } else {
                             match PreparedRemovedWorkerSession::prepare(conn, cleanup_plan) {
-                                Ok(cleanup) => Some(cleanup),
+                                Ok(cleanup) => (Some(cleanup), None),
                                 Err(error) => {
                                     prepared.preparation_error.get_or_insert(error);
-                                    None
+                                    (None, None)
                                 }
-                            };
+                            }
+                        };
                         prepared.sessions.push(RemovedSharedWorkerAttachment {
                             retirement,
-                            cleanup,
+                            cleanup: Rc::new(RefCell::new(cleanup)),
+                            captured,
                         });
                     }
                 }
@@ -170,6 +181,32 @@ impl PreparedSharedWorkerRetirement {
     }
 }
 
+impl RemovedSharedWorkerAttachment {
+    pub(crate) fn prepare_captured(&self, conn: &mut CdpConnection) -> Result<()> {
+        if self.cleanup.borrow().is_some() || !self.retirement.is_current() {
+            return Ok(());
+        }
+        let Some(plan) = self.captured.as_ref() else {
+            return Ok(());
+        };
+        let original = crate::conn::TargetWorkerProtocolAttachmentIdentity::SharedOrDedicated(
+            self.retirement.identity().clone(),
+        );
+        if conn.committed_worker_protocol_attachment_identity(plan.session_id()) == Some(&original)
+        {
+            let cleanup = PreparedRemovedWorkerSession::prepare(conn, plan.clone())?;
+            // Register the owned native wait in the original recovery receipt
+            // before this finite operation can lose its reply.
+            *self.cleanup.borrow_mut() = Some(cleanup);
+        } else {
+            // No original binding remains. Retire the native authority in the
+            // same turn; a held attach cannot create a new phantom afterward.
+            self.retirement.clone().retire();
+        }
+        Ok(())
+    }
+}
+
 impl SharedWorkerRetirementCompletion {
     async fn run(
         self,
@@ -177,15 +214,22 @@ impl SharedWorkerRetirementCompletion {
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
         for session in self.sessions {
-            if let Some(cleanup) = &session.cleanup {
+            if session.captured.is_some() {
+                let preparation = session.clone();
+                context
+                    .with_state(driver, move |state, _| {
+                        state.prepare_removed_shared_worker_attachment(preparation)
+                    })
+                    .await??;
+            }
+            let cleanup = session.cleanup.borrow().clone();
+            if let Some(cleanup) = &cleanup {
                 cleanup.wait().await;
             }
             context
                 .with_state(driver, move |state, context| {
-                    let events = state.finish_removed_shared_worker_attachment(
-                        session.cleanup,
-                        session.retirement,
-                    );
+                    let events =
+                        state.finish_removed_shared_worker_attachment(cleanup, session.retirement);
                     // SharedWorker removal has always exposed its complete
                     // retirement prefix before the close acknowledgement.
                     context.context_mut().protocol_events_mut().extend(events);
@@ -260,6 +304,27 @@ mod tests {
         )
         .unwrap();
         conn.start_parsed_command_dispatch_with_context(&command, context)
+    }
+
+    fn capture_peer_attach(conn: &CdpConnection) -> PreparedTargetAttach {
+        let route = CdpSessionRoute::SharedWorkerTarget {
+            browser_context_id: "BID-shared-retirement".into(),
+            target_id: TARGET.into(),
+        };
+        let attachment = conn
+            .worker_protocol_attachment_identity_for_route(&route, PEER)
+            .unwrap();
+        PreparedTargetAttach::new(
+            TARGET,
+            conn.devtools_target_info(TARGET).unwrap(),
+            [TargetAttachSessionCommit::auto_attached(
+                PEER.to_owned(),
+                None,
+                route,
+                false,
+            )],
+        )
+        .with_worker_attachment(attachment)
     }
 
     async fn drive(
@@ -510,6 +575,247 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_worker_close_retires_an_original_attach_committed_after_admission() {
+        let mut conn = fixture();
+        let attachment = conn
+            .shared_worker_target_for_session(Some(PEER))
+            .unwrap()
+            .protocol_attachment_identity("BID-shared-retirement", PEER)
+            .unwrap();
+        let info = conn.devtools_target_info(TARGET).unwrap();
+        let prepared_attach = PreparedTargetAttach::new(
+            TARGET,
+            info,
+            [TargetAttachSessionCommit::auto_attached(
+                PEER.to_owned(),
+                None,
+                CdpSessionRoute::SharedWorkerTarget {
+                    browser_context_id: "BID-shared-retirement".into(),
+                    target_id: TARGET.into(),
+                },
+                false,
+            )],
+        );
+        let prepared_attach = prepared_attach.with_worker_attachment(
+            crate::conn::TargetWorkerProtocolAttachmentIdentity::SharedOrDedicated(
+                attachment.clone(),
+            ),
+        );
+        conn.rollback_attached_session_without_event(PEER);
+        assert!(conn.session_route(Some(PEER)).is_none());
+        assert!(
+            attachment.is_current(),
+            "capture still owns its original target attachment"
+        );
+        let mut requests = conn.take_protocol_state_requests().unwrap();
+        let mut context = CommandDispatchContext::default();
+        let CdpCommandTaskStep::Pending(pending) = start(
+            &mut conn,
+            1001,
+            "Target.closeTarget",
+            json!({"targetId":TARGET}),
+            &mut context,
+        ) else {
+            panic!("close owns its cleanup outside the actor");
+        };
+        // The real held attach can be published while native cleanup waits.
+        // Its retirement scope is still current, even though the target has
+        // already been removed from the live inventory.
+        assert!(attachment.is_current());
+        let attached = conn
+            .commit_prepared_attach_event_plan(prepared_attach)
+            .into_background_events();
+        assert!(
+            attached
+                .iter()
+                .any(|event| event.clone().into_protocol_message()["method"]
+                    == "Target.attachedToTarget")
+        );
+        let original_binding = conn.session_binding_lifetime(PEER).unwrap();
+        let completed = drive(&mut conn, &mut requests, *pending).await;
+        let mut step = conn
+            .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+            .unwrap_or_else(|_| panic!("finite retirement completion"));
+        let messages = loop {
+            match step {
+                CdpCommandTaskStep::Pending(pending) => {
+                    let completed = drive(&mut conn, &mut requests, *pending).await;
+                    step = conn
+                        .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                        .unwrap_or_else(|_| panic!("finite recovery completion"));
+                }
+                CdpCommandTaskStep::Complete(outcome) => {
+                    let (events, _, _) = outcome.into_protocol_event_parts();
+                    break events
+                        .into_iter()
+                        .map(BackgroundProtocolEvent::into_protocol_message)
+                        .collect::<Vec<_>>();
+                }
+            }
+        };
+        assert!(
+            conn.session_route(Some(PEER)).is_none(),
+            "the original late attachment must not survive target retirement"
+        );
+        assert!(original_binding.is_closed());
+        assert!(!attachment.is_current());
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["method"] == "Target.detachedFromTarget"
+                    && message["params"]["sessionId"] == PEER)
+                .count(),
+            1,
+            "{messages:?}"
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .find(|message| message["id"] == 1001)
+                .unwrap()["result"]["success"],
+            true,
+            "a captured attach is not an invalid-session close failure: {messages:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_worker_close_retires_captured_authority_without_closing_its_successor() {
+        for rebind in [false, true] {
+            let mut conn = fixture();
+            let prepared = capture_peer_attach(&conn);
+            let original = conn
+                .shared_worker_target_for_session(Some(PEER))
+                .unwrap()
+                .protocol_attachment_identity("BID-shared-retirement", PEER)
+                .unwrap();
+            conn.rollback_attached_session_without_event(PEER);
+            let mut requests = conn.take_protocol_state_requests().unwrap();
+            let mut context = CommandDispatchContext::default();
+            let CdpCommandTaskStep::Pending(close) = start(
+                &mut conn,
+                1101,
+                "Target.closeTarget",
+                json!({"targetId":TARGET}),
+                &mut context,
+            ) else {
+                panic!("retirement owns the captured attachment");
+            };
+            let successor = if rebind {
+                // Reuse all literal routing ids, but create a new native scope.
+                let mut worker = SharedWorkerTargetState::new(
+                    moli_core::RendererOwnerLocalHostId::new_for_testing(107),
+                    SharedWorkerInstanceId::from_u64(307),
+                    TARGET.into(),
+                    Some("TID-owner".into()),
+                    String::new(),
+                    String::new(),
+                );
+                worker.attach_session(PEER.into());
+                conn.browser_context_by_id_mut("BID-shared-retirement")
+                    .unwrap()
+                    .insert_shared_worker_target(worker);
+                let prepared = capture_peer_attach(&conn);
+                let _ = conn.commit_prepared_attach_event_plan(prepared);
+                Some((
+                    conn.committed_worker_protocol_attachment_identity(PEER)
+                        .unwrap()
+                        .clone(),
+                    conn.session_binding_lifetime(PEER).unwrap(),
+                ))
+            } else {
+                None
+            };
+            let completed = drive(&mut conn, &mut requests, *close).await;
+            let messages = finish(&mut conn, completed, &mut context);
+            assert_eq!(
+                messages
+                    .iter()
+                    .find(|message| message["id"] == 1101)
+                    .unwrap()["result"]["success"],
+                true,
+                "{messages:?}"
+            );
+            assert!(!original.is_current());
+            assert!(
+                conn.commit_prepared_attach_event_plan(prepared)
+                    .into_background_events()
+                    .is_empty(),
+                "an expired captured attach cannot create a phantom or overwrite a successor"
+            );
+            if let Some((attachment, lifetime)) = successor {
+                assert!(attachment.is_current());
+                assert!(!lifetime.is_closed() && !conn.session_is_closing(PEER));
+                assert_eq!(
+                    conn.committed_worker_protocol_attachment_identity(PEER),
+                    Some(&attachment)
+                );
+            } else {
+                assert!(conn.session_route(Some(PEER)).is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_worker_late_attach_cleanup_retains_its_wait_after_owner_reply_loss() {
+        let mut conn = fixture();
+        let prepared = capture_peer_attach(&conn);
+        conn.rollback_attached_session_without_event(PEER);
+        let mut requests = conn.take_protocol_state_requests().unwrap();
+        let mut context = CommandDispatchContext::default();
+        let CdpCommandTaskStep::Pending(close) = start(
+            &mut conn,
+            1201,
+            "Target.closeTarget",
+            json!({"targetId":TARGET}),
+            &mut context,
+        ) else {
+            panic!("close owns late attachment cleanup");
+        };
+        let _ = conn.commit_prepared_attach_event_plan(prepared);
+        let binding = conn.session_binding_lifetime(PEER).unwrap();
+        let mut close = Box::pin(close.wait());
+        for _ in 0..2 {
+            assert!(close.as_mut().now_or_never().is_none());
+            requests.recv().await.unwrap().apply(&mut conn);
+        }
+        assert!(conn.session_route(Some(SESSION)).is_none());
+        assert!(conn.session_is_closing(PEER) && !binding.is_closed());
+        assert!(close.as_mut().now_or_never().is_none());
+        drop(requests.recv().await.unwrap());
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(10), close)
+            .await
+            .unwrap();
+        let CdpCommandTaskStep::Pending(recovery) = conn
+            .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+            .unwrap_or_else(|_| panic!("finite rejected completion"))
+        else {
+            panic!("cleanup remains owned by the original command");
+        };
+        let completed = drive(&mut conn, &mut requests, *recovery).await;
+        let messages = finish(&mut conn, completed, &mut context);
+        assert!(binding.is_closed());
+        assert!(conn.session_route(Some(PEER)).is_none());
+        assert_eq!(
+            messages
+                .iter()
+                .find(|message| message["id"] == 1201)
+                .unwrap()["error"]["message"],
+            "protocol owner closed: channel closed"
+        );
+        for session in [SESSION, PEER] {
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["method"] == "Target.detachedFromTarget"
+                        && message["params"]["sessionId"] == session)
+                    .count(),
+                1,
+                "{messages:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn shared_worker_close_uses_direct_with_state_while_original_cleanup_waits() {
         let owner = crate::conn::ProtocolStateOwner::new(fixture());
         let handle = owner.handle();
@@ -605,6 +911,8 @@ mod tests {
                 .unwrap()
         });
         let _ = conn.rollback_attached_session_without_event(PEER);
+        conn.register_session_route_for_test(PEER, CdpSessionRoute::Browser);
+        let successor = conn.session_binding_lifetime(PEER).unwrap();
         let mut requests = conn.take_protocol_state_requests().unwrap();
         let mut context = CommandDispatchContext::default();
         let CdpCommandTaskStep::Pending(pending) = start(
@@ -649,9 +957,14 @@ mod tests {
                 .iter()
                 .find(|message| message["id"] == 801)
                 .unwrap()["error"]["message"],
-            "InvalidSessionId"
+            "UnknownTargetId"
         );
         assert!(conn.session_route(Some(SESSION)).is_none());
+        assert_eq!(
+            conn.session_route(Some(PEER)),
+            Some(CdpSessionRoute::Browser)
+        );
+        assert!(!successor.is_closed() && !conn.session_is_closing(PEER));
         assert!(identities.iter().all(|identity| !identity.is_current()));
         assert_eq!(
             messages

@@ -84,19 +84,26 @@ pub(super) fn auto_attach_related(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Co
         && let Some((session_id, target_info)) =
             attach_service_worker_target_for_auto_attach_related(conn, &target.target_id)
     {
-        let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-            &target.target_id,
-            target_info,
-            [TargetAttachSessionCommit::auto_attached(
-                session_id,
-                cmd.session_id.map(str::to_owned),
-                CdpSessionRoute::ServiceWorkerTarget {
-                    browser_context_id: target.browser_context_id.clone(),
-                    target_id: target.target_id.clone(),
-                },
-                false,
-            )],
-        ));
+        let route = CdpSessionRoute::ServiceWorkerTarget {
+            browser_context_id: target.browser_context_id.clone(),
+            target_id: target.target_id.clone(),
+        };
+        let attachment = conn
+            .worker_protocol_attachment_identity_for_route(&route, &session_id)
+            .expect("related worker attach retains its original native scope");
+        let event_plan = conn.commit_prepared_attach_event_plan(
+            PreparedTargetAttach::new(
+                &target.target_id,
+                target_info,
+                [TargetAttachSessionCommit::auto_attached(
+                    session_id,
+                    cmd.session_id.map(str::to_owned),
+                    route,
+                    false,
+                )],
+            )
+            .with_worker_attachment(attachment),
+        );
         for event in event_plan {
             plan.push_background_event(event);
         }
@@ -637,7 +644,26 @@ async fn set_auto_attach_inner_async(
                         route.is_some(),
                         "attached shared worker target must remain addressable"
                     );
-                    route.map(|route| (target_id, session_id, route))
+                    let route = route?;
+                    let attachment = conn
+                        .worker_protocol_attachment_identity_for_route(&route, &session_id)
+                        .expect("prepared worker attach retains its original native scope");
+                    let info = conn
+                        .browser_context_by_id(route.browser_context_id()?)?
+                        .devtools_target_info(&target_id)?;
+                    Some(
+                        PreparedTargetAttach::new(
+                            target_id,
+                            info,
+                            [TargetAttachSessionCommit::auto_attached(
+                                session_id,
+                                owner_session_id.map(str::to_owned),
+                                route,
+                                waiting_for_debugger,
+                            )],
+                        )
+                        .with_worker_attachment(attachment),
+                    )
                 })
                 .collect::<Vec<_>>();
             let attached_dedicated_worker_targets = attached_dedicated_worker_targets
@@ -651,7 +677,26 @@ async fn set_auto_attach_inner_async(
                         route.is_some(),
                         "attached dedicated worker target must remain addressable"
                     );
-                    route.map(|route| (target_id, session_id, route))
+                    let route = route?;
+                    let attachment = conn
+                        .worker_protocol_attachment_identity_for_route(&route, &session_id)
+                        .expect("prepared worker attach retains its original native scope");
+                    let info = conn
+                        .browser_context_by_id(route.browser_context_id()?)?
+                        .devtools_target_info(&target_id)?;
+                    Some(
+                        PreparedTargetAttach::new(
+                            target_id,
+                            info,
+                            [TargetAttachSessionCommit::auto_attached(
+                                session_id,
+                                owner_session_id.map(str::to_owned),
+                                route,
+                                waiting_for_debugger,
+                            )],
+                        )
+                        .with_worker_attachment(attachment),
+                    )
                 })
                 .collect::<Vec<_>>();
             let attached_service_worker_targets = attached_service_worker_targets
@@ -665,7 +710,26 @@ async fn set_auto_attach_inner_async(
                         route.is_some(),
                         "attached service worker target must remain addressable"
                     );
-                    route.map(|route| (target_id, session_id, route))
+                    let route = route?;
+                    let attachment = conn
+                        .worker_protocol_attachment_identity_for_route(&route, &session_id)
+                        .expect("prepared worker attach retains its original native scope");
+                    let info = conn
+                        .browser_context_by_id(route.browser_context_id()?)?
+                        .devtools_target_info(&target_id)?;
+                    Some(
+                        PreparedTargetAttach::new(
+                            target_id,
+                            info,
+                            [TargetAttachSessionCommit::auto_attached(
+                                session_id,
+                                owner_session_id.map(str::to_owned),
+                                route,
+                                waiting_for_debugger,
+                            )],
+                        )
+                        .with_worker_attachment(attachment),
+                    )
                 })
                 .collect::<Vec<_>>();
             let attached_tab_targets = attached_tab_targets
@@ -762,67 +826,16 @@ async fn set_auto_attach_inner_async(
                 ));
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id, route) in attached_shared_worker_targets {
-                let ti = {
-                    let bc = conn
-                        .browser_context
-                        .as_ref()
-                        .expect("browser context must exist when emitting attach events");
-                    bc.devtools_target_info(&target_id)
-                        .expect("attached shared worker target must remain addressable")
-                };
-                let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                    &target_id,
-                    ti,
-                    [TargetAttachSessionCommit::auto_attached(
-                        session_id,
-                        owner_session_id.map(str::to_owned),
-                        route,
-                        waiting_for_debugger,
-                    )],
-                ));
+            for prepared in attached_shared_worker_targets {
+                let event_plan = conn.commit_prepared_attach_event_plan(prepared);
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id, route) in attached_dedicated_worker_targets {
-                let ti = {
-                    let bc = conn
-                        .browser_context
-                        .as_ref()
-                        .expect("browser context must exist when emitting attach events");
-                    bc.devtools_target_info(&target_id)
-                        .expect("attached dedicated worker target must remain addressable")
-                };
-                let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                    &target_id,
-                    ti,
-                    [TargetAttachSessionCommit::auto_attached(
-                        session_id,
-                        owner_session_id.map(str::to_owned),
-                        route,
-                        waiting_for_debugger,
-                    )],
-                ));
+            for prepared in attached_dedicated_worker_targets {
+                let event_plan = conn.commit_prepared_attach_event_plan(prepared);
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id, route) in attached_service_worker_targets {
-                let ti = {
-                    let bc = conn
-                        .browser_context
-                        .as_ref()
-                        .expect("browser context must exist when emitting attach events");
-                    bc.devtools_target_info(&target_id)
-                        .expect("attached service worker target must remain addressable")
-                };
-                let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                    &target_id,
-                    ti,
-                    [TargetAttachSessionCommit::auto_attached(
-                        session_id,
-                        owner_session_id.map(str::to_owned),
-                        route,
-                        waiting_for_debugger,
-                    )],
-                ));
+            for prepared in attached_service_worker_targets {
+                let event_plan = conn.commit_prepared_attach_event_plan(prepared);
                 out.extend_background_events(event_plan);
             }
             continue;

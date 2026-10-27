@@ -83,10 +83,14 @@ pub(super) fn register_shared_worker_target(
                 ),
                 "shared-worker auto-attach must freeze its exact target route at capture"
             );
-            attached_outputs.push((
-                attachment,
-                PreparedTargetAttach::new(target_id.clone(), target_info, [prepared_session]),
-            ));
+            let prepared_attach =
+                PreparedTargetAttach::new(target_id.clone(), target_info, [prepared_session])
+                    .with_worker_attachment(
+                        crate::conn::TargetWorkerProtocolAttachmentIdentity::SharedOrDedicated(
+                            attachment.clone(),
+                        ),
+                    );
+            attached_outputs.push((attachment, prepared_attach));
         }
     }
     if let Some(target_info) = created_snapshot {

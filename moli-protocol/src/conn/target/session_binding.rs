@@ -396,13 +396,33 @@ impl CdpConnection {
         emit_attached_state_delta: bool,
     ) -> TargetEventPlan {
         let (target_id, target_info, sessions) = prepared.into_parts();
-        let should_emit_attached_state_delta = emit_attached_state_delta && !sessions.is_empty();
-        let attached_state_delta_plan = should_emit_attached_state_delta
-            .then(|| self.exact_target_info_changed_event_plan_for_target_delta(&target_id));
+        let mut attached_state_delta_plan = None;
         let mut plan = TargetEventPlan::default();
         for session in sessions {
+            let worker_attachment = session.worker_attachment().cloned();
+            assert!(
+                worker_attachment.is_some()
+                    || !matches!(
+                        session.route(),
+                        CdpSessionRoute::SharedWorkerTarget { .. }
+                            | CdpSessionRoute::DedicatedWorkerTarget { .. }
+                            | CdpSessionRoute::ServiceWorkerTarget { .. }
+                    ),
+                "worker attach must freeze its original native attachment before waiting"
+            );
+            if worker_attachment
+                .as_ref()
+                .is_some_and(|attachment| !attachment.is_current())
+            {
+                continue;
+            }
+            if emit_attached_state_delta && attached_state_delta_plan.is_none() {
+                attached_state_delta_plan =
+                    Some(self.exact_target_info_changed_event_plan_for_target_delta(&target_id));
+            }
             let (session_id, owner_session_id, route, auto_attached, waiting_for_debugger) =
                 session.into_parts();
+            let binding_session_id = session_id.clone();
             if auto_attached {
                 self.target_control
                     .ensure_owner(owner_session_id.as_deref());
@@ -416,6 +436,10 @@ impl CdpConnection {
                 waiting_for_debugger,
                 target_info.clone(),
             ));
+            if let Some(attachment) = worker_attachment {
+                self.target_control
+                    .bind_worker_attachment(&binding_session_id, attachment);
+            }
         }
         if let Some(attached_state_delta_plan) = attached_state_delta_plan {
             plan.extend(attached_state_delta_plan);
@@ -492,13 +516,16 @@ impl CdpConnection {
             self.rollback_prepared_attach_session_sync_without_event(&prepared_session);
             return Err("UnknownTargetId");
         };
-        Ok(
-            self.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                target_id,
-                target_info,
-                [prepared_session],
-            )),
-        )
+        let attachment = self
+            .worker_protocol_attachment_identity_for_route(
+                prepared_session.route(),
+                prepared_session.session_id(),
+            )
+            .expect("synchronous worker attachment retains its original native scope");
+        Ok(self.commit_prepared_attach_event_plan(
+            PreparedTargetAttach::new(target_id, target_info, [prepared_session])
+                .with_worker_attachment(attachment),
+        ))
     }
 
     pub(crate) fn attach_service_worker_target_session_event_plan(
@@ -530,13 +557,16 @@ impl CdpConnection {
             self.rollback_prepared_attach_session_sync_without_event(&prepared_session);
             return Err("UnknownTargetId");
         };
-        Ok(
-            self.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                target_id,
-                target_info,
-                [prepared_session],
-            )),
-        )
+        let attachment = self
+            .worker_protocol_attachment_identity_for_route(
+                prepared_session.route(),
+                prepared_session.session_id(),
+            )
+            .expect("synchronous worker attachment retains its original native scope");
+        Ok(self.commit_prepared_attach_event_plan(
+            PreparedTargetAttach::new(target_id, target_info, [prepared_session])
+                .with_worker_attachment(attachment),
+        ))
     }
 
     pub(crate) fn attach_dedicated_worker_target_session_event_plan(
@@ -568,13 +598,16 @@ impl CdpConnection {
             self.rollback_prepared_attach_session_sync_without_event(&prepared_session);
             return Err("UnknownTargetId");
         };
-        Ok(
-            self.commit_prepared_dedicated_worker_attach_event_plan(PreparedTargetAttach::new(
-                target_id,
-                target_info,
-                [prepared_session],
-            )),
-        )
+        let attachment = self
+            .worker_protocol_attachment_identity_for_route(
+                prepared_session.route(),
+                prepared_session.session_id(),
+            )
+            .expect("synchronous worker attachment retains its original native scope");
+        Ok(self.commit_prepared_dedicated_worker_attach_event_plan(
+            PreparedTargetAttach::new(target_id, target_info, [prepared_session])
+                .with_worker_attachment(attachment),
+        ))
     }
 
     pub(crate) fn prepare_auto_attached_tab_session_binding(

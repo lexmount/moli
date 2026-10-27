@@ -12,6 +12,13 @@ use crate::domains::target::session_disposal::{
 use crate::{conn::SessionDisposalPlan, domains::session::PreparedSessionHandlers};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_removed_shared_worker_attachment(
+        self,
+        attachment: crate::domains::target::RemovedSharedWorkerAttachment,
+    ) -> Result<()> {
+        attachment.prepare_captured(self.connection)
+    }
+
     pub(crate) fn finish_removed_shared_worker_attachment(
         self,
         cleanup: Option<crate::domains::target::session_disposal::PreparedRemovedWorkerSession>,

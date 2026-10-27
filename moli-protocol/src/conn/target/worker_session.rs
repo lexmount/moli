@@ -37,6 +37,47 @@ impl TargetWorkerProtocolAttachmentIdentity {
 }
 
 impl CdpConnection {
+    pub(crate) fn worker_protocol_attachment_identity_for_route(
+        &self,
+        route: &CdpSessionRoute,
+        session_id: &str,
+    ) -> Option<TargetWorkerProtocolAttachmentIdentity> {
+        match route {
+            CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id,
+                target_id,
+            } => self
+                .browser_context_by_id(browser_context_id)?
+                .shared_worker_target(target_id)?
+                .protocol_attachment_identity(browser_context_id, session_id)
+                .map(TargetWorkerProtocolAttachmentIdentity::SharedOrDedicated),
+            CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id,
+                target_id,
+            } => self
+                .browser_context_by_id(browser_context_id)?
+                .dedicated_worker_target(target_id)?
+                .protocol_attachment_identity(browser_context_id, session_id)
+                .map(TargetWorkerProtocolAttachmentIdentity::SharedOrDedicated),
+            CdpSessionRoute::ServiceWorkerTarget {
+                browser_context_id,
+                target_id,
+            } => self
+                .browser_context_by_id(browser_context_id)?
+                .service_worker_target(target_id)?
+                .protocol_attachment_identity(browser_context_id, session_id)
+                .map(TargetWorkerProtocolAttachmentIdentity::Service),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn committed_worker_protocol_attachment_identity(
+        &self,
+        session_id: &str,
+    ) -> Option<&TargetWorkerProtocolAttachmentIdentity> {
+        self.target_control.worker_attachment(session_id)
+    }
+
     /// Captures the exact live Worker attachment addressed by one renderer
     /// output stream and DevTools session.
     ///

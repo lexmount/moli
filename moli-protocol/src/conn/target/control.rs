@@ -20,6 +20,21 @@ pub(crate) struct TargetControlPlane {
 }
 
 impl TargetControlPlane {
+    pub(crate) fn bind_worker_attachment(
+        &mut self,
+        session_id: &str,
+        attachment: super::TargetWorkerProtocolAttachmentIdentity,
+    ) {
+        self.sessions.bind_worker_attachment(session_id, attachment);
+    }
+
+    pub(crate) fn worker_attachment(
+        &self,
+        session_id: &str,
+    ) -> Option<&super::TargetWorkerProtocolAttachmentIdentity> {
+        self.sessions.worker_attachment(session_id)
+    }
+
     pub(crate) fn close_session_waiters(&self) {
         self.sessions.close_session_waiters();
     }

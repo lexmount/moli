@@ -98,8 +98,6 @@ pub(super) fn register_service_worker_target_with_active_run(
                 },
                 waiting_for_debugger,
             );
-            let prepared_attach =
-                PreparedTargetAttach::new(target_id.clone(), target_info, [prepared_session]);
             let attachment = conn
                 .browser_context_by_id(browser_context_id)
                 .and_then(|context| context.service_worker_target(&target_id))
@@ -107,6 +105,13 @@ pub(super) fn register_service_worker_target_with_active_run(
                     target.protocol_attachment_identity(browser_context_id, &session_id)
                 })
                 .expect("auto-attached service-worker session must own an exact attachment");
+            let prepared_attach =
+                PreparedTargetAttach::new(target_id.clone(), target_info, [prepared_session])
+                    .with_worker_attachment(
+                        crate::conn::TargetWorkerProtocolAttachmentIdentity::Service(
+                            attachment.clone(),
+                        ),
+                    );
             attached_outputs.push((attachment, prepared_attach));
         }
     }

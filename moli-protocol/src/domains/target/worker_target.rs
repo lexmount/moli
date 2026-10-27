@@ -67,7 +67,9 @@ pub(crate) use dedicated_worker_retirement::{
     WorkerRetirementFailureCleanup,
 };
 mod shared_worker_retirement;
-pub(crate) use shared_worker_retirement::PreparedSharedWorkerRetirement;
+pub(crate) use shared_worker_retirement::{
+    PreparedSharedWorkerRetirement, RemovedSharedWorkerAttachment,
+};
 mod shared_worker;
 use shared_worker::*;
 mod service_worker_targets;

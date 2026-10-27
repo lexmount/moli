@@ -188,6 +188,9 @@ pub(super) fn record_dedicated_worker_main_script(
             },
             waiting_for_debugger,
         );
+        let attachment = conn
+            .worker_protocol_attachment_identity_for_route(prepared_session.route(), &session_id)
+            .expect("prepared worker attach captures its original renderer attachment");
         if waiting_for_debugger
             && let Some(context) = conn.browser_context_by_id_mut(browser_context_id)
             && let Some(target) = context
@@ -205,7 +208,8 @@ pub(super) fn record_dedicated_worker_main_script(
                 target_id.clone(),
                 target_info,
                 [prepared_session],
-            ),
+            )
+            .with_worker_attachment(attachment),
         });
     }
     let changed_snapshot = should_emit_info_changed

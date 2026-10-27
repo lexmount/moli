@@ -35,7 +35,7 @@ mod tests;
 mod worker_target;
 pub(crate) use worker_target::{
     CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity, PreparedDedicatedWorkerRetirement,
-    WorkerRetirementFailureCleanup,
+    RemovedSharedWorkerAttachment, WorkerRetirementFailureCleanup,
 };
 
 pub(crate) enum TargetCommandFailureCleanup {

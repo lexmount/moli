@@ -160,6 +160,7 @@ struct AttachedTargetSession {
     waiting_for_debugger: bool,
     closing: bool,
     closed: SessionClosed,
+    worker_attachment: Option<Box<super::TargetWorkerProtocolAttachmentIdentity>>,
 }
 
 #[derive(Clone, Debug)]
@@ -213,6 +214,30 @@ pub(crate) struct TargetSessionRegistry {
 }
 
 impl TargetSessionRegistry {
+    pub(crate) fn bind_worker_attachment(
+        &mut self,
+        session_id: &str,
+        attachment: super::TargetWorkerProtocolAttachmentIdentity,
+    ) {
+        let session = self
+            .attached_sessions
+            .get_mut(session_id)
+            .expect("worker provenance binds an admitted session");
+        assert_eq!(attachment.session_id(), session_id);
+        assert_eq!(attachment.target_id(), session.target_id);
+        session.worker_attachment = Some(Box::new(attachment));
+    }
+
+    pub(crate) fn worker_attachment(
+        &self,
+        session_id: &str,
+    ) -> Option<&super::TargetWorkerProtocolAttachmentIdentity> {
+        self.attached_sessions
+            .get(session_id)?
+            .worker_attachment
+            .as_deref()
+    }
+
     pub(crate) fn close_session_waiters(&self) {
         for session in self.attached_sessions.values() {
             session.closed.0.send_replace(true);
@@ -266,6 +291,7 @@ impl TargetSessionRegistry {
                 waiting_for_debugger,
                 closing: false,
                 closed: SessionClosed::default(),
+                worker_attachment: None,
             },
         );
         self.attached_sessions_by_target
