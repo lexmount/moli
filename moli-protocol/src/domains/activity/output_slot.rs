@@ -1,6 +1,8 @@
 use std::{future::Future, pin::Pin};
 
-use crate::conn::CdpConnection;
+use anyhow::Result;
+
+use crate::conn::{CdpConnection, CommandWorkflowContext, ProtocolWorkflowDriver};
 
 use super::contextual_projection::ProtocolOutputProjectionContext;
 use super::output_payloads::{ProtocolOutputPayload, ProtocolOutputPayloads};
@@ -150,116 +152,184 @@ impl ProtocolOutputSlot {
         }
     }
 
-    pub(in crate::domains::activity) fn project_async<'a>(
+    /// Consumes only already-frozen facts and finite owner-state changes.
+    /// Native waits are returned to the ordinary async projection workflow.
+    pub(in crate::domains::activity) fn project_finite(
+        self,
+        conn: &mut CdpConnection,
+        context: &mut ProtocolOutputProjectionContext<'_>,
+        payloads: &mut ProtocolOutputPayloads,
+    ) -> Result<(), Self> {
+        match self {
+            Self::WebMcp => crate::domains::web_mcp::project_web_mcp(context, payloads),
+            Self::NetworkBacklog => {
+                crate::domains::network::project_network_backlog(conn, context, payloads)
+            }
+            Self::RendererNetworkLive => {
+                crate::domains::network::project_renderer_network_live(conn, context, payloads)
+            }
+            Self::SubresourceFetchInterception => {
+                crate::domains::network::project_subresource_fetch_interception(
+                    conn, context, payloads,
+                )
+            }
+            Self::RuntimeBindingCalls => {
+                crate::domains::runtime::project_runtime_binding_calls(conn, context, payloads)
+            }
+            Self::Audits => {
+                crate::domains::observable_output::project_audits(conn, context, payloads)
+            }
+            Self::Console => {
+                crate::domains::observable_output::project_console(conn, context, payloads)
+            }
+            Self::Log => crate::domains::observable_output::project_log(conn, context, payloads),
+            Self::RuntimeObservable => {
+                crate::domains::observable_output::project_runtime_observable(
+                    conn, context, payloads,
+                )
+            }
+            Self::DomMutations => {
+                crate::domains::dom::project_dom_mutations(conn, context, payloads)
+            }
+            Self::DomStorage => crate::domains::dom_storage::project_dom_storage(context, payloads),
+            Self::MainDocumentCommit => {
+                crate::domains::page::project_main_document_commit(conn, context, payloads)
+            }
+            Self::DocumentLifecycle
+            | Self::DocumentTitleChanged
+            | Self::JavascriptDialog
+            | Self::WindowOpen
+            | Self::ChildFrameActivity
+            | Self::NavigateAuxiliaryWindow
+            | Self::SessionHistoryUpdate
+            | Self::TopLevelLocationNavigation => {
+                return crate::domains::page::project_page_output_finite(
+                    self, conn, context, payloads,
+                );
+            }
+            _ => return Err(self),
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_wait(
+        self,
+        conn: &mut CdpConnection,
+        owner: &crate::conn::CommandOwnerScope,
+        payloads: &mut ProtocolOutputPayloads,
+    ) -> Option<PreparedProtocolOutputWait> {
+        match self {
+            Self::RuntimeInspectorMessages | Self::RuntimeInspectorPostResponseMessages => {
+                crate::domains::runtime::PreparedRuntimeInspectorProjection::take(self, payloads)
+                    .map(PreparedProtocolOutputWait::Runtime)
+            }
+            Self::Download | Self::FileChooser => {
+                crate::domains::input::PreparedInputOutputProjection::take(
+                    self, conn, owner, payloads,
+                )
+                .map(PreparedProtocolOutputWait::Input)
+            }
+            Self::SharedWorkerTargetLifecycle
+            | Self::ServiceWorkerTargetLifecycle
+            | Self::DedicatedWorkerTargetLifecycle => {
+                crate::domains::target::WorkerTargetOutputProjection::take(payloads)
+                    .map(PreparedProtocolOutputWait::Worker)
+            }
+            _ => unreachable!("finite projection selects the native output family"),
+        }
+    }
+
+    pub(in crate::domains) fn project_async<'a>(
         self,
         conn: &'a mut CdpConnection,
         context: &'a mut ProtocolOutputProjectionContext<'_>,
         payloads: &'a mut ProtocolOutputPayloads,
     ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         Box::pin(async move {
+            if self.project_finite(conn, context, payloads).is_ok() {
+                return;
+            }
             match self {
-                Self::WebMcp => crate::domains::web_mcp::project_async(context, payloads).await,
                 Self::PendingSubresourceContinueEvents => {
                     crate::domains::network::project_pending_subresource_continue_async(
                         conn, context, payloads,
                     )
                     .await;
                 }
-                Self::NetworkBacklog => {
-                    crate::domains::network::project_network_backlog_async(conn, context, payloads)
-                        .await;
-                }
-                Self::RendererNetworkLive => {
-                    crate::domains::network::project_renderer_network_live_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::SubresourceFetchInterception => {
-                    crate::domains::network::project_subresource_fetch_interception_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeBindingCalls => {
-                    crate::domains::runtime::project_runtime_binding_calls_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeInspectorMessages => {
-                    crate::domains::runtime::project_runtime_inspector_messages_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeInspectorPostResponseMessages => {
-                    crate::domains::runtime::project_runtime_inspector_post_response_messages_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Audits => {
-                    crate::domains::observable_output::project_audits_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Console => {
-                    crate::domains::observable_output::project_console_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Log => {
-                    crate::domains::observable_output::project_log_async(conn, context, payloads)
-                        .await;
-                }
-                Self::RuntimeObservable => {
-                    crate::domains::observable_output::project_runtime_observable_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::DomMutations => {
-                    crate::domains::dom::project_dom_mutations_async(conn, context, payloads).await;
-                }
-                Self::DomStorage => {
-                    crate::domains::dom_storage::project_dom_storage_async(context, payloads).await;
-                }
-                Self::MainDocumentCommit => {
-                    crate::domains::page::project_main_document_commit_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Download
+                Self::RuntimeInspectorMessages
+                | Self::RuntimeInspectorPostResponseMessages
+                | Self::Download
                 | Self::FileChooser
-                | Self::JavascriptDialog
-                | Self::WindowOpen
-                | Self::Popup
+                | Self::SharedWorkerTargetLifecycle
+                | Self::ServiceWorkerTargetLifecycle
+                | Self::DedicatedWorkerTargetLifecycle => {
+                    if let Some(wait) = self.prepare_wait(conn, context.owner(), payloads) {
+                        let mut local = crate::conn::CommandDispatchContext::new(
+                            context.command.response_flush().clone(),
+                        );
+                        let (mut output, _scope) =
+                            CommandWorkflowContext::take_from(&mut local, None, None);
+                        let result = wait
+                            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
+                            .await;
+                        output.finish_projection_inline(conn, context.command);
+                        result.expect("exclusive output projection retains its connection owner");
+                    }
+                }
+                Self::Popup
                 | Self::CloseAuxiliaryWindow
-                | Self::NavigateAuxiliaryWindow
-                | Self::DocumentTitleChanged
-                | Self::DocumentLifecycle
-                | Self::ChildFrameActivity
-                | Self::SessionHistoryUpdate
                 | Self::SameDocumentNavigation
-                | Self::TopLevelLocationNavigation
                 | Self::TopLevelHistoryTraversal => {
                     crate::domains::page::project_page_output_async(self, conn, context, payloads)
                         .await;
                 }
-                Self::SharedWorkerTargetLifecycle
-                | Self::ServiceWorkerTargetLifecycle
-                | Self::DedicatedWorkerTargetLifecycle => {
-                    crate::domains::target::project_worker_target_output_async(
-                        self, conn, context, payloads,
-                    )
-                    .await;
+                Self::WebMcp
+                | Self::NetworkBacklog
+                | Self::RendererNetworkLive
+                | Self::SubresourceFetchInterception
+                | Self::RuntimeBindingCalls
+                | Self::Audits
+                | Self::Console
+                | Self::Log
+                | Self::RuntimeObservable
+                | Self::DomMutations
+                | Self::DomStorage
+                | Self::MainDocumentCommit
+                | Self::DocumentLifecycle
+                | Self::DocumentTitleChanged
+                | Self::JavascriptDialog
+                | Self::WindowOpen
+                | Self::ChildFrameActivity
+                | Self::NavigateAuxiliaryWindow
+                | Self::SessionHistoryUpdate
+                | Self::TopLevelLocationNavigation => {
+                    unreachable!("finite output slots have already been consumed")
                 }
             }
         })
+    }
+}
+
+pub(crate) enum PreparedProtocolOutputWait {
+    Worker(crate::domains::target::WorkerTargetOutputProjection),
+    Runtime(crate::domains::runtime::PreparedRuntimeInspectorProjection),
+    Input(crate::domains::input::PreparedInputOutputProjection),
+}
+
+impl PreparedProtocolOutputWait {
+    pub(in crate::domains::activity) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        match self {
+            Self::Worker(projection) => projection.run(driver, context).await,
+            Self::Runtime(projection) => projection.run(driver, context).await,
+            Self::Input(projection) => {
+                projection.run(driver, context).await;
+                Ok(())
+            }
+        }
     }
 }
 

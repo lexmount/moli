@@ -2085,21 +2085,6 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
     }
 }
 
-pub(in crate::domains) async fn replay_shared_worker_runtime_bindings_for_session_async(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-) {
-    let Some(replay) = crate::conn::WorkerRuntimeScope::capture(conn, session_id)
-        .ok()
-        .and_then(|scope| PreparedWorkerBindingReplay::prepare(conn, scope))
-    else {
-        return;
-    };
-    replay
-        .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-        .await;
-}
-
 pub(crate) async fn execute_runtime_listener_command_for_owner(
     conn: &mut CdpConnection,
     owner: CommandOwnerScope,

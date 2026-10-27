@@ -31,7 +31,7 @@ pub(crate) struct ObservableOutputProjectionContext<'a> {
         Option<&'a mut ObservablePreparedOutputs>,
 }
 
-async fn project_observable_output_async(
+fn project_observable_output(
     step: ObservableOutputProjectionStep,
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
@@ -39,38 +39,36 @@ async fn project_observable_output_async(
 ) {
     let owner = context.owner().clone();
     if let Some(slot) = prepared_outputs.observable_mut() {
-        slot.emit_activity_background_events_async(
+        slot.emit_activity_background_events(
             step,
             conn,
             context.command.protocol_events_mut(),
             owner.session_id(),
-        )
-        .await;
+        );
     }
 }
 
 macro_rules! observable_projector {
     ($name:ident, $step:ident) => {
-        pub(in crate::domains) async fn $name(
+        pub(in crate::domains) fn $name(
             conn: &mut CdpConnection,
             context: &mut ProtocolOutputProjectionContext<'_>,
             prepared_outputs: &mut ProtocolOutputPayloads,
         ) {
-            project_observable_output_async(
+            project_observable_output(
                 ObservableOutputProjectionStep::$step,
                 conn,
                 context,
                 prepared_outputs,
-            )
-            .await;
+            );
         }
     };
 }
 
-observable_projector!(project_audits_async, Audits);
-observable_projector!(project_console_async, Console);
-observable_projector!(project_log_async, Log);
-observable_projector!(project_runtime_observable_async, RuntimeObservable);
+observable_projector!(project_audits, Audits);
+observable_projector!(project_console, Console);
+observable_projector!(project_log, Log);
+observable_projector!(project_runtime_observable, RuntimeObservable);
 
 pub(in crate::domains) const SLOT_CONSOLE: ProtocolOutputSlot = ProtocolOutputSlot::Console;
 pub(in crate::domains) const SLOT_AUDITS: ProtocolOutputSlot = ProtocolOutputSlot::Audits;
@@ -122,7 +120,7 @@ impl ObservableActivityEmissionPlan {
         }
     }
 
-    async fn prepare_async(
+    fn prepare(
         step: ObservableOutputProjectionStep,
         conn: &mut CdpConnection,
         session_id: Option<&str>,
@@ -143,12 +141,12 @@ impl ObservableActivityEmissionPlan {
                 prepared_outputs,
             ),
             ObservableOutputProjectionStep::RuntimeObservable => {
-                Self::prepare_runtime_observable(conn, session_id, prepared_outputs).await
+                Self::prepare_runtime_observable(conn, session_id, prepared_outputs)
             }
         }
     }
 
-    async fn prepare_runtime_observable(
+    fn prepare_runtime_observable(
         conn: &mut CdpConnection,
         session_id: Option<&str>,
         prepared_outputs: Option<&mut ObservablePreparedOutputs>,
@@ -271,7 +269,7 @@ impl ObservableEmissionCursor {
     }
 }
 
-pub(crate) async fn emit_pending_observable_activity_background_events_async(
+pub(crate) fn emit_pending_observable_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     context: ObservableOutputProjectionContext<'_>,
@@ -328,8 +326,7 @@ pub(crate) async fn emit_pending_observable_activity_background_events_async(
         return;
     }
     if let Some(plan) =
-        ObservableActivityEmissionPlan::prepare_async(step, conn, session_id, prepared_outputs)
-            .await
+        ObservableActivityEmissionPlan::prepare(step, conn, session_id, prepared_outputs)
     {
         plan.emit_background_events(conn, out, session_id);
     }
@@ -447,13 +444,12 @@ mod tests {
         let mut duplicate_slot =
             ObservablePreparedOutputSlot::from_outputs(prepared_outputs.clone());
         let mut prepared_slot = ObservablePreparedOutputSlot::from_outputs(prepared_outputs);
-        let console_plan = ObservableActivityEmissionPlan::prepare_async(
+        let console_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::Console,
             &mut ctx.conn,
             None,
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("console output should produce an observable emission plan");
         assert_eq!(console_plan.step(), ObservableOutputProjectionStep::Console);
         let mut out = Vec::new();
@@ -476,13 +472,12 @@ mod tests {
             "executing the console plan should advance the Console cursor"
         );
 
-        let log_plan = ObservableActivityEmissionPlan::prepare_async(
+        let log_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::Log,
             &mut ctx.conn,
             Some("SID-1"),
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("log output should produce an observable emission plan");
         assert_eq!(log_plan.step(), ObservableOutputProjectionStep::Log);
         out.clear();
@@ -508,25 +503,23 @@ mod tests {
             "executing the log plan should advance the session-local Log cursor"
         );
         assert!(
-            ObservableActivityEmissionPlan::prepare_async(
+            ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::Log,
                 &mut ctx.conn,
                 Some("SID-1"),
                 Some(duplicate_slot.outputs_mut_for_test()),
             )
-            .await
             .is_none(),
             "a captured Log range must become stale after the session cursor advances"
         );
 
         assert!(
-            ObservableActivityEmissionPlan::prepare_async(
+            ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::RuntimeObservable,
                 &mut ctx.conn,
                 None,
                 None,
             )
-            .await
             .is_none(),
             "RuntimeObservable should not prepare an emission plan without Runtime.enable"
         );
@@ -564,7 +557,7 @@ mod tests {
             .expect("late console message should evaluate");
 
         let mut out = Vec::new();
-        super::emit_pending_observable_activity_background_events_async(
+        super::emit_pending_observable_activity_background_events(
             &mut ctx.conn,
             &mut out,
             ObservableOutputProjectionContext::new(
@@ -572,8 +565,7 @@ mod tests {
                 Some("SID-1"),
             )
             .with_prepared_outputs(Some(prepared_slot.outputs_mut_for_test())),
-        )
-        .await;
+        );
         let out = out
             .into_iter()
             .filter_map(BackgroundProtocolEvent::into_wire_message)
@@ -626,13 +618,12 @@ mod tests {
             .await
             .expect("late console message should evaluate");
 
-        let console_plan = ObservableActivityEmissionPlan::prepare_async(
+        let console_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::Console,
             &mut ctx.conn,
             None,
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("prepared console range should produce a plan");
         let mut out = Vec::new();
         console_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
@@ -705,13 +696,12 @@ mod tests {
         }
 
         assert!(
-            ObservableActivityEmissionPlan::prepare_async(
+            ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::Console,
                 &mut ctx.conn,
                 None,
                 Some(prepared_slot.outputs_mut_for_test()),
             )
-            .await
             .is_none(),
             "prepared console range from the old Page attachment must not materialize against the replacement Page"
         );
@@ -778,13 +768,12 @@ mod tests {
         let mut prepared_slot =
             observable_backlog_activity_outputs(&ctx.conn, Some("SID-background"))
                 .into_prepared_slot();
-        let console_plan = ObservableActivityEmissionPlan::prepare_async(
+        let console_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::Console,
             &mut ctx.conn,
             Some("SID-background"),
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("background prepared console range should produce a plan");
         let mut out = Vec::new();
         console_plan.emit(&mut ctx.conn, &mut out, Some("SID-background"));
@@ -899,24 +888,22 @@ mod tests {
         }
 
         assert!(
-            ObservableActivityEmissionPlan::prepare_async(
+            ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::Console,
                 &mut ctx.conn,
                 None,
                 Some(old_active_prepared.outputs_mut_for_test()),
             )
-            .await
             .is_none(),
             "prepared output from the old active owner must not materialize on the activated target"
         );
 
-        let old_owner_plan = ObservableActivityEmissionPlan::prepare_async(
+        let old_owner_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::Console,
             &mut ctx.conn,
             Some("SID-active"),
             Some(old_active_owner_prepared.outputs_mut_for_test()),
         )
-        .await
         .expect("prepared output must remain addressable through its background owner");
         let mut old_owner_out = Vec::new();
         old_owner_plan.emit(&mut ctx.conn, &mut old_owner_out, Some("SID-active"));
@@ -927,13 +914,12 @@ mod tests {
 
         let mut activated_prepared =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        let activated_plan = ObservableActivityEmissionPlan::prepare_async(
+        let activated_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::Console,
             &mut ctx.conn,
             None,
             Some(activated_prepared.outputs_mut_for_test()),
         )
-        .await
         .expect("activated target current Page output should remain visible");
         let mut activated_out = Vec::new();
         activated_plan.emit(&mut ctx.conn, &mut activated_out, None);
@@ -975,13 +961,12 @@ mod tests {
             .await
             .expect("late runtime console message should evaluate");
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
+        let runtime_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::RuntimeObservable,
             &mut ctx.conn,
             None,
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("prepared runtime observable range should produce a plan");
         let mut out = Vec::new();
         runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
@@ -1032,13 +1017,12 @@ mod tests {
         let mut prepared_slot =
             observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
+        let runtime_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::RuntimeObservable,
             &mut ctx.conn,
             None,
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("source payload should produce a prepared runtime observable plan");
         let mut out = Vec::new();
         runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
@@ -1087,13 +1071,12 @@ mod tests {
         let mut prepared_slot =
             observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
+        let runtime_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::RuntimeObservable,
             &mut ctx.conn,
             None,
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("stored source queue payload should produce a prepared runtime observable plan");
         let mut out = Vec::new();
         runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
@@ -1163,13 +1146,12 @@ mod tests {
         let mut prepared_slot =
             observable_source_activity_outputs(&mut ctx.conn, &lifecycle_snapshot, None)
                 .into_prepared_slot();
-        let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
+        let runtime_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::RuntimeObservable,
             &mut ctx.conn,
             None,
             Some(prepared_slot.outputs_mut_for_test()),
         )
-        .await
         .expect("lifecycle source should still produce a RuntimeObservable plan");
         let mut out = Vec::new();
         runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
@@ -1214,13 +1196,12 @@ mod tests {
             .expect("runtime slot should exist")
             .ingest_owner_page_observable_output_updates();
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
+        let runtime_plan = ObservableActivityEmissionPlan::prepare(
             ObservableOutputProjectionStep::RuntimeObservable,
             &mut ctx.conn,
             None,
             None,
-        )
-        .await;
+        );
         assert!(
             runtime_plan.is_none(),
             "RuntimeObservable drain must not live-read page console payload without a stored source queue item"
@@ -1277,13 +1258,12 @@ mod tests {
         }
 
         assert!(
-            ObservableActivityEmissionPlan::prepare_async(
+            ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::RuntimeObservable,
                 &mut ctx.conn,
                 None,
                 Some(prepared_slot.outputs_mut_for_test()),
             )
-            .await
             .is_none(),
             "source-time prepared RuntimeObservable payload must remain bound to the Page attachment"
         );
@@ -1344,13 +1324,12 @@ mod tests {
             .expect("new runtime console message should evaluate");
 
         assert!(
-            ObservableActivityEmissionPlan::prepare_async(
+            ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::RuntimeObservable,
                 &mut ctx.conn,
                 None,
                 Some(old_prepared_slot.outputs_mut_for_test()),
             )
-            .await
             .is_none(),
             "prepared RuntimeObservable range from the old Page attachment must not materialize against the replacement Page"
         );

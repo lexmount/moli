@@ -6,8 +6,7 @@ mod params;
 mod tests;
 
 pub(in crate::domains) use activity::{
-    DomStoragePreparedOutputSlot, append_pending_dom_storage_outputs_for_owner,
-    project_dom_storage_async,
+    DomStoragePreparedOutputSlot, append_pending_dom_storage_outputs_for_owner, project_dom_storage,
 };
 pub(crate) use commands::{
     CompletedDomStorageCommandDispatch, DomStorageCommandTaskStep,

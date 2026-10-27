@@ -519,13 +519,12 @@ mod tests {
         let prepared = live_log_prepared_outputs_for_renderer_network_fact(&ctx.conn, &owner);
         let mut slot = ObservablePreparedOutputSlot::from_outputs(prepared);
         let mut events = Vec::new();
-        slot.emit_activity_background_events_async(
+        slot.emit_activity_background_events(
             ObservableOutputProjectionStep::Log,
             &mut ctx.conn,
             &mut events,
             Some("SID-1"),
-        )
-        .await;
+        );
         let messages = events
             .into_iter()
             .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)

@@ -83,7 +83,6 @@ struct InFlightCommandState {
 enum CompletedActorWork {
     Command(CompletedCdpCommandDispatch),
     FrontendControl,
-    Protocol(moli_protocol::CompletedProtocolSchedulerWork),
 }
 
 type PendingCommandCompletion = CommandWaitCompletion<CompletedActorWork>;
@@ -96,18 +95,13 @@ struct BlockedCommandDispatch {
 enum InFlightWork {
     Command(Box<InFlightCommandState>),
     FrontendControl(CommandWaitTask),
-    Protocol {
-        pending: moli_protocol::PendingProtocolSchedulerWork,
-        task: CommandWaitTask,
-        recovering: bool,
-    },
 }
 
 impl InFlightWork {
     fn command(&self) -> Option<&InFlightCommandState> {
         match self {
             Self::Command(state) => Some(state),
-            Self::FrontendControl(_) | Self::Protocol { .. } => None,
+            Self::FrontendControl(_) => None,
         }
     }
 
@@ -115,7 +109,6 @@ impl InFlightWork {
         match self {
             Self::Command(state) => state.pending_turn,
             Self::FrontendControl(_) => 0,
-            Self::Protocol { recovering, .. } => u64::from(*recovering),
         }
     }
 
@@ -123,7 +116,6 @@ impl InFlightWork {
         match self {
             Self::Command(state) => state.wait_task,
             Self::FrontendControl(task) => task,
-            Self::Protocol { task, .. } => task,
         }
     }
 }
@@ -142,6 +134,7 @@ fn page_javascript_owner_is_blocked(
 }
 
 enum SchedulerInput {
+    ProtocolWorkCompletion(super::protocol_task::ProtocolWorkCompletion),
     ProtocolStateRequest(moli_protocol::conn::ProtocolStateRequest),
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
@@ -153,6 +146,8 @@ enum SchedulerInput {
 
 struct SchedulerInputReceivers {
     protocol_state_request_rx: moli_protocol::conn::ProtocolStateRequestReceiver,
+    protocol_work_completion_rx:
+        mpsc::UnboundedReceiver<super::protocol_task::ProtocolWorkCompletion>,
     document_activity_completion_rx:
         mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     background_event_rx: CdpBackgroundEventReceiver,
@@ -166,6 +161,7 @@ impl SchedulerInputReceivers {
     fn new(receivers: CdpSchedulerEventReceivers) -> Self {
         Self {
             protocol_state_request_rx: receivers.protocol_state_request_rx,
+            protocol_work_completion_rx: receivers.protocol_work_completion_rx,
             document_activity_completion_rx: receivers.document_activity_completion_rx,
             background_event_rx: receivers.background_event_rx,
             background_navigation_completion_rx: receivers.background_navigation_completion_rx,
@@ -205,20 +201,6 @@ impl SchedulerInputReceivers {
                 response,
             )));
     }
-
-    /// Receives the next concrete stream message needed by an exact response
-    /// cursor fence.
-    ///
-    /// The transport contains only typed stream controls and concrete
-    /// publications. Every message is safe to admit while a Page JavaScript
-    /// stack is blocked because protocol never re-enters renderer state to
-    /// discover its payload.
-    async fn recv_concrete_renderer_transport(&mut self) -> Option<RendererOutputTransportMessage> {
-        if let Some(publication) = self.buffered_renderer_publications.pop_front() {
-            return Some(publication);
-        }
-        self.renderer_publication_rx.recv().await
-    }
 }
 
 impl SchedulerInputReceivers {
@@ -245,6 +227,9 @@ impl SchedulerInputReceivers {
         if has_pending_runtime_deferred_reply {
             tokio::select! {
                 biased;
+                completion = self.protocol_work_completion_rx.recv(), if !self.protocol_work_completion_rx.is_closed() => {
+                    completion.map(SchedulerInput::ProtocolWorkCompletion)
+                }
                 maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
                     maybe_request.map(SchedulerInput::ProtocolStateRequest)
                 }
@@ -272,6 +257,9 @@ impl SchedulerInputReceivers {
         } else {
             tokio::select! {
                 biased;
+                completion = self.protocol_work_completion_rx.recv(), if !self.protocol_work_completion_rx.is_closed() => {
+                    completion.map(SchedulerInput::ProtocolWorkCompletion)
+                }
                 maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
                     maybe_request.map(SchedulerInput::ProtocolStateRequest)
                 }
@@ -332,8 +320,6 @@ async fn run_cdp_scheduler_actor(
         VecDeque::new();
     let (pending_command_completion_tx, mut pending_command_completion_rx) =
         mpsc::unbounded_channel();
-    let (owned_protocol_work_tx, mut owned_protocol_work_rx) = mpsc::unbounded_channel();
-    scheduler.owned_protocol_work_tx = Some(owned_protocol_work_tx);
     let (page_screencast_completion_tx, mut page_screencast_completion_rx) =
         mpsc::unbounded_channel::<CompletedPageScreencastCapture>();
     let mut in_flight_commands = InFlightCommands::new();
@@ -377,16 +363,6 @@ async fn run_cdp_scheduler_actor(
         let page_screencast_deadline = scheduler.next_page_screencast_deadline();
         tokio::select! {
             biased;
-            Some(pending) = owned_protocol_work_rx.recv() => {
-                let token = take_next_in_flight_command_token(&mut next_in_flight_command_token);
-                let wait = pending.clone();
-                let task = spawn_command_wait(
-                    CommandWaitIdentity { token, turn: 0 },
-                    async move { CompletedActorWork::Protocol(wait.wait().await) },
-                    &pending_command_completion_tx,
-                );
-                in_flight_commands.insert(token, InFlightWork::Protocol { pending, task, recovering: false });
-            }
             maybe_completion = pending_command_completion_rx.recv(), if !in_flight_commands.is_empty() => {
                 let Some(completion) = maybe_completion else {
                     break;
@@ -572,6 +548,7 @@ async fn run_cdp_scheduler_actor(
             .filter_map(|pending| pending.response_task),
     );
     waits.extend(scheduler.conn.take_background_navigation_tasks());
+    waits.extend(scheduler.take_protocol_work_tasks());
     for task in &waits {
         task.abort();
     }
@@ -611,6 +588,15 @@ async fn handle_scheduler_input(
         );
     }
     let ok = match input {
+        SchedulerInput::ProtocolWorkCompletion(completion) => {
+            flush_owned_protocol_work(
+                frontend_router,
+                scheduler,
+                pending_runtime_deferred_replies,
+                completion,
+            )
+            .await
+        }
         SchedulerInput::ProtocolStateRequest(request) => {
             scheduler.apply_protocol_state_request(request);
             true
@@ -733,6 +719,29 @@ async fn handle_scheduler_input(
     ok
 }
 
+async fn flush_owned_protocol_work(
+    frontend_router: &CdpFrontendRouter,
+    scheduler: &mut CdpScheduler,
+    pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
+    completion: super::protocol_task::ProtocolWorkCompletion,
+) -> bool {
+    match scheduler.complete_protocol_work(completion) {
+        Ok(output) => {
+            flush_protocol_output_with_runtime_deferred_reply_routing(
+                frontend_router,
+                scheduler,
+                pending_runtime_deferred_replies,
+                output,
+            )
+            .await
+        }
+        Err(error) => {
+            tracing::error!(%error, "protocol owner work failed during recovery");
+            false
+        }
+    }
+}
+
 async fn flush_renderer_publication_predecessor(
     frontend_router: &CdpFrontendRouter,
     scheduler: &mut CdpScheduler,
@@ -748,19 +757,35 @@ async fn flush_renderer_publication_predecessor(
         .conn
         .renderer_output_cursor_is_projected(predecessor.cursor())
     {
-        let Some(publication) = scheduler_input_rx.recv_concrete_renderer_transport().await else {
-            return false;
-        };
-        if !ingest_and_flush_renderer_publication(
-            frontend_router,
-            scheduler,
-            pending_runtime_deferred_replies,
-            adapter_scheduler,
-            publication,
-        )
-        .await
-        {
-            return false;
+        if let Some(publication) = scheduler_input_rx.take_buffered_renderer_publication() {
+            if !ingest_and_flush_renderer_publication(
+                frontend_router,
+                scheduler,
+                pending_runtime_deferred_replies,
+                adapter_scheduler,
+                publication,
+            )
+            .await
+            {
+                return false;
+            }
+            continue;
+        }
+        tokio::select! {
+            biased;
+            request = scheduler_input_rx.protocol_state_request_rx.recv(), if !scheduler_input_rx.protocol_state_request_rx.is_closed() => {
+                let Some(request) = request else { return false; };
+                scheduler.apply_protocol_state_request(request);
+            }
+            completion = scheduler_input_rx.protocol_work_completion_rx.recv() => {
+                let Some(completion) = completion else { return false; };
+                if !flush_owned_protocol_work(frontend_router, scheduler, pending_runtime_deferred_replies, completion).await { return false; }
+            }
+            publication = scheduler_input_rx.renderer_publication_rx.recv() => {
+                let Some(publication) = publication else { return false; };
+                if !ingest_and_flush_renderer_publication(frontend_router, scheduler,
+                    pending_runtime_deferred_replies, adapter_scheduler, publication).await { return false; }
+            }
         }
     }
     true
@@ -2219,63 +2244,12 @@ async fn handle_pending_command_completion(
             return true;
         }
         InFlightWork::Command(state) => state,
-        InFlightWork::Protocol {
-            pending,
-            recovering,
-            ..
-        } => {
-            let result = match completion.result {
-                Ok(CompletedActorWork::Protocol(completed)) => Ok(completed),
-                Err(error) => Err(error),
-                _ => unreachable!("protocol wait retains its completion kind"),
-            };
-            match result {
-                Ok(completed) => {
-                    let outcome = scheduler
-                        .conn
-                        .complete_owned_protocol_scheduler_work(completed);
-                    let output = scheduler.apply_protocol_only_turn_outcome(outcome);
-                    return flush_protocol_output_with_runtime_deferred_reply_routing(
-                        frontend_router,
-                        scheduler,
-                        pending_runtime_deferred_replies,
-                        output,
-                    )
-                    .await;
-                }
-                Err(error) if !recovering => {
-                    tracing::warn!(token = identity.token, %error, "protocol workflow failed; rejoining admitted owner work");
-                    let recovery = pending.clone();
-                    let task = spawn_command_wait(
-                        CommandWaitIdentity {
-                            token: identity.token,
-                            turn: 1,
-                        },
-                        async move { CompletedActorWork::Protocol(recovery.wait().await) },
-                        pending_command_completion_tx,
-                    );
-                    in_flight_commands.insert(
-                        identity.token,
-                        InFlightWork::Protocol {
-                            pending,
-                            task,
-                            recovering: true,
-                        },
-                    );
-                    return true;
-                }
-                Err(error) => {
-                    tracing::error!(token = identity.token, %error, "protocol owner work failed during recovery");
-                    return false;
-                }
-            }
-        }
     };
     let completion = CommandWaitCompletion {
         identity,
         result: completion.result.map(|completed| match completed {
             CompletedActorWork::Command(completed) => completed,
-            CompletedActorWork::FrontendControl | CompletedActorWork::Protocol(_) => {
+            CompletedActorWork::FrontendControl => {
                 unreachable!("command wait completed as control work")
             }
         }),
@@ -2478,6 +2452,7 @@ fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
 fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
     match input {
         SchedulerInput::ProtocolStateRequest(_) => "protocol_state_request",
+        SchedulerInput::ProtocolWorkCompletion(_) => "protocol_work_completion",
         SchedulerInput::DocumentActivityCompletion(_) => "document_activity_completion",
         SchedulerInput::BackgroundNavigationCompletion(_) => "background_navigation_completion",
         SchedulerInput::BackgroundEvent(_) => "background_event",
@@ -2549,6 +2524,7 @@ mod tests {
         let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
             protocol_state_request_rx: mpsc::unbounded_channel().1,
+            protocol_work_completion_rx: mpsc::unbounded_channel().1,
             document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,
@@ -2871,6 +2847,7 @@ mod tests {
         let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         let mut receivers = SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
             protocol_state_request_rx: mpsc::unbounded_channel().1,
+            protocol_work_completion_rx: mpsc::unbounded_channel().1,
             document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,

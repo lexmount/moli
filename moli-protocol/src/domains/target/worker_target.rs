@@ -49,7 +49,6 @@ use crate::{
         runtime_console_api_called_background_event, runtime_console_message_type_and_text,
         runtime_exception_thrown_background_event,
     },
-    domains::runtime::replay_shared_worker_runtime_bindings_for_session_async,
     domains::{network, service_worker},
 };
 #[cfg(test)]
@@ -81,8 +80,12 @@ pub(in crate::domains) use dedicated_worker::{
     release_failed_dedicated_worker_target_after_debugger_resume,
     retire_dedicated_worker_targets_for_replaced_page_async,
 };
-pub(in crate::domains) use event_projection::project_worker_target_output_async;
+
 use event_projection::*;
+pub(crate) use event_projection::{
+    PreparedDedicatedWorkerProjectionDisposal, WorkerTargetOutputProjection,
+    prepare_worker_inspector_projection, project_worker_target_event, retain_events,
+};
 pub(in crate::domains) use lifecycle_projection::{
     dedicated_worker_target_lifecycle_prepared_outputs_for_event,
     service_worker_target_lifecycle_prepared_outputs_for_event,
@@ -100,7 +103,7 @@ pub(in crate::domains) struct TargetPreparedOutputs {
 }
 
 #[derive(Debug, PartialEq)]
-enum WorkerTargetLifecycleOutput {
+pub(crate) enum WorkerTargetLifecycleOutput {
     DedicatedWorkerEvents {
         browser_context_id: String,
         renderer_instance_id: u64,

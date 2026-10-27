@@ -397,7 +397,7 @@ impl CompletedCdpCommandDispatch {
     }
 }
 
-fn append_command_output_plan(
+pub(super) fn append_command_output_plan(
     out: &mut Vec<BackgroundProtocolEvent>,
     command_context: &mut CommandDispatchContext,
     mut plan: CommandOutputPlan,

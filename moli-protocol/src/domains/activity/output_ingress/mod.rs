@@ -1,9 +1,13 @@
 mod ordered_stream;
 mod prepared_outputs;
 mod renderer;
+mod worker;
+pub(crate) use worker::{PreparedWorkerRendererRecord, WorkerRendererProjection};
 
-pub(crate) use ordered_stream::{OrderedRendererOutputIngress, RendererOutputIngressAdmission};
-pub(super) use prepared_outputs::PreparedProtocolOutputs;
+pub(crate) use ordered_stream::{
+    AdmittedRendererOutputPublication, OrderedRendererOutputIngress, RendererOutputIngressAdmission,
+};
+pub(crate) use prepared_outputs::PreparedProtocolOutputs;
 pub(crate) use renderer::ingest_renderer_output_transport_async;
 
 use crate::conn::{CdpConnection, CommandDispatchContext, CommandOwnerScope};

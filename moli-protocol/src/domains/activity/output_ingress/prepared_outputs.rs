@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use moli_core::{
     RendererOwnerAction, RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
 };
@@ -19,13 +21,82 @@ use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIG
 /// cleanup.
 #[derive(Debug)]
 #[must_use = "prepared protocol outputs must be projected, held, or cleaned up exactly once"]
-pub(in crate::domains::activity) struct PreparedProtocolOutputs {
+pub(crate) struct PreparedProtocolOutputs {
     ordered_slots: Vec<ProtocolOutputSlot>,
     payloads: ProtocolOutputPayloads,
     emit_root_network_idle_after_projection: bool,
 }
 
 impl PreparedProtocolOutputs {
+    pub(crate) async fn project_using(
+        mut self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        let mut first_error = None;
+        while !self.ordered_slots.is_empty() {
+            let step_owner = owner.clone();
+            let (remaining, pending) = context
+                .with_state(driver, move |state, context| {
+                    state.prepare_protocol_output_projection_step(self, step_owner, context)
+                })
+                .await?;
+            self = remaining;
+            if let Some(pending) = pending
+                && let Err(error) = pending.run(driver, context).await
+            {
+                first_error.get_or_insert(error);
+            }
+        }
+        context
+            .with_state(driver, move |state, context| {
+                state.finish_protocol_output_projection(self, owner, context);
+            })
+            .await?;
+        first_error.map_or(Ok(()), Err)
+    }
+
+    pub(crate) fn prepare_next_projection_step(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> (
+        Self,
+        Option<super::super::output_slot::PreparedProtocolOutputWait>,
+    ) {
+        let slot = self.ordered_slots.remove(0);
+        let pending = if slot
+            .project_finite(
+                conn,
+                &mut ProtocolOutputProjectionContext::new(&owner, context.context_mut()),
+                &mut self.payloads,
+            )
+            .is_ok()
+        {
+            None
+        } else {
+            slot.prepare_wait(conn, &owner, &mut self.payloads)
+        };
+        (self, pending)
+    }
+
+    pub(crate) fn finish_projection(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) {
+        self.emit_root_network_idle_if_ready(conn, &owner, context.context_mut());
+    }
+
+    pub(in crate::domains::activity) fn has_after_response_slots(&self) -> bool {
+        self.ordered_slots
+            .iter()
+            .any(|slot| slot.command_response_order() == ProtocolOutputResponseOrder::AfterResponse)
+    }
+
     pub(in crate::domains::activity) fn empty() -> Self {
         Self {
             ordered_slots: Vec::new(),

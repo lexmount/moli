@@ -1,3 +1,7 @@
+use crate::conn::{CommandWorkflowContext, ProtocolWorkflowDriver};
+use crate::domains::command_output::CommandOutputPlan;
+use anyhow::Result;
+
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
@@ -36,7 +40,7 @@ struct RuntimeBindingCallBatch {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct RuntimeInspectorMessageBatch {
+pub(crate) struct RuntimeInspectorMessageBatch {
     authority: RuntimeInspectorMessageAuthority,
     messages: Vec<RuntimeInspectorMessage>,
     /// Contexts created by this exact Inspector batch.
@@ -144,7 +148,7 @@ pub(in crate::domains) const SLOT_RUNTIME_INSPECTOR_MESSAGES: ProtocolOutputSlot
 pub(in crate::domains) const SLOT_RUNTIME_INSPECTOR_POST_RESPONSE_MESSAGES: ProtocolOutputSlot =
     ProtocolOutputSlot::RuntimeInspectorPostResponseMessages;
 
-pub(in crate::domains) async fn project_runtime_binding_calls_async(
+pub(in crate::domains) fn project_runtime_binding_calls(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
@@ -168,6 +172,7 @@ pub(in crate::domains) async fn project_runtime_binding_calls_async(
     }
 }
 
+#[cfg(test)]
 pub(in crate::domains) async fn project_runtime_inspector_messages_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
@@ -181,48 +186,90 @@ pub(in crate::domains) async fn project_runtime_inspector_messages_async(
     }
 }
 
-pub(in crate::domains) async fn project_runtime_inspector_post_response_messages_async(
-    conn: &mut CdpConnection,
-    context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: &mut ProtocolOutputPayloads,
-) {
-    if let Some(batches) = prepared_outputs
-        .runtime_mut()
-        .and_then(RuntimePreparedOutputSlot::take_post_response_inspector_messages)
-    {
-        project_inspector_message_batches(conn, context, batches).await;
+pub(crate) struct PreparedRuntimeInspectorProjection {
+    batches: Vec<RuntimeInspectorMessageBatch>,
+}
+
+impl PreparedRuntimeInspectorProjection {
+    pub(in crate::domains) fn take(
+        slot: ProtocolOutputSlot,
+        payloads: &mut ProtocolOutputPayloads,
+    ) -> Option<Self> {
+        let runtime = payloads.runtime_mut()?;
+        let batches = match slot {
+            ProtocolOutputSlot::RuntimeInspectorMessages => runtime.take_inspector_messages(),
+            ProtocolOutputSlot::RuntimeInspectorPostResponseMessages => {
+                runtime.take_post_response_inspector_messages()
+            }
+            _ => unreachable!("only Runtime Inspector slots prepare these messages"),
+        }?;
+        Some(Self { batches })
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        for batch in self.batches {
+            let preloads = context
+                .with_state(driver, move |state, context| {
+                    state.prepare_runtime_inspector_projection_batch(batch, context)
+                })
+                .await?;
+            for preload in preloads {
+                let mut events = Vec::new();
+                preload.run(driver, &mut events).await;
+                let mut output = CommandOutputPlan::default();
+                output.extend_background_events(events);
+                context.retain_output(output);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn begin_batch(
+        conn: &mut CdpConnection,
+        batch: RuntimeInspectorMessageBatch,
+        context: &mut CommandWorkflowContext,
+    ) -> Vec<super::PreparedBidiPreloadChannelListeners> {
+        if !batch.authority.permits_projection(conn) {
+            return Vec::new();
+        }
+        let owner = batch.authority.command_owner();
+        let session = batch.authority.session_id().map(str::to_owned);
+        let mut events = Vec::new();
+        push_runtime_inspector_messages_for_session(
+            conn,
+            &mut events,
+            batch.messages,
+            session.as_deref(),
+        );
+        let mut output = CommandOutputPlan::default();
+        output.extend_background_events(events);
+        context.retain_output(output);
+        batch
+            .created_execution_context_ids
+            .into_iter()
+            .filter_map(|id| super::PreparedBidiPreloadChannelListeners::prepare(conn, &owner, id))
+            .collect()
     }
 }
 
+#[cfg(test)]
 async fn project_inspector_message_batches(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     batches: Vec<RuntimeInspectorMessageBatch>,
 ) {
-    for batch in batches {
-        if !batch.authority.permits_projection(conn) {
-            continue;
-        }
-        let owner = batch.authority.command_owner();
-        let session_id = batch.authority.session_id().map(str::to_owned);
-        push_runtime_inspector_messages_for_session(
-            conn,
-            context.command.protocol_events_mut(),
-            batch.messages,
-            session_id.as_deref(),
-        );
-        for execution_context_id in batch.created_execution_context_ids {
-            Box::pin(
-                super::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-                    conn,
-                    &owner,
-                    execution_context_id,
-                    context.command.protocol_events_mut(),
-                ),
-            )
-            .await;
-        }
-    }
+    let mut local =
+        crate::conn::CommandDispatchContext::new(context.command.response_flush().clone());
+    let (mut output, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
+    let result = PreparedRuntimeInspectorProjection { batches }
+        .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
+        .await;
+    output.finish_projection_inline(conn, context.command);
+    result.expect("exclusive Runtime projection retains its connection owner");
 }
 
 impl RuntimePreparedOutputs {
@@ -889,7 +936,7 @@ mod tests {
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
         let mut prepared = prepared_runtime_binding_calls(attachment);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
+        super::project_runtime_binding_calls(&mut conn, &mut context, &mut prepared);
         let out = context
             .command
             .take_protocol_events()
@@ -918,7 +965,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
+        super::project_runtime_binding_calls(&mut conn, &mut context, &mut prepared);
 
         assert!(
             context.command.take_protocol_events().is_empty(),
@@ -946,7 +993,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
+        super::project_runtime_binding_calls(&mut conn, &mut context, &mut prepared);
         let events = context
             .command
             .take_protocol_events()
@@ -976,7 +1023,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
+        super::project_runtime_binding_calls(&mut conn, &mut context, &mut prepared);
 
         assert!(
             context.command.take_protocol_events().is_empty(),

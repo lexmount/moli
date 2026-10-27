@@ -1405,6 +1405,12 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    completion = receivers.protocol_work_completion_rx.recv() => {
+                        let Some(completion) = completion else { break; };
+                        if !attached.actor.handle_protocol_work_completion(&mut scheduler, &mut receivers, completion).await {
+                            detach_bidi = true;
+                        }
+                    }
                     request = receivers.protocol_state_request_rx.recv() => {
                         let Some(request) = request else { break; };
                         scheduler.apply_protocol_state_request(request);
@@ -1544,6 +1550,10 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                completion = receivers.protocol_work_completion_rx.recv() => {
+                    let Some(completion) = completion else { break; };
+                    if scheduler.complete_protocol_work(completion).is_err() { break; }
+                }
                 request = receivers.protocol_state_request_rx.recv() => {
                     let Some(request) = request else { break; };
                     scheduler.apply_protocol_state_request(request);

@@ -2338,7 +2338,7 @@ fn prepared_child_frame_tree_event_frame_id(event: &PagePreparedChildFrameTreeEv
     }
 }
 
-pub(crate) async fn emit_prepared_child_frame_activity(
+pub(crate) fn emit_prepared_child_frame_activity(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     activity: PagePreparedChildFrameActivity,

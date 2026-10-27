@@ -195,6 +195,10 @@ async fn handle_bidi_session_socket_local(
         tokio::select! {
             biased;
             _ = control.shutdown_requested() => break,
+            completion = receivers.protocol_work_completion_rx.recv() => {
+                let Some(completion) = completion else { break; };
+                if !actor.handle_protocol_work_completion(&mut scheduler, &mut receivers, completion).await { break; }
+            }
             maybe_request = receivers.protocol_state_request_rx.recv() => {
                 let Some(request) = maybe_request else { break; };
                 scheduler.apply_protocol_state_request(request);
@@ -414,6 +418,24 @@ impl BidiSocketActor {
             message,
         )
         .await
+    }
+
+    pub(in crate::protocol_server) async fn handle_protocol_work_completion(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        receivers: &mut CdpSchedulerEventReceivers,
+        completion: crate::cdp_scheduler::ProtocolWorkCompletion,
+    ) -> bool {
+        match scheduler.complete_protocol_work(completion) {
+            Ok(output) => {
+                self.send_or_route_protocol_output(scheduler, receivers, output, None)
+                    .await
+            }
+            Err(error) => {
+                tracing::error!(%error, "protocol owner work failed during recovery");
+                false
+            }
+        }
     }
 
     pub(in crate::protocol_server) async fn handle_background_navigation_completion(

@@ -10,7 +10,9 @@ mod output;
 #[cfg(test)]
 mod tests;
 pub(in crate::domains) use output::navigation_failed;
-pub(in crate::domains) use output::{WebMcpPreparedOutputSlot, append_observation, project_async};
+pub(in crate::domains) use output::{
+    WebMcpPreparedOutputSlot, append_observation, project_web_mcp,
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

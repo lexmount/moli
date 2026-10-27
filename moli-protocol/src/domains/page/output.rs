@@ -740,26 +740,14 @@ impl PagePreparedOutputSlot {
     }
 }
 
-pub(in crate::domains) async fn project_page_output_async(
+pub(in crate::domains) fn project_page_output_finite(
     output: ProtocolOutputSlot,
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
-) {
+) -> Result<(), ProtocolOutputSlot> {
     let owner = context.owner().clone();
     match output {
-        ProtocolOutputSlot::Download => {
-            let mut events = Vec::new();
-            input::emit_download_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-                context.command,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
         ProtocolOutputSlot::DocumentLifecycle => {
             if let Some(renderer_events) = prepared_outputs
                 .page_mut()
@@ -801,25 +789,9 @@ pub(in crate::domains) async fn project_page_output_async(
                 context.command.protocol_events_mut().extend(events);
             }
         }
-        ProtocolOutputSlot::FileChooser => {
-            let mut events = Vec::new();
-            input::emit_file_chooser_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
         ProtocolOutputSlot::JavascriptDialog => {
             let mut events = Vec::new();
-            emit_javascript_dialog_activity_background_events_async(
-                conn,
-                &mut events,
-                prepared_outputs,
-            )
-            .await;
+            emit_javascript_dialog_activity_background_events(conn, &mut events, prepared_outputs);
             context.command.protocol_events_mut().extend(events);
         }
         ProtocolOutputSlot::WindowOpen => {
@@ -835,11 +807,6 @@ pub(in crate::domains) async fn project_page_output_async(
                     .extend(protocol_events);
             }
         }
-        ProtocolOutputSlot::Popup => {
-            let mut events = Vec::new();
-            emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs).await;
-            context.command.protocol_events_mut().extend(events);
-        }
         ProtocolOutputSlot::ChildFrameActivity => {
             if let Some(activities) = prepared_outputs
                 .page_mut()
@@ -847,7 +814,7 @@ pub(in crate::domains) async fn project_page_output_async(
             {
                 let mut events = Vec::new();
                 for activity in activities {
-                    emit_prepared_child_frame_activity(conn, &mut events, activity, None).await;
+                    emit_prepared_child_frame_activity(conn, &mut events, activity, None);
                 }
                 context.command.protocol_events_mut().extend(events);
             }
@@ -877,6 +844,47 @@ pub(in crate::domains) async fn project_page_output_async(
                 }
             }
         }
+        ProtocolOutputSlot::SessionHistoryUpdate => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for (residence, _source_document, update) in
+                    std::mem::take(&mut slot.outputs.session_history_updates)
+                {
+                    // document.open() does not undo committed history. Page
+                    // residence, not current Document identity, is authority.
+                    if conn.target_page_residence_identity_is_current(&residence) {
+                        conn.record_session_history_update_for_owner(&owner, &update);
+                    }
+                }
+            }
+        }
+        ProtocolOutputSlot::TopLevelLocationNavigation => {
+            publish_prepared_top_level_location_navigation_owner_action(
+                conn,
+                &owner,
+                prepared_outputs,
+            );
+        }
+        _ => return Err(output),
+    }
+    Ok(())
+}
+
+pub(in crate::domains) async fn project_page_output_async(
+    output: ProtocolOutputSlot,
+    conn: &mut CdpConnection,
+    context: &mut ProtocolOutputProjectionContext<'_>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
+) {
+    if project_page_output_finite(output, conn, context, prepared_outputs).is_ok() {
+        return;
+    }
+    let owner = context.owner().clone();
+    match output {
+        ProtocolOutputSlot::Popup => {
+            let mut events = Vec::new();
+            emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs).await;
+            context.command.protocol_events_mut().extend(events);
+        }
         ProtocolOutputSlot::CloseAuxiliaryWindow => {
             if let Some(slot) = prepared_outputs.page_mut() {
                 for (browser_context_id, window) in
@@ -904,19 +912,6 @@ pub(in crate::domains) async fn project_page_output_async(
                 }
             }
         }
-        ProtocolOutputSlot::SessionHistoryUpdate => {
-            if let Some(slot) = prepared_outputs.page_mut() {
-                for (residence, _source_document, update) in
-                    std::mem::take(&mut slot.outputs.session_history_updates)
-                {
-                    // document.open() does not undo committed history. Page
-                    // residence, not current Document identity, is authority.
-                    if conn.target_page_residence_identity_is_current(&residence) {
-                        conn.record_session_history_update_for_owner(&owner, &update);
-                    }
-                }
-            }
-        }
         ProtocolOutputSlot::SameDocumentNavigation => {
             let mut events = Vec::new();
             emit_same_document_navigation_activity_background_events_async(
@@ -927,13 +922,6 @@ pub(in crate::domains) async fn project_page_output_async(
             )
             .await;
             context.command.protocol_events_mut().extend(events);
-        }
-        ProtocolOutputSlot::TopLevelLocationNavigation => {
-            publish_prepared_top_level_location_navigation_owner_action(
-                conn,
-                &owner,
-                prepared_outputs,
-            );
         }
         ProtocolOutputSlot::TopLevelHistoryTraversal => {
             let mut events = Vec::new();

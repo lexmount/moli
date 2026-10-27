@@ -16,7 +16,7 @@ use super::conn::{
 use crate::automation::{AutomationCommand, AutomationResult, DevToolsError};
 use crate::domains::activity::{
     ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    RuntimeCommandOutputBarrierPermit,
 };
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputFence, RendererOutputStreamControl,
@@ -43,7 +43,6 @@ pub struct TestContext {
     pub sent: Vec<Value>,
     pending_runtime_deferred_replies: VecDeque<PendingTestRuntimeDeferredReply>,
     pending_protocol_scheduler_work: VecDeque<ProtocolSchedulerWork>,
-    runtime_command_output_barriers: RuntimeCommandOutputBarriers,
     runtime_inspector_response_ready_rx:
         tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
     renderer_publication_rx: moli_core::RendererOutputTransportReceiver,
@@ -232,7 +231,6 @@ impl TestContext {
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
             runtime_inspector_response_ready_rx,
             renderer_publication_rx,
             background_event_tx,
@@ -832,8 +830,7 @@ impl TestContext {
         command
             .runtime_command_executes_page_javascript()
             .then(|| {
-                self.runtime_command_output_barriers.admit(
-                    &self.conn,
+                self.conn.admit_runtime_command_output_barrier(
                     command.request().id(),
                     command.command_output_session_id(),
                 )
@@ -1060,10 +1057,7 @@ impl TestContext {
     ) -> Vec<CdpSchedulerEvent> {
         let completion = self
             .conn
-            .release_runtime_command_output_barrier_turn_async(
-                &mut self.runtime_command_output_barriers,
-                permit,
-            )
+            .release_runtime_command_output_barrier_turn_async(permit)
             .await;
         let (protocol_events, scheduler_events) =
             completion.into_outcome().into_protocol_event_parts();
@@ -1196,20 +1190,14 @@ impl TestContext {
                 TestSchedulerWork::ReleaseRuntimeOutputBarrier(permit) => {
                     let completion = self
                         .conn
-                        .release_runtime_command_output_barrier_turn_async(
-                            &mut self.runtime_command_output_barriers,
-                            permit,
-                        )
+                        .release_runtime_command_output_barrier_turn_async(permit)
                         .await;
                     self.enqueue_runtime_output_barrier_completion(completion, work);
                 }
                 TestSchedulerWork::CancelRuntimeOutputBarrier(permit) => {
                     let completion = self
                         .conn
-                        .cancel_runtime_command_output_barrier_turn_async(
-                            &mut self.runtime_command_output_barriers,
-                            permit,
-                        )
+                        .cancel_runtime_command_output_barrier_turn_async(permit)
                         .await;
                     self.enqueue_runtime_output_barrier_completion(completion, work);
                 }
@@ -1653,10 +1641,7 @@ impl TestContext {
         // stream and can deadlock sequence N behind output produced at N + 1.
         let outcome = self
             .conn
-            .ingest_renderer_output_turn_async(
-                publication,
-                &mut self.runtime_command_output_barriers,
-            )
+            .ingest_renderer_output_turn_async(publication)
             .await;
         let (protocol_events, scheduler_events) = outcome.into_protocol_event_parts();
         if !protocol_events.is_empty() {
@@ -2003,6 +1988,9 @@ fn enqueue_scheduler_events_like_scheduler(
 ) {
     for event in events {
         match event {
+            CdpSchedulerEvent::RendererOutputProjectionPrepared { .. } => unreachable!(
+                "owned renderer projection tests drive their original state owner and task supervisor"
+            ),
             CdpSchedulerEvent::ProtocolWorkPublished { work } => {
                 queue.push_back(TestDeferredSchedulerWork(work));
             }
@@ -2239,7 +2227,6 @@ mod tests {
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
             runtime_inspector_response_ready_rx: runtime_response_rx,
             renderer_publication_rx: publication_rx,
             background_event_tx,

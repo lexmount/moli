@@ -191,7 +191,7 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
     ))
 }
 
-pub(in crate::domains) async fn emit_javascript_dialog_activity_background_events_async(
+pub(in crate::domains) fn emit_javascript_dialog_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     prepared_outputs: &mut ProtocolOutputPayloads,

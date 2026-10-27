@@ -17,10 +17,12 @@ pub(crate) use main_document::{
     PendingDeferredMainDocumentLoadCompletionActivity,
 };
 pub(crate) use output_ingress::{
-    OrderedRendererOutputIngress, RendererOutputIngressAdmission,
+    AdmittedRendererOutputPublication, OrderedRendererOutputIngress, PreparedProtocolOutputs,
+    PreparedWorkerRendererRecord, RendererOutputIngressAdmission, WorkerRendererProjection,
     ingest_renderer_output_transport_async, project_protocol_local_command_outputs,
 };
 pub(in crate::domains) use output_payloads::ProtocolOutputPayloads;
+pub(crate) use output_slot::PreparedProtocolOutputWait;
 pub(in crate::domains) use output_slot::{ProtocolOutputSink, ProtocolOutputSlot};
 pub(crate) use output_work::{
     ProtocolOutputWork, RootFrameStoppedLoadingSettlement, RootFrameStoppedLoadingSettlementError,

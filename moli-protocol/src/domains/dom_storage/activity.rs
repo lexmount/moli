@@ -25,7 +25,7 @@ pub(in crate::domains) struct DomStoragePreparedOutputSlot {
 
 pub(in crate::domains) const SLOT_DOM_STORAGE: ProtocolOutputSlot = ProtocolOutputSlot::DomStorage;
 
-pub(in crate::domains) async fn project_dom_storage_async(
+pub(in crate::domains) fn project_dom_storage(
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
 ) {

@@ -137,13 +137,14 @@ pub(crate) fn detach_session_inspector(
     Ok(())
 }
 
-pub(crate) use activity::push_routed_renderer_runtime_inspector_message_batch_background_events;
-pub(in crate::domains) use activity::{
-    RuntimePreparedOutputSlot, RuntimePreparedOutputs, project_runtime_binding_calls_async,
-    project_runtime_inspector_messages_async,
-    project_runtime_inspector_post_response_messages_async,
+pub(crate) use activity::{
+    PreparedRuntimeInspectorProjection, RuntimeInspectorMessageBatch,
+    push_routed_renderer_runtime_inspector_message_batch_background_events,
 };
-pub(in crate::domains) use dispatcher::replay_shared_worker_runtime_bindings_for_session_async;
+pub(in crate::domains) use activity::{
+    RuntimePreparedOutputSlot, RuntimePreparedOutputs, project_runtime_binding_calls,
+};
+pub(crate) use dispatcher::PreparedWorkerBindingReplay;
 pub(crate) use dispatcher::{
     BidiPreloadFunctionDeclaration, CompletedRuntimeCommandDispatch, PendingRuntimeCommandDispatch,
     PreparedBidiPreloadChannelListeners, RuntimeCommandTaskStep,

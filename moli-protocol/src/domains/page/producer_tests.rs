@@ -378,12 +378,7 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
             ),
         ));
 
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
 
     assert_eq!(out.len(), 1);
     let (message, automation_event) = out.remove(0).into_parts();
@@ -442,12 +437,7 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
         ));
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
 
     assert_eq!(out.len(), 1);
     let message = out.remove(0).into_protocol_message();
@@ -510,12 +500,7 @@ async fn detached_source_attachment_dismisses_prepared_child_dialog() {
     conn.rollback_attached_session_without_event("SID-detached");
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
 
     assert!(out.is_empty());
     assert!(!completion.finish(true, String::new()));
@@ -556,12 +541,11 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
             ),
         ));
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
+    super::emit_javascript_dialog_activity_background_events(
         &mut conn,
         &mut out,
         &mut dialog_output,
-    )
-    .await;
+    );
     assert!(
         out.is_empty(),
         "dialog should remain pending before popup creation"
@@ -661,12 +645,7 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     );
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
     assert!(
         out.is_empty(),
         "dialog must wait for its popup target instead of falling back to the opener"
@@ -734,12 +713,11 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
             ),
         ));
     let mut later_out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
+    super::emit_javascript_dialog_activity_background_events(
         &mut conn,
         &mut later_out,
         &mut later_dialog,
-    )
-    .await;
+    );
     let later_messages = protocol_messages_from_background_events(later_out);
     assert!(later_messages.iter().any(|message| {
         message["method"] == json!("Page.javascriptDialogOpening")
@@ -809,12 +787,7 @@ async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
     );
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
     super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
 
     let messages = protocol_messages_from_background_events(out);
@@ -910,12 +883,7 @@ async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
         .replace_page_attachment_id_for_test();
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
 
     assert!(out.is_empty());
     assert!(
@@ -968,12 +936,7 @@ async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
     .expect("target session state should retire its dialog scope");
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
 
     assert!(out.is_empty());
     assert!(!completion.finish(true, String::new()));
@@ -1019,12 +982,7 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
         .set_target_url("https://replacement.example/current".to_owned());
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        &mut prepared,
-    )
-    .await;
+    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
 
     assert_eq!(out.len(), 1);
     let message = out.remove(0).into_protocol_message();
@@ -1127,7 +1085,7 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
         ProtocolOutputSlot::JavascriptDialog,
         ProtocolOutputSlot::Popup,
     ] {
-        super::output::project_page_output_async(step, &mut conn, &mut context, &mut prepared)
+        step.project_async(&mut conn, &mut context, &mut prepared)
             .await;
     }
 
@@ -1255,7 +1213,7 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
         ProtocolOutputSlot::SameDocumentNavigation,
         ProtocolOutputSlot::TopLevelLocationNavigation,
     ] {
-        super::output::project_page_output_async(step, &mut conn, &mut context, &mut prepared)
+        step.project_async(&mut conn, &mut context, &mut prepared)
             .await;
     }
 
@@ -1390,8 +1348,7 @@ async fn browser_initiated_child_frame_completion_omits_renderer_request_events(
         &mut background_events,
         activity,
         Some("CHILD-FRAME-1"),
-    )
-    .await;
+    );
     let out = protocol_messages_from_background_events(background_events);
 
     assert!(
@@ -1463,8 +1420,7 @@ async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_term
         .and_then(|mut activities| activities.pop())
         .expect("test prepared output should carry one child frame activity");
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None)
-        .await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
     let out = protocol_messages_from_background_events(background_events);
 
     let navigated_index = out
@@ -1528,8 +1484,7 @@ async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session()
         default_prepared_child_frame_activity_for_test(&conn, "SID-primary", source_document);
     let mut background_events = Vec::new();
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None)
-        .await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
     let out = protocol_messages_from_background_events(background_events);
 
     for method in [
@@ -1596,8 +1551,7 @@ async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url()
     let activity =
         prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None)
-        .await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
     let out = protocol_messages_from_background_events(background_events);
 
     let navigated = out
@@ -1851,8 +1805,7 @@ async fn child_frame_activity_emits_document_network_events_from_prepared_load()
     let activity =
         prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None)
-        .await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
     let out = protocol_messages_from_background_events(background_events);
 
     let request = out
@@ -1984,8 +1937,7 @@ async fn stale_child_document_response_emits_network_without_navigation_or_lifec
         prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);
     let mut background_events = Vec::new();
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None)
-        .await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
     let out = protocol_messages_from_background_events(background_events);
 
     assert_eq!(
@@ -2226,7 +2178,7 @@ async fn prepared_child_frame_activity_does_not_follow_replacement_page_residenc
         .replace_page_attachment_id_for_test();
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
 
     assert!(
         events.is_empty(),
@@ -2266,7 +2218,7 @@ async fn prepared_child_frame_activity_does_not_follow_root_document_open_replac
     );
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
 
     assert!(
         events.is_empty(),
@@ -2304,7 +2256,7 @@ async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery(
     );
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
 
     assert!(
         !events.is_empty(),
@@ -2357,7 +2309,7 @@ async fn prepared_child_frame_activity_does_not_follow_detached_protocol_session
     conn.rollback_attached_session_without_event("SID-child-session");
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
 
     assert!(
         events.is_empty(),

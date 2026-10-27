@@ -20,7 +20,7 @@ use moli_protocol::{
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingPageScreencastCapture,
-    ProtocolSchedulerWorkKind, RuntimeCommandOutputBarriers,
+    ProtocolSchedulerWorkKind,
     automation::{AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait},
     conn::{RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender},
 };
@@ -39,6 +39,8 @@ mod command_task;
 mod frontend_control;
 mod instance_command;
 mod protocol_residence;
+mod protocol_task;
+pub(crate) use protocol_task::ProtocolWorkCompletion;
 mod runtime_command_barrier;
 mod runtime_dispatch;
 
@@ -112,10 +114,8 @@ pub(crate) enum CommandStartAction {
 
 pub(crate) struct CdpScheduler {
     conn: CdpConnection,
-    owned_protocol_work_tx:
-        Option<mpsc::UnboundedSender<moli_protocol::PendingProtocolSchedulerWork>>,
+    protocol_tasks: Option<protocol_task::ProtocolTaskSupervisor>,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
-    runtime_command_output_barriers: RuntimeCommandOutputBarriers,
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
     page_screencast_interval_ms: u32,
@@ -233,6 +233,8 @@ pub(crate) type CdpBackgroundNavigationCompletionReceiver =
 pub(crate) type CdpRendererPublicationReceiver = moli_core::RendererOutputTransportReceiver;
 pub(crate) struct CdpSchedulerEventReceivers {
     pub(crate) protocol_state_request_rx: moli_protocol::conn::ProtocolStateRequestReceiver,
+    pub(crate) protocol_work_completion_rx:
+        mpsc::UnboundedReceiver<protocol_task::ProtocolWorkCompletion>,
     pub(crate) document_activity_completion_rx:
         mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     pub(crate) background_event_rx: CdpBackgroundEventReceiver,
@@ -251,6 +253,7 @@ pub(crate) struct CdpSchedulerEventReceivers {
 /// value in the caller makes ownership unambiguous: once dequeued, the input
 /// is completed before the command wait selects again.
 pub(crate) enum CdpSchedulerInterleavedInput {
+    ProtocolWorkCompletion(protocol_task::ProtocolWorkCompletion),
     ProtocolStateRequest(moli_protocol::conn::ProtocolStateRequest),
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
@@ -262,6 +265,9 @@ impl CdpSchedulerEventReceivers {
     pub(crate) async fn recv_interleaved_input(&mut self) -> Option<CdpSchedulerInterleavedInput> {
         tokio::select! {
             biased;
+            completion = self.protocol_work_completion_rx.recv(), if !self.protocol_work_completion_rx.is_closed() => {
+                completion.map(CdpSchedulerInterleavedInput::ProtocolWorkCompletion)
+            }
             maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
                 maybe_request.map(CdpSchedulerInterleavedInput::ProtocolStateRequest)
             }
@@ -716,9 +722,8 @@ impl CdpScheduler {
     fn new_with_screencast_interval(conn: CdpConnection, page_screencast_interval_ms: u32) -> Self {
         Self {
             conn,
-            owned_protocol_work_tx: None,
+            protocol_tasks: None,
             pending_navigation_background_events: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
             page_screencast_interval_ms,
@@ -808,6 +813,10 @@ impl CdpScheduler {
             .conn
             .take_protocol_state_requests()
             .expect("scheduler takes its state request receiver once");
+        let (protocol_work_completion_tx, protocol_work_completion_rx) = mpsc::unbounded_channel();
+        scheduler.protocol_tasks = Some(protocol_task::ProtocolTaskSupervisor::new(
+            protocol_work_completion_tx,
+        ));
         let (background_event_tx, background_event_rx) = mpsc::unbounded_channel();
         scheduler
             .conn
@@ -831,6 +840,7 @@ impl CdpScheduler {
             scheduler,
             CdpSchedulerEventReceivers {
                 protocol_state_request_rx,
+                protocol_work_completion_rx,
                 document_activity_completion_rx,
                 background_event_rx,
                 background_navigation_completion_rx,
@@ -873,8 +883,7 @@ impl CdpScheduler {
         // must use that exact id rather than infer one from the frontend CDP
         // request id.
         let runtime_output_barrier = if command.runtime_command_executes_page_javascript() {
-            self.runtime_command_output_barriers.admit(
-                &self.conn,
+            self.conn.admit_runtime_command_output_barrier(
                 command.request().id(),
                 command.command_output_session_id(),
             )
@@ -1892,6 +1901,37 @@ impl CdpScheduler {
         self.complete_protocol_residence_snapshot(snapshot).await
     }
 
+    async fn advance_renderer_projection(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        boundary: &'static str,
+    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        tokio::select! {
+            biased;
+            request = receivers.protocol_state_request_rx.recv(), if !receivers.protocol_state_request_rx.is_closed() => {
+                let Some(request) = request else { return Ok(ProtocolOutputSequence::empty()); };
+                self.apply_protocol_state_request(request);
+                Ok(ProtocolOutputSequence::empty())
+            }
+            completion = receivers.protocol_work_completion_rx.recv(), if !receivers.protocol_work_completion_rx.is_closed() => {
+                let Some(completion) = completion else { return Ok(ProtocolOutputSequence::empty()); };
+                self.complete_protocol_work(completion).map_err(|error| {
+                    RendererOutputTransportFailure::without_output(DevToolsError::new(
+                        moli_protocol::automation::DevToolsErrorKind::Internal, error.to_string(),
+                    ))
+                })
+            }
+            publication = receivers.renderer_publication_rx.recv() => {
+                let Some(publication) = publication else {
+                    return Err(RendererOutputTransportFailure::without_output(
+                        renderer_output_transport_terminal_error(&receivers.renderer_publication_rx, boundary),
+                    ));
+                };
+                Ok(self.ingest_renderer_publication_now(publication).await)
+            }
+        }
+    }
+
     /// Projects the exact renderer stream position owned by a DevTools
     /// command before its protocol-neutral result leaves the scheduler.
     ///
@@ -1911,16 +1951,17 @@ impl CdpScheduler {
             .conn
             .renderer_output_cursor_is_projected(predecessor.cursor())
         {
-            let Some(publication) = receivers.renderer_publication_rx.recv().await else {
-                return Err(RendererOutputTransportFailure::new(
-                    output,
-                    renderer_output_transport_terminal_error(
-                        &receivers.renderer_publication_rx,
-                        "the command predecessor was projected",
-                    ),
-                ));
-            };
-            output.append(self.ingest_renderer_publication_now(publication).await);
+            match self
+                .advance_renderer_projection(receivers, "the command predecessor was projected")
+                .await
+            {
+                Ok(progress) => output.append(progress),
+                Err(failure) => {
+                    let (prefix, error) = failure.into_parts();
+                    output.append(prefix);
+                    return Err(RendererOutputTransportFailure::new(output, error));
+                }
+            }
         }
         output.append(
             self.complete_renderer_output_predecessor_before_runtime_response(predecessor)
@@ -2069,6 +2110,14 @@ impl CdpScheduler {
         input: CdpSchedulerInterleavedInput,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         match input {
+            CdpSchedulerInterleavedInput::ProtocolWorkCompletion(completion) => {
+                self.complete_protocol_work(completion).map_err(|error| {
+                    RendererOutputTransportFailure::without_output(DevToolsError::new(
+                        moli_protocol::automation::DevToolsErrorKind::Internal,
+                        error.to_string(),
+                    ))
+                })
+            }
             CdpSchedulerInterleavedInput::ProtocolStateRequest(request) => {
                 self.apply_protocol_state_request(request);
                 Ok(ProtocolOutputSequence::default())
@@ -2091,6 +2140,44 @@ impl CdpScheduler {
                 Ok(self.ingest_renderer_publication_now(publication).await)
             }
         }
+    }
+
+    fn try_start_protocol_work(
+        &mut self,
+        work: moli_protocol::ProtocolSchedulerWork,
+    ) -> Result<(), Box<moli_protocol::ProtocolSchedulerWork>> {
+        let Some(tasks) = &mut self.protocol_tasks else {
+            return Err(Box::new(work));
+        };
+        if let Some(pending) = self.conn.try_start_owned_protocol_scheduler_work(work)? {
+            tasks.start(pending);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn complete_protocol_work(
+        &mut self,
+        completion: protocol_task::ProtocolWorkCompletion,
+    ) -> Result<ProtocolOutputSequence, command_task::CommandWaitFailure> {
+        let completed = self
+            .protocol_tasks
+            .as_mut()
+            .expect("only an installed supervisor publishes task completions")
+            .complete(completion)?;
+        Ok(match completed {
+            Some(completed) => {
+                let outcome = self.conn.complete_owned_protocol_scheduler_work(completed);
+                self.apply_protocol_only_turn_outcome(outcome)
+            }
+            None => ProtocolOutputSequence::empty(),
+        })
+    }
+
+    fn take_protocol_work_tasks(&mut self) -> Vec<command_task::CommandWaitTask> {
+        self.protocol_tasks
+            .as_mut()
+            .map(|tasks| tasks.take_tasks())
+            .unwrap_or_default()
     }
 
     pub(crate) fn apply_protocol_state_request(
@@ -2264,7 +2351,31 @@ impl CdpScheduler {
                 );
             }
             match event {
+                CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                    self.protocol_tasks
+                        .as_mut()
+                        .expect("owned renderer ingress uses the installed task supervisor")
+                        .start(pending);
+                }
                 CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                    // The background navigation already owns its execution
+                    // turn. Poll its continuation immediately: a command may
+                    // be waiting for it while driving only concrete producer
+                    // and state inputs, without entering the adapter turn queue.
+                    let work = if work.kind()
+                        == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
+                    {
+                        let sequence = work.publish_sequence();
+                        match self.try_start_protocol_work(work) {
+                            Ok(()) => {
+                                self.queues.admit_protocol_work_publish_sequence(sequence);
+                                continue;
+                            }
+                            Err(work) => *work,
+                        }
+                    } else {
+                        work
+                    };
                     if moli_trace::cdp_nav_timing_enabled() {
                         tracing::info!(
                             publish_sequence = work.publish_sequence().get(),
@@ -2421,13 +2532,30 @@ impl CdpScheduler {
             );
         }
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let outcome = self
-            .conn
-            .ingest_renderer_output_turn_async(
-                publication,
-                &mut self.runtime_command_output_barriers,
-            )
-            .await;
+        let worker_publication = matches!(
+            &publication,
+            RendererOutputTransportMessage::Publication(output)
+                if matches!(output.cursor().stream().residence(),
+                    moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
+                    | moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. })
+        );
+        let outcome = if worker_publication && self.protocol_tasks.is_some() {
+            match self
+                .conn
+                .try_start_owned_worker_renderer_output(publication)
+            {
+                Ok(outcome) => outcome,
+                Err(publication) => {
+                    self.conn
+                        .ingest_renderer_output_turn_async(*publication)
+                        .await
+                }
+            }
+        } else {
+            self.conn
+                .ingest_renderer_output_turn_async(publication)
+                .await
+        };
         let (
             mut events,
             mut post_renderer_output_events,
@@ -2574,10 +2702,7 @@ impl CdpScheduler {
         };
         let completion = self
             .conn
-            .release_runtime_command_output_barrier_turn_async(
-                &mut self.runtime_command_output_barriers,
-                runtime_barrier,
-            )
+            .release_runtime_command_output_barrier_turn_async(runtime_barrier)
             .await;
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
@@ -2713,23 +2838,9 @@ impl CdpScheduler {
                     load_predecessors.is_empty(),
                     "scheduler selected protocol work before its exact load predecessor"
                 );
-                let work = if moli_protocol::PendingProtocolSchedulerWork::handles(work.kind())
-                    && let Some(sender) = &self.owned_protocol_work_tx
-                {
-                    match self.conn.try_start_owned_protocol_scheduler_work(work) {
-                        Ok(pending) => {
-                            if let Some(pending) = pending {
-                                assert!(
-                                    sender.send(pending).is_ok(),
-                                    "protocol task intake remains open while its actor runs"
-                                );
-                            }
-                            return out;
-                        }
-                        Err(work) => *work,
-                    }
-                } else {
-                    work
+                let work = match self.try_start_protocol_work(work) {
+                    Ok(()) => return out,
+                    Err(work) => *work,
                 };
                 let load_observation_id = work.main_document_load_observation_id();
                 let outcome = self
@@ -2857,7 +2968,7 @@ impl CdpScheduler {
         Option<moli_core::RendererOutputFence>,
     ) {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let owned = if self.owned_protocol_work_tx.is_some()
+        let owned = if self.protocol_tasks.is_some()
             || matches!(
                 &completion,
                 BackgroundNavigationCompletion::ProtocolWorkflowReady(_)
@@ -2865,8 +2976,8 @@ impl CdpScheduler {
             self.conn
                 .try_start_background_navigation_completion_turn(completion)
         } else {
-            // Direct adapters retain their inline driver until they also own
-            // the actor's protocol-work supervisor and state-request receiver.
+            // Standalone compatibility callers have no task supervisor or
+            // state-request receiver to drive an owned continuation.
             Err(completion)
         };
         let outcome = match owned {
@@ -2957,16 +3068,17 @@ impl CdpScheduler {
             .conn
             .renderer_output_cursor_is_projected(predecessor.cursor())
         {
-            let Some(publication) = receivers.renderer_publication_rx.recv().await else {
-                return Err(RendererOutputTransportFailure::new(
-                    output,
-                    renderer_output_transport_terminal_error(
-                        &receivers.renderer_publication_rx,
-                        "navigation completion",
-                    ),
-                ));
-            };
-            output.append(self.ingest_renderer_publication_now(publication).await);
+            match self
+                .advance_renderer_projection(receivers, "navigation completion")
+                .await
+            {
+                Ok(progress) => output.append(progress),
+                Err(failure) => {
+                    let (prefix, error) = failure.into_parts();
+                    output.append(prefix);
+                    return Err(RendererOutputTransportFailure::new(output, error));
+                }
+            }
         }
         output.append(
             self.complete_renderer_output_predecessor_before_runtime_response(&predecessor)

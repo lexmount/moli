@@ -483,4 +483,6 @@ mod tests {
     }
 }
 
+mod output_projection;
+mod worker_projection;
 mod worker_runtime;

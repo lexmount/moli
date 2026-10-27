@@ -32,7 +32,7 @@ impl MainDocumentCommitPreparedOutput {
     }
 }
 
-pub(in crate::domains) async fn project_main_document_commit_async(
+pub(in crate::domains) fn project_main_document_commit(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     payloads: &mut ProtocolOutputPayloads,

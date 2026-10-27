@@ -9,8 +9,7 @@ mod runtime_queue;
 #[cfg(test)]
 pub(crate) use emission::ObservableOutputProjectionStep;
 pub(in crate::domains) use emission::{
-    project_audits_async, project_console_async, project_log_async,
-    project_runtime_observable_async,
+    project_audits, project_console, project_log, project_runtime_observable,
 };
 pub(in crate::domains) use items::{
     console_message_added_background_event, console_message_level_and_text, log_entry_event,

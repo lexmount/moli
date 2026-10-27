@@ -155,6 +155,9 @@ mod termination_tests;
 mod native_tests;
 
 #[cfg(test)]
+mod projection_tests;
+
+#[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 

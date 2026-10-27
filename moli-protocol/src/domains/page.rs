@@ -36,7 +36,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::input;
 use crate::conn::{
     BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
     CommandOwnerScope, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
@@ -58,7 +57,7 @@ pub(crate) use navigation_cleanup::{
     PreparedNavigationFailureCleanup, prepare_failed_navigation_cleanup,
 };
 mod javascript_dialog;
-pub(in crate::domains) use javascript_dialog::emit_javascript_dialog_activity_background_events_async;
+pub(in crate::domains) use javascript_dialog::emit_javascript_dialog_activity_background_events;
 use javascript_dialog::*;
 mod capture;
 mod lifecycle;
@@ -67,7 +66,7 @@ pub(crate) mod native;
 mod navigation;
 mod output;
 use capture::*;
-pub(in crate::domains) use output::project_page_output_async;
+pub(in crate::domains) use output::{project_page_output_async, project_page_output_finite};
 mod navigation_commit;
 pub(crate) use navigation_commit::{
     CompletedNavigationProtocolCompletion, NavigationProtocolCleanup,
@@ -110,7 +109,7 @@ pub(crate) use lifecycle::{
 };
 pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
-    project_main_document_commit_async,
+    project_main_document_commit,
 };
 pub use navigation::BackgroundNavigationCompletion;
 #[cfg(test)]

@@ -34,8 +34,11 @@ pub(crate) use session_disposal::dispose_uncommitted_session_async;
 mod tests;
 mod worker_target;
 pub(crate) use worker_target::{
-    CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity, PreparedDedicatedWorkerRetirement,
-    RemovedSharedWorkerAttachment, WorkerRetirementFailureCleanup,
+    CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity,
+    PreparedDedicatedWorkerProjectionDisposal, PreparedDedicatedWorkerRetirement,
+    RemovedSharedWorkerAttachment, WorkerRetirementFailureCleanup, WorkerTargetLifecycleOutput,
+    WorkerTargetOutputProjection, prepare_worker_inspector_projection, project_worker_target_event,
+    retain_events,
 };
 
 pub(crate) enum TargetCommandFailureCleanup {
@@ -75,7 +78,6 @@ pub(crate) fn popup_activation_creates_new_target_for_owner(
 pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
     dedicated_worker_target_lifecycle_prepared_outputs_for_event,
-    project_worker_target_output_async,
     release_failed_dedicated_worker_target_after_debugger_resume,
     retire_dedicated_worker_targets_for_replaced_page_async,
     service_worker_target_lifecycle_prepared_outputs_for_event,

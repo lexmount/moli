@@ -33,6 +33,7 @@ struct BackgroundNavigationPublication {
 }
 
 struct BackgroundNavigationProtocolMetadata {
+    token: DocumentNavigationToken,
     requested_url: url::Url,
     target_id: String,
 }
@@ -104,6 +105,7 @@ impl PendingBackgroundNavigationProtocol {
     ) -> Self {
         let source = completion.state.clone();
         let metadata = Rc::new(BackgroundNavigationProtocolMetadata {
+            token: completion.token.clone(),
             target_id: completion.token.target_id.clone(),
             requested_url: source.requested_url.clone(),
         });
@@ -229,7 +231,6 @@ impl CdpConnection {
                 let Some(access) = self.protocol_state_access() else {
                     return Err(BackgroundNavigationCompletion::PreparedDocument(completion));
                 };
-                self.settle_background_navigation_completion(&completion.token);
                 let pending =
                     PendingBackgroundNavigationProtocol::prepare(self, access, *completion);
                 self.publish_background_navigation_protocol(pending);
@@ -289,6 +290,10 @@ impl CdpConnection {
             )
             .with_renderer_output_predecessor(None);
         }
+        // Source readiness transfers the original navigation into this
+        // workflow; it is not its terminal. Keep command admission waiting on
+        // that exact navigation until the final owner publication.
+        self.settle_background_navigation_completion(&metadata.token);
         let CdpCommandTaskStep::Complete(outcome) =
             self.complete_with_output_plan(&mut context, plan, None, None)
         else {

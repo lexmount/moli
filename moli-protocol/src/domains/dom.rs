@@ -25,7 +25,7 @@ mod stack_traces;
 mod tests;
 
 pub(in crate::domains) use activity::{
-    DomPreparedOutputSlot, DomPreparedOutputs, project_dom_mutations_async,
+    DomPreparedOutputSlot, DomPreparedOutputs, project_dom_mutations,
 };
 pub(crate) use resolve::{
     CompletedDomCommandDispatch, DomCommandTaskStep, PendingDomCommandDispatch,

@@ -45,6 +45,8 @@ mod drag;
 pub(crate) mod file_chooser;
 mod key;
 mod mouse;
+mod output_projection;
+pub(crate) use output_projection::PreparedInputOutputProjection;
 #[cfg(test)]
 mod tests;
 
@@ -1676,46 +1678,7 @@ async fn handle_input_dispatch_outcome(
     Ok(())
 }
 
-pub(in crate::domains) async fn emit_download_activity_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    prepared_outputs: &mut ProtocolOutputPayloads,
-    command_context: &mut CommandDispatchContext,
-) {
-    if let Some(activations) = prepared_outputs
-        .input_mut()
-        .and_then(InputPreparedOutputSlot::take_download_activations)
-    {
-        emit_download_activations(conn, out, owner, activations, command_context).await;
-    }
-}
-
-async fn emit_download_activations(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    activations: Vec<RendererPendingDownloadActivation>,
-    command_context: &mut CommandDispatchContext,
-) {
-    for activation in activations {
-        if let Err(error) = conn
-            .handle_pending_download_activation_background_events_async(
-                out,
-                owner,
-                activation,
-                command_context,
-            )
-            .await
-        {
-            tracing::warn!(
-                error = ?error,
-                "pending download activation failed during protocol output projection"
-            );
-        }
-    }
-}
-
+#[cfg(test)]
 pub(in crate::domains) async fn emit_file_chooser_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -2426,7 +2389,6 @@ mod producer_tests {
         conn.install_browser_context_fixture_for_test(bc);
         conn.download_behavior
             .set_global("deny".to_owned(), None, true);
-        let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut command_context = CommandDispatchContext::default();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
@@ -2439,14 +2401,18 @@ mod producer_tests {
                 ]),
             ));
 
-        super::emit_download_activity_background_events_async(
-            &mut conn,
-            &mut out,
-            &CommandOwnerScope::for_session("SID-download"),
-            &mut prepared,
-            &mut command_context,
-        )
-        .await;
+        let owner = CommandOwnerScope::for_session("SID-download");
+        crate::domains::activity::ProtocolOutputSlot::Download
+            .project_async(
+                &mut conn,
+                &mut crate::domains::activity::ProtocolOutputProjectionContext::new(
+                    &owner,
+                    &mut command_context,
+                ),
+                &mut prepared,
+            )
+            .await;
+        let mut out = command_context.take_protocol_events();
 
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|event| !event.has_protocol_wire_message()));

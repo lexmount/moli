@@ -555,84 +555,14 @@ pub(in crate::domains) async fn retire_dedicated_worker_targets_for_replaced_pag
             renderer_instance_id,
             DedicatedWorkerRetirementCause::OwnerRetired,
         );
-        for output in outputs.worker_target_lifecycle_outputs {
-            match commit_dedicated_worker_retirement_output_async(conn, output).await {
-                Ok(output_events) => events.extend(output_events),
-                Err(output) => {
-                    debug_assert!(
-                        false,
-                        "Page replacement DedicatedWorker retirement contained non-terminal output: {output:?}"
-                    );
-                }
-            }
-        }
+        let mut context = crate::conn::CommandDispatchContext::default();
+        WorkerTargetOutputProjection::new(outputs.worker_target_lifecycle_outputs)
+            .run_inline(conn, &mut context)
+            .await
+            .expect("Page retirement must complete its original DedicatedWorker cleanup");
+        events.extend(context.take_protocol_events());
     }
     events
-}
-
-// Non-retirement output is handed back unchanged for the caller to route.
-#[allow(clippy::result_large_err)]
-pub(super) async fn commit_dedicated_worker_retirement_output_async(
-    conn: &mut CdpConnection,
-    output: WorkerTargetLifecycleOutput,
-) -> Result<Vec<BackgroundProtocolEvent>, WorkerTargetLifecycleOutput> {
-    let mut events = Vec::new();
-    match output {
-        WorkerTargetLifecycleOutput::DedicatedWorkerDetached {
-            target_delta,
-            cleanup_plan,
-        } => {
-            if let Some(target_delta) = target_delta {
-                events.extend(
-                    conn.prepared_target_info_changed_event_plan_for_discovery_owners(target_delta),
-                );
-            }
-            let mut response_events = Vec::new();
-            let outcome = super::super::session_disposal::dispose_dedicated_worker_session_after_prepared_state_delta_async(
-                conn,
-                &mut events,
-                &mut response_events,
-                cleanup_plan,
-            )
-            .await
-            .expect("retired dedicated-worker session cleanup should succeed");
-            let (event_plan, predecessor) = outcome.into_parts();
-            debug_assert!(
-                predecessor.is_none(),
-                "DedicatedWorker disposal cannot publish a Page renderer fence"
-            );
-            events.extend(response_events);
-            events.extend(event_plan);
-        }
-        WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed {
-            browser_context_id,
-            renderer_instance_id,
-            target_id,
-            target_delta,
-        } => {
-            let removed = conn
-                .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|context| {
-                    let target = context
-                        .dedicated_worker_targets
-                        .get(&renderer_instance_id)?;
-                    (target.target_id == target_id).then(|| {
-                        context.remove_dedicated_worker_target_by_renderer_instance(
-                            renderer_instance_id,
-                        )
-                    })
-                })
-                .flatten();
-            if removed.is_none() {
-                return Ok(events);
-            }
-            if let Some(target_delta) = target_delta {
-                events.extend(conn.prepared_target_host_delta_event_plan(target_delta));
-            }
-        }
-        output => return Err(output),
-    }
-    Ok(events)
 }
 
 pub(super) fn commit_failed_dedicated_worker_retirement_sync(

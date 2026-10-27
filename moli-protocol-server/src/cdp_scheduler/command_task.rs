@@ -8,12 +8,12 @@ pub(super) use moli_protocol::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct CommandWaitIdentity {
+pub(crate) struct CommandWaitIdentity {
     pub token: u64,
     pub turn: u64,
 }
 
-pub(super) struct CommandWaitCompletion<T> {
+pub(crate) struct CommandWaitCompletion<T> {
     pub identity: CommandWaitIdentity,
     pub result: Result<T, CommandWaitFailure>,
 }

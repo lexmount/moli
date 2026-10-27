@@ -81,7 +81,36 @@ struct HeldRuntimeCommandOutput {
     renderer_output_cursor: Option<RendererOutputCursor>,
     predecessor: Option<RuntimeCommandOutputBarrierId>,
     release_mode: HeldOutputReleaseMode,
-    outputs: PreparedProtocolOutputs,
+    // None retains this exact FIFO position while its before-response
+    // projection runs outside state. A released predecessor alone cannot
+    // make that unfinished projection ready.
+    outputs: Option<PreparedProtocolOutputs>,
+}
+
+pub(crate) struct PreparedPublicationOutputProjection {
+    pub(super) prefix: Option<PreparedProtocolOutputs>,
+    pub(super) outputs: PreparedProtocolOutputs,
+    pub(super) owner: CommandOwnerScope,
+    pub(super) hold: Option<RuntimeCommandBeforeResponseProjection>,
+}
+
+/// The before-response projection may fill only its own reserved FIFO slot.
+/// Barrier release/cancellation can proceed while it waits, retaining the
+/// original release mode rather than reconstructing it from current state.
+pub(crate) struct RuntimeCommandBeforeResponseProjection {
+    hold_id: RuntimeCommandOutputHoldId,
+}
+
+pub(crate) struct ReadyRuntimeCommandOutputProjection {
+    permit: RuntimeCommandOutputProjectionPermit,
+    renderer_output_cursor: Option<RendererOutputCursor>,
+    pub(super) owner: CommandOwnerScope,
+    pub(super) outputs: PreparedProtocolOutputs,
+    pub(super) owner_actions_only: bool,
+}
+
+pub(crate) struct RuntimeCommandOutputProjectionPermit {
+    hold_id: RuntimeCommandOutputHoldId,
 }
 
 #[derive(Debug)]
@@ -178,6 +207,155 @@ impl RuntimeCommandOutputRoute {
 }
 
 impl RuntimeCommandOutputBarriers {
+    pub(super) fn prepare_publication_projection(
+        &mut self,
+        conn: &CdpConnection,
+        owner: CommandOwnerScope,
+        renderer_cause: Option<&RendererRuntimeCommandCausalIdentity>,
+        cursor: Option<RendererOutputCursor>,
+        mut outputs: PreparedProtocolOutputs,
+    ) -> PreparedPublicationOutputProjection {
+        let unheld = |owner, outputs| PreparedPublicationOutputProjection {
+            prefix: None,
+            outputs,
+            owner,
+            hold: None,
+        };
+        let Some(route) = RuntimeCommandOutputRoute::capture_for_scope(conn, owner.clone()) else {
+            return unheld(owner, outputs);
+        };
+        let prepared_cause = outputs
+            .top_level_location_navigation_runtime_command_cause()
+            .cloned();
+        let Some(cause) = prepared_cause.as_ref().or(renderer_cause) else {
+            return unheld(owner, outputs);
+        };
+        let mut matching = self.active.iter().filter_map(|(id, barrier)| {
+            (barrier.causal_owner == route.causal_owner && &barrier.renderer_cause == cause)
+                .then_some(*id)
+        });
+        let Some(barrier_id) = matching.next() else {
+            return unheld(owner, outputs);
+        };
+        assert!(
+            matching.next().is_none(),
+            "one Runtime cause has one output barrier"
+        );
+        let (prefix, outputs) = if prepared_cause.as_ref() == Some(cause) {
+            let causal = outputs
+                .take_top_level_location_navigation_for_runtime_command(cause)
+                .expect("a prepared navigation retains its original causal action");
+            (Some(outputs), causal)
+        } else {
+            (None, outputs)
+        };
+        let hold = outputs.has_after_response_slots().then(|| {
+            let hold_id = self.next_hold_id;
+            self.next_hold_id = self.next_hold_id.checked_next();
+            self.push_held_output(
+                route.clone(),
+                HeldRuntimeCommandOutput {
+                    id: hold_id,
+                    renderer_output_cursor: cursor,
+                    predecessor: Some(barrier_id),
+                    release_mode: HeldOutputReleaseMode::All,
+                    outputs: None,
+                },
+            );
+            RuntimeCommandBeforeResponseProjection { hold_id }
+        });
+        PreparedPublicationOutputProjection {
+            prefix,
+            outputs,
+            owner: route.delivery_scope,
+            hold,
+        }
+    }
+
+    pub(super) fn complete_before_response_projection(
+        &mut self,
+        permit: RuntimeCommandBeforeResponseProjection,
+        outputs: PreparedProtocolOutputs,
+    ) -> Vec<ReadyRuntimeCommandOutputProjection> {
+        let held = self
+            .held_routes
+            .iter_mut()
+            .flat_map(|route| &mut route.outputs)
+            .find(|held| held.id == permit.hold_id)
+            .expect("the original before-response projection retains its FIFO slot");
+        assert!(
+            held.outputs.is_none(),
+            "a projection fills its reserved slot once"
+        );
+        held.outputs = Some(outputs);
+        self.take_ready_output_projections()
+    }
+
+    fn push_held_output(
+        &mut self,
+        route: RuntimeCommandOutputRoute,
+        held: HeldRuntimeCommandOutput,
+    ) {
+        if let Some(existing) = self
+            .held_routes
+            .iter_mut()
+            .find(|entry| entry.route == route)
+        {
+            existing.outputs.push_back(held);
+        } else {
+            self.held_routes.push(HeldRuntimeCommandOutputRoute {
+                route,
+                outputs: VecDeque::from([held]),
+            });
+        }
+    }
+
+    fn take_ready_output_projections(&mut self) -> Vec<ReadyRuntimeCommandOutputProjection> {
+        let mut ready = Vec::new();
+        for route in &mut self.held_routes {
+            if let Some(held) = route.outputs.front_mut()
+                && held.predecessor.is_none()
+                && let Some(outputs) = held.outputs.take()
+            {
+                ready.push(ReadyRuntimeCommandOutputProjection {
+                    permit: RuntimeCommandOutputProjectionPermit { hold_id: held.id },
+                    renderer_output_cursor: held.renderer_output_cursor,
+                    owner: route.route.delivery_scope.clone(),
+                    outputs,
+                    owner_actions_only: held.release_mode
+                        == HeldOutputReleaseMode::OwnerActionsOnly,
+                });
+            }
+        }
+        ready
+    }
+
+    pub(crate) fn complete_output_projection(
+        &mut self,
+        permit: RuntimeCommandOutputProjectionPermit,
+    ) -> Vec<ReadyRuntimeCommandOutputProjection> {
+        let route = self
+            .held_routes
+            .iter_mut()
+            .find(|route| {
+                route
+                    .outputs
+                    .front()
+                    .is_some_and(|held| held.id == permit.hold_id)
+            })
+            .expect("a running projection retains its original route front");
+        let held = route
+            .outputs
+            .pop_front()
+            .expect("the running route front exists");
+        assert!(
+            held.predecessor.is_none() && held.outputs.is_none(),
+            "only the original released projection finishes its route front"
+        );
+        self.held_routes.retain(|route| !route.outputs.is_empty());
+        self.take_ready_output_projections()
+    }
+
     pub fn admit(
         &mut self,
         conn: &CdpConnection,
@@ -219,109 +397,30 @@ impl RuntimeCommandOutputBarriers {
     pub(super) async fn route_publication_outputs(
         &mut self,
         conn: &mut CdpConnection,
-        delivery_scope: &CommandOwnerScope,
-        renderer_cause: Option<&RendererRuntimeCommandCausalIdentity>,
-        renderer_output_cursor: Option<RendererOutputCursor>,
-        mut outputs: PreparedProtocolOutputs,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let Some(route) =
-            RuntimeCommandOutputRoute::capture_for_scope(conn, delivery_scope.clone())
-        else {
-            outputs
-                .project_async(conn, delivery_scope, command_context)
-                .await;
-            return;
-        };
-        let prepared_cause = outputs
-            .top_level_location_navigation_runtime_command_cause()
-            .cloned();
-        let Some(renderer_cause) = prepared_cause.as_ref().or(renderer_cause) else {
-            outputs
-                .project_async(conn, delivery_scope, command_context)
-                .await;
-            return;
-        };
-        let barrier_id = {
-            let mut matching = self.active.iter().filter_map(|(id, barrier)| {
-                (barrier.causal_owner == route.causal_owner
-                    && &barrier.renderer_cause == renderer_cause)
-                    .then_some(*id)
-            });
-            let barrier_id = matching.next();
-            assert!(
-                matching.next().is_none(),
-                "one renderer Runtime command cause cannot match multiple active barriers"
-            );
-            barrier_id
-        };
-        let Some(barrier_id) = barrier_id else {
-            outputs
-                .project_async(conn, delivery_scope, command_context)
-                .await;
-            return;
-        };
-        let causal_outputs = if prepared_cause.as_ref() == Some(renderer_cause) {
-            let causal_outputs = outputs
-                .take_top_level_location_navigation_for_runtime_command(renderer_cause)
-                .expect("a prepared Runtime-command navigation cause must retain its exact action");
-            outputs
-                .project_async(conn, &route.delivery_scope, command_context)
-                .await;
-            causal_outputs
-        } else {
-            outputs
-        };
-        self.hold_for_exact_barrier(
-            conn,
-            route,
-            barrier_id,
-            renderer_output_cursor,
-            causal_outputs,
-            command_context,
-        )
-        .await;
-    }
-
-    async fn hold_for_exact_barrier(
-        &mut self,
-        conn: &mut CdpConnection,
-        route: RuntimeCommandOutputRoute,
-        barrier_id: RuntimeCommandOutputBarrierId,
-        renderer_output_cursor: Option<RendererOutputCursor>,
+        owner: &CommandOwnerScope,
+        cause: Option<&RendererRuntimeCommandCausalIdentity>,
+        cursor: Option<RendererOutputCursor>,
         outputs: PreparedProtocolOutputs,
-        command_context: &mut CommandDispatchContext,
+        context: &mut CommandDispatchContext,
     ) {
-        let Some(outputs) = outputs
-            .project_before_command_response_and_hold_after(
-                conn,
-                &route.delivery_scope,
-                command_context,
-            )
-            .await
-        else {
-            return;
-        };
-        let id = self.next_hold_id;
-        self.next_hold_id = self.next_hold_id.checked_next();
-        let held = HeldRuntimeCommandOutput {
-            id,
-            renderer_output_cursor,
-            predecessor: Some(barrier_id),
-            release_mode: HeldOutputReleaseMode::All,
-            outputs,
-        };
-        if let Some(existing) = self
-            .held_routes
-            .iter_mut()
-            .find(|existing| existing.route == route)
-        {
-            existing.outputs.push_back(held);
+        let prepared =
+            self.prepare_publication_projection(conn, owner.clone(), cause, cursor, outputs);
+        if let Some(prefix) = prepared.prefix {
+            prefix.project_async(conn, &prepared.owner, context).await;
+        }
+        if let Some(hold) = prepared.hold {
+            let after = prepared
+                .outputs
+                .project_before_command_response_and_hold_after(conn, &prepared.owner, context)
+                .await
+                .expect("a reserved projection retains its after-response slots");
+            let ready = self.complete_before_response_projection(hold, after);
+            self.project_ready_batches(conn, context, ready).await;
         } else {
-            self.held_routes.push(HeldRuntimeCommandOutputRoute {
-                route,
-                outputs: VecDeque::from([held]),
-            });
+            prepared
+                .outputs
+                .project_async(conn, &prepared.owner, context)
+                .await;
         }
     }
 
@@ -409,55 +508,42 @@ impl RuntimeCommandOutputBarriers {
     async fn project_ready_outputs(
         &mut self,
         conn: &mut CdpConnection,
-        command_context: &mut CommandDispatchContext,
+        context: &mut CommandDispatchContext,
     ) {
-        let mut route_index = 0;
-        while route_index < self.held_routes.len() {
-            loop {
-                let ready = self.held_routes[route_index]
-                    .outputs
-                    .front()
-                    .is_some_and(|held| held.predecessor.is_none());
-                if !ready {
-                    break;
-                }
-                let held = self.held_routes[route_index]
-                    .outputs
-                    .pop_front()
-                    .expect("ready held output came from the route front");
-                let route = self.held_routes[route_index].route.clone();
-                if moli_trace::cdp_runtime_trace_enabled() {
-                    tracing::info!(
-                        target: "moli_cdp_runtime",
-                        stage = "runtime_command_barrier_output_release",
-                        hold_id = held.id.0,
-                        renderer_output_stream_epoch = ?held.renderer_output_cursor.map(|cursor| cursor.stream().epoch().get()),
-                        renderer_output_sequence = ?held.renderer_output_cursor.map(RendererOutputCursor::sequence),
-                        release_mode = ?held.release_mode,
-                    );
-                }
-                match held.release_mode {
-                    HeldOutputReleaseMode::All => {
-                        held.outputs
-                            .project_async(conn, &route.delivery_scope, command_context)
-                            .await;
-                    }
-                    HeldOutputReleaseMode::OwnerActionsOnly => {
-                        held.outputs
-                            .project_owner_actions_async(
-                                conn,
-                                &route.delivery_scope,
-                                command_context,
-                            )
-                            .await;
-                    }
-                }
+        let ready = self.take_ready_output_projections();
+        self.project_ready_batches(conn, context, ready).await;
+    }
+
+    async fn project_ready_batches(
+        &mut self,
+        conn: &mut CdpConnection,
+        context: &mut CommandDispatchContext,
+        ready: Vec<ReadyRuntimeCommandOutputProjection>,
+    ) {
+        let mut ready = VecDeque::from(ready);
+        while let Some(projection) = ready.pop_front() {
+            if moli_trace::cdp_runtime_trace_enabled() {
+                tracing::info!(
+                    target: "moli_cdp_runtime",
+                    stage = "runtime_command_barrier_output_release",
+                    hold_id = projection.permit.hold_id.0,
+                    renderer_output_stream_epoch = ?projection.renderer_output_cursor.map(|cursor| cursor.stream().epoch().get()),
+                    renderer_output_sequence = ?projection.renderer_output_cursor.map(RendererOutputCursor::sequence),
+                    owner_actions_only = projection.owner_actions_only,
+                );
             }
-            if self.held_routes[route_index].outputs.is_empty() {
-                self.held_routes.remove(route_index);
+            if projection.owner_actions_only {
+                projection
+                    .outputs
+                    .project_owner_actions_async(conn, &projection.owner, context)
+                    .await;
             } else {
-                route_index += 1;
+                projection
+                    .outputs
+                    .project_async(conn, &projection.owner, context)
+                    .await;
             }
+            ready.extend(self.complete_output_projection(projection.permit));
         }
     }
 
@@ -1086,6 +1172,171 @@ mod tests {
         assert!(
             contains_top_level_navigation(&produced_events(&mut command_context)),
             "canceling the protocol command must still settle its already-produced browser-owner action"
+        );
+    }
+    fn reserve_navigation_projection(
+        conn: &CdpConnection,
+        barriers: &mut RuntimeCommandOutputBarriers,
+        permit: &RuntimeCommandOutputBarrierPermit,
+        marker: &str,
+    ) -> super::PreparedPublicationOutputProjection {
+        let cause = renderer_cause_for_permit(conn, permit);
+        let owner = conn
+            .target_page_residence_identity_for_session(Some(SESSION_ID))
+            .unwrap();
+        let outputs = super::super::output_ingress::PreparedProtocolOutputs::from_top_level_location_navigation_for_test(
+            owner,
+            RendererDocumentSourcedTopLevelLocationNavigation::new_with_runtime_command_cause(
+                loaded_page_source_document(conn), format!("data:text/html,{marker}"), Some(cause),
+            ),
+        );
+        barriers.prepare_publication_projection(
+            conn,
+            CommandOwnerScope::for_session(SESSION_ID),
+            None,
+            None,
+            outputs,
+        )
+    }
+
+    #[tokio::test]
+    async fn response_release_during_before_projection_retains_its_original_terminal() {
+        for canceled in [false, true] {
+            let mut conn = connection_with_loaded_page().await;
+            let mut barriers = RuntimeCommandOutputBarriers::default();
+            let permit = admit_registered_command(&mut conn, &mut barriers, 71);
+            let projection = reserve_navigation_projection(
+                &conn,
+                &mut barriers,
+                &permit,
+                "projection-held-before-response",
+            );
+            let mut context = CommandDispatchContext::default();
+            let terminal = if canceled {
+                barriers.cancel(&mut conn, permit, &mut context).await
+            } else {
+                barriers.release(&mut conn, permit, &mut context).await
+            };
+            assert_eq!(
+                terminal,
+                if canceled {
+                    RuntimeCommandOutputBarrierTerminal::Canceled
+                } else {
+                    RuntimeCommandOutputBarrierTerminal::Released
+                }
+            );
+            assert!(
+                conn.take_scheduler_events().is_empty(),
+                "a response terminal cannot release an unfinished before-response projection"
+            );
+            let ready = barriers
+                .complete_before_response_projection(projection.hold.unwrap(), projection.outputs);
+            assert_eq!(ready.len(), 1);
+            assert_eq!(ready[0].owner_actions_only, canceled);
+            assert_eq!(
+                barriers.held_output_count(),
+                1,
+                "the running projection retains its route front"
+            );
+            barriers
+                .project_ready_batches(&mut conn, &mut context, ready)
+                .await;
+            assert_eq!(barriers.held_output_count(), 0);
+            let events = conn.take_scheduler_events();
+            assert_eq!(
+                events.len(),
+                1,
+                "the original owner continuation is published exactly once"
+            );
+            assert!(
+                matches!(&events[0], crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.is_top_level_location_navigation_owner_action())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn later_same_route_output_cannot_overtake_a_running_projection() {
+        let mut conn = connection_with_loaded_page().await;
+        let mut barriers = RuntimeCommandOutputBarriers::default();
+        let first = admit_registered_command(&mut conn, &mut barriers, 81);
+        let second = admit_registered_command(&mut conn, &mut barriers, 82);
+        let first_projection =
+            reserve_navigation_projection(&conn, &mut barriers, &first, "projection-first");
+        let second_projection =
+            reserve_navigation_projection(&conn, &mut barriers, &second, "projection-second");
+        let mut context = CommandDispatchContext::default();
+        assert!(
+            barriers
+                .complete_before_response_projection(
+                    second_projection.hold.unwrap(),
+                    second_projection.outputs
+                )
+                .is_empty()
+        );
+        barriers.release(&mut conn, second, &mut context).await;
+        barriers.release(&mut conn, first, &mut context).await;
+        assert!(conn.take_scheduler_events().is_empty());
+        let first_ready = barriers.complete_before_response_projection(
+            first_projection.hold.unwrap(),
+            first_projection.outputs,
+        );
+        assert_eq!(first_ready.len(), 1);
+        assert!(
+            barriers.take_ready_output_projections().is_empty(),
+            "yielding during the first projection must keep the second resident"
+        );
+        assert_eq!(barriers.held_output_count(), 2);
+        barriers
+            .project_ready_batches(&mut conn, &mut context, first_ready)
+            .await;
+        let urls = conn.take_scheduler_events().into_iter().map(|event| {
+            let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else { panic!("navigation owner action"); };
+            let super::super::scheduler_work::ReadyProtocolSchedulerWork::TopLevelLocationNavigationOwnerAction(action) = work.into_ready() else { panic!("original navigation owner action"); };
+            action.into_parts().2.url().to_owned()
+        }).collect::<Vec<_>>();
+        assert_eq!(
+            urls,
+            [
+                "data:text/html,projection-first",
+                "data:text/html,projection-second"
+            ]
+        );
+        assert_eq!(barriers.held_output_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn finite_connection_access_restores_the_original_barriers_after_panic() {
+        let mut conn = connection_with_loaded_page().await;
+        let descriptor = RendererCommandDescriptor::from_synthesized_payload(
+            serde_json::json!({"id":91,"method":"Runtime.evaluate","params":{"expression":"1"}})
+                .to_string(),
+        )
+        .unwrap();
+        conn.try_register_renderer_call_for_session_owner(Some(SESSION_ID), 91, None, descriptor)
+            .unwrap();
+        let permit = conn
+            .admit_runtime_command_output_barrier(91, Some(SESSION_ID))
+            .unwrap();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            conn.with_runtime_command_output_barriers::<()>(|_, barriers| {
+                assert_eq!(barriers.active_count(), 1);
+                panic!("controlled finite barrier operation failure");
+            });
+        }));
+        assert!(failed.is_err());
+        assert_eq!(
+            conn.with_runtime_command_output_barriers(|_, barriers| barriers.active_count()),
+            1
+        );
+        assert_eq!(
+            conn.release_runtime_command_output_barrier_turn_async(permit)
+                .await
+                .terminal(),
+            RuntimeCommandOutputBarrierTerminal::Released
+        );
+        assert_eq!(
+            conn.with_runtime_command_output_barriers(|_, barriers| barriers.active_count()),
+            0
         );
     }
 }

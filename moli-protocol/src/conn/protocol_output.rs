@@ -1,3 +1,6 @@
+use futures_util::FutureExt as _;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
 use super::{CdpConnection, CdpTurnOutcome};
 use crate::domains::activity::{
     ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
@@ -8,10 +11,39 @@ use moli_core::RendererOutputTransportMessage;
 mod navigation;
 pub use navigation::BackgroundNavigationProtocolReady;
 pub(crate) use navigation::PendingBackgroundNavigationProtocol;
+mod renderer;
 mod task;
 pub use task::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
 
 impl CdpConnection {
+    /// Barrier admission and renderer-call registration belong to this same
+    /// connection. The adapter owns only the move-only response permit.
+    pub fn admit_runtime_command_output_barrier(
+        &mut self,
+        command_id: u64,
+        session_id: Option<&str>,
+    ) -> Option<RuntimeCommandOutputBarrierPermit> {
+        self.with_runtime_command_output_barriers(|conn, barriers| {
+            barriers.admit(conn, command_id, session_id)
+        })
+    }
+
+    /// Returns only owned values; no connection or barrier borrow can escape
+    /// this finite operation. Restore the original registry while unwinding.
+    pub(crate) fn with_runtime_command_output_barriers<T: 'static>(
+        &mut self,
+        operation: impl for<'state> FnOnce(
+            &'state mut Self,
+            &'state mut RuntimeCommandOutputBarriers,
+        ) -> T,
+    ) -> T {
+        let mut barriers =
+            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
+        let result = catch_unwind(AssertUnwindSafe(|| operation(self, &mut barriers)));
+        self.scheduler_state.runtime_command_output_barriers = barriers;
+        result.unwrap_or_else(|payload| resume_unwind(payload))
+    }
+
     pub(crate) fn publish_renderer_fenced_protocol_output(
         &mut self,
         events: Vec<super::BackgroundProtocolEvent>,
@@ -263,16 +295,22 @@ impl CdpConnection {
     pub async fn ingest_renderer_output_turn_async(
         &mut self,
         publication: RendererOutputTransportMessage,
-        barriers: &mut RuntimeCommandOutputBarriers,
     ) -> CdpTurnOutcome {
         let mut command_context = super::CommandDispatchContext::default();
-        let protocol_events = crate::domains::activity::ingest_renderer_output_transport_async(
-            self,
-            publication,
-            barriers,
-            &mut command_context,
+        let mut barriers =
+            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
+        let result = AssertUnwindSafe(
+            crate::domains::activity::ingest_renderer_output_transport_async(
+                self,
+                publication,
+                &mut barriers,
+                &mut command_context,
+            ),
         )
+        .catch_unwind()
         .await;
+        self.scheduler_state.runtime_command_output_barriers = barriers;
+        let protocol_events = result.unwrap_or_else(|payload| resume_unwind(payload));
         CdpTurnOutcome::new_with_protocol_and_post_response_events(
             protocol_events,
             command_context.take_post_response_events(),
@@ -301,11 +339,16 @@ impl CdpConnection {
 
     pub async fn release_runtime_command_output_barrier_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
         permit: RuntimeCommandOutputBarrierPermit,
     ) -> RuntimeCommandOutputBarrierCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.release(self, permit, &mut command_context).await;
+        let mut barriers =
+            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
+        let result = AssertUnwindSafe(barriers.release(self, permit, &mut command_context))
+            .catch_unwind()
+            .await;
+        self.scheduler_state.runtime_command_output_barriers = barriers;
+        let terminal = result.unwrap_or_else(|payload| resume_unwind(payload));
         RuntimeCommandOutputBarrierCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
@@ -318,11 +361,16 @@ impl CdpConnection {
 
     pub async fn cancel_runtime_command_output_barrier_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
         permit: RuntimeCommandOutputBarrierPermit,
     ) -> RuntimeCommandOutputBarrierCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.cancel(self, permit, &mut command_context).await;
+        let mut barriers =
+            std::mem::take(&mut self.scheduler_state.runtime_command_output_barriers);
+        let result = AssertUnwindSafe(barriers.cancel(self, permit, &mut command_context))
+            .catch_unwind()
+            .await;
+        self.scheduler_state.runtime_command_output_barriers = barriers;
+        let terminal = result.unwrap_or_else(|payload| resume_unwind(payload));
         RuntimeCommandOutputBarrierCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(

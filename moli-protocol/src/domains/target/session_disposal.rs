@@ -502,30 +502,6 @@ pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
     Ok(predecessor)
 }
 
-pub(super) async fn dispose_dedicated_worker_session_after_prepared_state_delta_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    protocol_events: &mut Vec<BackgroundProtocolEvent>,
-    cleanup_plan: TargetSessionDetachCleanupPlan,
-) -> Result<TargetSessionDisposalOutcome> {
-    let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
-    if !matches!(
-        plan.target(),
-        SessionDisposalTarget::DedicatedWorkerTarget { .. }
-    ) {
-        anyhow::bail!(SessionDisposalError::InvalidSession);
-    }
-
-    dispose_live_session_domains_async(conn, background_events, protocol_events, &plan).await?;
-    conn.commit_session_disposal(&plan)?;
-    let event_plan =
-        conn.commit_target_session_detachment_after_prepared_state_delta_event_plan(detachment);
-    Ok(TargetSessionDisposalOutcome {
-        event_plan,
-        renderer_output_predecessor: None,
-    })
-}
-
 /// Completes disposal after a worker target has transferred and dropped its
 /// per-session state. Renderer-owned resources have already gone away with
 /// the target, but connection-owned handlers still retire before the control
@@ -590,15 +566,6 @@ impl PreparedRemovedWorkerSession {
         conn.cancel_tracing_for_session_owner(Some(self.identity.plan().session_id()));
         conn.commit_target_session_detachment_event_plan(self.detachment)
     }
-}
-
-pub(super) async fn dispose_removed_worker_session_async(
-    conn: &mut CdpConnection,
-    cleanup_plan: TargetSessionDetachCleanupPlan,
-) -> Result<TargetEventPlan> {
-    let pending = PreparedRemovedWorkerSession::prepare(conn, cleanup_plan)?;
-    pending.wait().await;
-    Ok(pending.finish(conn))
 }
 
 /// Emergency completion for a DedicatedWorker retirement whose renderer

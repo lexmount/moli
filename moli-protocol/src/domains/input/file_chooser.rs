@@ -94,6 +94,7 @@ impl PreparedFileChooserActivation {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn emit_prepared_activations_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -105,6 +106,7 @@ pub(super) async fn emit_prepared_activations_async(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn emit_prepared_activation_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,

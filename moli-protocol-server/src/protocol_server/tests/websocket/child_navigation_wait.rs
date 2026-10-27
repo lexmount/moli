@@ -209,7 +209,7 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
     );
     assert!(
         !observed.iter().any(|message| message["id"] == 7),
-        "the child navigation must retain its load wait: {observed:?}"
+        "the child navigation must retain its load wait: child_id={child_id}, frame_tree={tree:?}, observed={observed:?}"
     );
     if replace_parent {
         send_cdp_command_without_wait(

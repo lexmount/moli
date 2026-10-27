@@ -1014,23 +1014,6 @@ pub(super) fn parse_service_worker_fetch_diagnostic_url(value: &str) -> Url {
     Url::parse(value).unwrap_or_else(|_| Url::parse("about:blank").expect("valid fallback URL"))
 }
 
-pub(super) fn service_worker_runtime_is_registry_current(
-    conn: &CdpConnection,
-    runtime: &TargetServiceWorkerRuntimeAttachmentIdentity,
-) -> bool {
-    if !runtime.is_current() {
-        return false;
-    }
-    let attachment = runtime.attachment();
-    let Some(target) = conn
-        .browser_context_by_id(attachment.browser_context_id())
-        .and_then(|context| context.service_worker_target(attachment.target_id()))
-    else {
-        return false;
-    };
-    target.observes_runtime_identity(attachment.browser_context_id(), runtime)
-}
-
 pub(super) fn exact_service_worker_runtime_target_mut<'a>(
     conn: &'a mut CdpConnection,
     runtime: &TargetServiceWorkerRuntimeAttachmentIdentity,

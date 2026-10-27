@@ -193,6 +193,27 @@ impl CommandWorkflowContext {
             .expect("live workflow owns its context")
     }
 
+    /// The exclusive compatibility driver uses the same retained output and
+    /// fence merger as an owned workflow. No protocol response is synthesized
+    /// for a renderer-owner projection.
+    pub(crate) fn finish_projection_inline(
+        self,
+        connection: &mut super::CdpConnection,
+        target: &mut CommandDispatchContext,
+    ) {
+        let mut local = CommandDispatchContext::new(target.response_flush().clone());
+        let plan = self
+            .complete(CommandOutputPlan::default())
+            .finish(connection, &mut local);
+        let (events, boundary, after_boundary) = local.take_renderer_fenced_protocol_events();
+        target.append_renderer_fenced_protocol_events(events, boundary, after_boundary);
+        super::dispatch::append_command_output_plan(&mut Vec::new(), target, plan, None, None);
+        target.extend_post_response_events(local.take_post_response_events());
+        if let Some(predecessor) = local.take_renderer_output_predecessor() {
+            target.set_renderer_output_predecessor(predecessor);
+        }
+    }
+
     /// Move the command's output owner into the finite operation itself.
     /// If a ready state reply is discarded, its guard returns both context
     /// and materialized output to the original recovery scope.

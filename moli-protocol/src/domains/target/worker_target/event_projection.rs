@@ -1,40 +1,349 @@
-use super::*;
+use anyhow::Result;
 
-pub(in crate::domains) async fn project_worker_target_output_async(
-    output: ProtocolOutputSlot,
-    conn: &mut CdpConnection,
-    context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: &mut ProtocolOutputPayloads,
-) {
-    match output {
-        ProtocolOutputSlot::SharedWorkerTargetLifecycle
-        | ProtocolOutputSlot::ServiceWorkerTargetLifecycle
-        | ProtocolOutputSlot::DedicatedWorkerTargetLifecycle => {}
-        _ => panic!("non-Target output routed through the Target projector: {output:?}"),
+use super::super::session_disposal::{PreparedSessionDisposal, SessionDisposalIdentity};
+use super::*;
+use crate::conn::{CommandWorkflowContext, ProtocolWorkflowDriver, WorkerRuntimeScope};
+use crate::domains::command_output::CommandOutputPlan;
+use crate::domains::runtime::PreparedWorkerBindingReplay;
+
+pub(crate) struct WorkerTargetOutputProjection {
+    events: Vec<WorkerTargetLifecycleOutput>,
+}
+
+impl WorkerTargetOutputProjection {
+    pub(crate) fn new(events: Vec<WorkerTargetLifecycleOutput>) -> Self {
+        Self { events }
     }
-    emit_target_lifecycle_events(conn, context, prepared_outputs).await;
+
+    pub(in crate::domains) fn take(payloads: &mut ProtocolOutputPayloads) -> Option<Self> {
+        payloads
+            .target_mut()
+            .and_then(TargetPreparedOutputSlot::take_worker_target_lifecycle_outputs)
+            .map(Self::new)
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        let mut first_error = None;
+        for event in self.events {
+            let result: Result<()> = async {
+                match event {
+                WorkerTargetLifecycleOutput::DedicatedWorkerDetached {
+                    target_delta,
+                    cleanup_plan,
+                } => {
+                    let pending = context
+                        .with_state(driver, move |state, context| {
+                            state.prepare_dedicated_worker_projection_disposal(
+                                target_delta,
+                                cleanup_plan,
+                                context,
+                            )
+                        })
+                        .await??;
+                    let mut background = Vec::new();
+                    let mut protocol = Vec::new();
+                    let result = pending
+                        .disposal
+                        .run(driver, &mut background, &mut protocol)
+                        .await;
+                    background.extend(protocol);
+                    retain_events(context, background);
+                    let failed = result.is_err();
+                    context
+                        .with_state(driver, move |state, context| {
+                            state.finish_dedicated_worker_projection_disposal(
+                                pending.identity,
+                                pending.detachment,
+                                failed,
+                                context,
+                            )
+                        })
+                        .await??;
+                    result?;
+                }
+                WorkerTargetLifecycleOutput::SharedWorkerDetached {
+                    retirement,
+                    cleanup_plan,
+                } => {
+                    assert_eq!(cleanup_plan.target_id(), retirement.identity().target_id());
+                    assert_eq!(
+                        cleanup_plan.session_id(),
+                        retirement.identity().session_id()
+                    );
+                    let Some((pending, retirement)) = context
+                        .with_state(driver, move |state, _| {
+                            if !retirement.is_current() { return Ok(None); }
+                            state.prepare_removed_worker_projection(cleanup_plan)
+                                .map(|pending| Some((pending, retirement)))
+                        })
+                        .await?? else { return Ok(()); };
+                    pending.wait().await;
+                    context
+                        .with_state(driver, move |state, context| {
+                            state.finish_removed_worker_projection(pending, context);
+                            retirement.retire();
+                        })
+                        .await?;
+                }
+                WorkerTargetLifecycleOutput::ServiceWorkerDetached {
+                    retirement,
+                    cleanup_plan,
+                } => {
+                    assert_eq!(cleanup_plan.target_id(), retirement.identity().target_id());
+                    assert_eq!(
+                        cleanup_plan.session_id(),
+                        retirement.identity().session_id()
+                    );
+                    let Some((pending, retirement)) = context
+                        .with_state(driver, move |state, _| {
+                            if !retirement.is_current() { return Ok(None); }
+                            state.prepare_removed_worker_projection(cleanup_plan)
+                                .map(|pending| Some((pending, retirement)))
+                        })
+                        .await?? else { return Ok(()); };
+                    pending.wait().await;
+                    context
+                        .with_state(driver, move |state, context| {
+                            state.finish_removed_worker_projection(pending, context);
+                            retirement.retire();
+                        })
+                        .await?;
+                }
+                event @ (WorkerTargetLifecycleOutput::ServiceWorkerRuntimeInspectorMessages {
+                    ..
+                }
+                | WorkerTargetLifecycleOutput::SharedWorkerRuntimeInspectorMessages {
+                    ..
+                }
+                | WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
+                    ..
+                }) => {
+                    if let Some(replay) = context
+                        .with_state(driver, move |state, context| {
+                            state.prepare_worker_inspector_projection(event, context)
+                        })
+                        .await?
+                    {
+                        replay.run(driver).await;
+                    }
+                }
+                event => {
+                    context
+                        .with_state(driver, move |state, context| {
+                            state.project_worker_target_event(event, context)
+                        })
+                        .await?;
+                }
+            }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    pub(crate) async fn run_inline(
+        self,
+        conn: &mut CdpConnection,
+        command: &mut crate::conn::CommandDispatchContext,
+    ) -> Result<()> {
+        let mut local = crate::conn::CommandDispatchContext::new(command.response_flush().clone());
+        let (mut context, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
+        let result = self
+            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
+            .await;
+        context.finish_projection_inline(conn, command);
+        result
+    }
+}
+
+pub(crate) struct PreparedDedicatedWorkerProjectionDisposal {
+    disposal: PreparedSessionDisposal,
+    identity: SessionDisposalIdentity,
+    detachment: TargetSessionDetachCleanupPlan,
+}
+
+impl PreparedDedicatedWorkerProjectionDisposal {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        delta: Option<PreparedTargetHostDelta>,
+        cleanup: TargetSessionDetachCleanupPlan,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<Self> {
+        if let Some(delta) = delta {
+            retain_events(
+                context,
+                conn.prepared_target_info_changed_event_plan_for_discovery_owners(delta),
+            );
+        }
+        let (plan, detachment) =
+            super::super::session_disposal::prepare_session_disposal(conn, cleanup)?;
+        let disposal = PreparedSessionDisposal::prepare(conn, plan);
+        let identity = disposal.identity();
+        Ok(Self {
+            disposal,
+            identity,
+            detachment,
+        })
+    }
+
+    pub(crate) fn finish(
+        conn: &mut CdpConnection,
+        identity: SessionDisposalIdentity,
+        detachment: TargetSessionDetachCleanupPlan,
+        failed: bool,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        if !identity.is_current(conn) {
+            return Ok(());
+        }
+        if failed {
+            crate::domains::session::dispose_closed_handlers_sync(
+                conn,
+                identity.plan().session_id(),
+            );
+        }
+        conn.commit_session_disposal(identity.plan())?;
+        retain_events(
+            context,
+            conn.commit_target_session_detachment_after_prepared_state_delta_event_plan(detachment),
+        );
+        Ok(())
+    }
+}
+
+pub(crate) fn retain_events(
+    context: &mut CommandWorkflowContext,
+    events: impl IntoIterator<Item = BackgroundProtocolEvent>,
+) {
+    let mut output = CommandOutputPlan::default();
+    output.extend_background_events(events);
+    context.retain_output(output);
 }
 
 pub(super) async fn emit_target_lifecycle_events(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: &mut ProtocolOutputPayloads,
+    payloads: &mut ProtocolOutputPayloads,
 ) {
-    let Some(events) = prepared_outputs
-        .target_mut()
-        .and_then(TargetPreparedOutputSlot::take_worker_target_lifecycle_outputs)
-    else {
-        return;
-    };
-    let mut side_effects = events::TargetProtocolSideEffects::default();
-    for event in events {
-        let event = match commit_dedicated_worker_retirement_output_async(conn, event).await {
-            Ok(events) => {
-                side_effects.extend_background_events(events);
-                continue;
+    if let Some(projection) = WorkerTargetOutputProjection::take(payloads) {
+        projection
+            .run_inline(conn, context.command)
+            .await
+            .expect("Worker lifecycle projection should finish its original cleanup");
+    }
+}
+
+pub(crate) fn prepare_worker_inspector_projection(
+    conn: &mut CdpConnection,
+    event: WorkerTargetLifecycleOutput,
+    context: &mut CommandWorkflowContext,
+) -> Option<PreparedWorkerBindingReplay> {
+    let mut output = Vec::new();
+    let session = match event {
+        WorkerTargetLifecycleOutput::ServiceWorkerRuntimeInspectorMessages {
+            runtime,
+            background_events,
+            response_events,
+            pending_runtime_console,
+            pending_runtime_exceptions,
+        } => {
+            if !runtime.is_current() {
+                return None;
             }
-            Err(event) => event,
-        };
+            output.extend(background_events);
+            output.extend(response_events);
+            if let Some((messages, _)) = pending_runtime_console {
+                output.extend(runtime_console_api_called_events(
+                    runtime.session_id(),
+                    &messages,
+                ));
+            }
+            if let Some((messages, start, _)) = pending_runtime_exceptions {
+                output.extend(runtime_exception_thrown_events(
+                    runtime.session_id(),
+                    &messages,
+                    start,
+                ));
+            }
+            runtime.session_id().to_owned()
+        }
+        WorkerTargetLifecycleOutput::SharedWorkerRuntimeInspectorMessages {
+            attachment,
+            messages,
+        } => {
+            if !attachment.is_current() {
+                return None;
+            }
+            let session = attachment.session_id();
+            let mut responses = Vec::new();
+            let current_response_seen = route_worker_runtime_inspector_messages_into(
+                conn,
+                messages,
+                session,
+                &mut responses,
+                &mut output,
+            );
+            debug_assert!(!current_response_seen);
+            output.extend(responses);
+            if let Some((messages, end)) =
+                exact_shared_worker_pending_runtime_console(conn, &attachment)
+            {
+                output.extend(runtime_console_api_called_events(session, &messages));
+                // Acceptance, cursor advancement and retained output are one finite operation.
+                mark_exact_shared_worker_runtime_console_emitted(conn, &attachment, end);
+            }
+            session.to_owned()
+        }
+        WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
+            browser_context_id,
+            renderer_instance_id,
+            target_id,
+            session_id,
+            messages,
+        } => {
+            if !dedicated_worker_target_is_current(
+                conn,
+                &browser_context_id,
+                renderer_instance_id,
+                &target_id,
+            ) {
+                return None;
+            }
+            let mut responses = Vec::new();
+            let current_response_seen = route_worker_runtime_inspector_messages_into(
+                conn,
+                messages,
+                &session_id,
+                &mut responses,
+                &mut output,
+            );
+            debug_assert!(!current_response_seen);
+            output.extend(responses);
+            session_id
+        }
+        _ => unreachable!("only Worker Inspector messages use this projection"),
+    };
+    retain_events(context, output);
+    WorkerRuntimeScope::capture(conn, Some(&session))
+        .ok()
+        .and_then(|scope| PreparedWorkerBindingReplay::prepare(conn, scope))
+}
+
+pub(crate) fn project_worker_target_event(
+    conn: &mut CdpConnection,
+    event: WorkerTargetLifecycleOutput,
+    context: &mut CommandWorkflowContext,
+) {
+    let mut side_effects = events::TargetProtocolSideEffects::default();
+    for event in std::iter::once(event) {
         match event {
             WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
                 browser_context_id,
@@ -149,9 +458,32 @@ pub(super) async fn emit_target_lifecycle_events(
                     );
                 }
             }
-            WorkerTargetLifecycleOutput::DedicatedWorkerDetached { .. }
-            | WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed { .. } => {
-                unreachable!("DedicatedWorker retirement outputs are committed before projection")
+            WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed {
+                browser_context_id,
+                renderer_instance_id,
+                target_id,
+                target_delta,
+            } => {
+                let removed = conn
+                    .browser_context_by_id_mut(&browser_context_id)
+                    .and_then(|context| {
+                        let target = context
+                            .dedicated_worker_targets
+                            .get(&renderer_instance_id)?;
+                        (target.target_id == target_id).then(|| {
+                            context.remove_dedicated_worker_target_by_renderer_instance(
+                                renderer_instance_id,
+                            )
+                        })
+                    })
+                    .flatten();
+                if removed.is_some()
+                    && let Some(delta) = target_delta
+                {
+                    side_effects.extend_background_events(
+                        conn.prepared_target_host_delta_event_plan(delta),
+                    );
+                }
             }
             WorkerTargetLifecycleOutput::SharedWorkerAttachmentEvents { attachment, events } => {
                 if attachment.is_current() {
@@ -213,60 +545,6 @@ pub(super) async fn emit_target_lifecycle_events(
                         conn.commit_prepared_attach_event_plan(prepared_attach),
                     );
                 }
-            }
-            WorkerTargetLifecycleOutput::SharedWorkerDetached {
-                retirement,
-                cleanup_plan,
-            } => {
-                if !retirement.is_current() {
-                    continue;
-                }
-                assert_eq!(
-                    cleanup_plan.target_id(),
-                    retirement.identity().target_id(),
-                    "shared-worker detach plan must retain its exact target"
-                );
-                assert_eq!(
-                    cleanup_plan.session_id(),
-                    retirement.identity().session_id(),
-                    "shared-worker detach plan must retain its exact attachment"
-                );
-                let event_plan =
-                    super::super::session_disposal::dispose_removed_worker_session_async(
-                        conn,
-                        cleanup_plan,
-                    )
-                    .await
-                    .expect("retired shared-worker session cleanup should succeed");
-                side_effects.extend_background_events(event_plan);
-                retirement.retire();
-            }
-            WorkerTargetLifecycleOutput::ServiceWorkerDetached {
-                retirement,
-                cleanup_plan,
-            } => {
-                if !retirement.is_current() {
-                    continue;
-                }
-                assert_eq!(
-                    cleanup_plan.target_id(),
-                    retirement.identity().target_id(),
-                    "service-worker detach plan must retain its exact version target"
-                );
-                assert_eq!(
-                    cleanup_plan.session_id(),
-                    retirement.identity().session_id(),
-                    "service-worker detach plan must retain its exact attachment"
-                );
-                let event_plan =
-                    super::super::session_disposal::dispose_removed_worker_session_async(
-                        conn,
-                        cleanup_plan,
-                    )
-                    .await
-                    .expect("retired service-worker session cleanup should succeed");
-                side_effects.extend_background_events(event_plan);
-                retirement.retire();
             }
             WorkerTargetLifecycleOutput::SharedWorkerDestroyed { target_delta } => {
                 side_effects.extend_background_events(
@@ -381,108 +659,17 @@ pub(super) async fn emit_target_lifecycle_events(
                     ));
                 }
             }
-            WorkerTargetLifecycleOutput::ServiceWorkerRuntimeInspectorMessages {
-                runtime,
-                background_events,
-                response_events,
-                pending_runtime_console,
-                pending_runtime_exceptions,
-            } => {
-                if !runtime.is_current() {
-                    continue;
-                }
-                let session_id = runtime.session_id();
-                side_effects.extend_background_events(background_events);
-                if service_worker_runtime_is_registry_current(conn, &runtime) {
-                    replay_shared_worker_runtime_bindings_for_session_async(conn, Some(session_id))
-                        .await;
-                }
-                side_effects.extend_background_events(response_events);
-                if let Some((messages, _console_end)) = pending_runtime_console {
-                    side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
-                    ));
-                }
-                if let Some((messages, exception_start, _exception_end)) =
-                    pending_runtime_exceptions
-                {
-                    side_effects.extend_background_events(runtime_exception_thrown_events(
-                        session_id,
-                        &messages,
-                        exception_start,
-                    ));
-                }
-            }
-            WorkerTargetLifecycleOutput::SharedWorkerRuntimeInspectorMessages {
-                attachment,
-                messages,
-            } => {
-                if !attachment.is_current() {
-                    continue;
-                }
-                let session_id = attachment.session_id();
-                let mut response_events = Vec::new();
-                let mut background_events = Vec::new();
-                let current_response_seen = route_worker_runtime_inspector_messages_into(
-                    conn,
-                    messages,
-                    session_id,
-                    &mut response_events,
-                    &mut background_events,
-                );
-                debug_assert!(!current_response_seen);
-                side_effects.extend_background_events(background_events);
-                let pending_runtime_console =
-                    exact_shared_worker_pending_runtime_console(conn, &attachment);
-                replay_shared_worker_runtime_bindings_for_session_async(conn, Some(session_id))
-                    .await;
-                side_effects.extend_background_events(response_events);
-                if let Some((messages, console_end)) = pending_runtime_console {
-                    side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
-                    ));
-                    mark_exact_shared_worker_runtime_console_emitted(
-                        conn,
-                        &attachment,
-                        console_end,
-                    );
-                }
-            }
-            WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
-                browser_context_id,
-                renderer_instance_id,
-                target_id,
-                session_id,
-                messages,
-            } => {
-                if !dedicated_worker_target_is_current(
-                    conn,
-                    &browser_context_id,
-                    renderer_instance_id,
-                    &target_id,
-                ) {
-                    continue;
-                }
-                let mut response_events = Vec::new();
-                let mut background_events = Vec::new();
-                let current_response_seen = route_worker_runtime_inspector_messages_into(
-                    conn,
-                    messages,
-                    &session_id,
-                    &mut response_events,
-                    &mut background_events,
-                );
-                debug_assert!(!current_response_seen);
-                side_effects.extend_background_events(background_events);
-                replay_shared_worker_runtime_bindings_for_session_async(conn, Some(&session_id))
-                    .await;
-                side_effects.extend_background_events(response_events);
+            WorkerTargetLifecycleOutput::DedicatedWorkerDetached { .. }
+            | WorkerTargetLifecycleOutput::SharedWorkerDetached { .. }
+            | WorkerTargetLifecycleOutput::ServiceWorkerDetached { .. }
+            | WorkerTargetLifecycleOutput::ServiceWorkerRuntimeInspectorMessages { .. }
+            | WorkerTargetLifecycleOutput::SharedWorkerRuntimeInspectorMessages { .. }
+            | WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages { .. } => {
+                unreachable!("waiting Worker projections use the ordinary async flow")
             }
         }
     }
-    for event in side_effects.into_background_events() {
-        context.command.push_protocol_event(event);
-    }
+    retain_events(context, side_effects.into_background_events());
 }
 
 pub(super) fn route_worker_runtime_inspector_messages_into(

@@ -1015,6 +1015,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
     let (_activity_tx, document_activity_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut receivers = super::CdpSchedulerEventReceivers {
         protocol_state_request_rx: tokio::sync::mpsc::unbounded_channel().1,
+        protocol_work_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,
@@ -1093,9 +1094,7 @@ fn concrete_protocol_output_preserves_protocol_publish_order() {
 }
 
 #[test]
-#[should_panic(
-    expected = "protocol work must enter scheduler residence in exact publication order"
-)]
+#[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_duplicate_publication_sequence() {
     let mut queues = SchedulerQueues::default();
     queues.enqueue_protocol_work(
@@ -1111,9 +1110,7 @@ fn concrete_protocol_output_rejects_duplicate_publication_sequence() {
 }
 
 #[test]
-#[should_panic(
-    expected = "protocol work must enter scheduler residence in exact publication order"
-)]
+#[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_missing_earlier_publication() {
     let mut queues = SchedulerQueues::default();
     queues.enqueue_protocol_work(

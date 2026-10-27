@@ -9,6 +9,9 @@ const RECENT_ACTIVITY_TRACE_LIMIT: usize = 128;
 
 #[derive(Debug)]
 pub enum CdpSchedulerEvent {
+    RendererOutputProjectionPrepared {
+        pending: super::PendingProtocolSchedulerWork,
+    },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
     },
@@ -233,6 +236,8 @@ pub(super) struct CdpConnectionSchedulerState {
     next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
+    pub(super) runtime_command_output_barriers:
+        crate::domains::activity::RuntimeCommandOutputBarriers,
     scheduler_events: Vec<CdpSchedulerEvent>,
     recent_activity_traces: VecDeque<Value>,
     next_activity_trace_id: u64,

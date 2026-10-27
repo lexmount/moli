@@ -18,7 +18,7 @@ use super::TargetRuntimeObservableQueueSnapshot;
 use super::TargetRuntimeObservableSourceOutput;
 use super::emission::{
     ObservableOutputProjectionContext, ObservableOutputProjectionStep, SLOT_AUDITS, SLOT_CONSOLE,
-    SLOT_LOG, SLOT_RUNTIME_OBSERVABLE, emit_pending_observable_activity_background_events_async,
+    SLOT_LOG, SLOT_RUNTIME_OBSERVABLE, emit_pending_observable_activity_background_events,
 };
 use super::items::{
     ObservableOutputItem, ObservableRuntimePreparedItems, console_domain_items, log_domain_items,
@@ -402,19 +402,18 @@ impl ObservablePreparedOutputSlot {
         ObservablePreparedOutputs::projection_context(step, session_id, Some(&mut self.outputs))
     }
 
-    pub(crate) async fn emit_activity_background_events_async(
+    pub(crate) fn emit_activity_background_events(
         &mut self,
         step: ObservableOutputProjectionStep,
         conn: &mut CdpConnection,
         out: &mut Vec<BackgroundProtocolEvent>,
         session_id: Option<&str>,
     ) {
-        emit_pending_observable_activity_background_events_async(
+        emit_pending_observable_activity_background_events(
             conn,
             out,
             self.projection_context(step, session_id),
-        )
-        .await;
+        );
     }
 }
 

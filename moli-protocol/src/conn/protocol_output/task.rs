@@ -24,6 +24,7 @@ pub struct PendingProtocolSchedulerWork {
 
 #[derive(Clone)]
 enum PendingProtocolWork {
+    WorkerRendererProjection(super::renderer::PendingWorkerRendererProjection),
     Termination(TargetTermination),
     PopupActivation(PendingPopupActivation),
     BidiChannel(PendingBidiChannel),
@@ -103,6 +104,10 @@ pub struct CompletedProtocolSchedulerWork {
 }
 
 enum CompletedProtocolWork {
+    WorkerRendererProjection(
+        super::renderer::PendingWorkerRendererProjection,
+        super::renderer::SharedRendererProjectionResult,
+    ),
     Termination(Box<CompletedTargetTermination>),
     PopupActivation(PendingPopupActivation, Option<TargetActivationOutput>),
     BidiChannel(PendingBidiChannel, crate::conn::BidiChannelOutput),
@@ -110,6 +115,22 @@ enum CompletedProtocolWork {
         super::navigation::PendingBackgroundNavigationProtocol,
         super::navigation::SharedNavigationResult,
     ),
+}
+
+impl std::fmt::Debug for PendingProtocolSchedulerWork {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match &self.work {
+            PendingProtocolWork::WorkerRendererProjection(_) => "WorkerRendererProjection",
+            PendingProtocolWork::Termination(_) => "Termination",
+            PendingProtocolWork::PopupActivation(_) => "PopupActivation",
+            PendingProtocolWork::BidiChannel(_) => "BidiChannel",
+            PendingProtocolWork::Navigation(_) => "Navigation",
+        };
+        formatter
+            .debug_struct("PendingProtocolSchedulerWork")
+            .field("kind", &kind)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CompletedProtocolSchedulerWork {
@@ -121,6 +142,16 @@ impl CompletedProtocolSchedulerWork {
 }
 
 impl PendingProtocolSchedulerWork {
+    pub(super) fn for_worker_renderer_projection(
+        pending: super::renderer::PendingWorkerRendererProjection,
+        access: ProtocolStateAccess,
+    ) -> Self {
+        Self {
+            work: PendingProtocolWork::WorkerRendererProjection(pending),
+            access,
+        }
+    }
+
     /// The adapter and finite admission share this migration boundary.
     pub fn handles(kind: ProtocolSchedulerWorkKind) -> bool {
         matches!(
@@ -134,6 +165,12 @@ impl PendingProtocolSchedulerWork {
 
     pub async fn wait(self) -> CompletedProtocolSchedulerWork {
         match self.work {
+            PendingProtocolWork::WorkerRendererProjection(projection) => {
+                let result = projection.wait().await;
+                CompletedProtocolSchedulerWork {
+                    work: CompletedProtocolWork::WorkerRendererProjection(projection, result),
+                }
+            }
             PendingProtocolWork::Navigation(navigation) => {
                 let ready = navigation.wait().await;
                 CompletedProtocolSchedulerWork {
@@ -199,6 +236,9 @@ impl CdpConnection {
         completed: CompletedProtocolSchedulerWork,
     ) -> CdpTurnOutcome {
         match completed.work {
+            CompletedProtocolWork::WorkerRendererProjection(projection, result) => {
+                projection.finish(self, result)
+            }
             CompletedProtocolWork::Navigation(navigation, ready) => {
                 navigation.hand_off_ready(ready);
                 CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
@@ -561,10 +601,9 @@ mod tests {
         // nonempty batches are projected against their retired owner rather
         // than manufacturing projection completion in the test.
         let projected = conn
-            .ingest_renderer_output_turn_async(
-                RendererOutputTransportMessage::Publication(publication(1)),
-                &mut Default::default(),
-            )
+            .ingest_renderer_output_turn_async(RendererOutputTransportMessage::Publication(
+                publication(1),
+            ))
             .await;
         assert!(projected.into_protocol_event_parts().0.is_empty());
         assert!(work.renderer_output_predecessor_is_projected(&conn));

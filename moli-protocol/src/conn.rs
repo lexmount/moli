@@ -64,6 +64,7 @@ mod dispatch;
 mod document_activity_work;
 mod downloads;
 pub use document_activity_work::CompletedDocumentActivityUpdate;
+pub(crate) use downloads::PreparedDownloadActivationDelivery;
 mod fetch_support;
 mod inspector_route;
 mod navigation_error;
@@ -470,6 +471,7 @@ impl CommandDispatchContext {
         self.terminal_response_delivery_override
     }
 
+    #[cfg(test)]
     pub(crate) fn push_protocol_event(&mut self, event: BackgroundProtocolEvent) {
         self.protocol_events_mut().push(event);
     }

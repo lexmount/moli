@@ -272,22 +272,28 @@ impl SchedulerQueues {
             ));
     }
 
+    pub(super) fn admit_protocol_work_publish_sequence(
+        &mut self,
+        publish_sequence: moli_protocol::ProtocolWorkPublishSequence,
+    ) {
+        assert_eq!(
+            publish_sequence.get(),
+            self.next_protocol_work_publish_sequence,
+            "protocol work must be admitted in exact publication order"
+        );
+        self.next_protocol_work_publish_sequence = self
+            .next_protocol_work_publish_sequence
+            .checked_add(1)
+            .expect("scheduler protocol work publish sequence exhausted");
+    }
+
     pub(super) fn enqueue_protocol_work(
         &mut self,
         work: ProtocolSchedulerWork,
         load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
         future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
     ) {
-        let publish_sequence = work.publish_sequence();
-        assert_eq!(
-            publish_sequence.get(),
-            self.next_protocol_work_publish_sequence,
-            "protocol work must enter scheduler residence in exact publication order"
-        );
-        self.next_protocol_work_publish_sequence = self
-            .next_protocol_work_publish_sequence
-            .checked_add(1)
-            .expect("scheduler protocol work publish sequence exhausted");
+        self.admit_protocol_work_publish_sequence(work.publish_sequence());
         // A replacement must reach its owner before the pending load completes,
         // so it can cancel that load. Keep the client-turn boundary and the
         // action's owner checks, but never make it a successor of that load.

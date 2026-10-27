@@ -369,7 +369,7 @@ pub(in crate::domains) async fn project_pending_subresource_continue_async(
     }
 }
 
-pub(in crate::domains) async fn project_network_backlog_async(
+pub(in crate::domains) fn project_network_backlog(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
@@ -387,7 +387,7 @@ pub(in crate::domains) async fn project_network_backlog_async(
     }
 }
 
-pub(in crate::domains) async fn project_renderer_network_live_async(
+pub(in crate::domains) fn project_renderer_network_live(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
@@ -402,7 +402,7 @@ pub(in crate::domains) async fn project_renderer_network_live_async(
     }
 }
 
-pub(in crate::domains) async fn project_subresource_fetch_interception_async(
+pub(in crate::domains) fn project_subresource_fetch_interception(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
@@ -738,8 +738,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_subresource_fetch_interception_async(&mut conn, &mut context, &mut prepared)
-            .await;
+        super::project_subresource_fetch_interception(&mut conn, &mut context, &mut prepared);
 
         assert!(
             conn.runtime_session_owner_slot(Some("SID-1"))
@@ -795,8 +794,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_subresource_fetch_interception_async(&mut conn, &mut context, &mut prepared)
-            .await;
+        super::project_subresource_fetch_interception(&mut conn, &mut context, &mut prepared);
 
         let out = context
             .command
