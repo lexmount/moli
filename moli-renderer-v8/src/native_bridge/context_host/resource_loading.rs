@@ -1866,7 +1866,7 @@ impl JsContextHost {
                 .pending_window_request_aborts
                 .contains_key(&internal_id),
             AsyncSubresourceFetchEventTarget::Upload { internal_id } => {
-                self.pending_xhr_for_upload(internal_id).is_some()
+                self.pending_window_xhr(internal_id).is_some()
             }
             AsyncSubresourceFetchEventTarget::Completion { internal_id } => {
                 self.pending_subresource_fetches.contains_key(&internal_id)
@@ -1954,7 +1954,7 @@ impl JsContextHost {
         error
     }
 
-    fn pending_xhr_for_upload(&self, internal_id: u64) -> Option<&PendingSubresourceFetchState> {
+    fn pending_window_xhr(&self, internal_id: u64) -> Option<&PendingSubresourceFetchState> {
         let pending = self
             .pending_subresource_fetches
             .get(&internal_id)
@@ -1979,7 +1979,7 @@ impl JsContextHost {
         v8::Local<'s, v8::Object>,
         crate::types::PendingSubresourceExecutionContext,
     )> {
-        let pending = self.pending_xhr_for_upload(internal_id)?;
+        let pending = self.pending_window_xhr(internal_id)?;
         if let Some(target) = pending.execution_context.window_request_target()
             && !self
                 .window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
@@ -2528,6 +2528,25 @@ impl JsContextHost {
             .browser_context_runtime
             .abort_service_worker_fetch(internal_id);
         self.abort_subresource_fetch(internal_id)
+    }
+
+    /// A delayed XHR timer must not replace a completed transport result while
+    /// its Window's networking tasks are still queued. Completion and timeout
+    /// arbitrate on the lease's selected response, including a racing finish.
+    /// Requests held for authentication or response interception remain subject
+    /// to timeout; their intermediate response is not the consumer's outcome.
+    pub(crate) fn cancel_xhr_fetch_for_timeout(&mut self, internal_id: u64) -> bool {
+        if self
+            .pending_window_xhr(internal_id)
+            .is_some_and(|pending| !pending.load.cancel_if_response_pending())
+        {
+            return false;
+        }
+        let _ = self
+            .browser_context_runtime
+            .abort_service_worker_fetch(internal_id);
+        self.abort_subresource_fetch(internal_id);
+        true
     }
 
     pub(crate) fn abort_subresource_fetch(&mut self, internal_id: u64) -> bool {

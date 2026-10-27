@@ -65,6 +65,8 @@ mod redirect_chain;
 mod resource_io;
 #[path = "fetch_cli/subprocess.rs"]
 mod subprocess;
+#[path = "fetch_cli/xhr_timeout.rs"]
+mod xhr_timeout;
 
 struct Output {
     status: OutputStatus,
