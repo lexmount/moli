@@ -359,8 +359,14 @@ impl JsContextHost {
         if let ChildBrowsingContextBootstrap::Url(url) = &attribute_bootstrap
             && url.scheme() == "javascript"
         {
-            let dispatch_load_on_no_string_completion =
-                entry_snapshot.navigation_seed_is_initial_about_blank_commit();
+            // The initial about:blank history entry can outlive its load.
+            // Only an unfinished owner load can release the parent's delay
+            // through the existing initial-document lifecycle.
+            let dispatch_load_on_no_string_completion = entry_snapshot
+                .navigation_seed_is_initial_about_blank_commit()
+                && !self
+                    .frame_owner_store
+                    .current_child_document_owner_load_is_complete(handle, navigation_load.owner());
             let entry = self.child_browsing_contexts.get_mut(&handle)?;
             entry.set_pending_navigation(
                 PendingChildFrameNavigation::new(

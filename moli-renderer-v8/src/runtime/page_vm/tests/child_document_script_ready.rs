@@ -1,5 +1,78 @@
 use super::*;
 
+#[test]
+fn iframe_javascript_attribute_navigation_completes_the_parent_load_once() {
+    run_page_vm_large_stack_async_test("iframe-javascript-attribute-load", || async move {
+        for before_insertion in [false, true] {
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(&format!(
+                        r#"
+globalThis.__javascriptAttributeLoadOrder = [];
+addEventListener('load', () => __javascriptAttributeLoadOrder.push('parent-load'));
+const frame = document.createElement('iframe');
+frame.onload = () => __javascriptAttributeLoadOrder.push('frame-load');
+const source = 'javascript:parent.__javascriptAttributeLoadOrder.push("javascript"); void 0';
+if ({before_insertion}) frame.src = source;
+document.body.appendChild(frame);
+if (!{before_insertion}) frame.src = source;
+"#,
+                    ))?;
+                    for source in [
+                        ChildFrameSemanticTurnKind::NavigationCommit,
+                        ChildFrameSemanticTurnKind::DocumentScriptReady,
+                    ] {
+                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                            &mut page_vm,
+                            source,
+                            "javascript attribute navigation",
+                        )
+                        .await;
+                    }
+                    if before_insertion {
+                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                            &mut page_vm,
+                            ChildFrameSemanticTurnKind::HostLoad,
+                            "initial javascript iframe load",
+                        )
+                        .await;
+                    }
+                    let outcome = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        page_vm.finish_post_parse_execution_on_named_owner_lane(
+                            Vec::new(),
+                            PageVmInitStage::Load,
+                            Instant::now(),
+                        ),
+                    )
+                    .await
+                    .expect("non-string javascript completion must release the parent load")?;
+                    let PageVmNavigationTurnOutcome::Completed(mut page_vm) = outcome else {
+                        panic!("javascript URL must retain the current parent document");
+                    };
+                    let expected = if before_insertion {
+                        "javascript|frame-load|parent-load"
+                    } else {
+                        "frame-load|javascript|parent-load"
+                    };
+                    assert_eq!(
+                        page_vm
+                            .vm_mut()
+                            .eval("__javascriptAttributeLoadOrder.join('|')")?,
+                        expected,
+                        "the initial iframe load must finish once, before the parent load"
+                    );
+                    assert_eq!(page_vm.vm_mut().eval("document.readyState")?, "complete");
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .expect("javascript attribute navigation should complete its parent load");
+        }
+    });
+}
+
 async fn install_child_classic_script_ready_fixture(
     page_vm: &mut PageVm,
     frame_id: &str,
