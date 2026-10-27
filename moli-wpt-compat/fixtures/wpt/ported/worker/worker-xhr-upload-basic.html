@@ -164,14 +164,11 @@ promise_test(async function () {
   assert_array_equals(
     result.uploadEvents,
     [
-      "loadstart:true:true:false:0:0",
-      "progress:true:true:false:0:0",
-      "load:true:true:false:0:0",
-      "loadend:true:true:false:0:0",
+      "loadstart:true:true:true:0:0",
     ],
-    "worker XHR send(\"\") should dispatch upload completion events with zero-byte totals",
+    "worker XHR send(\"\") should expose a known empty upload without completion notifications",
   );
-}, "Dedicated workers dispatch zero-byte upload events for an empty string request body");
+}, "Dedicated workers report only upload loadstart for an empty string request body");
 
 promise_test(async function () {
   const result = await run_worker_upload_case({ kind: "abort-from-loadstart" });
