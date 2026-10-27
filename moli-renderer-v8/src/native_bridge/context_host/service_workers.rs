@@ -1721,6 +1721,15 @@ impl JsContextHost {
             .dispatch_service_worker_fetch(dispatch)
     }
 
+    pub(crate) fn dispatch_service_worker_fetch_with_prepared_request(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        prepared: moli_fetch::Request,
+    ) -> bool {
+        self.browser_context_runtime
+            .dispatch_service_worker_fetch_with_prepared_request(dispatch, prepared)
+    }
+
     pub(crate) fn dispatch_service_worker_message(
         &self,
         version_id: ServiceWorkerVersionId,

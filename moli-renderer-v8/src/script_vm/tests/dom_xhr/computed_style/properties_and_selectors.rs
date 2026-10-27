@@ -158,6 +158,7 @@ unrelatedHost.attachShadow({ mode: 'open' }).innerHTML =
 
     let properties = vm
         .computed_style_properties_for_inspector_handle(target)
+        .expect("computed-style observation succeeds")
         .expect("live element should resolve");
 
     let update_materializations = vm
@@ -214,6 +215,7 @@ unrelatedHost.attachShadow({ mode: 'open' }).innerHTML =
         .style_world_full_snapshots_for_test();
     let clean_properties = vm
         .computed_style_properties_for_inspector_handle(target)
+        .expect("computed-style observation succeeds")
         .expect("a clean retained world should remain readable");
     assert_eq!(clean_properties.len(), properties.len());
     assert_eq!(
@@ -262,6 +264,7 @@ target.id = 'target';
     for observation in 0..2 {
         let properties = vm
             .computed_style_properties_for_inspector_handle(target)
+            .expect("computed-style observation succeeds")
             .expect("live element should resolve");
         assert_eq!(
             properties
@@ -330,6 +333,7 @@ childDocument.close();
 
     let properties = vm
         .computed_style_properties_for_inspector_handle(target)
+        .expect("computed-style observation succeeds")
         .expect("child-frame element should resolve")
         .into_iter()
         .collect::<std::collections::HashMap<_, _>>();
@@ -345,7 +349,8 @@ childDocument.close();
     vm.eval("document.getElementById('inspector-child-frame').style.display = 'none'")
         .expect("child frame should become hidden");
     assert_eq!(
-        vm.computed_style_properties_for_inspector_handle(target),
+        vm.computed_style_properties_for_inspector_handle(target)
+            .unwrap(),
         Some(Vec::new()),
         "an existing element in a hidden child frame has an empty computed declaration",
     );
@@ -378,6 +383,7 @@ host.attachShadow({ mode: 'open' }).innerHTML = `
 
     let properties = vm
         .computed_style_properties_for_inspector_handle(target)
+        .expect("computed-style observation succeeds")
         .expect("shadow element should resolve")
         .into_iter()
         .collect::<std::collections::HashMap<_, _>>();
@@ -405,6 +411,7 @@ host.attachShadow({ mode: 'open' }).innerHTML = `
         .style_world_update_materializations_for_test();
     let clean_properties = vm
         .computed_style_properties_for_inspector_handle(target)
+        .expect("computed-style observation succeeds")
         .expect("clean shadow target should resolve");
     assert_eq!(clean_properties.len(), properties.len());
     assert_eq!(

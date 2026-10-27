@@ -30,6 +30,13 @@ pub(crate) type AuthorizedCurrentPageRenderingUpdate =
     AuthorizedCurrentWindowDocumentTask<RendererPageRenderingUpdateTask>;
 
 impl PageVm {
+    pub(in crate::runtime) fn current_realtime_rendering_opportunity(
+        &self,
+    ) -> Option<RendererPageRenderingUpdateTask> {
+        self.vm()
+            .current_realtime_rendering_opportunity(self.document_lifecycle.identity().document)
+    }
+
     fn current_page_rendering_update_owner(
         &self,
         task_id: RendererPageRenderingUpdateTaskId,

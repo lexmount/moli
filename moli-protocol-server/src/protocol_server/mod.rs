@@ -21,7 +21,7 @@ use axum::{
 };
 use moli_cookie_jar::StoredCookie;
 use moli_core::{
-    LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask,
+    LayoutPolicy, OptionalResourceFetchMask,
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
@@ -127,6 +127,7 @@ impl ProtocolServer {
         storage_partition: Arc<StoragePartitionState>,
         mut navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
+        navigation_runtime_config.ensure_layout_working_set_budget();
         if navigation_runtime_config
             .fetch_config()
             .http_cache_dir()
@@ -563,7 +564,6 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 #[derive(Clone)]
 struct AppState {
     control: BrowserInstanceControl,
-    debugger_enabled: bool,
     browser_ws_url: String,
     page_ws_url: String,
     bidi_ws_url: String,
@@ -574,10 +574,7 @@ struct AppState {
     devtools_frontend_url: String,
     cookie_profile: SharedCookieProfile,
     storage_partition: Arc<StoragePartitionState>,
-    fetch_config: FetchConfig,
-    optional_resource_fetch_mask: OptionalResourceFetchMask,
-    subframe_loading_enabled: bool,
-    layout_configuration: LayoutConfiguration,
+    navigation_runtime_config: NavigationRuntimeConfig,
 }
 
 impl AppState {
@@ -624,10 +621,11 @@ impl AppState {
         addr: SocketAddr,
         cookie_profile: SharedCookieProfile,
         storage_partition: Arc<StoragePartitionState>,
-        navigation_runtime_config: NavigationRuntimeConfig,
+        mut navigation_runtime_config: NavigationRuntimeConfig,
         screencast_interval_ms: u32,
         control: BrowserInstanceControl,
     ) -> Self {
+        navigation_runtime_config.ensure_layout_working_set_budget();
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
@@ -644,7 +642,6 @@ impl AppState {
         Self {
             control,
             browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
-            debugger_enabled: navigation_runtime_config.debugger_enabled(),
             page_ws_url: format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"),
             bidi_ws_url: format!("ws://{addr}/session"),
             bidi_session_registry: SharedBidiSessionRegistry::default(),
@@ -656,10 +653,7 @@ impl AppState {
             ),
             cookie_profile,
             storage_partition,
-            fetch_config: navigation_runtime_config.fetch_config().clone(),
-            optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
-            subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
-            layout_configuration: navigation_runtime_config.layout_configuration(),
+            navigation_runtime_config,
         }
     }
 

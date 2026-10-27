@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 mod auxiliary_pages;
+mod layout_working_set_budget;
 mod open_streaming;
 mod redirect_chain;
 

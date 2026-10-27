@@ -308,6 +308,7 @@ document.body.innerHTML = '<div id=target></div>';
             .paint_layout_snapshot(
                 moli_layout::PaintViewport::new(320, 200, 1.0),
                 moli_layout::LayoutFlushReason::Screencast,
+                crate::native_bridge::LayoutPublicationRequest::Screen,
             )?
             .expect("first screencast frame layout");
         assert_eq!(
@@ -344,6 +345,7 @@ document.body.innerHTML = '<div id=target></div>';
             .paint_layout_snapshot(
                 moli_layout::PaintViewport::new(320, 200, 1.0),
                 moli_layout::LayoutFlushReason::Screencast,
+                crate::native_bridge::LayoutPublicationRequest::Screen,
             )?
             .expect("second screencast frame layout");
         assert_eq!(
@@ -925,6 +927,7 @@ nextChildContext.fillRect(0,0,1,1);
             .paint_layout_snapshot(
                 moli_layout::PaintViewport::new(80, 60, 1.0),
                 moli_layout::LayoutFlushReason::Screencast,
+                crate::native_bridge::LayoutPublicationRequest::Screen,
             )?
             .expect("screencast canvas fixture must retain a layout root");
         let screencast_raster = moli_paint::raster_snapshot(&screencast)?;

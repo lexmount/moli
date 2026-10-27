@@ -174,7 +174,8 @@ pub(crate) use self::response::{
     validate_opaque_response_blocking_with_body,
 };
 pub(crate) use self::stylesheet_subresource::{
-    StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,
+    StylesheetSubresourceFetchStart, start_capture_resource_fetch,
+    start_stylesheet_subresource_fetch,
 };
 pub(crate) use self::text_track::{
     TextTrackResourceFetchStart, start_text_track_resource_fetch, text_track_response_result,

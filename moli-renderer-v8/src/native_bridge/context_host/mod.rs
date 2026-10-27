@@ -101,13 +101,15 @@ mod image_decodes;
 mod image_loads;
 mod image_resources;
 pub(crate) use image_resources::{
-    CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
-    ScannedImagePreloadAdmission,
+    CaptureReadyImage, CssImageResourceAdmission, CssImageResourceRequestIdentity,
+    ImageResponseDescriptor, ScannedImagePreloadAdmission,
 };
 mod indexed_db_tasks;
 mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
+mod font_loading;
 mod internal_node_refs;
+mod intersection_observer_tasks;
 mod layout;
 mod layout_snapshot;
 mod layout_state;
@@ -116,7 +118,13 @@ mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
 mod misc_platform_api_tasks;
+mod realtime_animation_frames;
+mod realtime_environment;
+mod realtime_events;
+mod realtime_layout;
+mod realtime_rendering;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
+pub(crate) use realtime_layout::LayoutPublicationRequest;
 mod text_track_loads;
 pub(crate) use text_track_loads::{
     PendingMediaCanPlayFollowup, PendingMediaTextTrackGateRegistration,
@@ -146,6 +154,7 @@ mod security_policy;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
+mod document_execution_context;
 mod font_face_loads;
 mod shared_workers;
 mod signal_bridge;
@@ -161,6 +170,7 @@ mod websockets;
 mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
+mod window_world;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 
@@ -189,6 +199,7 @@ pub(crate) use child_frame_snapshots::{
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;
+pub(crate) use document_execution_context::DocumentExecutionContext;
 pub(crate) use event_callbacks::{EventCallbackId, PreparedEventCallback};
 pub(crate) use host_loads::ChildFrameAttachmentSnapshot;
 #[cfg(test)]
@@ -234,6 +245,14 @@ use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
     WindowExecutionContextScopedRealmRegistration,
 };
+#[cfg(test)]
+pub(crate) use window_world::install_isolated_window_world_for_context;
+pub(crate) use window_world::{
+    IsolatedWindowWorld, IsolatedWindowWorldId, PrebootstrappedIsolatedWindowContext,
+    PrebootstrappedWindowContexts, WindowEventAccess, install_isolated_window_world_definition,
+    isolated_window_world_for_context, remember_isolated_window_context,
+    window_context_in_wrapper_world, window_event_access, window_in_wrapper_world,
+};
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 
@@ -252,9 +271,9 @@ impl std::ops::Deref for PrebootstrappedChildDefaultContext {
 }
 
 pub(crate) type SharedPrebootstrappedChildDefaultContexts =
-    Rc<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Rc<RefCell<PrebootstrappedWindowContexts>>;
 pub(crate) type WeakPrebootstrappedChildDefaultContexts =
-    Weak<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Weak<RefCell<PrebootstrappedWindowContexts>>;
 
 #[derive(Clone)]
 struct ChildDefaultContextBootstrapConfig {
@@ -816,6 +835,7 @@ pub(crate) struct JsContextHost {
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    realtime_layout_state: Option<Box<realtime_layout::RealtimeLayoutState>>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
     completed_layout_pass_time: Cell<std::time::Duration>,
@@ -857,6 +877,8 @@ pub(crate) struct JsContextHost {
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
     frame_owner_store: FrameOwnerStore,
+    inert_document_execution_contexts:
+        Option<Box<document_execution_context::InertDocumentExecutionContexts>>,
     frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore,
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
     frame_document_blocking_stylesheets: FrameDocumentBlockingStylesheetStore,
@@ -866,6 +888,8 @@ pub(crate) struct JsContextHost {
     child_default_context_bootstrap: Option<ChildDefaultContextBootstrapConfig>,
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
+    #[cfg(test)]
+    force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell<bool>,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: Rc<RefCell<Option<String>>>,
     next_child_browsing_context_id: u64,
@@ -923,6 +947,8 @@ pub(crate) struct JsContextHost {
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
     directory_reader_callbacks: directory_reader_callbacks::DirectoryReaderCallbackState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
+    intersection_observer_tasks:
+        Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
@@ -1321,6 +1347,7 @@ impl JsContextHost {
             return;
         }
         self.page_context_resources_closed = true;
+        self.clear_realtime_layout_working_sets();
         self.bridge.web_mcp.clear();
         self.retire_all_window_execution_context_resources_for_teardown();
         self.pending_history_traversal_admissions.clear();

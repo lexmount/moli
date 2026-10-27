@@ -772,6 +772,11 @@ impl ScriptVm {
                                 .then(|| observable_response.body_bytes());
                             crate::context_bootstrap::finish_font_face_url_load(scope, face, bytes);
                         }
+                        PendingSubresourceContinuation::CaptureResource(capture) => {
+                            context_host.borrow().complete_capture_resource_response(
+                                capture, &observable_response, parkable_image.as_ref(),
+                            );
+                        }
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             target,
@@ -913,6 +918,11 @@ impl ScriptVm {
                         PendingSubresourceContinuation::FontFace(face) => {
                             let face = v8::Local::new(scope, face);
                             crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                        }
+                        PendingSubresourceContinuation::CaptureResource(capture) => {
+                            context_host.borrow().queue_capture_resource_result(
+                                capture, crate::capture_resources::CaptureResourceResult::Failed(error_text.clone()),
+                            );
                         }
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,

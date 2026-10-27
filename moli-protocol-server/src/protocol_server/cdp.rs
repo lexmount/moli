@@ -25,7 +25,7 @@ pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResp
         "Browser": version::PRODUCT,
         "Moli-Version": version::MOLI_VERSION,
         "Protocol-Version": version::PROTOCOL_VERSION,
-        "User-Agent": state.fetch_config.user_agent(),
+        "User-Agent": state.navigation_runtime_config.fetch_config().user_agent(),
         "V8-Version": version::js_version(),
         "WebKit-Version": version::WEBKIT_VERSION,
         "webSocketDebuggerUrl": state.browser_ws_url,

@@ -446,7 +446,7 @@ where
         );
         local_overflow = LayoutRect::new(left, top, right - left, bottom - top);
     }
-    if let Some(context) = layout_box.inline_layout.as_ref() {
+    if let Some(context) = world.inline_layouts[id.index()].as_ref() {
         let origin = LayoutPoint::new(
             layout.border.left
                 + layout.padding.left

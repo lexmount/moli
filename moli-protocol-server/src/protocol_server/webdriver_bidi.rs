@@ -72,13 +72,7 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
     let session_registry = state.bidi_session_registry;
     let cookie_profile = state.cookie_profile;
     let control = state.control;
-    let navigation_runtime_config = NavigationRuntimeConfig::new_with_layout_configuration(
-        state.fetch_config,
-        state.optional_resource_fetch_mask,
-        state.subframe_loading_enabled,
-        state.layout_configuration,
-    )
-    .with_debugger_enabled(state.debugger_enabled);
+    let navigation_runtime_config = state.navigation_runtime_config.clone();
     ws.on_upgrade(move |socket| {
         handle_bidi_session_socket(
             socket,

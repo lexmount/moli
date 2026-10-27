@@ -410,6 +410,7 @@ fn register_pending_window_fetch_for_test(
             PendingWindowFetchTestStage::Response => {
                 host.record_pending_subresource_response(
                     crate::types::PendingSubresourceResponseState {
+                        capture_security: None,
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),
@@ -2273,6 +2274,8 @@ mod document_implementation_realm;
 mod svg_animated_value_native_receivers;
 
 mod native_exception_stack_capture;
+mod native_input_validation;
+mod native_node_event_outcomes;
 mod no_cors_header_fill;
 mod node_event_worlds;
 
@@ -2292,6 +2295,12 @@ mod queue_microtask;
 mod svg_gradient_native_receivers;
 
 mod readable_algorithm_arrays;
+mod realtime_cssom;
+mod realtime_frames;
+mod realtime_layout;
+mod realtime_publication;
+mod realtime_resources;
+mod realtime_working_sets;
 mod remote_playback_interface;
 mod rendering_update;
 mod rtc_configuration;
@@ -2350,6 +2359,8 @@ mod window_execution_context;
 mod window_immutable_prototype_chain;
 
 mod window_getter_consolidation;
+mod window_node_events;
+mod window_node_worlds;
 mod window_receiver_access;
 mod worklet_interfaces;
 

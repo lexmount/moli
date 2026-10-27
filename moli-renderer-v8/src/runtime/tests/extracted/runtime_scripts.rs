@@ -191,6 +191,7 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
     let viewport_clip = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            purpose: crate::runtime::RendererScreenshotPurpose::Screenshot,
             base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -220,6 +221,7 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
     let page_clip = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            purpose: crate::runtime::RendererScreenshotPurpose::Screenshot,
             base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,

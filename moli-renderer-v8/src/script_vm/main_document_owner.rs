@@ -138,7 +138,14 @@ impl ScriptVm {
             );
         }
 
-        self.reset_main_document_local_state();
+        if self._context_host.borrow().layout_policy().is_realtime() {
+            // Each document.open transaction already retired Host layout/font
+            // state synchronously. Preserve any new geometry published before
+            // this turn boundary while still retiring ScriptVm input state.
+            clear_input_dispatch_state(self);
+        } else {
+            self.reset_main_document_local_state();
+        }
     }
 
     pub(super) fn reset_main_document_local_state(&mut self) {

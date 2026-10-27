@@ -31,6 +31,8 @@ mod app_manifest;
 mod blob;
 mod broadcast_channel_runtime;
 mod callback_invocation;
+mod capture_layout_resources;
+mod capture_resources;
 #[cfg(test)]
 mod chromium_property_surface;
 mod common_runtime;
@@ -67,6 +69,7 @@ mod inspector_microtasks;
 mod inspector_session;
 mod javascript_url;
 mod layout_renderer;
+mod layout_working_set_budget;
 mod link_as;
 mod live_document_parser;
 mod live_stylesheet;
@@ -227,6 +230,12 @@ pub use host::{
     DocumentCookieCapabilitySnapshot, DocumentCookieFacadeTelemetrySnapshot,
     DocumentCookieFirstOperation,
 };
+pub use layout_working_set_budget::{
+    BudgetConfigError as LayoutWorkingSetBudgetConfigError,
+    BudgetLimits as LayoutWorkingSetBudgetLimits, BudgetSnapshot as LayoutWorkingSetBudgetSnapshot,
+    BudgetTiming as LayoutWorkingSetBudgetTiming, LayoutWorkingSetBudget,
+    PressureChange as LayoutWorkingSetPressureChange,
+};
 pub use local_executor::is_on_js_local_executor;
 pub use native_bridge::element::ClientRect as RendererClientRect;
 pub use runtime::{
@@ -323,7 +332,7 @@ pub use runtime::{
     RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
     RendererRuntimeRemoteObjectResolution, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
+    RendererScreenshotPurpose, RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
     RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
     RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,

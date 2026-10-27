@@ -163,9 +163,53 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
 ) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
     let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
-    let context = callback.relevant_context(scope);
-    let (receiver, event) =
-        crate::context_bootstrap::event_callback_values(scope, receiver, event, context)?;
+    let (receiver, event) = {
+        let context = callback.relevant_context(scope);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let scope = &mut catch.init();
+        // The current native ownerDocument supplies a Node's execution
+        // context. Its wrapper can have been created in another Window or
+        // adopted there, and an inert Document need not have a frame.
+        let node_context = if let EventTargetHandle::Node(node) = target {
+            Some(unsafe { &*host_ptr }.node_event_execution_context(scope, node)?)
+        } else {
+            None
+        };
+        let window = node_context
+            .map(|context| context.global(scope))
+            .or_else(|| v8::Local::<v8::Object>::try_from(receiver).ok());
+        if let Some(window) = window {
+            match crate::native_bridge::window_event_access(scope, window, context) {
+                crate::native_bridge::WindowEventAccess::Retired => return None,
+                crate::native_bridge::WindowEventAccess::Denied => {
+                    let exception = crate::context_bootstrap::new_dom_exception_value(
+                        scope,
+                        "Blocked an event listener from accessing a cross-origin target.",
+                        "SecurityError",
+                    );
+                    return Some(v8::Global::new(scope, exception));
+                }
+                crate::native_bridge::WindowEventAccess::Allowed
+                | crate::native_bridge::WindowEventAccess::Unmanaged => {}
+            }
+        }
+        let projection = if let Some(node_context) = node_context {
+            crate::context_bootstrap::node_event_callback_values(
+                scope,
+                receiver,
+                event,
+                node_context,
+                context,
+            )
+        } else {
+            crate::context_bootstrap::window_event_callback_values(scope, receiver, event, context)
+        };
+        if let Some(exception) = scope.exception() {
+            return Some(v8::Global::new(scope, exception));
+        }
+        projection?
+    };
     // Window.onerror's five arguments are JS values, not an Event conversion.
     let event_arguments = [event.into()];
     let arguments = if has_event_argument {
@@ -622,11 +666,12 @@ fn event_listener_error_event_from_report<'s>(
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PublicEventDispatchResult {
     pub default_prevented: bool,
+    canceled_before_dispatch: bool,
 }
 
 impl PublicEventDispatchResult {
     pub(crate) fn allows_default(self) -> bool {
-        !self.default_prevented
+        !self.default_prevented && !self.canceled_before_dispatch
     }
 
     pub(crate) fn dispatch_event_return_value(self) -> bool {
@@ -1307,6 +1352,16 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     event: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<PublicEventDispatchResult, String> {
     unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("public event dispatch");
+    if let EventTargetHandle::Node(node) = dispatch_target
+        && unsafe { &*host_ptr }
+            .document_execution_context_for_node(node)
+            .is_none()
+    {
+        return Ok(PublicEventDispatchResult {
+            canceled_before_dispatch: true,
+            default_prevented: event_default_prevented(scope, event),
+        });
+    }
     let target_object = event_target_object(scope, host_ptr, dispatch_target)?;
     let event_type = normalize_public_event_record(scope, event, target_object.into())?;
 
@@ -1715,6 +1770,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     clear_event_composed_path(scope, event);
     Ok(PublicEventDispatchResult {
         default_prevented: event_default_prevented(scope, event),
+        canceled_before_dispatch: false,
     })
 }
 

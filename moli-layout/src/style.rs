@@ -601,6 +601,19 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
 }
 
 impl ResolvedLayoutStyle {
+    /// Keep only the owned computed-style residence and scalar inline inputs
+    /// needed to validate retained preparation. Numeric/grid/generated-content
+    /// allocations are pass-local; the next pass installs a fresh full style.
+    pub(crate) fn prepare_for_construction_retention(&mut self) {
+        let float = self.taffy.float;
+        self.taffy = Style {
+            float,
+            ..Style::default()
+        };
+        self.generated_content = GeneratedContent::None;
+        self.list_marker_type = LayoutListMarkerType::None;
+    }
+
     /// Converts one retained Stylo style while preserving its allocation for
     /// the full lifetime of the pass-local Taffy projection.
     pub fn from_stylo(computed: ServoArc<ComputedValues>) -> Self {

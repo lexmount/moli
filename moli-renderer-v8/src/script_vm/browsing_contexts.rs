@@ -46,6 +46,10 @@ impl ScriptVm {
         state: crate::dom::native::DocumentReadyState,
     ) -> Result<()> {
         self.document_runtime.set_document_ready_state(state);
+        if state == crate::dom::native::DocumentReadyState::Complete {
+            let host = self._context_host.borrow();
+            host.queue_realtime_font_readiness(host.document_handle());
+        }
         Ok(())
     }
 

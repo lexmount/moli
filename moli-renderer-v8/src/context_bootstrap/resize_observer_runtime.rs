@@ -1,4 +1,5 @@
 mod entry;
+mod realtime;
 use super::*;
 use crate::common_runtime::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence, CommonRuntimeState,
@@ -9,6 +10,7 @@ use crate::webidl;
 use entry::ResizeObserverEntryData;
 pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi_declare::WebApiObject;
+pub(crate) use realtime::{broadcast_realtime_resize_observer, gather_realtime_resize_observers};
 use webidl::WebIdlDictionarySerialize;
 
 #[derive(WebApiObject)]
@@ -64,7 +66,7 @@ struct ResizeObserverUnobserveArgs<'s> {
     target: v8::Local<'s, v8::Object>,
 }
 
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, webidl::WebIdlEnum)]
 #[webidl(name = "ResizeObserverBoxOptions", rename_all = "kebab-case")]
 enum ResizeObserverBoxOptions {
     #[default]
@@ -123,6 +125,12 @@ pub(super) fn resize_observer_constructor_callback<'s>(
     )
     .initialize(scope, args.this())
     .expect("ResizeObserver declaration should initialize object");
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        crate::observer_runtime::register_realtime_resize_observer(
+            unsafe { &*host_ptr },
+            callback_id,
+        );
+    }
     rv.set(args.this().into());
 }
 
@@ -138,6 +146,16 @@ pub(super) fn resize_observer_observe_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if realtime::observe_if_realtime(
+        scope,
+        args.this(),
+        targets,
+        parsed.target,
+        parsed.options.observed_box,
+    ) {
+        rv.set_undefined();
+        return;
+    }
     let record = if let Some(existing_index) =
         observed_record_index(scope, targets, parsed.target.into())
     {
@@ -228,6 +246,13 @@ pub(super) fn resize_observer_take_records_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if realtime::is_enabled(scope) {
+        // This legacy extension has no queued records in the frame route.
+        // In particular it must not consume the RO loop's active records or
+        // commit last-reported sizes outside broadcast.
+        rv.set(v8::Array::new(scope, 0).into());
+        return;
+    }
     let Some(pending_targets) = resize_observer_pending_targets(scope, args.this()) else {
         rv.set(v8::Array::new(scope, 0).into());
         return;
@@ -317,10 +342,53 @@ fn is_resize_observer_target<'s>(
     .is_some()
 }
 
+/// One active sample, before it has been reported. Keeping native entry data
+/// here lets a frame gather observations without creating JS entries or
+/// advancing lastReportedSizes for observations that it cannot broadcast yet.
+struct ResizeObservationMeasurement<'s> {
+    record: Option<v8::Local<'s, v8::Object>>,
+    observed_size: (f64, f64),
+    entry: ResizeObserverEntryData<'s>,
+}
+
+impl<'s> ResizeObservationMeasurement<'s> {
+    fn into_reported_entry(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+        if let Some(record) = self.record {
+            set_resize_observer_last_reported_size(scope, record, self.observed_size);
+        }
+        self.entry.into_object(scope)
+    }
+}
+
 fn build_resize_observer_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observed_records: v8::Local<'s, v8::Array>,
 ) -> Result<v8::Local<'s, v8::Array>, moli_layout::LayoutError> {
+    let mut entries = Vec::new();
+    for_each_active_resize_observation(scope, observed_records, |scope, measurement| {
+        entries.push(measurement.into_reported_entry(scope));
+    })?;
+    Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
+}
+
+/// Samples the published geometry and compares it with reported sizes, without
+/// changing those sizes. The consumer is native-only: it must not invoke JS.
+/// Legacy delivery consumes each sample immediately, retaining its existing
+/// allocation pattern; a frame gather can instead retain a batch until broadcast.
+fn for_each_active_resize_observation<'s, 'i>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    observed_records: v8::Local<'s, v8::Array>,
+    consume: impl FnMut(&mut v8::PinScope<'s, 'i>, ResizeObservationMeasurement<'s>),
+) -> Result<(), moli_layout::LayoutError> {
+    for_each_resize_observation(scope, observed_records, true, consume)
+}
+
+fn for_each_resize_observation<'s, 'i>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    observed_records: v8::Local<'s, v8::Array>,
+    compare_reported_sizes: bool,
+    mut consume: impl FnMut(&mut v8::PinScope<'s, 'i>, ResizeObservationMeasurement<'s>),
+) -> Result<(), moli_layout::LayoutError> {
     struct PendingEntry<'s> {
         record: Option<v8::Local<'s, v8::Object>>,
         target: v8::Local<'s, v8::Value>,
@@ -350,11 +418,21 @@ fn build_resize_observer_entries<'s>(
     let mut geometry = std::collections::HashMap::new();
     let mut by_document = std::collections::HashMap::<_, Vec<_>>::new();
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return Ok(v8::Array::new(scope, 0));
+        return Ok(());
     };
     let runtime = unsafe { &*host_ptr };
+    let realtime = runtime.layout_policy().is_realtime();
     for handle in pending.iter().filter_map(|entry| entry.handle) {
         if let Some(document) = runtime.dom_host().owner_document_handle(handle) {
+            if realtime
+                && (!runtime.dom_host().is_connected(handle)
+                    || runtime.owner_dispatch_scope_for_node(handle).is_none()
+                    || crate::observer_runtime::realtime_resize_observer_box_was_removed(
+                        runtime, handle,
+                    ))
+            {
+                continue;
+            }
             by_document.entry(document).or_default().push(handle);
         }
     }
@@ -374,7 +452,9 @@ fn build_resize_observer_entries<'s>(
             &moli_layout::LayoutQueryBatch::new(queries),
         ) {
             Ok(answers) => answers,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+            Err(moli_layout::LayoutError::NoLayoutSnapshot) if !realtime => {
+                continue;
+            }
             Err(error) => return Err(error),
         };
         let mut answers = answers.answers.into_iter();
@@ -400,7 +480,6 @@ fn build_resize_observer_entries<'s>(
         }
     }
 
-    let mut entries = Vec::new();
     for entry in pending {
         let (metrics, dpr) = entry
             .handle
@@ -435,24 +514,46 @@ fn build_resize_observer_entries<'s>(
             Some(ResizeObserverBoxOptions::DevicePixelContentBox) => device_pixel_content_box_size,
             Some(ResizeObserverBoxOptions::ContentBox) | None => content_box_size,
         };
-        if let Some(record) = entry.record {
+        if compare_reported_sizes && let Some(record) = entry.record {
             let previous = resize_observer_last_reported_size(scope, record);
             if previous == Some(observed_size) {
                 continue;
             }
-            set_resize_observer_last_reported_size(scope, record, observed_size);
         }
-        let entry = ResizeObserverEntryData {
-            target: entry.target,
-            content_rect: rect,
-            content_box_size,
-            border_box_size,
-            device_pixel_content_box_size,
-        }
-        .into_object(scope);
-        entries.push(entry);
+        consume(
+            scope,
+            ResizeObservationMeasurement {
+                record: entry.record,
+                observed_size,
+                entry: ResizeObserverEntryData {
+                    target: entry.target,
+                    content_rect: rect,
+                    content_box_size,
+                    border_box_size,
+                    device_pixel_content_box_size,
+                },
+            },
+        );
     }
-    Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn resize_observer_measurements_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+    report_indices: &[usize],
+) -> Result<Vec<(f64, f64)>, moli_layout::LayoutError> {
+    let records = resize_observer_targets(scope, observer).expect("test ResizeObserver targets");
+    let mut sizes = Vec::new();
+    for_each_active_resize_observation(scope, records, |scope, measurement| {
+        let index = sizes.len();
+        sizes.push(measurement.observed_size);
+        if report_indices.contains(&index) {
+            measurement.into_reported_entry(scope);
+        }
+    })?;
+    Ok(sizes)
 }
 
 fn build_observed_record<'s>(
@@ -684,6 +785,9 @@ fn queue_resize_observer_delivery<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observer: v8::Local<'s, v8::Object>,
 ) {
+    if realtime::is_enabled(scope) {
+        return;
+    }
     if resize_observer_scheduled(scope, observer) {
         return;
     }
@@ -709,6 +813,10 @@ fn queue_resize_observer_delivery<'s>(
 }
 
 pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {
+    if realtime::is_enabled(scope) {
+        // The source commit requested native RO work before observer effects.
+        return;
+    }
     let Some(registry) = global_queue_array(scope, RESIZE_OBSERVER_REGISTRY_SLOT) else {
         return;
     };
@@ -741,10 +849,13 @@ pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {
     }
 }
 
-fn remove_resize_observer_from_registry(
-    scope: &mut v8::PinScope<'_, '_>,
-    observer: v8::Local<'_, v8::Object>,
+fn remove_resize_observer_from_registry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
 ) {
+    if realtime::deactivate_if_realtime(scope, observer) {
+        return;
+    }
     let Some(registry) = global_queue_array(scope, RESIZE_OBSERVER_REGISTRY_SLOT) else {
         return;
     };

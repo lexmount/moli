@@ -1,0 +1,471 @@
+use std::time::{Duration, Instant};
+
+use moli_layout::LayoutFlushReason;
+
+use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use crate::frame_owner_model::FrameDocumentTaskOwner;
+use crate::page_task_queue::RendererPageRenderingUpdateTaskId;
+
+const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+
+fn next_frame_deadline(previous: Option<Instant>, now: Instant) -> Instant {
+    let next = previous.unwrap_or(now) + FRAME_INTERVAL;
+    if now <= next {
+        return next;
+    }
+    // Preserve the active burst's cadence while skipping elapsed ticks in
+    // constant time. A tick exactly at `now` is eligible; don't replay any of
+    // the earlier opportunities missed by a long script or layout pass.
+    let period = FRAME_INTERVAL.as_nanos();
+    let phase = now.duration_since(next).as_nanos() % period;
+    now + Duration::from_nanos(((period - phase) % period) as u64)
+}
+
+struct RunningRealtimeFrame {
+    ticket: (RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget),
+    // The root is first. Only an explicit document.open transaction may move
+    // these exact targets: it preserves the Web Document and Window, while
+    // replacing Moli's task owner. Navigation never transfers this batch.
+    documents: Vec<WindowDocumentTaskTarget>,
+}
+
+#[derive(Default)]
+pub(super) struct RealtimeFrameState {
+    next_id: u64,
+    pending: Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)>,
+    // Realtime-only metadata for an active burst. Idle/canceled/retired work
+    // drops the cadence without creating a persistent wake-up source.
+    last_deadline: Option<Instant>,
+    running: Option<RunningRealtimeFrame>,
+    source_requested: bool,
+    #[cfg(test)]
+    now_for_test: Option<Instant>,
+    #[cfg(test)]
+    completed_for_test: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl RealtimeFrameState {
+    fn sampled_now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.now_for_test {
+            return now;
+        }
+        Instant::now()
+    }
+
+    pub(super) fn is_idle(&self) -> bool {
+        self.pending.is_none() && self.running.is_none()
+    }
+
+    pub(super) fn retire_document(&mut self) {
+        // Do not reuse ids across document.open(), or a stale claimed task
+        // could retire the replacement's payload during discard.
+        self.pending = None;
+        self.last_deadline = None;
+        // The running body can outlive its Document through author callbacks.
+        // Only that body's settlement may release the non-reentrancy guard.
+        self.source_requested = false;
+        #[cfg(test)]
+        self.completed_for_test.take();
+    }
+}
+
+impl JsContextHost {
+    pub(super) fn rebind_realtime_document_after_open(
+        &self,
+        retired: FrameDocumentTaskOwner,
+        current: FrameDocumentTaskOwner,
+    ) {
+        let Some(state) = &self.realtime_layout_state else {
+            return;
+        };
+        debug_assert_eq!(retired.local_window_id, current.local_window_id);
+        let retired = WindowDocumentOwner::Frame(retired);
+        let current = WindowDocumentOwner::Frame(current);
+        // Callback residence can follow document.open(), but computation
+        // inputs belong to the retired exact Document and must start cold.
+        self.retire_realtime_layout_working_set_owner(retired);
+        state.environment.borrow_mut().rebind(retired, current);
+        self.rebind_realtime_font_readiness(retired, current);
+        self.rebind_realtime_rendering_events(retired, current);
+        self.rebind_realtime_animation_frame_document(retired, current);
+        crate::observer_runtime::rebind_realtime_resize_observer_document(self, retired, current);
+        {
+            let mut frame = state.frame.borrow_mut();
+            // Unstarted tasks still need a new exact-owner ticket. A running
+            // body keeps its original ticket and non-reentrancy guard, but
+            // follows the explicitly preserved Document in later phases.
+            if frame
+                .pending
+                .is_some_and(|(_, target)| target.owner() == retired)
+            {
+                frame.pending = None;
+            }
+            if let Some(running) = &mut frame.running {
+                for target in &mut running.documents {
+                    if target.owner() == retired {
+                        *target = WindowDocumentTaskTarget::new(current, target.dispatch_scope());
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn retire_realtime_rendering_document(&self, retired: WindowDocumentOwner) {
+        if self.realtime_layout_state.is_none() {
+            return;
+        }
+        self.retire_realtime_animation_frame_document(retired);
+        self.retire_realtime_layout_working_set_owner(retired);
+        self.retire_realtime_font_readiness(retired);
+        if let Some(state) = &self.realtime_layout_state {
+            state
+                .environment
+                .borrow_mut()
+                .retain(|target| target.owner() != retired);
+            state
+                .rendering_events
+                .borrow_mut()
+                .retain(|pending| pending.target().owner() != retired);
+        }
+        crate::observer_runtime::retire_realtime_resize_observer_document(self, retired);
+        self.refresh_realtime_rendering_opportunity();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn realtime_frame_is_idle_for_test(&self) -> bool {
+        self.realtime_layout_state.as_ref().is_some_and(|state| {
+            let frame = state.frame.borrow();
+            frame.is_idle() && !frame.source_requested
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn realtime_frame_snapshot_for_test(&self) -> Option<String> {
+        let state = self.realtime_layout_state.as_ref()?;
+        let frame = state.frame.borrow();
+        Some(format!(
+            "{:?}",
+            (
+                frame.next_id,
+                frame.pending,
+                frame.last_deadline,
+                frame
+                    .running
+                    .as_ref()
+                    .map(|running| (&running.ticket, &running.documents)),
+                frame.source_requested,
+            ),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_realtime_opportunity_clock_for_test(&self, now: Instant) {
+        self.realtime_layout_state
+            .as_ref()
+            .expect("Realtime test clock")
+            .frame
+            .borrow_mut()
+            .now_for_test = Some(now);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_next_realtime_opportunity_for_test(
+        &self,
+        completed: tokio::sync::oneshot::Sender<()>,
+    ) {
+        self.realtime_layout_state
+            .as_ref()
+            .expect("Realtime test observer")
+            .frame
+            .borrow_mut()
+            .completed_for_test = Some(completed);
+    }
+
+    /// Source commits register semantic demand; the stable Page source owns
+    /// deadline residence. This neither computes layout nor calls page JS.
+    pub(crate) fn request_realtime_rendering_opportunity(&self) {
+        let Some(state) = &self.realtime_layout_state else {
+            return;
+        };
+        let already_requested = {
+            let mut frame = state.frame.borrow_mut();
+            std::mem::replace(&mut frame.source_requested, true)
+        };
+        if !already_requested {
+            crate::observer_runtime::request_realtime_resize_observer_checks(self);
+        }
+        self.refresh_realtime_rendering_opportunity();
+    }
+
+    /// Reconcile semantic demand with the single deadline residence. rAF
+    /// registration/cancellation does not manufacture a layout source change.
+    pub(crate) fn refresh_realtime_rendering_opportunity(&self) {
+        let Some(state) = &self.realtime_layout_state else {
+            return;
+        };
+        // Policy is installed before Page task capabilities during bootstrap.
+        // The capability installation requests the initial opportunity once
+        // the stable owner route exists; source commits still update inputs.
+        if self.page_task_capabilities.get().is_none() {
+            return;
+        }
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top)
+        else {
+            return;
+        };
+        if state.frame.borrow().running.is_some() {
+            // This also covers document.open during a callback. There can
+            // never be a second opportunity nested inside the running body.
+            return;
+        }
+        let callbacks_pending = self.has_runnable_realtime_animation_frames();
+        let resize_pending =
+            crate::observer_runtime::has_pending_realtime_resize_observers(self, None);
+        let environment_pending = state.environment.borrow().has_pending();
+        let events_pending = self.has_realtime_rendering_events();
+        let mut frame = state.frame.borrow_mut();
+        if !self.document_activity().visible
+            || (!frame.source_requested
+                && !callbacks_pending
+                && !resize_pending
+                && !environment_pending
+                && !events_pending)
+        {
+            frame.pending = None;
+            frame.last_deadline = None;
+            return;
+        }
+        if frame
+            .pending
+            .is_some_and(|(_, pending_target)| pending_target == target)
+        {
+            return;
+        }
+        frame.pending = None;
+        let Some(next_id) = frame.next_id.checked_add(1) else {
+            tracing::error!("realtime rendering opportunity id exhausted");
+            return;
+        };
+        frame.next_id = next_id;
+        let id = RendererPageRenderingUpdateTaskId::Frame(next_id);
+        let deadline = next_frame_deadline(frame.last_deadline, frame.sampled_now());
+        frame.pending = Some((id, target));
+        if self
+            .page_rendering_update_sender()
+            .schedule_frame(target, id, deadline)
+            .is_err()
+        {
+            frame.pending = None;
+            frame.last_deadline = None;
+            state.rendering_events.borrow_mut().retain(|_| false);
+            tracing::debug!(
+                ?target,
+                ?id,
+                "retired realtime opportunity after route closure"
+            );
+        } else {
+            frame.last_deadline = Some(deadline);
+        }
+    }
+
+    pub(crate) fn current_realtime_rendering_opportunity(
+        &self,
+    ) -> Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)> {
+        let (id, target) = self
+            .realtime_layout_state
+            .as_ref()?
+            .frame
+            .borrow()
+            .pending?;
+        self.window_document_owner_is_current_for_dispatch_scope(
+            target.owner(),
+            target.dispatch_scope(),
+        )
+        .then_some((id, target))
+    }
+
+    pub(crate) fn discard_realtime_rendering_opportunity(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+    ) -> bool {
+        let Some(state) = &self.realtime_layout_state else {
+            return false;
+        };
+        let mut frame = state.frame.borrow_mut();
+        if frame
+            .pending
+            .is_some_and(|(pending_id, _)| pending_id == id)
+        {
+            frame.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn begin_realtime_rendering_opportunity(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+        target: WindowDocumentTaskTarget,
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            self.current_realtime_rendering_opportunity() == Some((id, target)),
+            "authorized realtime opportunity lost its exact payload"
+        );
+        self.discard_realtime_rendering_opportunity(id);
+        let state = self.realtime_layout_state.as_ref().expect("Realtime frame");
+        let mut frame = state.frame.borrow_mut();
+        anyhow::ensure!(frame.running.is_none(), "reentrant rendering opportunity");
+        if !self.document_activity().visible {
+            return Ok(false);
+        }
+        let documents = self.realtime_animation_frame_documents();
+        anyhow::ensure!(
+            documents.first() == Some(&target),
+            "rendering root changed before its batch"
+        );
+        frame.running = Some(RunningRealtimeFrame {
+            ticket: (id, target),
+            documents,
+        });
+        Ok(true)
+    }
+
+    pub(crate) fn realtime_rendering_opportunity_is_current(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        let Some(root) = self.realtime_rendering_document(id, target, 0) else {
+            return false;
+        };
+        self.window_document_owner_is_current_for_dispatch_scope(
+            root.owner(),
+            root.dispatch_scope(),
+        )
+    }
+
+    pub(crate) fn realtime_rendering_document(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+        root: WindowDocumentTaskTarget,
+        index: usize,
+    ) -> Option<WindowDocumentTaskTarget> {
+        let frame = self.realtime_layout_state.as_ref()?.frame.borrow();
+        let running = frame.running.as_ref()?;
+        (running.ticket == (id, root))
+            .then(|| running.documents.get(index).copied())
+            .flatten()
+    }
+
+    /// No page callbacks are invoked while native style/layout borrows exist.
+    pub(crate) fn run_realtime_layout_phase(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+        target: WindowDocumentTaskTarget,
+    ) -> anyhow::Result<()> {
+        if !self.realtime_rendering_opportunity_is_current(id, target) {
+            return Ok(());
+        }
+        // This phase consumes all source changes preceding it, including
+        // writes in rAF and its microtasks. Synchronous getters did not consume
+        // lifecycle demand, but their geometry can satisfy this phase.
+        self.realtime_layout_state
+            .as_ref()
+            .expect("Realtime frame")
+            .frame
+            .borrow_mut()
+            .source_requested = false;
+        // Empty Documents have no layout root. A later parser/DOM commit will
+        // request a new opportunity; do not automatically retry the same input.
+        if self
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(self.document_handle())
+            .is_none()
+        {
+            return Ok(());
+        }
+        self.ensure_current_screen_layout(LayoutFlushReason::RenderingOpportunity)?;
+        #[cfg(test)]
+        if let Some(completed) = self
+            .realtime_layout_state
+            .as_ref()
+            .and_then(|state| state.frame.borrow_mut().completed_for_test.take())
+        {
+            let _ = completed.send(());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish_realtime_rendering_opportunity(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+        target: WindowDocumentTaskTarget,
+        succeeded: bool,
+    ) {
+        let Some(state) = &self.realtime_layout_state else {
+            return;
+        };
+        {
+            let mut frame = state.frame.borrow_mut();
+            let Some(running) = frame
+                .running
+                .as_ref()
+                .filter(|running| running.ticket == (id, target))
+            else {
+                // Callback navigation may already have installed a new
+                // document's request. Never settle it with the old ticket.
+                return;
+            };
+            let current_root = running.documents[0];
+            frame.running = None;
+            if !succeeded
+                && self.window_document_owner_is_current_for_dispatch_scope(
+                    current_root.owner(),
+                    current_root.dispatch_scope(),
+                )
+            {
+                // Retain uncalled callbacks but require new explicit demand
+                // after a fatal layout/checkpoint/watchdog failure.
+                frame.source_requested = false;
+                frame.last_deadline = None;
+                return;
+            }
+        }
+        self.prune_realtime_animation_frames();
+        self.prune_realtime_environment();
+        self.prune_realtime_rendering_events();
+        crate::observer_runtime::prune_realtime_resize_observers(self);
+        self.refresh_realtime_rendering_opportunity();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_frame_deadline_accepts_current_ticks_and_skips_elapsed_ticks() {
+        let anchor = Instant::now();
+        assert_eq!(next_frame_deadline(None, anchor), anchor + FRAME_INTERVAL);
+        for (elapsed, expected) in [
+            (Duration::ZERO, FRAME_INTERVAL),
+            (FRAME_INTERVAL, FRAME_INTERVAL),
+            (FRAME_INTERVAL + Duration::from_nanos(1), FRAME_INTERVAL * 2),
+            (FRAME_INTERVAL * 60_000, FRAME_INTERVAL * 60_000),
+            (
+                FRAME_INTERVAL * 60_000 + Duration::from_nanos(1),
+                FRAME_INTERVAL * 60_001,
+            ),
+        ] {
+            assert_eq!(
+                next_frame_deadline(Some(anchor), anchor + elapsed),
+                anchor + expected,
+                "elapsed: {elapsed:?}"
+            );
+        }
+    }
+}

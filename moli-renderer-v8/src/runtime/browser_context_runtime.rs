@@ -192,6 +192,7 @@ pub(crate) struct ClipboardSnapshot {
 struct RendererBrowserContextRuntimeInner {
     debugger_enabled: bool,
     id: super::RendererBrowserContextRuntimeId,
+    layout_working_set_budget: Mutex<Option<crate::LayoutWorkingSetBudget>>,
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
     clipboard_snapshot: Mutex<ClipboardSnapshot>,
@@ -369,6 +370,33 @@ impl Default for RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntime {
+    pub(crate) fn resolve_layout_working_set_budget(
+        &self,
+        policy: moli_page_types::LayoutPolicy,
+        requested: Option<crate::LayoutWorkingSetBudget>,
+    ) -> anyhow::Result<Option<crate::LayoutWorkingSetBudget>> {
+        if !policy.is_realtime() {
+            return Ok(None);
+        }
+        let mut binding = self.inner.layout_working_set_budget.lock();
+        if let Some(existing) = binding.as_ref() {
+            anyhow::ensure!(
+                requested
+                    .as_ref()
+                    .is_none_or(|requested| existing.shares_state_with(requested)),
+                "renderer browser context already uses a different layout working-set budget"
+            );
+            return Ok(Some(existing.clone()));
+        }
+        let budget = requested.unwrap_or_default();
+        *binding = Some(budget.clone());
+        Ok(Some(budget))
+    }
+
+    pub(crate) fn layout_working_set_budget(&self) -> Option<crate::LayoutWorkingSetBudget> {
+        self.inner.layout_working_set_budget.lock().clone()
+    }
+
     pub(crate) fn clipboard_snapshot(&self) -> ClipboardSnapshot {
         self.inner.clipboard_snapshot.lock().clone()
     }
@@ -592,6 +620,7 @@ impl RendererBrowserContextRuntime {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 debugger_enabled,
                 id,
+                layout_working_set_budget: Mutex::new(None),
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 window_names: Mutex::new(HashMap::new()),
                 auxiliary_windows: Mutex::new(HashMap::new()),
@@ -1148,6 +1177,95 @@ mod tests {
         let clone = runtime.clone();
 
         assert!(runtime.shares_state_with(&clone));
+    }
+
+    #[test]
+    fn rejected_layout_configuration_does_not_bind_a_working_set_budget() {
+        use moli_page_types::{LayoutConfiguration, LayoutPolicy};
+
+        let context = RendererBrowserContextRuntime::new();
+        let runtime =
+            JsRuntime::initialize_with_browser_context_owner_access(&context.owner_access())
+                .unwrap();
+        let owner = runtime.renderer_owner_handle();
+        let pool = crate::LayoutWorkingSetBudget::default();
+        assert!(
+            owner
+                .configure_layout_configuration_with_budget(
+                    LayoutConfiguration {
+                        policy: LayoutPolicy::Mock,
+                        scrollbars_hidden: true,
+                    },
+                    Some(pool.clone()),
+                )
+                .is_err()
+        );
+        assert!(context.layout_working_set_budget().is_none());
+        owner
+            .configure_layout_policy(LayoutPolicy::OnDemand)
+            .unwrap();
+        assert!(
+            owner
+                .configure_layout_configuration_with_budget(
+                    LayoutConfiguration {
+                        policy: LayoutPolicy::Realtime,
+                        scrollbars_hidden: false,
+                    },
+                    Some(pool),
+                )
+                .is_err()
+        );
+        assert_eq!(owner.layout_policy(), LayoutPolicy::OnDemand);
+        assert!(owner.layout_working_set_budget().is_none());
+        assert!(context.layout_working_set_budget().is_none());
+    }
+
+    #[test]
+    fn conflicting_working_set_budget_does_not_seal_a_new_renderer_owner() {
+        use moli_page_types::{LayoutConfiguration, LayoutPolicy};
+
+        let context = RendererBrowserContextRuntime::new();
+        let first =
+            JsRuntime::initialize_with_browser_context_owner_access(&context.owner_access())
+                .unwrap();
+        first
+            .renderer_owner_handle()
+            .configure_layout_policy(LayoutPolicy::Realtime)
+            .unwrap();
+        let pool = context.layout_working_set_budget().unwrap();
+        assert_eq!(
+            pool.limits().document_bytes,
+            moli_layout::LayoutWorkingSetLimits::default().max_estimated_retained_bytes
+        );
+        assert_eq!(pool.snapshot().open_pages, 0);
+
+        let second =
+            JsRuntime::initialize_with_browser_context_owner_access(&context.owner_access())
+                .unwrap();
+        let owner = second.renderer_owner_handle();
+        assert!(
+            owner
+                .configure_layout_configuration_with_budget(
+                    LayoutConfiguration {
+                        policy: LayoutPolicy::Realtime,
+                        scrollbars_hidden: false,
+                    },
+                    Some(crate::LayoutWorkingSetBudget::default()),
+                )
+                .is_err()
+        );
+        // The rejected first configuration must leave this owner configurable.
+        owner.configure_layout_policy(LayoutPolicy::Mock).unwrap();
+        assert!(owner.layout_working_set_budget().is_none());
+        assert!(pool.shares_state_with(&context.layout_working_set_budget().unwrap()));
+        assert!(
+            pool.shares_state_with(
+                &first
+                    .renderer_owner_handle()
+                    .layout_working_set_budget()
+                    .unwrap()
+            )
+        );
     }
 
     #[test]

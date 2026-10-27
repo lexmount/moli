@@ -53,6 +53,10 @@ pub(crate) enum DocumentWebFontCompletion {
 pub(crate) struct PreparedStylesheetResourceLoad {
     pub(crate) request: Option<StylesheetSubresourceRequest>,
     pub(crate) fonts_changed: bool,
+    // Registering already loaded source bytes only materializes a declaration
+    // that a current-style layout can already select. A new local source does
+    // change the glyph inputs and must invalidate Realtime geometry as well.
+    pub(crate) font_inputs_changed: bool,
 }
 
 impl DocumentWebFontState {
@@ -173,6 +177,7 @@ impl DocumentWebFontState {
                 return PreparedStylesheetResourceLoad {
                     request: Some(StylesheetSubresourceRequest::image(url, None)),
                     fonts_changed: false,
+                    font_inputs_changed: false,
                 };
             }
             StylesheetLoadBlockingResource::Font { font, .. } => font,
@@ -182,7 +187,8 @@ impl DocumentWebFontState {
             font.registration_slot().to_owned(),
             WebFontSlot { load: load.clone() },
         );
-        let next = if load.borrow_mut().begin() {
+        let source_started = load.borrow_mut().begin();
+        let next = if source_started {
             load.borrow_mut().next_url(services)
         } else {
             None
@@ -192,6 +198,7 @@ impl DocumentWebFontState {
             return PreparedStylesheetResourceLoad {
                 request: Some(self.bind_request(url, font, load)),
                 fonts_changed: false,
+                font_inputs_changed: false,
             };
         }
         let fonts_changed = match load
@@ -210,6 +217,7 @@ impl DocumentWebFontState {
         PreparedStylesheetResourceLoad {
             request: None,
             fonts_changed,
+            font_inputs_changed: fonts_changed && source_started,
         }
     }
 

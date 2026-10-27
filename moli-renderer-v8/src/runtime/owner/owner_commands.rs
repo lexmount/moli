@@ -1,5 +1,29 @@
 use super::*;
 
+impl RendererOwnerLocalContext {
+    pub(in crate::runtime) fn layout_configuration(&self) -> moli_page_types::LayoutConfiguration {
+        self.owner_state
+            .layout_configuration
+            .lock()
+            .unwrap_or_default()
+    }
+
+    /// Page reservation already runs under this owner's sealed layout policy.
+    /// A shared BrowserContext may also serve legacy owners: its pool alone is
+    /// not permission to register their Pages.
+    pub(in crate::runtime) fn layout_working_set_budget(
+        &self,
+    ) -> Option<crate::LayoutWorkingSetBudget> {
+        let policy = self.layout_configuration().policy;
+        if !policy.is_realtime() {
+            return None;
+        }
+        self.owner_state
+            .browser_context_runtime
+            .layout_working_set_budget()
+    }
+}
+
 impl RendererOwnerHandle {
     /// Selects the immutable layout policy for this renderer owner.
     ///
@@ -23,6 +47,17 @@ impl RendererOwnerHandle {
         &self,
         configuration: moli_page_types::LayoutConfiguration,
     ) -> Result<()> {
+        self.configure_layout_configuration_with_budget(configuration, None)
+    }
+
+    /// Configures optional Realtime computation storage before Page creation.
+    /// An existing BrowserContext keeps its pool unless the caller supplies
+    /// that same pool explicitly. Old policies do not bind or create a pool.
+    pub fn configure_layout_configuration_with_budget(
+        &self,
+        configuration: moli_page_types::LayoutConfiguration,
+        requested: Option<crate::LayoutWorkingSetBudget>,
+    ) -> Result<()> {
         ensure!(
             !configuration.scrollbars_hidden || configuration.policy.uses_real_layout(),
             "hiding scrollbars requires real layout"
@@ -37,10 +72,23 @@ impl RendererOwnerHandle {
                 configuration.policy,
                 configuration.scrollbars_hidden
             );
-        } else {
-            *state = Some(configuration);
         }
+        // Reject a policy change before allocating or binding a pool. Conversely,
+        // a conflicting pool must not seal a previously unconfigured owner.
+        self.state
+            .browser_context_runtime
+            .resolve_layout_working_set_budget(configuration.policy, requested)?;
+        *state = Some(configuration);
         Ok(())
+    }
+
+    pub fn layout_working_set_budget(&self) -> Option<crate::LayoutWorkingSetBudget> {
+        if !self.layout_policy().is_realtime() {
+            return None;
+        }
+        self.state
+            .browser_context_runtime
+            .layout_working_set_budget()
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
@@ -795,6 +843,35 @@ impl RendererOwnerHandle {
                     .map(RendererOwnerReply::TestingHostUniqueDocumentIsolateCount)
                     .into()
             }
+            #[cfg(test)]
+            RendererOwnerCommand::TestingLayoutWorkingSetObservation { token } => {
+                owner_local_store_session(owner_local_store)
+                    .layout_working_set_observation_for_testing(token)
+                    .map(Box::new)
+                    .map(RendererOwnerReply::TestingLayoutWorkingSetObservation)
+                    .into()
+            }
+            #[cfg(test)]
+            RendererOwnerCommand::TestingLayoutWorkingSetState { token } => {
+                owner_local_store_session(owner_local_store)
+                    .layout_working_set_state_for_testing(token)
+                    .map(RendererOwnerReply::TestingLayoutWorkingSetState)
+                    .into()
+            }
+            #[cfg(test)]
+            RendererOwnerCommand::TestingCloseWorkingSetRetention {
+                token,
+                pool,
+                checked_out_publication,
+            } => crate::runtime::owner_local_store::close_page_working_set_retention_for_test(
+                self.state.local_executor.clone(),
+                token,
+                pool,
+                checked_out_publication,
+            )
+            .await
+            .map(RendererOwnerReply::TestingCloseWorkingSetRetention)
+            .into(),
             #[cfg(test)]
             RendererOwnerCommand::TestingDeferredPageVmDropPendingCount => {
                 Ok(RendererOwnerReply::TestingDeferredPageVmDropPendingCount(

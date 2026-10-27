@@ -83,6 +83,7 @@ impl DocumentRuntime {
         }
         let resources = resources.web_fonts().to_vec();
         host.retain_document_web_font_slots(document, resources.iter());
+        host.queue_realtime_font_readiness(document);
         if resources.is_empty() {
             host.publish_document_web_font_resource_generation(document, generation);
             return;
@@ -99,6 +100,7 @@ impl DocumentRuntime {
             host.publish_document_web_font_resource_generation(document, generation);
         }
         Self::start_stylesheet_subresource_fetches_in_current_scope(scope, host_ptr, bound);
+        crate::context_bootstrap::sync_realtime_document_font_face_set(scope, host_ptr, document);
     }
 
     pub(crate) fn settle_stylesheet_link_clients_in_current_scope(

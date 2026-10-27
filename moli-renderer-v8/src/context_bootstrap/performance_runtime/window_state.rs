@@ -120,7 +120,7 @@ pub(in crate::context_bootstrap) fn ensure_current_window_performance<'s>(
     ensure_window_lazy_surface_object(scope, global, WindowLazySurface::Performance)
 }
 
-pub(super) fn current_window_performance_time_origin_seed(
+pub(crate) fn current_window_performance_time_origin_seed(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<f64> {
     let global = scope.get_current_context().global(scope);

@@ -354,6 +354,8 @@ mod specified_values;
 use self::specified_values::*;
 mod computed_properties;
 use self::computed_properties::*;
+mod layout_dependencies;
+pub(in crate::native_bridge::element::styles) use self::layout_dependencies::property_uses_container_geometry;
 mod custom_functions;
 use self::custom_functions::*;
 mod computed_values;

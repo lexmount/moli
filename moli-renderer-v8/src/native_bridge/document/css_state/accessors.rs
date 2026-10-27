@@ -679,5 +679,11 @@ fn create_document_font_face_set<'s>(
         holder.into(),
     );
     let _ = holder.set(scope, v8str(scope, FONTS_SLOT).into(), fonts.into());
+    if let Ok((host_ptr, document)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, holder)
+    {
+        unsafe { &*host_ptr }.initialize_realtime_font_readiness(document);
+        crate::context_bootstrap::sync_realtime_document_font_face_set(scope, host_ptr, document);
+    }
     Some(fonts)
 }

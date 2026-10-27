@@ -180,6 +180,16 @@ impl ScriptVm {
                     self._context_host
                         .borrow_mut()
                         .record_pending_subresource_response(PendingSubresourceResponseState {
+                            capture_security: matches!(
+                                &pending.continuation,
+                                PendingSubresourceContinuation::CaptureResource(_)
+                            )
+                            .then_some(
+                                crate::types::CaptureSubresourceResponseSecurity {
+                                    skip_fetch_security_validation,
+                                    response_filter,
+                                },
+                            ),
                             pending,
                             request_url,
                             request_method,
@@ -628,6 +638,10 @@ impl ScriptVm {
                     .err()
                 })
                 .flatten()
+            })
+            .or_else(|| {
+                matches!(&pending.continuation, PendingSubresourceContinuation::CaptureResource(_))
+                    .then(|| "capture resource unexpectedly used streaming transport".to_owned())
             });
             if let Some(error_text) = streaming_start_error {
                 pending.load.cancel();
@@ -715,6 +729,12 @@ impl ScriptVm {
                     PendingSubresourceContinuation::FontFace(face) => {
                         let face = v8::Local::new(scope, face);
                         crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                    }
+                    PendingSubresourceContinuation::CaptureResource(capture) => {
+                        self._context_host.borrow().queue_capture_resource_result(
+                            capture.clone(),
+                            crate::capture_resources::CaptureResourceResult::Failed(error_text.clone()),
+                        );
                     }
                     PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                         apply_stylesheet_subresource_terminal(&self._context_host, *binding);
@@ -957,6 +977,9 @@ impl ScriptVm {
                 PendingSubresourceContinuation::FontFace(face) => {
                     let face = v8::Local::new(scope, face);
                     crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                }
+                PendingSubresourceContinuation::CaptureResource(_) => {
+                    unreachable!("capture streaming starts are rejected before body registration")
                 }
                 PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                     apply_stylesheet_subresource_terminal(&self._context_host, *binding);

@@ -11,11 +11,13 @@ mod dynamic_import_owner_action;
 mod element_toggle_event;
 mod file_entry_file_callback;
 mod file_reading;
+mod font_loading;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
 mod indexed_db_task;
 mod internal_loading;
+mod intersection_observer;
 mod main_document_post_parse;
 mod main_document_runtime;
 mod main_document_task_owner;
@@ -242,6 +244,11 @@ pub(crate) use self::file_reading::{
     RendererPageFileReadingOwner, RendererPageFileReadingSender, RendererPageFileReadingTask,
     RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
 };
+pub(crate) use self::font_loading::{
+    PageFontLoadingTargetEffect, PageFontLoadingTurnAction, PageFontLoadingTurnOutcome,
+    RendererPageFontLoadingOwner, RendererPageFontLoadingSender, RendererPageFontLoadingTask,
+    RendererPageFontLoadingTaskId, RendererPageFontLoadingTaskKind,
+};
 pub(crate) use self::hash_change_delivery::{
     PageHashChangeDeliveryTargetEffect, PageHashChangeDeliveryTurnAction,
     PageHashChangeDeliveryTurnOutcome, RendererPageHashChangeData,
@@ -270,6 +277,12 @@ pub(crate) use self::internal_loading::{
     PageInternalLoadingTargetEffect, PageInternalLoadingTurnAction, PageInternalLoadingTurnOutcome,
     RendererPageInternalLoadingOwner, RendererPageInternalLoadingSender,
     RendererPageInternalLoadingTask,
+};
+pub(crate) use self::intersection_observer::{
+    PageIntersectionObserverTargetEffect, PageIntersectionObserverTurnAction,
+    PageIntersectionObserverTurnOutcome, RendererPageIntersectionObserverOwner,
+    RendererPageIntersectionObserverSender, RendererPageIntersectionObserverTask,
+    RendererPageIntersectionObserverTaskId, RendererPageIntersectionObserverTaskKind,
 };
 pub(crate) use self::main_document_post_parse::{
     MainDocumentCompletionRecheckEffect, MainDocumentPostParseCallbackExecution,

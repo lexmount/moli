@@ -2,8 +2,9 @@
 //
 // The one-Parley-tree-per-IFC shape follows DioxusLabs/blitz commit
 // d788124ab881f9bb537cb452ec1d837604a374a8, especially
-// `layout/construct.rs::build_inline_layout_into`. Moli deliberately
-// keeps the item stream, source mapping, and Parley layout pass-local.
+// `layout/construct.rs::build_inline_layout_into`. The default pipeline keeps
+// the item stream, source mapping, and Parley layout pass-local. An optional
+// working set retains owned preparation and validated local numeric results.
 // Relative positioning of atomic inline boxes additionally follows Blitz
 // commit 4a9be930accc971675d5730e4fde3cfa13c3b57e.
 
@@ -28,6 +29,9 @@ use crate::{
     stylo_to_parley::TextBrush,
     text::{DocumentLayoutServices, InlineFontMetrics},
 };
+
+mod numeric_reuse;
+pub(crate) use numeric_reuse::{InlineMeasurementInputs, InlineNumericInputs, InlineNumericReuse};
 
 /// Resolve the relative inset applied after Parley has positioned an atomic
 /// inline box. Taffy cannot do this itself because atomic IFC children are
@@ -454,6 +458,154 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
+    /// Validate all retained construction IDs before transferring an IFC into
+    /// a different graph. Parley styles/objects use local indices into these
+    /// maps; none may silently name an unrelated fresh construction slot.
+    pub(crate) fn references_only(&self, mut contains: impl FnMut(LayoutBoxId) -> bool) -> bool {
+        contains(self.root_style)
+            && self.text_units.iter().all(|unit| {
+                contains(unit.style_box)
+                    && unit.ancestors.iter().copied().all(&mut contains)
+                    && unit.sources.iter().all(|source| contains(source.box_id))
+            })
+            && self.source_map.iter().all(|source| contains(source.box_id))
+            && self.objects.iter().all(|object| {
+                contains(object.box_id) && object.ancestors.iter().copied().all(&mut contains)
+            })
+            && self.style_parents.iter().copied().all(&mut contains)
+            && self
+                .structural_boxes
+                .iter()
+                .all(|state| contains(state.box_id) && contains(state.parent))
+            && self
+                .fragments
+                .text
+                .iter()
+                .all(|fragment| contains(fragment.box_id))
+            && self
+                .fragments
+                .boxes
+                .iter()
+                .all(|fragment| contains(fragment.box_id))
+            && self.line_placements.iter().all(|placement| {
+                placement
+                    .box_block_placements
+                    .iter()
+                    .all(|state| contains(state.box_id))
+            })
+    }
+
+    /// Retain one paragraph and its source mapping. A validated final numeric
+    /// entry can also keep its accepted lines and local fragments; all other
+    /// IFCs retain preparation alone.
+    pub(crate) fn prepare_for_retention(&mut self, preserve_numeric: bool) {
+        if preserve_numeric && self.laid_out.is_some() {
+            // Intrinsic probes clone lazily when required. Do not retain both
+            // that scratch paragraph and the accepted final output by default.
+            self.measurement_layout = None;
+            return;
+        }
+        // PerformLayout may have moved the only shaped paragraph into the
+        // accepted output. Transfer it back before retiring line placement;
+        // the next measurement replaces its lines for the new constraints.
+        if self.measurement_layout.is_none() {
+            self.measurement_layout = self.laid_out.take();
+        } else {
+            self.laid_out = None;
+        }
+        self.line_placements = Vec::new();
+        self.fragments = InlineFragments::default();
+    }
+
+    /// Our own final-output vectors, excluding the IFC struct and Parley
+    /// paragraphs already charged by `estimated_retained_preparation_bytes`.
+    pub(crate) fn estimated_retained_numeric_bytes(&self) -> usize {
+        fn allocation<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        self.line_placements.iter().fold(
+            allocation(&self.line_placements)
+                .saturating_add(allocation(&self.fragments.lines))
+                .saturating_add(allocation(&self.fragments.text))
+                .saturating_add(allocation(&self.fragments.boxes)),
+            |bytes, placement| {
+                bytes
+                    .saturating_add(allocation(&placement.item_offsets))
+                    .saturating_add(allocation(&placement.glyph_offsets))
+                    .saturating_add(allocation(&placement.box_block_placements))
+            },
+        )
+    }
+
+    /// Admission charge, excluding the inline struct and shared font payloads.
+    ///
+    /// Our own vectors use their capacities. Parley's public API does not
+    /// expose capacities for shaped runs, characters, clusters, glyphs, or
+    /// line-breaking buffers. Those use a text-length model instead; this is
+    /// not a measured byte count or a proven upper bound. Do not walk glyphs
+    /// or lines merely to account for a warm paragraph on every frame.
+    pub(crate) fn estimated_retained_preparation_bytes(&self) -> usize {
+        fn allocation<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        let mut bytes = self
+            .text
+            .capacity()
+            .saturating_add(allocation(&self.text_units))
+            .saturating_add(allocation(&self.source_map))
+            .saturating_add(allocation(&self.objects))
+            .saturating_add(allocation(&self.font_metrics))
+            .saturating_add(allocation(&self.style_parents))
+            .saturating_add(allocation(&self.structural_boxes));
+        for unit in &self.text_units {
+            bytes = bytes
+                .saturating_add(allocation(&unit.ancestors))
+                .saturating_add(allocation(&unit.sources));
+        }
+        for object in &self.objects {
+            bytes = bytes.saturating_add(allocation(&object.ancestors));
+        }
+        for layout in [&self.measurement_layout, &self.laid_out]
+            .into_iter()
+            .flatten()
+        {
+            // This admission weight includes opaque shaping arrays and line
+            // capacity. Multiple glyphs per character and dependency changes
+            // can defeat this estimate; precise accounting needs a Parley API.
+            const PARLEY_BYTES_PER_TEXT_BYTE: usize = 128;
+            const PARLEY_BYTES_PER_STYLE: usize = 256;
+            const PARLEY_BYTES_PER_INLINE_BOX: usize = 128;
+            bytes = bytes
+                .saturating_add(layout.text_len().saturating_mul(PARLEY_BYTES_PER_TEXT_BYTE))
+                .saturating_add(layout.styles().len().saturating_mul(PARLEY_BYTES_PER_STYLE))
+                .saturating_add(
+                    layout
+                        .inline_boxes()
+                        .len()
+                        .saturating_mul(PARLEY_BYTES_PER_INLINE_BOX),
+                );
+            // Brushes share their shadow arrays. Charging each reference is
+            // conservative, avoids an allocation for a deduplication index,
+            // and captures large authored arrays independently of text length.
+            for style in layout.styles() {
+                for brush in std::iter::once(&style.brush)
+                    .chain(style.underline.as_ref().map(|decoration| &decoration.brush))
+                    .chain(
+                        style
+                            .strikethrough
+                            .as_ref()
+                            .map(|decoration| &decoration.brush),
+                    )
+                {
+                    bytes = bytes.saturating_add(brush.shadows.len().saturating_mul(
+                        std::mem::size_of::<crate::stylo_to_parley::TextShadowBrush>(),
+                    ));
+                }
+            }
+        }
+        bytes
+    }
+
     pub(crate) fn object(&self, id: u64) -> Option<&InlineObject> {
         usize::try_from(id)
             .ok()
@@ -1974,13 +2126,38 @@ pub(crate) fn prepare_inline_contexts<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    prepare_inline_contexts_with_retained_inputs(world, services, false);
+}
+
+pub(crate) fn prepare_inline_contexts_with_retained_inputs<N>(
+    world: &mut LayoutWorld<N>,
+    services: &mut DocumentLayoutServices,
+    retain_prepared: bool,
+) -> usize
+where
+    N: Copy + Debug + Eq + Hash,
+{
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let mut collection_elapsed = std::time::Duration::ZERO;
+    let mut role_update_elapsed = std::time::Duration::ZERO;
     let mut preparation_elapsed = std::time::Duration::ZERO;
+    let mut collected_context_count = 0usize;
     let mut prepared_context_count = 0usize;
     let mut text_unit_count = 0usize;
-    for layout_box in &mut world.boxes {
-        layout_box.inline_layout = None;
+    let mut reused_context_count = 0usize;
+    world.prepare_inline_storage();
+    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
+        if retain_prepared {
+            if let Some(context) = world.inline_layouts[index].as_mut() {
+                let preserve_numeric = world
+                    .inline_numeric_reuse
+                    .as_ref()
+                    .is_some_and(|reuse| reuse.contains(LayoutBoxId::from_index(index)));
+                context.prepare_for_retention(preserve_numeric);
+            }
+        } else {
+            world.inline_layouts[index] = None;
+        }
         layout_box.inline_context_owner = None;
         layout_box.inline_flattened = false;
         layout_box.inline_static_position = None;
@@ -1997,10 +2174,25 @@ pub(crate) fn prepare_inline_contexts<N>(
         if world.boxes[owner.index()].inline_flattened {
             continue;
         }
+        if world.inline_layouts[owner.index()].is_some() {
+            // Restoration already checked graph/inline inputs and the
+            // document font collection. The old collection only rebuilt
+            // normalization which was discarded, plus these mutable roles.
+            // Preserve the latter for current numeric traversal and objects.
+            let role_update_started = profile_started.map(|_| std::time::Instant::now());
+            restore_inline_roles(world, owner);
+            if let Some(started) = role_update_started {
+                role_update_elapsed += started.elapsed();
+            }
+            reused_context_count += 1;
+            initialized = true;
+            continue;
+        }
         let collection_started = profile_started.map(|_| std::time::Instant::now());
         let input = collect_inline_input(world, owner);
         if let Some(started) = collection_started {
             collection_elapsed += started.elapsed();
+            collected_context_count += 1;
             text_unit_count += input.units.len();
         }
         if input.units.is_empty()
@@ -2016,7 +2208,7 @@ pub(crate) fn prepare_inline_contexts<N>(
             preparation_elapsed += started.elapsed();
             prepared_context_count += 1;
         }
-        world.boxes[owner.index()].inline_layout = Some(context);
+        world.inline_layouts[owner.index()] = Some(context);
         initialized = true;
     }
     if initialized {
@@ -2029,11 +2221,15 @@ pub(crate) fn prepare_inline_contexts<N>(
             root = ?world.boxes[world.root().index()].source(),
             total_us = started.elapsed().as_micros(),
             collection_us = collection_elapsed.as_micros(),
+            role_update_us = role_update_elapsed.as_micros(),
             preparation_us = preparation_elapsed.as_micros(),
+            collected_context_count,
             prepared_context_count,
+            reused_context_count,
             text_unit_count,
         );
     }
+    reused_context_count
 }
 
 struct InlineBuildInput {
@@ -2404,6 +2600,66 @@ where
     normalizer.finish()
 }
 
+enum InlineChildKind {
+    OutsideMarker,
+    Text,
+    Break,
+    Object(InlineObjectRole, InlineBoxKind),
+    Structural,
+}
+
+fn inline_child_kind<N>(layout_box: &crate::LayoutBox<N>) -> InlineChildKind {
+    if layout_box.kind == LayoutBoxKind::PseudoMarker && layout_box.outside_list_marker {
+        InlineChildKind::OutsideMarker
+    } else if layout_box.kind == LayoutBoxKind::Text {
+        InlineChildKind::Text
+    } else if layout_box.kind == LayoutBoxKind::LineBreak {
+        InlineChildKind::Break
+    } else if layout_box.style.is_floated() {
+        InlineChildKind::Object(InlineObjectRole::Float, InlineBoxKind::CustomOutOfFlow)
+    } else if layout_box.style.is_out_of_flow() {
+        InlineChildKind::Object(InlineObjectRole::OutOfFlow, InlineBoxKind::OutOfFlow)
+    } else if layout_box.style.display().is_inline_flow()
+        && !matches!(
+            layout_box.kind,
+            LayoutBoxKind::Replaced
+                | LayoutBoxKind::FormControl
+                | LayoutBoxKind::InlineTableWrapper
+        )
+    {
+        InlineChildKind::Structural
+    } else {
+        InlineChildKind::Object(InlineObjectRole::Atomic, InlineBoxKind::InFlow)
+    }
+}
+
+fn restore_inline_roles<N>(world: &mut LayoutWorld<N>, owner: LayoutBoxId)
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    // Visit the current graph, including collapsed-away text which has no
+    // retained glyph/source-map entry. Objects establish their own inner IFC;
+    // do not overwrite that inner subtree with the outer object's owner.
+    let mut pending = world.boxes[owner.index()].children.clone();
+    while let Some(id) = pending.pop() {
+        let kind = inline_child_kind(&world.boxes[id.index()]);
+        if matches!(kind, InlineChildKind::OutsideMarker) {
+            continue;
+        }
+        world.boxes[id.index()].inline_context_owner = Some(owner);
+        match kind {
+            InlineChildKind::Text | InlineChildKind::Break => {
+                world.boxes[id.index()].inline_flattened = true;
+            }
+            InlineChildKind::Structural => {
+                world.boxes[id.index()].inline_flattened = true;
+                pending.extend_from_slice(&world.boxes[id.index()].children);
+            }
+            InlineChildKind::Object(..) | InlineChildKind::OutsideMarker => {}
+        }
+    }
+}
+
 fn collect_box<N>(
     world: &mut LayoutWorld<N>,
     owner: LayoutBoxId,
@@ -2413,14 +2669,13 @@ fn collect_box<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let kind = world.boxes[id.index()].kind;
-    let display = world.boxes[id.index()].style.display();
-    if kind == LayoutBoxKind::PseudoMarker && world.boxes[id.index()].outside_list_marker {
+    let kind = inline_child_kind(&world.boxes[id.index()]);
+    if matches!(kind, InlineChildKind::OutsideMarker) {
         return;
     }
     world.boxes[id.index()].inline_context_owner = Some(owner);
 
-    if kind == LayoutBoxKind::Text {
+    if matches!(kind, InlineChildKind::Text) {
         world.boxes[id.index()].inline_flattened = true;
         let text = world.boxes[id.index()].text.clone().unwrap_or_default();
         normalizer.push_text(
@@ -2432,47 +2687,17 @@ fn collect_box<N>(
         );
         return;
     }
-    if kind == LayoutBoxKind::LineBreak {
+    if matches!(kind, InlineChildKind::Break) {
         world.boxes[id.index()].inline_flattened = true;
         normalizer.hard_break(id, ancestors);
         return;
     }
 
-    if world.boxes[id.index()].style.is_floated() {
+    if let InlineChildKind::Object(role, kind) = kind {
         normalizer.push_object(
             id,
-            InlineObjectRole::Float,
-            InlineBoxKind::CustomOutOfFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
-
-    let out_of_flow = world.boxes[id.index()].style.is_out_of_flow();
-    if out_of_flow {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::OutOfFlow,
-            InlineBoxKind::OutOfFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
-
-    let structural_inline = display.is_inline_flow()
-        && !matches!(
+            role,
             kind,
-            LayoutBoxKind::Replaced
-                | LayoutBoxKind::FormControl
-                | LayoutBoxKind::InlineTableWrapper
-        );
-    if !structural_inline {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::Atomic,
-            InlineBoxKind::InFlow,
             ancestors,
             world.boxes[id.index()].style.vertical_align(),
         );

@@ -47,6 +47,11 @@ fn clone_detached_document_shell<'s>(
     document: v8::Local<'s, v8::Object>,
     deep: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let (runtime_ptr, source_handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+            .ok()?;
+    let execution_context =
+        unsafe { &*runtime_ptr }.document_execution_context_for_node(source_handle)?;
     let document_kind = detached_state_string(scope, document, "documentKind");
     let root_is_html = detached_document_root_local_name(scope, document)
         .is_some_and(|name| name.eq_ignore_ascii_case("html"));
@@ -64,6 +69,9 @@ fn clone_detached_document_shell<'s>(
     };
     let cloned = call_global_bridge_method(scope, helper, &[])
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let cloned_handle = detached_native_handle_for_runtime(scope, runtime_ptr, cloned)?;
+    unsafe { &mut *runtime_ptr }
+        .set_inert_document_execution_context(cloned_handle, Some(execution_context));
     let content_type = detached_document_content_type_value(scope, document)?;
     set_detached_document_content_type(scope, cloned, &content_type)?;
     let character_set = detached_document_character_set_value(scope, document)?;

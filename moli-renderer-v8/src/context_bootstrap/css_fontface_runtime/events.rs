@@ -307,6 +307,21 @@ pub(super) fn font_face_set_loading_started<'s>(
         return;
     }
     set_font_face_set_status(scope, owner, "loading");
+    ensure_pending_font_face_set_ready(scope, owner);
+    for slot in [LOADED_FACES, FAILED_FACES] {
+        let array = v8::Array::new(scope, 0);
+        set_private_value(scope, owner, slot, array.into());
+    }
+    queue_font_face_set_task(scope, owner, false);
+}
+
+pub(super) fn ensure_pending_font_face_set_ready<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if get_private_value(scope, owner, READY_RESOLVER).is_some_and(|value| value.is_object()) {
+        return;
+    }
     let resolver = v8::PromiseResolver::new(scope).expect("FontFaceSet ready resolver");
     set_private_value(scope, owner, READY_RESOLVER, resolver.into());
     set_private_value(
@@ -315,11 +330,23 @@ pub(super) fn font_face_set_loading_started<'s>(
         FONT_FACE_SET_READY_SLOT,
         resolver.get_promise(scope).into(),
     );
-    for slot in [LOADED_FACES, FAILED_FACES] {
-        let array = v8::Array::new(scope, 0);
-        set_private_value(scope, owner, slot, array.into());
+}
+
+/// Realtime's exact-Document font task has already completed current layout.
+/// Reuse the normal finish body here instead of queuing another finish task.
+pub(super) fn finish_document_font_readiness<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if super::storage::document_font_face_set_has_pending_requests(scope, owner) {
+        return;
     }
-    queue_font_face_set_task(scope, owner, false);
+    if super::loading::string_slot(scope, owner, FONT_FACE_SET_STATUS_SLOT) == "loading" {
+        set_private_value(scope, owner, FINISH_QUEUED, v8::undefined(scope).into());
+        finish_font_set_task(scope, owner);
+    } else {
+        resolve_font_face_set_ready(scope, owner);
+    }
 }
 
 pub(super) fn notify_font_face_set_owners_of_load<'s>(
@@ -419,10 +446,7 @@ fn finish_font_set_task<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'
         (faces, event)
     });
     set_font_face_set_status(scope, owner, "loaded");
-    if let Some(resolver) = super::loading::resolver_from_slot(scope, owner, READY_RESOLVER) {
-        set_private_value(scope, owner, READY_RESOLVER, v8::undefined(scope).into());
-        let _ = resolver.resolve(scope, owner.into());
-    }
+    resolve_font_face_set_ready(scope, owner);
     // A loadingdone handler may begin another cycle and replace its arrays.
     for (faces, event) in events {
         if let Some(array) = faces
@@ -430,6 +454,16 @@ fn finish_font_set_task<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'
         {
             let _ = dispatch_font_face_set_event(scope, owner, event, Some(array));
         }
+    }
+}
+
+fn resolve_font_face_set_ready<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if let Some(resolver) = super::loading::resolver_from_slot(scope, owner, READY_RESOLVER) {
+        set_private_value(scope, owner, READY_RESOLVER, v8::undefined(scope).into());
+        let _ = resolver.resolve(scope, owner.into());
     }
 }
 

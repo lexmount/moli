@@ -37,6 +37,12 @@ pub(crate) fn retain_window_document_in_retired_realm(
     if get_private_object(scope, window, WINDOW_DOCUMENT_SLOT).is_some() {
         return Some(());
     }
+    // A fallible Window bootstrap may fail before platform interfaces exist.
+    // Such an unpublished Realm has no Document wrapper to preserve; creating
+    // one here would require the very registry that bootstrap never installed.
+    if !super::super::has_intrinsic_interface_registry(context) {
+        return None;
+    }
     let handle = WindowEnvironmentSettings::for_current_realm(scope)
         .map(|settings| settings.document_handle())
         .unwrap_or_else(|| unsafe { &*host_ptr }.document_handle());

@@ -1403,6 +1403,20 @@ pub(super) fn frame_owner_content_window_getter_function<'s>(
             if exposes_same_origin_wrapper {
                 runtime.set_cached_detached_iframe_content_window(scope, handle, window);
             }
+            let context = scope.get_current_context();
+            let window = match crate::native_bridge::window_in_wrapper_world(scope, window, context)
+            {
+                Ok(projected) => projected.unwrap_or(window),
+                Err(error) => {
+                    if let Some(message) =
+                        v8_string(scope, &format!("Window world projection failed: {error}"))
+                    {
+                        let exception = v8::Exception::error(scope, message);
+                        scope.throw_exception(exception);
+                    }
+                    return;
+                }
+            };
             rv.set(window.into());
         }
         None => rv.set_null(),

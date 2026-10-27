@@ -49,10 +49,11 @@ pub(crate) use values::{
     style_property_value,
 };
 pub(super) use values::{
-    computed_style_applies, style_css_text_for_computed, style_property_count_with_context,
-    style_property_index_exists_with_context, style_property_name_at_with_context,
-    style_property_names_with_context, style_property_priority,
-    style_property_value_for_pseudo_with_context, style_property_value_with_context,
+    computed_style_applies, property_uses_container_geometry, style_css_text_for_computed,
+    style_property_count_with_context, style_property_index_exists_with_context,
+    style_property_name_at_with_context, style_property_names_with_context,
+    style_property_priority, style_property_value_for_pseudo_with_context,
+    style_property_value_with_context,
 };
 
 fn normalize_css_integer_token(value: &str) -> Option<String> {

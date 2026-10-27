@@ -56,6 +56,17 @@ async fn dispatch_main_document_domcontentloaded_for_rendering_test(
 mod form_controls;
 mod layout_geometry;
 mod painting_tables;
+mod realtime_animation_frames;
+mod realtime_capture;
+mod realtime_environment;
+mod realtime_events;
+mod realtime_fonts;
+mod realtime_input;
+mod realtime_intersection_observer;
+mod realtime_opportunity;
+mod realtime_print;
+mod realtime_resize_observer;
+mod realtime_working_set_feed;
 mod scrollbars;
 mod text_stroke;
 mod text_styles;

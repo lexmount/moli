@@ -247,8 +247,6 @@ pub struct LayoutBox<N> {
     pub(crate) style: ResolvedLayoutStyle,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
-    /// Shared text/inline layout owned by this formatting-context root.
-    pub(crate) inline_layout: Option<InlineFormattingContext>,
     /// Outermost IFC that consumes this box as a flattened or atomic item.
     pub(crate) inline_context_owner: Option<LayoutBoxId>,
     /// Text, `<br>`, and non-atomic inline boxes are laid out by their owner IFC
@@ -541,6 +539,11 @@ impl Default for ViewportLayoutState {
 }
 
 impl<N> LayoutBox<N> {
+    /// A retained construction box must not refer into a dropped world's cache.
+    pub(crate) fn clear_numeric_cache_slot(&mut self) {
+        self.cache_slot = None;
+    }
+
     pub fn kind(&self) -> LayoutBoxKind {
         self.kind
     }
@@ -641,6 +644,10 @@ where
     pub(crate) resolved_grid_tracks: HashMap<LayoutBoxId, LayoutResolvedGridTracks>,
     /// Native track positions and names read by Taffy's out-of-flow pass.
     pub(crate) native_grid_details: HashMap<LayoutBoxId, DetailedLayoutInfo<Atom>>,
+    /// Pass-only IFC scratch indexed by construction/numeric box ID. Keep its
+    /// large empty slots out of persistent box objects. Retention extracts
+    /// only actual owners into the existing sparse working-set storage.
+    pub(crate) inline_layouts: Vec<Option<InlineFormattingContext>>,
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
@@ -652,6 +659,12 @@ where
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    /// Optional source dependencies for validating a retained construction
+    /// graph. Ordinary one-shot construction creates no dependency storage.
+    pub(crate) construction_inputs: Option<Box<crate::builder::ConstructionInputs<N>>>,
+    /// Optional accepted inline results for callers retaining computation
+    /// across passes. One-shot callers allocate no per-box reuse metadata.
+    pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
     /// Full numeric measurement retains baselines without publishing layouts.
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
@@ -666,13 +679,26 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) fn new(root: LayoutBox<N>, root_is_document_element: bool) -> Self {
+        Self::from_construction(vec![root], HashMap::new(), root_is_document_element)
+    }
+
+    /// Installs the unique owned construction graph with fresh pass-local
+    /// environment, viewport and numeric bookkeeping. The graph's vector and
+    /// child allocations are moved, never materialized from comparison records.
+    pub(crate) fn from_construction(
+        boxes: Vec<LayoutBox<N>>,
+        source_mapping: HashMap<N, LayoutBoxId>,
+        root_is_document_element: bool,
+    ) -> Self {
+        let count = boxes.len();
         Self {
-            boxes: vec![root],
+            boxes,
+            inline_layouts: Vec::new(),
             box_caches: Vec::new(),
             collapsed_table_borders: HashMap::new(),
             resolved_grid_tracks: HashMap::new(),
             native_grid_details: HashMap::new(),
-            source_mapping: HashMap::new(),
+            source_mapping,
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             root_is_document_element,
@@ -681,11 +707,13 @@ where
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
+            construction_inputs: None,
+            inline_numeric_reuse: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
             numeric_layout_tracking: false,
             numeric_layout_touched: Vec::new(),
-            numeric_layout_touched_marks: vec![false],
+            numeric_layout_touched_marks: vec![false; count],
         }
     }
 
@@ -725,8 +753,34 @@ where
         &mut self.box_caches[(slot.get() - 1) as usize]
     }
 
+    pub(crate) fn prepare_inline_storage(&mut self) {
+        self.inline_layouts.resize_with(self.boxes.len(), || None);
+    }
+
+    /// Remove a terminal construction closure before numeric work starts.
+    /// Survivors keep their dense identities and existing owned allocations.
+    pub(crate) fn truncate_construction_tail(&mut self, keep: usize) {
+        debug_assert!(self.inline_layouts.is_empty() && self.box_caches.is_empty());
+        for layout_box in &self.boxes[keep..] {
+            if let Some(node) = layout_box.source {
+                self.source_mapping.remove(&node);
+            }
+        }
+        self.boxes.truncate(keep);
+        self.numeric_layout_touched_marks.truncate(keep);
+    }
+
     pub fn root(&self) -> LayoutBoxId {
         self.root
+    }
+
+    /// A validated graph knows its required extent. Reserve once before
+    /// materializing it instead of repeatedly moving the large box records.
+    /// This is only a pass-local allocation hint, including prior numeric-only
+    /// records; it neither restores those records nor creates source mappings.
+    pub(crate) fn reserve_box_capacity(&mut self, count: usize) {
+        self.boxes
+            .reserve_exact(count.saturating_sub(self.boxes.len()));
     }
 
     pub(crate) fn is_viewport_defining_body(&self, id: LayoutBoxId) -> bool {
@@ -853,6 +907,9 @@ where
     pub(crate) fn allocate(&mut self, layout_box: LayoutBox<N>) -> LayoutBoxId {
         let id = LayoutBoxId::from_index(self.boxes.len());
         self.boxes.push(layout_box);
+        if !self.inline_layouts.is_empty() {
+            self.inline_layouts.push(None);
+        }
         self.numeric_layout_touched_marks.push(false);
         id
     }
@@ -970,6 +1027,10 @@ where
             }
         }
 
+        // Construction normalization precedes IFC preparation. No prepared
+        // references may be silently remapped by this source-tree compaction.
+        assert!(self.inline_layouts.iter().all(Option::is_none));
+        self.inline_layouts = Vec::new();
         let mut compacted = Vec::with_capacity(next_index);
         for (index, mut layout_box) in self.boxes.drain(..).enumerate() {
             if !reachable[index] {
@@ -1185,6 +1246,26 @@ where
         Ok(())
     }
 
+    pub(crate) fn refresh_box_style(layout_box: &mut LayoutBox<N>, mut style: ResolvedLayoutStyle) {
+        Self::normalize_box_style(layout_box.kind, &mut style);
+        layout_box.capability_diagnostics = default_capability_diagnostics(
+            layout_box.kind,
+            layout_box.element_semantics.as_ref(),
+            &style,
+        );
+        layout_box.style = style;
+    }
+
+    fn normalize_box_style(kind: LayoutBoxKind, style: &mut ResolvedLayoutStyle) {
+        if kind.is_internal_table_box() {
+            // Keep the authored/computed value in `preferred_aspect_ratio`.
+            // The table formatter supplies internal track and cell sizes;
+            // construction and retained refresh must suppress the same
+            // numeric projection before generic sizing consumes it.
+            style.taffy.aspect_ratio = None;
+        }
+    }
+
     pub(crate) fn new_box(
         source: Option<N>,
         owner: Option<N>,
@@ -1197,15 +1278,7 @@ where
         mut style: ResolvedLayoutStyle,
         text: Option<Arc<str>>,
     ) -> LayoutBox<N> {
-        if kind.is_internal_table_box() {
-            // Keep the authored/computed value in `preferred_aspect_ratio`.
-            // Only the numeric backend projection is suppressed: CSS Sizing
-            // excludes internal table boxes from `aspect-ratio`, and the table
-            // formatter supplies their used track and cell sizes. Chromium
-            // represents the same boundary with its table-cell constraint
-            // space before generic block-size resolution.
-            style.taffy.aspect_ratio = None;
-        }
+        Self::normalize_box_style(kind, &mut style);
         let capability_diagnostics =
             default_capability_diagnostics(kind, element_semantics.as_ref(), &style);
         LayoutBox {
@@ -1228,7 +1301,6 @@ where
             style,
             text,
             text_selection: None,
-            inline_layout: None,
             inline_context_owner: None,
             inline_flattened: false,
             outside_list_marker: false,

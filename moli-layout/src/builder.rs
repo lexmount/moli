@@ -24,6 +24,9 @@ use crate::{
 };
 use style::values::generics::image::GenericImage;
 
+mod retained_construction;
+pub(crate) use retained_construction::ConstructionInputs;
+
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
     source: &S,
@@ -34,6 +37,28 @@ where
     R: LayoutStyleResolver<S::NodeId>,
 {
     BoxBuilder::new(source, styles).build()
+}
+
+/// Reuse a validated construction graph before running the ordinary builder.
+/// The source records exist only for callers retaining a working set; style,
+/// resources and numeric working state still belong to this pass.
+pub(crate) fn build_layout_world_with_retained_inputs<S, R>(
+    source: &S,
+    styles: &mut R,
+    previous: Option<&mut crate::working_set::RetainedWork<S::NodeId>>,
+) -> Result<LayoutWorld<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
+    if let Some(previous) = previous
+        && let Some(world) = retained_construction::try_restore(source, styles, previous)?
+    {
+        return Ok(world);
+    }
+    let mut builder = BoxBuilder::new(source, styles);
+    builder.construction_inputs = Some(Box::new(ConstructionInputs::new(source)));
+    builder.build()
 }
 
 struct BoxBuilder<'a, S, R>
@@ -50,6 +75,7 @@ where
     source_root: Option<S::NodeId>,
     root_is_html: bool,
     viewport_body_candidate: Option<ViewportBodyCandidate<S::NodeId>>,
+    construction_inputs: Option<Box<ConstructionInputs<S::NodeId>>>,
 }
 
 /// Selects both the generated wrapper and its whitespace-suppression rule.
@@ -97,6 +123,7 @@ where
             source_root: None,
             root_is_html: false,
             viewport_body_candidate: None,
+            construction_inputs: None,
         }
     }
 
@@ -128,10 +155,7 @@ where
         };
         let (mut root_style, root_before, root_after) = root_styles.into_parts();
         let root_metrics = self.source.replaced_metrics(source_root);
-        if root_semantics.is_hidden_input()
-            || (root_style.display() == LayoutDisplay::Contents
-                && root_semantics.display_contents_is_none())
-        {
+        if suppresses_element_box(&root_semantics, &root_style) {
             // A LayoutWorld always needs a carrier root for Taffy and paint.
             // Preserve that internal carrier but give it the correct no-box
             // used display and never construct source descendants.
@@ -147,6 +171,13 @@ where
         ) {
             root_style.mark_intrinsic_form_control_container();
         }
+        self.record_element_input(
+            source_root,
+            &root_semantics,
+            Some(&root_style),
+            root_before.is_some(),
+            root_after.is_some(),
+        );
         let root_kind = principal_kind(&root_semantics, &root_style);
         let root_generates_principal_box = root_style.display() != LayoutDisplay::None;
         let mut root = self.principal_box(
@@ -211,6 +242,13 @@ where
             );
         }
         world.css_image_references = self.css_image_references;
+        if self
+            .construction_inputs
+            .as_ref()
+            .is_some_and(|inputs| inputs.supports_graph(&world))
+        {
+            world.construction_inputs = self.construction_inputs;
+        }
         Ok(world)
     }
 
@@ -248,26 +286,21 @@ where
         match source_kind {
             LayoutSourceKind::Comment | LayoutSourceKind::Other => {
                 self.validate_non_element_semantics(source_node, source_kind)?;
+                if let Some(inputs) = &mut self.construction_inputs {
+                    inputs.record_ignored(self.source, source_node, source_kind);
+                }
                 Ok(Vec::new())
             }
             LayoutSourceKind::Text => {
                 self.validate_non_element_semantics(source_node, source_kind)?;
-                let Some(text) = self.source.text(source_node) else {
+                let text = self.source.text(source_node).map(Arc::<str>::from);
+                if let Some(inputs) = &mut self.construction_inputs {
+                    inputs.record_text(self.source, source_node, text.as_ref());
+                }
+                let Some(text) = text else {
                     return Ok(Vec::new());
                 };
-                let id = world.allocate(LayoutWorld::new_box(
-                    Some(source_node),
-                    None,
-                    None,
-                    self.source.label(source_node),
-                    None,
-                    None,
-                    None,
-                    LayoutBoxKind::Text,
-                    ResolvedLayoutStyle::text_leaf_from(inherited_style),
-                    Some(Arc::from(text)),
-                ));
-                world.boxes[id.index()].text_selection = self.source.text_selection(source_node);
+                let id = world.allocate(self.text_box(source_node, inherited_style, text));
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
@@ -290,22 +323,11 @@ where
             let semantics =
                 self.validated_element_semantics(source_node, self.source.node_kind(source_node))?;
             let Some(styles) = self.styles.element_styles(source_node)? else {
+                self.record_element_input(source_node, &semantics, None, false, false);
                 return Ok(Vec::new());
             };
             let (mut style, before, after) = styles.into_parts();
-            if self.viewport_body_candidate.is_none()
-                && self.root_is_html
-                && self
-                    .source_root
-                    .is_some_and(|root| self.source.flat_parent(source_node) == Some(root))
-                && semantics.is_html_element("body")
-            {
-                self.viewport_body_candidate = Some(ViewportBodyCandidate {
-                    source: source_node,
-                    overflow: style.overflow_modes(),
-                    blocks_propagation: style.applies_any_viewport_containment(),
-                });
-            }
+            self.note_viewport_body_candidate(source_node, &semantics, &style);
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced(
@@ -318,10 +340,14 @@ where
                 style.mark_intrinsic_form_control_container();
             }
 
-            if semantics.is_hidden_input()
-                || (style.display() == LayoutDisplay::Contents
-                    && semantics.display_contents_is_none())
-            {
+            self.record_element_input(
+                source_node,
+                &semantics,
+                Some(&style),
+                before.is_some(),
+                after.is_some(),
+            );
+            if suppresses_element_box(&semantics, &style) {
                 return Ok(Vec::new());
             }
 
@@ -366,6 +392,44 @@ where
 
         self.active_sources.remove(&source_node);
         result
+    }
+
+    fn record_element_input(
+        &mut self,
+        node: S::NodeId,
+        semantics: &LayoutElementSemantics,
+        style: Option<&ResolvedLayoutStyle>,
+        before: bool,
+        after: bool,
+    ) {
+        if self.construction_inputs.as_mut().is_some_and(|inputs| {
+            !inputs.record_element(self.source, node, semantics, style, before, after)
+        }) {
+            // An unsupported construction decision makes the complete graph
+            // ineligible. Its normal shared builder path remains unchanged.
+            self.construction_inputs = None;
+        }
+    }
+
+    fn note_viewport_body_candidate(
+        &mut self,
+        node: S::NodeId,
+        semantics: &LayoutElementSemantics,
+        style: &ResolvedLayoutStyle,
+    ) {
+        if self.viewport_body_candidate.is_none()
+            && self.root_is_html
+            && self
+                .source_root
+                .is_some_and(|root| self.source.flat_parent(node) == Some(root))
+            && semantics.is_html_element("body")
+        {
+            self.viewport_body_candidate = Some(ViewportBodyCandidate {
+                source: node,
+                overflow: style.overflow_modes(),
+                blocks_propagation: style.applies_any_viewport_containment(),
+            });
+        }
     }
 
     /// Converts the construction-only body candidate into the final viewport
@@ -420,36 +484,69 @@ where
         style: ResolvedLayoutStyle,
         metrics: Option<crate::ReplacedMetrics>,
     ) -> crate::LayoutBox<S::NodeId> {
-        let replaced_context = build_replaced_context(&semantics, metrics, &style);
         let mut layout_box = LayoutWorld::new_box(
             Some(source_node),
             None,
             None,
             source_label,
             None,
-            Some(semantics.clone()),
+            Some(semantics),
             None,
             kind,
-            style.clone(),
+            style,
             None,
         );
-        layout_box.replaced_context = replaced_context;
-        layout_box.replaced_image = self.source.replaced_image(source_node, &style);
-        if !matches!(
+        self.refresh_principal_inputs(&mut layout_box, metrics);
+        layout_box
+    }
+
+    /// Shared source sampling for cold construction and owned graph updates.
+    fn refresh_principal_inputs(
+        &mut self,
+        layout_box: &mut crate::LayoutBox<S::NodeId>,
+        metrics: Option<crate::ReplacedMetrics>,
+    ) {
+        let source_node = layout_box.source.expect("a principal box has a source");
+        let semantics = layout_box
+            .element_semantics
+            .as_ref()
+            .expect("principal semantics");
+        let style = &layout_box.style;
+        layout_box.replaced_context = build_replaced_context(semantics, metrics, style);
+        layout_box.replaced_image = self.source.replaced_image(source_node, style);
+        layout_box.css_images = if !matches!(
             style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents
         ) {
-            layout_box.css_images = self.css_image_resources(source_node, &style);
-        }
-        // DOM scroll state is stored in CSSOM units. Numeric layout operates
-        // in effective-zoomed CSS pixels, so import the sampled state into the
-        // same coordinate space as the box geometry.
-        let scroll_offset = self.source.scroll_offset(source_node);
-        let effective_zoom = style.effective_zoom();
-        layout_box.scroll_offset = crate::LayoutPoint::new(
-            scroll_offset.x * effective_zoom,
-            scroll_offset.y * effective_zoom,
+            self.css_image_resources(source_node, style)
+        } else {
+            crate::source::LayoutCssImageResources::default()
+        };
+        // Source scroll is in CSSOM units; numeric geometry uses effective zoom.
+        let offset = self.source.scroll_offset(source_node);
+        let zoom = style.effective_zoom();
+        layout_box.scroll_offset = crate::LayoutPoint::new(offset.x * zoom, offset.y * zoom);
+    }
+
+    fn text_box(
+        &self,
+        source: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
+        text: Arc<str>,
+    ) -> crate::LayoutBox<S::NodeId> {
+        let mut layout_box = LayoutWorld::new_box(
+            Some(source),
+            None,
+            None,
+            self.source.label(source),
+            None,
+            None,
+            None,
+            LayoutBoxKind::Text,
+            ResolvedLayoutStyle::text_leaf_from(inherited_style),
+            Some(text),
         );
+        layout_box.text_selection = self.source.text_selection(source);
         layout_box
     }
 
@@ -1321,6 +1418,9 @@ where
             }
             self.seen_sources.insert(*child, parent_label.clone());
         }
+        if let Some(inputs) = &mut self.construction_inputs {
+            inputs.record_children(parent, &children);
+        }
         Ok(children)
     }
 
@@ -1383,6 +1483,12 @@ struct ViewportBodyCandidate<N> {
     source: N,
     overflow: [LayoutOverflowMode; 2],
     blocks_propagation: bool,
+}
+
+fn suppresses_element_box(semantics: &LayoutElementSemantics, style: &ResolvedLayoutStyle) -> bool {
+    style.display() == LayoutDisplay::None
+        || semantics.is_hidden_input()
+        || (style.display() == LayoutDisplay::Contents && semantics.display_contents_is_none())
 }
 
 fn build_replaced_context(

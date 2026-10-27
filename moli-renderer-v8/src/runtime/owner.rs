@@ -14,12 +14,13 @@ use super::owner_local_store::{
     RendererOwnerLocalContext, RendererOwnerLocalStore, RendererPageCommandDispatch,
     RendererPageCreationResolution, RendererPageScheduledTurn, RendererPageToken,
     RendererPageTurnAdmission, RendererPageTurnCheckoutError, RendererPendingPageCreation,
-    RendererPreparedDocumentResidence, RetiringPageEntry,
+    RendererPreparedDocumentResidence, RendererPrintCaptureCommandDispatch, RetiringPageEntry,
     advance_document_lifecycle_one_page_turn_via_local_task,
     advance_dom_stable_wait_turn_on_entry_via_local_task,
     advance_network_idle_wait_turn_on_entry_via_local_task,
     advance_page_owner_one_turn_via_local_task,
     advance_pending_phase_one_navigation_on_entry_via_local_task,
+    advance_print_capture_on_entry_via_local_task,
     advance_runtime_command_lifecycle_on_entry_via_local_task,
     advance_runtime_expression_await_turn_on_entry_via_local_task,
     advance_script_truthy_wait_turn_on_entry_via_local_task,
@@ -293,6 +294,20 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
     },
     #[cfg(test)]
+    TestingLayoutWorkingSetState {
+        token: RendererPageToken,
+    },
+    #[cfg(test)]
+    TestingLayoutWorkingSetObservation {
+        token: RendererPageToken,
+    },
+    #[cfg(test)]
+    TestingCloseWorkingSetRetention {
+        token: RendererPageToken,
+        pool: crate::LayoutWorkingSetBudget,
+        checked_out_publication: bool,
+    },
+    #[cfg(test)]
     TestingDeferredPageVmDropPendingCount,
 }
 
@@ -320,6 +335,19 @@ pub enum RendererOwnerReply {
     TestingOwnerSlot(RendererPageSlotHandle),
     TestingHostInstanceKey(usize),
     TestingHostUniqueDocumentIsolateCount(usize),
+    #[cfg(test)]
+    TestingLayoutWorkingSetState((usize, usize)),
+    #[cfg(test)]
+    TestingLayoutWorkingSetObservation(
+        Box<super::owner_local::RendererLayoutWorkingSetObservation>,
+    ),
+    #[cfg(test)]
+    TestingCloseWorkingSetRetention(
+        Vec<(
+            crate::LayoutWorkingSetBudgetSnapshot,
+            Option<(usize, usize)>,
+        )>,
+    ),
     #[cfg(test)]
     TestingDeferredPageVmDropPendingCount(usize),
 }
@@ -723,6 +751,11 @@ enum RenderRuntimeTurn {
         command: RendererPageCommand,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
+    ContinueLivePagePrintCapture {
+        token: RendererPageToken,
+        job: Box<crate::capture_resources::PrintCaptureJob>,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    },
     ContinueLivePageRuntimeCommandLifecycle {
         token: RendererPageToken,
         scope_id: PageVmRuntimeCommandOutputScopeId,
@@ -829,6 +862,7 @@ impl RenderRuntimeTurn {
             Self::RunDevToolsMainCommand { token, .. }
             | Self::RunLivePageCommand { token, .. }
             | Self::ContinueLivePageRuntimeCommandLifecycle { token, .. }
+            | Self::ContinueLivePagePrintCapture { token, .. }
             | Self::WaitLivePageNetworkIdle { token, .. }
             | Self::WaitLivePageDomStable { token, .. }
             | Self::WaitLivePageSelector { token, .. }
@@ -842,6 +876,7 @@ impl RenderRuntimeTurn {
 
     fn committed_page_view_deadline(&self) -> Option<Instant> {
         match self {
+            Self::ContinueLivePagePrintCapture { job, .. } => Some(job.deadline()),
             Self::WaitLivePageNetworkIdle { deadline, .. }
             | Self::WaitLivePageDomStable { deadline, .. }
             | Self::WaitLivePageSelector { deadline, .. }
@@ -1090,6 +1125,10 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
         Some(RendererOwnerWakeSource::UserInteractionTask) => "user-interaction-task-wake",
         Some(RendererOwnerWakeSource::FileReadingTask) => "file-reading-task-wake",
         Some(RendererOwnerWakeSource::MiscPlatformApiTask) => "misc-platform-api-task-wake",
+        Some(RendererOwnerWakeSource::IntersectionObserverTask) => {
+            "intersection-observer-task-wake"
+        }
+        Some(RendererOwnerWakeSource::FontLoadingTask) => "font-loading-task-wake",
         Some(RendererOwnerWakeSource::NavigationAndTraversalTask) => {
             "navigation-and-traversal-task-wake"
         }
@@ -1158,6 +1197,9 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
         Some(RendererOwnerWakeSource::Runtime(
             RendererOwnerRuntimeActivitySource::MiscPlatformApi,
         )) => "misc-platform-api-output-wake",
+        Some(RendererOwnerWakeSource::Runtime(
+            RendererOwnerRuntimeActivitySource::IntersectionObserver,
+        )) => "intersection-observer-output-wake",
         Some(RendererOwnerWakeSource::Runtime(
             RendererOwnerRuntimeActivitySource::WindowMessage,
         )) => "window-message-wake",

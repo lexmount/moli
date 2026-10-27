@@ -2319,7 +2319,7 @@ async fn closing_live_page_releases_its_prepared_replacement() {
     );
 }
 
-async fn prepare_live_response_for_test(
+pub(super) async fn prepare_live_response_for_test(
     runtime: &JsRuntime,
     page: &RendererPageHandle,
     loader: &ResourceRequestClient,
@@ -2379,7 +2379,9 @@ async fn prepare_live_response_with_boundary_for_test(
         .unwrap()
 }
 
-async fn completed_raw_body_for_replacement_test(source: &[u8]) -> ExternalRawDocumentBodyStream {
+pub(super) async fn completed_raw_body_for_replacement_test(
+    source: &[u8],
+) -> ExternalRawDocumentBodyStream {
     let (completion_tx, completion_rx) = oneshot::channel();
     let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
     body_tx.send(source.to_vec()).await.unwrap();
