@@ -27,11 +27,11 @@ impl TargetDetachmentFailureCleanup {
             sessions: sessions
                 .iter()
                 .filter_map(|session| {
-                    let SessionDisposalWork::Own(disposal) = &session.disposal else {
+                    if !session.disposal.owns_cleanup() {
                         return None;
-                    };
+                    }
                     Some(SessionFailureCleanup {
-                        identity: disposal.identity(),
+                        identity: session.identity.clone(),
                         commit: session.commit.clone(),
                     })
                 })

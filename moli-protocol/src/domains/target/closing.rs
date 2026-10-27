@@ -56,6 +56,19 @@ pub(super) fn start_devtools_close_target_command(
     if conn.page_target_is_closing(page_target_id) {
         return super::target_command_error(-32000, "Target is closing");
     }
+    if let Some(access) = conn.protocol_state_access()
+        && let Some(retirement) = worker_target::PreparedDedicatedWorkerRetirement::prepare_close(
+            conn,
+            command.target_id.as_str(),
+        )
+    {
+        return match retirement {
+            Ok(retirement) => {
+                TargetCommandTaskStep::Workflow(retirement.into_command_workflow(access))
+            }
+            Err(error) => super::target_command_error(-32000, error),
+        };
+    }
     if let Some(closing) = PreparedPageTargetCloseCommand::prepare(conn, &command) {
         return TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
             command_id,

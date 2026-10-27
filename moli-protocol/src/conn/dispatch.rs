@@ -477,39 +477,66 @@ impl CdpConnection {
         message: &str,
         command_context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
+        let plan = CommandOutputPlan::error(-32000, message);
         if let Some(cleanup) = command_context.take_command_failure_cleanup() {
-            return match cleanup {
-                CommandFailureCleanup::Workflow(scope) => {
-                    command_context.register_command_failure_cleanup(
-                        CommandFailureCleanup::Workflow(scope.clone()),
-                    );
-                    self.pending_step(PendingCdpCommandDispatchKind::Workflow(
-                        scope.recover(CommandOutputPlan::error(-32000, message)),
-                    ))
-                }
-                CommandFailureCleanup::Native(cleanup) => self.pending_native_command_step(
-                    cleanup.recover(CommandOutputPlan::error(-32000, message)),
-                    command_context,
-                ),
-                CommandFailureCleanup::Target(cleanup) => {
-                    let pending = crate::domains::target::recover_failed_target_command(
-                        self,
-                        command_context,
-                        cleanup,
-                        command_id,
-                        session_id,
-                        CommandOutputPlan::error(-32000, message),
-                    );
-                    self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
-                }
-            };
+            return self.recover_command_output_cleanup(
+                cleanup,
+                plan,
+                command_id,
+                session_id,
+                command_context,
+            );
         }
-        self.complete_with_output_plan(
-            command_context,
-            CommandOutputPlan::error(-32000, message),
-            command_id,
-            session_id,
-        )
+        self.complete_with_output_plan(command_context, plan, command_id, session_id)
+    }
+
+    fn recover_command_output_cleanup(
+        &mut self,
+        cleanup: CommandFailureCleanup,
+        plan: CommandOutputPlan,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        command_context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        match cleanup {
+            CommandFailureCleanup::Workflow(scope) => {
+                command_context.register_command_failure_cleanup(CommandFailureCleanup::Workflow(
+                    scope.clone(),
+                ));
+                self.pending_step(PendingCdpCommandDispatchKind::Workflow(scope.recover(plan)))
+            }
+            CommandFailureCleanup::Continuation(cleanup) => self.start_command_workflow(
+                cleanup.recover(plan),
+                command_id,
+                session_id,
+                command_context,
+            ),
+            CommandFailureCleanup::Native(cleanup) => {
+                self.pending_native_command_step(cleanup.recover(plan), command_context)
+            }
+            CommandFailureCleanup::Target(cleanup) => {
+                let pending = crate::domains::target::recover_failed_target_command(
+                    self,
+                    command_context,
+                    cleanup,
+                    command_id,
+                    session_id,
+                    plan,
+                );
+                self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
+            }
+        }
+    }
+
+    pub(crate) fn start_command_workflow(
+        &mut self,
+        workflow: super::PreparedCommandWorkflow,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        command_context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let pending = workflow.start(command_context, command_id, session_id.map(str::to_owned));
+        self.pending_step(PendingCdpCommandDispatchKind::Workflow(pending))
     }
 
     fn pending_native_command_step(
@@ -855,6 +882,9 @@ impl CdpConnection {
                         crate::domains::target::TargetCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
                         }
+                        crate::domains::target::TargetCommandTaskStep::Workflow(workflow) => {
+                            self.start_command_workflow(workflow, cmd.id, cmd.session_id, command_context)
+                        }
                     }
                 })
             }
@@ -1092,6 +1122,15 @@ impl CdpConnection {
                 let command_id = completed.command_id;
                 let session_id = completed.session_id.clone();
                 let plan = completed.finish(command_context);
+                if let Some(cleanup) = command_context.take_command_failure_cleanup() {
+                    return Ok(self.recover_command_output_cleanup(
+                        cleanup,
+                        plan,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    ));
+                }
                 append_command_output_plan(
                     &mut out,
                     command_context,
@@ -1507,6 +1546,14 @@ impl CdpConnection {
                 {
                     crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
                         return self.pending_step(PendingCdpCommandDispatchKind::Target(pending));
+                    }
+                    crate::domains::target::TargetCommandTaskStep::Workflow(workflow) => {
+                        return self.start_command_workflow(
+                            workflow,
+                            command_id,
+                            session_id.as_deref(),
+                            command_context,
+                        );
                     }
                     crate::domains::target::TargetCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(

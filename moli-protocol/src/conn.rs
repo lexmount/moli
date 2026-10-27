@@ -52,6 +52,9 @@ mod command_owner_scope;
 mod command_view;
 mod command_wait_lifetime;
 mod command_workflow;
+pub(crate) use command_workflow::{
+    CommandWorkflowContext, CompletedCommandWorkflow, PreparedCommandWorkflow,
+};
 mod cookie_manager_surface;
 mod cookie_owner;
 mod cookie_policy_surface;
@@ -397,6 +400,7 @@ impl CommandResponseFlushContext {
 
 pub(crate) enum CommandFailureCleanup {
     Workflow(command_workflow::CommandWorkflowContextReturn),
+    Continuation(command_workflow::CommandWorkflowFailureCleanup),
     Native(crate::domains::native::NativeCommandFailureCleanup),
     Target(crate::domains::target::TargetCommandFailureCleanup),
 }

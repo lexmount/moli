@@ -227,11 +227,10 @@ async fn html_response_timing_preserves_cancellation_before_body_completion() ->
     assert_eq!(response.next_chunk().await.as_deref(), Some("part"));
     assert!(cancel.response_timing().response_end_at().is_none());
     assert!(cancel.cancel_if_response_pending());
-    assert!(
-        tokio::time::timeout(Duration::from_secs(5), response.finish())
-            .await?
-            .is_err()
-    );
+    let error = tokio::time::timeout(Duration::from_secs(5), response.finish())
+        .await?
+        .expect_err("cancellation must terminate the held HTML response");
+    assert!(crate::is_fetch_cancelled(&error), "{error:#}");
     assert!(cancel.response_timing().response_end_at().is_some());
     assert!(!cancel.response_completion_is_committed());
     release.send(())?;

@@ -1,3 +1,4 @@
+use crate::domains::target::session_disposal::SessionDisposalError;
 use anyhow::Result;
 
 use crate::automation::DevToolsTargetInfo;
@@ -965,7 +966,7 @@ impl CdpConnection {
         cleanup_plan: &SessionDisposalPlan,
     ) -> Result<()> {
         match cleanup_plan.target() {
-            SessionDisposalTarget::Browser => anyhow::bail!("InvalidSessionId"),
+            SessionDisposalTarget::Browser => anyhow::bail!(SessionDisposalError::InvalidSession),
             SessionDisposalTarget::PageTarget {
                 browser_context_id,
                 target_id,
@@ -973,21 +974,24 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 anyhow::ensure!(
                     bc.remove_page_session_binding(
                         target_id,
                         cleanup_plan.session_id(),
                         session_key,
                     ),
-                    "InvalidSessionId"
+                    SessionDisposalError::InvalidSession
                 );
             }
             SessionDisposalTarget::TabTarget { tab_target_id, .. } => {
                 let removed_target_id = self
                     .remove_tab_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *tab_target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *tab_target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
             SessionDisposalTarget::SharedWorkerTarget {
                 browser_context_id,
@@ -995,11 +999,14 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 let removed_target_id = bc
                     .detach_shared_worker_target_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
             SessionDisposalTarget::DedicatedWorkerTarget {
                 browser_context_id,
@@ -1007,11 +1014,14 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 let removed_target_id = bc
                     .detach_dedicated_worker_target_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
             SessionDisposalTarget::ServiceWorkerTarget {
                 browser_context_id,
@@ -1019,11 +1029,14 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 let removed_target_id = bc
                     .detach_service_worker_target_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
         }
         Ok(())

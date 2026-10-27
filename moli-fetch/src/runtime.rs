@@ -3735,6 +3735,14 @@ fn fail_streaming_job_with_easy(
     error: anyhow::Error,
 ) {
     let mut easy = easy.or_else(|| job.easy.take());
+    // Cancellation may stop curl by returning zero from a write callback,
+    // which curl reports as a write error rather than an aborted callback.
+    // Keep the explicit cancellation cause and the original transport error.
+    let error = if job.cancel_handle.is_cancelled() {
+        error.context(crate::FetchCancelled)
+    } else {
+        error
+    };
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
@@ -3774,6 +3782,14 @@ fn fail_raw_streaming_job_with_easy(
     mut easy: Option<Easy2<FetchTransferHandler>>,
     error: anyhow::Error,
 ) {
+    // Cancellation may stop curl by returning zero from a write callback,
+    // which curl reports as a write error rather than an aborted callback.
+    // Keep the explicit cancellation cause and the original transport error.
+    let error = if job.cancel_handle.is_cancelled() {
+        error.context(crate::FetchCancelled)
+    } else {
+        error
+    };
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,

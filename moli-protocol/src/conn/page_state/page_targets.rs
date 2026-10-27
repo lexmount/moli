@@ -1027,6 +1027,9 @@ impl BrowserContext {
     ) -> bool {
         let Some(renderer_instance_id) = self
             .dedicated_worker_target(target_id)
+            .filter(|target| {
+                !target.is_retiring() && self.target_page_residence_is_current(&target.owner_page)
+            })
             .map(|target| target.renderer_instance_id)
         else {
             return false;

@@ -803,6 +803,17 @@ pub(super) fn prepare_dedicated_worker_target_retirement(
     {
         return outputs;
     }
+    let first_retirement = conn
+        .browser_context_by_id_mut(browser_context_id)
+        .and_then(|context| {
+            context
+                .dedicated_worker_targets
+                .get_mut(&renderer_instance_id)
+        })
+        .is_some_and(|target| target.begin_retirement());
+    if !first_retirement {
+        return outputs;
+    }
     let target_id = match conn
         .browser_context_by_id(browser_context_id)
         .and_then(|context| {

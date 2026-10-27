@@ -19,6 +19,7 @@ pub(crate) struct DedicatedWorkerTargetState {
     pub(crate) owner_page: TargetPageResidenceIdentity,
     pub(crate) owner_page_network_sessions: Vec<Option<String>>,
     pub(crate) inner: SharedWorkerTargetState,
+    retiring: bool,
     main_script: Option<DedicatedWorkerMainScriptSnapshot>,
     delivered_main_script_sessions: BTreeSet<String>,
     replayable_main_script_sessions: BTreeSet<String>,
@@ -61,12 +62,21 @@ impl DedicatedWorkerTargetState {
                 String::new(),
                 name,
             ),
+            retiring: false,
             main_script: None,
             delivered_main_script_sessions: BTreeSet::new(),
             replayable_main_script_sessions: BTreeSet::new(),
             defer_failed_load_destroy_until_debugger_resume: false,
             renderer_destroyed_while_waiting_for_debugger: false,
         }
+    }
+
+    pub(crate) fn is_retiring(&self) -> bool {
+        self.retiring
+    }
+
+    pub(crate) fn begin_retirement(&mut self) -> bool {
+        !std::mem::replace(&mut self.retiring, true)
     }
 
     pub(crate) fn record_main_script(

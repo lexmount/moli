@@ -6,7 +6,7 @@ use crate::conn::{
     SessionDisposalTarget, TargetSessionDetachCleanupPlan,
 };
 use crate::domains::target::session_disposal::{
-    LiveSessionDisposal, SessionDisposalError, SessionDisposalIdentity,
+    PreparedSessionDisposal, SessionDisposalError, SessionDisposalIdentity,
 };
 
 pub(in crate::domains::target) struct TargetDetachment {
@@ -15,15 +15,10 @@ pub(in crate::domains::target) struct TargetDetachment {
 
 struct SessionDetachment {
     identity: SessionDisposalIdentity,
-    disposal: SessionDisposalWork,
+    disposal: PreparedSessionDisposal,
     commit: SessionDetachmentCommit,
     child: bool,
     response_before_event: bool,
-}
-
-enum SessionDisposalWork {
-    Own(LiveSessionDisposal),
-    Join(crate::conn::SessionDisposalWait),
 }
 
 mod recovery;
@@ -156,17 +151,8 @@ impl TargetDetachment {
         let sessions = plans
             .into_iter()
             .map(|(plan, commit, child, response_before_event)| {
-                let (disposal, identity) = match conn.session_disposal_wait(plan.session_id()) {
-                    Some(wait) => (
-                        SessionDisposalWork::Join(wait),
-                        SessionDisposalIdentity::capture(conn, plan),
-                    ),
-                    None => {
-                        let disposal = LiveSessionDisposal::prepare(conn, plan);
-                        let identity = disposal.identity();
-                        (SessionDisposalWork::Own(disposal), identity)
-                    }
-                };
+                let disposal = PreparedSessionDisposal::prepare(conn, plan);
+                let identity = disposal.identity();
                 SessionDetachment {
                     identity,
                     disposal,
@@ -187,17 +173,10 @@ impl TargetDetachment {
         for session in self.sessions {
             let mut background_events = Vec::new();
             let mut protocol_events = Vec::new();
-            let result = match session.disposal {
-                SessionDisposalWork::Own(disposal) => {
-                    disposal
-                        .run(driver, &mut background_events, &mut protocol_events)
-                        .await
-                }
-                SessionDisposalWork::Join(wait) => {
-                    wait.wait().await;
-                    Ok(None)
-                }
-            };
+            let result = session
+                .disposal
+                .run(driver, &mut background_events, &mut protocol_events)
+                .await;
             sessions.push(SessionDetachmentOutput {
                 identity: session.identity,
                 commit: session.commit,

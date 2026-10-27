@@ -33,6 +33,7 @@ pub(crate) use session_disposal::dispose_uncommitted_session_async;
 #[cfg(test)]
 mod tests;
 mod worker_target;
+pub(crate) use worker_target::{CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity};
 
 pub(crate) enum TargetCommandFailureCleanup {
     Detachment(TargetDetachmentFailureCleanup),
@@ -103,6 +104,7 @@ pub(crate) struct CompletedTargetCommandDispatch {
 
 pub(crate) enum TargetCommandTaskStep {
     Pending(PendingTargetCommandDispatch),
+    Workflow(crate::conn::PreparedCommandWorkflow),
     Complete(CommandOutputPlan),
 }
 
@@ -1241,6 +1243,13 @@ mod devtools_runtime_entry_tests {
                         &mut command_context,
                     )
                     .await;
+                }
+                TargetCommandTaskStep::Workflow(workflow) => {
+                    let completed = workflow
+                        .start(&mut command_context, Some(command_id), None)
+                        .wait()
+                        .await;
+                    step = TargetCommandTaskStep::Complete(completed.finish(&mut command_context));
                 }
             }
         }

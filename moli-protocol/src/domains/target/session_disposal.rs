@@ -7,7 +7,7 @@ use crate::conn::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub(in crate::domains::target) enum SessionDisposalError {
+pub(crate) enum SessionDisposalError {
     #[error("InvalidSessionId")]
     InvalidSession,
     #[error("UnknownTargetId")]
@@ -54,7 +54,7 @@ pub(crate) async fn dispose_closed_target_sessions_using(
         .await
 }
 
-fn prepare_session_disposal(
+pub(in crate::domains::target) fn prepare_session_disposal(
     conn: &CdpConnection,
     detachment: TargetSessionDetachCleanupPlan,
 ) -> Result<(SessionDisposalPlan, TargetSessionDetachCleanupPlan)> {
@@ -98,6 +98,66 @@ impl TargetSessionDisposalOutcome {
     }
 }
 
+pub(crate) enum PreparedSessionDisposal {
+    Own(LiveSessionDisposal),
+    Join {
+        identity: SessionDisposalIdentity,
+        wait: crate::conn::SessionDisposalWait,
+    },
+}
+
+impl PreparedSessionDisposal {
+    pub(crate) fn prepare(conn: &mut CdpConnection, plan: SessionDisposalPlan) -> Self {
+        Self::for_identity(conn, SessionDisposalIdentity::capture(conn, plan))
+            .expect("a finite disposal preparation retains its original binding")
+    }
+
+    pub(crate) fn for_identity(
+        conn: &mut CdpConnection,
+        identity: SessionDisposalIdentity,
+    ) -> Option<Self> {
+        if !identity.binding_is_current(conn) {
+            return None;
+        }
+        Some(
+            match conn.session_disposal_wait(identity.plan().session_id()) {
+                Some(wait) => Self::Join { identity, wait },
+                None => Self::Own(LiveSessionDisposal::prepare_for_identity(conn, identity)),
+            },
+        )
+    }
+
+    pub(crate) fn identity(&self) -> SessionDisposalIdentity {
+        match self {
+            Self::Own(disposal) => disposal.identity(),
+            Self::Join { identity, .. } => identity.clone(),
+        }
+    }
+
+    pub(crate) fn owns_cleanup(&self) -> bool {
+        matches!(self, Self::Own(_))
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        background_events: &mut Vec<BackgroundProtocolEvent>,
+        protocol_events: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Result<Option<moli_core::RendererOutputFence>> {
+        match self {
+            Self::Own(disposal) => {
+                disposal
+                    .run(driver, background_events, protocol_events)
+                    .await
+            }
+            Self::Join { wait, .. } => {
+                wait.wait().await;
+                Ok(None)
+            }
+        }
+    }
+}
+
 /// Captures the original renderer before any handler can wait. A session can
 /// remain attached while a successor Document replaces that renderer.
 pub(crate) struct LiveSessionDisposal {
@@ -135,8 +195,13 @@ impl LiveSessionDisposal {
     }
 
     pub(crate) fn prepare(conn: &mut CdpConnection, plan: SessionDisposalPlan) -> Self {
-        let handlers = crate::domains::session::PreparedSessionHandlers::prepare(conn, &plan);
-        conn.mark_session_closing(&plan);
+        Self::prepare_for_identity(conn, SessionDisposalIdentity::capture(conn, plan))
+    }
+
+    fn prepare_for_identity(conn: &mut CdpConnection, identity: SessionDisposalIdentity) -> Self {
+        let handlers =
+            crate::domains::session::PreparedSessionHandlers::prepare_for_identity(conn, identity);
+        conn.mark_session_closing(handlers.identity().plan());
         Self { handlers }
     }
 

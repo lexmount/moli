@@ -1224,6 +1224,16 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
 impl CdpConnection {
     pub(crate) fn target_is_closing_for_owner(&self, owner: &CommandOwnerScope) -> bool {
+        if let Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget {
+            browser_context_id,
+            target_id,
+        }) = owner.resolve_route(self)
+        {
+            return self
+                .browser_context_by_id(&browser_context_id)
+                .and_then(|context| context.dedicated_worker_target(&target_id))
+                .is_some_and(|target| target.is_retiring());
+        }
         self.target_session_owner_ref_for_owner(owner)
             .is_some_and(|owner| owner.target().closing)
     }

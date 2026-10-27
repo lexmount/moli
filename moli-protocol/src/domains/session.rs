@@ -93,11 +93,20 @@ pub(crate) struct PreparedSessionHandlers {
 }
 
 impl PreparedSessionHandlers {
+    #[cfg(test)]
     pub(crate) fn prepare(conn: &mut CdpConnection, plan: &SessionDisposalPlan) -> Self {
         let identity = crate::domains::target::session_disposal::SessionDisposalIdentity::capture(
             conn,
             plan.clone(),
         );
+        Self::prepare_for_identity(conn, identity)
+    }
+
+    pub(crate) fn prepare_for_identity(
+        conn: &mut CdpConnection,
+        identity: crate::domains::target::session_disposal::SessionDisposalIdentity,
+    ) -> Self {
+        let plan = identity.plan();
         let handlers = DevToolsSessionHandlers::for_target(plan.target())
             .handlers
             .iter()

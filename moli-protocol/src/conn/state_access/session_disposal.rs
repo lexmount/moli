@@ -12,6 +12,35 @@ use crate::domains::target::session_disposal::{
 use crate::{conn::SessionDisposalPlan, domains::session::PreparedSessionHandlers};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn finish_dedicated_worker_session_retirement(
+        self,
+        worker: crate::domains::target::DedicatedWorkerRetirementIdentity,
+        identity: SessionDisposalIdentity,
+        detachment: crate::conn::TargetSessionDetachCleanupPlan,
+        failed: bool,
+    ) -> (Vec<BackgroundProtocolEvent>, Option<anyhow::Error>) {
+        worker.finish_session(self.connection, identity, detachment, failed)
+    }
+
+    pub(crate) fn finish_dedicated_worker_retirement(
+        self,
+        identity: crate::domains::target::DedicatedWorkerRetirementIdentity,
+        destroyed_delta: Option<crate::conn::PreparedTargetHostDelta>,
+        uncommitted: Vec<crate::domains::target::CapturedWorkerAttachment>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        identity.finish(self.connection, destroyed_delta, uncommitted)
+    }
+
+    pub(crate) fn recover_dedicated_worker_session_retirement(
+        self,
+        worker: crate::domains::target::DedicatedWorkerRetirementIdentity,
+        identity: SessionDisposalIdentity,
+        detachment: crate::conn::TargetSessionDetachCleanupPlan,
+        owns_cleanup: bool,
+    ) -> (Vec<BackgroundProtocolEvent>, Option<anyhow::Error>) {
+        worker.recover_session(self.connection, identity, detachment, owns_cleanup)
+    }
+
     pub(crate) fn prepare_target_termination(
         self,
         action: crate::domains::page::PageTargetTerminationOwnerAction,

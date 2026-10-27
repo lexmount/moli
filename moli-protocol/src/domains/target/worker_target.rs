@@ -61,6 +61,10 @@ mod lifecycle_projection;
 use lifecycle_projection::*;
 mod dedicated_worker;
 use dedicated_worker::*;
+mod dedicated_worker_retirement;
+pub(crate) use dedicated_worker_retirement::{
+    CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity, PreparedDedicatedWorkerRetirement,
+};
 mod shared_worker;
 use shared_worker::*;
 mod service_worker_targets;
