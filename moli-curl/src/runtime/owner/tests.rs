@@ -109,6 +109,7 @@ fn completion_starts_queued_job(per_origin: bool) {
         shutdown_requested,
         closed: false,
         poll_interval: config.poll_interval,
+        http_handler_poll: None,
         diagnostics: Diagnostics::from_env(),
         http: HttpRegistry::new(config, completion_tx),
         websockets: WebSocketRegistry::new(websocket_rx, multi.waker()),
