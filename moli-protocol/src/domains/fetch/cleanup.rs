@@ -25,6 +25,10 @@ pub(super) enum FetchCleanupReason {
     PageClosed,
     #[error("Browser context disposed")]
     BrowserContextDisposed,
+    #[error("Navigation stopped")]
+    NavigationStopped,
+    #[error("Page crashed")]
+    PageCrashed,
 }
 
 pub(crate) struct PreparedFetchCleanup {
@@ -111,6 +115,12 @@ impl PreparedFetchCleanup {
         preserve_document: bool,
     ) -> Self {
         let (requests, auths, responses, subrequests, subauths, subresponses) = pending;
+        let subresource_error = match reason {
+            FetchCleanupReason::NavigationStopped => {
+                moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned()
+            }
+            _ => reason.to_string(),
+        };
         // Admit every native failure before releasing a Page. Dropping this
         // command cannot leave a pause stranded in a removed Fetch handler.
         let subresources = subrequests
@@ -127,7 +137,7 @@ impl PreparedFetchCleanup {
                     .map(|(_, pending)| CleanupSubresource::Response(pending)),
             )
             .filter_map(|resource| {
-                admit_subresource_failure(conn, owner, resource, &reason.to_string())
+                admit_subresource_failure(conn, owner, resource, &subresource_error)
             })
             .collect();
         let navigations = requests

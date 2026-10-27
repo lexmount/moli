@@ -903,13 +903,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         self.target_mut().fetch_owner.drain_pending_requests()
     }
 
-    pub(super) async fn mark_target_crashed_async(&mut self) -> Option<()> {
-        if let Some(page) = self.take_crashed_page() {
-            let _ = page.close_async().await;
-        }
-        Some(())
-    }
-
     fn take_crashed_page(&mut self) -> Option<Page> {
         let target = self.target_mut();
         target.owner_state.target_crash_state.mark_crashed();
@@ -1550,15 +1543,6 @@ impl CdpConnection {
             .clear_pending_navigation_history_update()
     }
 
-    pub(crate) async fn mark_target_crashed_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<()> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .mark_target_crashed_async()
-            .await
-    }
-
     pub(crate) fn take_crashed_page_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2155,6 +2139,16 @@ impl CdpConnection {
     /// Binds renderer-produced child-frame activity to the Page attachment
     /// that captured it and to the exact root Document reported by the same
     /// renderer snapshot.
+    #[cfg(test)]
+    pub(crate) fn target_root_document_protocol_attachment_identity_for_session(
+        &self,
+        session_id: Option<&str>,
+        root_document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_root_document_protocol_attachment_identity_for_owner(&owner, root_document)
+    }
+
     pub(crate) fn target_root_document_protocol_attachment_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -2166,6 +2160,51 @@ impl CdpConnection {
         );
         self.target_root_document_protocol_attachment_identity_is_current(&binding)
             .then_some(binding)
+    }
+
+    /// Captures the exact Native Document that owns concrete child output.
+    /// It can already have committed while protocol adoption is still waiting;
+    /// this route grants no authority to start work on that unbound Document.
+    pub(crate) fn target_root_document_output_identity_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        root_document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
+        let prepared = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .page_slot()
+            .prepared_document_output_binding();
+        let Some((_, binding)) = prepared else {
+            return self
+                .target_root_document_protocol_attachment_identity_for_owner(owner, root_document);
+        };
+        if binding.renderer_document_identity() != root_document {
+            return None;
+        }
+        let page_owner = self
+            .pending_target_page_residence_identity_for_owner(owner)
+            .filter(|page| page.page_attachment_id() == binding.page_attachment_id)
+            .or_else(|| self.target_page_residence_identity_for_owner(owner))
+            .filter(|page| page.page_attachment_id() == binding.page_attachment_id)?;
+        Some(
+            crate::conn::TargetRootDocumentProtocolAttachmentIdentity::new(
+                crate::conn::TargetPageProtocolAttachmentIdentity::new(
+                    page_owner,
+                    owner.session_id().map(str::to_owned),
+                ),
+                root_document,
+            ),
+        )
+    }
+
+    pub(crate) fn target_root_document_output_identity_is_current(
+        &self,
+        expected: &crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
+    ) -> bool {
+        let owner = CommandOwnerScope::for_page_attachment(expected.attachment());
+        self.target_root_document_output_identity_for_owner(&owner, expected.root_document())
+            .as_ref()
+            == Some(expected)
     }
 
     /// Authorizes deferred child-frame owner actions only while both the

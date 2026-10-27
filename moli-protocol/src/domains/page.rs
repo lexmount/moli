@@ -1,15 +1,15 @@
 use anyhow::Result;
 
 use crate::automation::{
-    AutomationCommand, AutomationContext, AutomationResult, DevToolsAddPreloadScriptCommand,
-    DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
-    DevToolsCaptureScreenshotResult, DevToolsError, DevToolsErrorKind, DevToolsGetFrameTreeCommand,
-    DevToolsGetFrameTreeResult, DevToolsGetFrameTreesCommand, DevToolsGetFrameTreesResult,
-    DevToolsGetJavaScriptDialogCommand, DevToolsGetLayoutMetricsCommand,
-    DevToolsHandleJavaScriptDialogCommand, DevToolsJavaScriptDialogResult,
-    DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
-    DevToolsScreenshotClip, DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo,
-    DevToolsTargetKind, FrontendProtocol, UserPromptClosedEvent,
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsCaptureScreenshotClip,
+    DevToolsCaptureScreenshotCommand, DevToolsCaptureScreenshotResult, DevToolsError,
+    DevToolsErrorKind, DevToolsGetFrameTreeCommand, DevToolsGetFrameTreeResult,
+    DevToolsGetFrameTreesCommand, DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
+    DevToolsGetLayoutMetricsCommand, DevToolsHandleJavaScriptDialogCommand,
+    DevToolsJavaScriptDialogResult, DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand,
+    DevToolsPrintToPdfTransferMode, DevToolsScreenshotClip,
+    DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo, DevToolsTargetKind,
+    FrontendProtocol, UserPromptClosedEvent,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
@@ -60,27 +60,40 @@ mod javascript_dialog;
 pub(in crate::domains) use javascript_dialog::emit_javascript_dialog_activity_background_events;
 use javascript_dialog::*;
 mod capture;
+mod completion;
+pub(crate) use preload::{
+    CreateIsolatedWorldCommandTask, PreparedCreatedIsolatedWorld, finish_isolated_world_runtime,
+    start_isolated_world_runtime,
+};
 mod lifecycle;
 mod main_document_commit;
 pub(crate) mod native;
 mod navigation;
+pub(crate) use navigation::{
+    CompletedContinueNavigationWithoutRequestPauseCommand, CompletedNavigateLoadCommand,
+};
 mod output;
 use capture::*;
 pub(in crate::domains) use output::project_page_output_finite;
 mod navigation_commit;
 pub(crate) use navigation_commit::{
-    CompletedNavigationProtocolCompletion, NavigationProtocolCleanup,
+    CompletedNavigationProtocolCompletion, NavigationCommandOutput, NavigationProtocolCleanup,
     PreparedNavigationProtocolCompletion,
 };
 mod pdf;
 mod popup;
 mod preload;
+pub(crate) use completion::PageCommandCompletionError;
+pub(crate) use preload::PreparedPageAddPreload;
 mod prepared_navigation;
 mod resource_search;
 mod resource_tree;
 pub(crate) use resource_tree::child_frame_security_identity;
 use resource_tree::*;
 mod termination;
+pub(crate) use termination::{
+    PreparedPageCrash, PreparedPageStopLoading, PreparedPageTargetTermination,
+};
 #[cfg(test)]
 mod tests;
 
@@ -158,7 +171,6 @@ pub(crate) struct PendingPageCommandDispatch {
 enum PendingPageCommandKind {
     BringToFront {
         route: CdpSessionRoute,
-        restore_browser_context_id: Option<String>,
     },
     AppendDefaultDocumentStartScript {
         identifier: String,
@@ -167,7 +179,7 @@ enum PendingPageCommandKind {
     RemoveDocumentStartScript {
         pending: PendingPageCommand,
     },
-    AddScriptToEvaluateOnNewDocument(DevToolsAddPreloadScriptCommand),
+    AddScriptToEvaluateOnNewDocument(PreparedPageAddPreload),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
         target_id: String,
@@ -210,9 +222,9 @@ enum PendingPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading,
-    Crash,
-    Close,
+    StopLoading(PreparedPageStopLoading),
+    Crash(Box<PreparedPageCrash>),
+    Close(PreparedPageTargetTermination),
     CreateIsolatedWorld(preload::PendingCreateIsolatedWorldCommand),
 }
 
@@ -225,16 +237,15 @@ pub(crate) struct CompletedPageCommandDispatch {
 enum CompletedPageCommandKind {
     BringToFront {
         route: CdpSessionRoute,
-        restore_browser_context_id: Option<String>,
     },
     AppendDefaultDocumentStartScript {
         identifier: String,
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     RemoveDocumentStartScript {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
-    AddScriptToEvaluateOnNewDocument(DevToolsAddPreloadScriptCommand),
+    AddScriptToEvaluateOnNewDocument(PreparedPageAddPreload),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
         target_id: String,
@@ -244,31 +255,31 @@ enum CompletedPageCommandKind {
         target_security_origin: String,
         target_secure_context_type: String,
         target_mime_type: String,
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     SearchInResource(Box<resource_search::CompletedSearchInResourceCommand>),
     GetAppManifest(Box<app_manifest::CompletedGetAppManifestCommand>),
     ResetNavigationHistory {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     SetDocumentContent {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     SetBypassContentSecurityPolicy {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     SameDocumentNavigate(Box<navigation::CompletedSameDocumentNavigateCommand>),
     CaptureSnapshot {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     GetLayoutMetrics {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     CaptureScreenshot {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
     },
     PrintToPdf {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: Box<Result<CompletedPageCommand>>,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
@@ -277,16 +288,16 @@ enum CompletedPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading,
-    Crash,
-    Close,
+    StopLoading(PreparedPageStopLoading),
+    Crash(Box<PreparedPageCrash>),
+    Close(PreparedPageTargetTermination),
     CreateIsolatedWorld(Box<preload::CompletedCreateIsolatedWorldCommand>),
 }
 
 impl CompletedPageCommandKind {
     fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         fn direct(
-            completed: &Result<CompletedPageCommand, String>,
+            completed: &Result<CompletedPageCommand>,
         ) -> Option<moli_core::RendererOutputFence> {
             completed
                 .as_ref()
@@ -314,9 +325,9 @@ impl CompletedPageCommandKind {
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
-            | Self::StopLoading
-            | Self::Crash
-            | Self::Close
+            | Self::StopLoading(_)
+            | Self::Crash(_)
+            | Self::Close(_)
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
             // completion handler records the fence only after rejecting a stale completion,
             // so an abandoned stream cannot become the predecessor of the final response.
@@ -331,25 +342,27 @@ pub(crate) enum PageCommandTaskStep {
 }
 
 impl PendingPageCommandDispatch {
+    pub(crate) fn command_id(&self) -> Option<u64> {
+        self.command_id
+    }
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.owner_scope.session_id()
+    }
     pub async fn wait(self) -> CompletedPageCommandDispatch {
         let kind = match *self.kind {
-            PendingPageCommandKind::BringToFront {
-                route,
-                restore_browser_context_id,
-            } => CompletedPageCommandKind::BringToFront {
-                route,
-                restore_browser_context_id,
-            },
+            PendingPageCommandKind::BringToFront { route } => {
+                CompletedPageCommandKind::BringToFront { route }
+            }
             PendingPageCommandKind::AppendDefaultDocumentStartScript {
                 identifier,
                 pending,
             } => CompletedPageCommandKind::AppendDefaultDocumentStartScript {
                 identifier,
-                completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                completed: Box::new(pending.wait().await),
             },
             PendingPageCommandKind::RemoveDocumentStartScript { pending } => {
                 CompletedPageCommandKind::RemoveDocumentStartScript {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::AddScriptToEvaluateOnNewDocument(command) => {
@@ -374,7 +387,7 @@ impl PendingPageCommandDispatch {
                 target_security_origin,
                 target_secure_context_type,
                 target_mime_type,
-                completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                completed: Box::new(pending.wait().await),
             },
             PendingPageCommandKind::SearchInResource(pending) => {
                 CompletedPageCommandKind::SearchInResource(Box::new(pending.wait().await))
@@ -384,17 +397,17 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::ResetNavigationHistory { pending } => {
                 CompletedPageCommandKind::ResetNavigationHistory {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::SetDocumentContent { pending } => {
                 CompletedPageCommandKind::SetDocumentContent {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::SetBypassContentSecurityPolicy { pending } => {
                 CompletedPageCommandKind::SetBypassContentSecurityPolicy {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::SameDocumentNavigate(pending) => {
@@ -402,24 +415,24 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::CaptureSnapshot { pending } => {
                 CompletedPageCommandKind::CaptureSnapshot {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::GetLayoutMetrics { pending } => {
                 CompletedPageCommandKind::GetLayoutMetrics {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::CaptureScreenshot { pending } => {
                 CompletedPageCommandKind::CaptureScreenshot {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: Box::new(pending.wait().await),
                 }
             }
             PendingPageCommandKind::PrintToPdf {
                 pending,
                 transfer_mode,
             } => CompletedPageCommandKind::PrintToPdf {
-                completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                completed: Box::new(pending.wait().await),
                 transfer_mode,
             },
             PendingPageCommandKind::Navigate(pending) => {
@@ -438,9 +451,11 @@ impl PendingPageCommandDispatch {
                     pending.wait().await,
                 ))
             }
-            PendingPageCommandKind::StopLoading => CompletedPageCommandKind::StopLoading,
-            PendingPageCommandKind::Crash => CompletedPageCommandKind::Crash,
-            PendingPageCommandKind::Close => CompletedPageCommandKind::Close,
+            PendingPageCommandKind::StopLoading(prepared) => {
+                CompletedPageCommandKind::StopLoading(prepared)
+            }
+            PendingPageCommandKind::Crash(prepared) => CompletedPageCommandKind::Crash(prepared),
+            PendingPageCommandKind::Close(prepared) => CompletedPageCommandKind::Close(prepared),
             PendingPageCommandKind::CreateIsolatedWorld(pending) => {
                 CompletedPageCommandKind::CreateIsolatedWorld(Box::new(pending.wait().await))
             }
@@ -549,85 +564,45 @@ fn start_bring_to_front_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Page
     PageCommandTaskStep::Pending(PendingPageCommandDispatch {
         command_id: cmd.id,
         owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(PendingPageCommandKind::BringToFront {
-            route,
-            restore_browser_context_id: conn.browser_context.as_ref().map(|bc| bc.id.clone()),
-        }),
+        kind: Box::new(PendingPageCommandKind::BringToFront { route }),
     })
 }
 
-async fn bring_session_route_to_front_async(
+pub(crate) fn prepare_page_bring_to_front(
     conn: &mut CdpConnection,
     route: CdpSessionRoute,
-) -> Result<Vec<BackgroundProtocolEvent>, String> {
-    let (browser_context_id, target_id) = match route {
-        CdpSessionRoute::Browser => return Ok(Vec::new()),
+) -> Result<Option<crate::domains::target::activation::PreparedTargetActivation>, DevToolsError> {
+    match route {
+        CdpSessionRoute::Browser => Ok(None),
         CdpSessionRoute::BrowserContext { browser_context_id } => {
-            if !conn
-                .activate_browser_context_by_id_async(&browser_context_id)
-                .await
-            {
-                return Err("BrowserContextNotLoaded".into());
+            if conn.has_browser_context_id(&browser_context_id) {
+                Ok(None)
+            } else {
+                Err(DevToolsError::new(
+                    DevToolsErrorKind::NoSuchTarget,
+                    "BrowserContextNotLoaded",
+                ))
             }
-            return Ok(Vec::new());
         }
         CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
             ..
-        } => (browser_context_id, target_id),
-        CdpSessionRoute::TabTarget { .. }
-        | CdpSessionRoute::SharedWorkerTarget { .. }
-        | CdpSessionRoute::DedicatedWorkerTarget { .. }
-        | CdpSessionRoute::ServiceWorkerTarget { .. } => {
-            return Err("UnsupportedTargetType".into());
+        } => {
+            if !conn.has_browser_context_id(&browser_context_id) {
+                return Err(DevToolsError::new(
+                    DevToolsErrorKind::NoSuchTarget,
+                    "BrowserContextNotLoaded",
+                ));
+            }
+            crate::domains::target::activation::prepare_target_activation_for_target(
+                conn, &target_id,
+            )
         }
-    };
-
-    if !conn
-        .activate_browser_context_by_id_async(&browser_context_id)
-        .await
-    {
-        return Err("BrowserContextNotLoaded".into());
-    }
-
-    let target_is_active = conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_target_identity())
-        .is_some_and(|(active_target_id, _)| active_target_id == target_id);
-    if target_is_active {
-        conn.select_browser_focus_for_target(&target_id);
-        conn.apply_browser_document_activity_async()
-            .await
-            .map_err(|error| error.to_string())?;
-        return Ok(Vec::new());
-    }
-
-    match conn
-        .select_page_target_for_connection_async(&target_id)
-        .await
-    {
-        Ok(Some(activation)) => Ok(activation.into_protocol_events()),
-        Ok(None) => Err("UnknownTargetId".into()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-async fn restore_page_bring_to_front_context_async(
-    conn: &mut CdpConnection,
-    browser_context_id: Option<&str>,
-) {
-    if let Some(browser_context_id) = browser_context_id
-        && conn.has_browser_context_id(browser_context_id)
-        && conn
-            .browser_context
-            .as_ref()
-            .is_none_or(|bc| bc.id != browser_context_id)
-    {
-        let _ = conn
-            .activate_browser_context_by_id_async(browser_context_id)
-            .await;
+        _ => Err(DevToolsError::new(
+            DevToolsErrorKind::Unsupported,
+            "UnsupportedTargetType",
+        )),
     }
 }
 
@@ -1510,6 +1485,7 @@ struct PageSetDownloadBehaviorParams {
 pub(crate) fn try_start_page_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    command_context: &mut CommandDispatchContext,
 ) -> Option<PageCommandTaskStep> {
     match cmd.parse_action::<PageAction>() {
         Some(PageAction::Enable) => try_start_page_enable_command(conn, cmd),
@@ -1575,8 +1551,16 @@ pub(crate) fn try_start_page_command_dispatch(
         Some(PageAction::StopLoading) => Some(
             termination::try_start_stop_loading_command_dispatch(conn, cmd),
         ),
-        Some(PageAction::Crash) => Some(termination::try_start_crash_command_dispatch(conn, cmd)),
-        Some(PageAction::Close) => Some(termination::try_start_close_command_dispatch(conn, cmd)),
+        Some(PageAction::Crash) => Some(termination::try_start_crash_command_dispatch(
+            conn,
+            cmd,
+            command_context,
+        )),
+        Some(PageAction::Close) => Some(termination::try_start_close_command_dispatch(
+            conn,
+            cmd,
+            command_context,
+        )),
         Some(PageAction::AddScriptToEvaluateOnNewDocument) => {
             preload::try_start_add_script_to_evaluate_on_new_document_command(conn, cmd)
         }
@@ -1909,503 +1893,40 @@ fn start_devtools_page_command(
 #[cfg(test)]
 mod protocol_neutral_tests;
 
+pub(crate) use completion::{
+    complete_finite as complete_finite_page_command,
+    try_complete as try_complete_ready_page_command,
+};
+
 pub(crate) async fn complete_pending_page_command(
     conn: &mut CdpConnection,
     completed: CompletedPageCommandDispatch,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
-    let command_id = completed.command_id;
-    let owner_scope = completed.owner_scope.clone();
-    if let Some(predecessor) = completed.kind.renderer_output_predecessor() {
-        command_context.set_renderer_output_predecessor(predecessor);
+    match completion::try_complete(conn, completed, command_context) {
+        Ok(step) => step,
+        Err(completed) => {
+            let (mut context, _scope) = crate::conn::CommandWorkflowContext::take_from(
+                command_context,
+                completed.command_id,
+                completed.owner_scope.session_id().map(str::to_owned),
+            );
+            let result = Box::pin(completion::complete_using(
+                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+                &mut context,
+                completed,
+            ))
+            .await;
+            let finished = match result {
+                Ok(PageCommandTaskStep::Complete(plan)) => context.complete(plan),
+                Ok(PageCommandTaskStep::Pending(_)) => {
+                    unreachable!("composite completion owns its native continuations")
+                }
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+            };
+            PageCommandTaskStep::Complete(finished.finish(conn, command_context))
+        }
     }
-    let plan = match *completed.kind {
-        CompletedPageCommandKind::BringToFront {
-            route,
-            restore_browser_context_id,
-        } => {
-            let result = bring_session_route_to_front_async(conn, route).await;
-            restore_page_bring_to_front_context_async(conn, restore_browser_context_id.as_deref())
-                .await;
-            match result {
-                Ok(events) => {
-                    let mut plan = CommandOutputPlan::default();
-                    plan.extend_background_events(events);
-                    plan.push_success();
-                    plan
-                }
-                Err(message) => CommandOutputPlan::error(-31998, message),
-            }
-        }
-        CompletedPageCommandKind::AppendDefaultDocumentStartScript {
-            identifier,
-            completed,
-        } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let completed_script = {
-                let Some(page) = conn.loaded_page_mut_for_owner(&owner_scope) else {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "NoDocumentLoaded",
-                    ));
-                };
-                page.finish_document_start_script_result_command_turn(completion)
-            };
-            let (_, output) = match completed_script {
-                Ok(completed_script) => completed_script,
-                Err(error) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        error.to_string(),
-                    ));
-                }
-            };
-            command_context.consume_renderer_command_turn_output(output);
-            preload::add_preload_script_result_plan(identifier)
-        }
-        CompletedPageCommandKind::RemoveDocumentStartScript { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let Some(page) = conn.loaded_page_mut_for_owner(&owner_scope) else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            if let Err(error) =
-                page.finish_unit_runtime_page_command(completion, "remove document-start script")
-            {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
-            CommandOutputPlan::success()
-        }
-        CompletedPageCommandKind::SearchInResource(completed) => {
-            return resource_search::complete_search_in_resource_command(
-                conn,
-                command_id,
-                &owner_scope,
-                *completed,
-            );
-        }
-        CompletedPageCommandKind::GetAppManifest(completed) => {
-            return app_manifest::complete_get_app_manifest_command(
-                conn,
-                command_id,
-                &owner_scope,
-                *completed,
-                command_context,
-            );
-        }
-        CompletedPageCommandKind::ResetNavigationHistory { completed } => {
-            return navigation::complete_reset_navigation_history_command(
-                conn,
-                &owner_scope,
-                *completed,
-            );
-        }
-        CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(command) => {
-            return preload::complete_pending_add_script_to_evaluate_on_new_document_command(
-                conn,
-                &owner_scope,
-                command,
-                command_context,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::SetBypassContentSecurityPolicy { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let Some(page) = conn.loaded_page_mut_for_owner(&owner_scope) else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            if let Err(error) = page.finish_set_bypass_content_security_policy(completion) {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
-            CommandOutputPlan::success()
-        }
-        CompletedPageCommandKind::SetDocumentContent { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let (result, output) = {
-                let Some(page) = conn.loaded_page_mut_for_owner(&owner_scope) else {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "No Document instance to set HTML for",
-                    ));
-                };
-                match page.finish_set_document_content_command_turn(completion) {
-                    Ok(completed) => completed,
-                    Err(error) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            error.to_string(),
-                        ));
-                    }
-                }
-            };
-            command_context.consume_renderer_command_turn_output(output);
-            let mut plan = CommandOutputPlan::default();
-            match result {
-                RendererSetDocumentContentResult::Updated => plan.push_success(),
-                RendererSetDocumentContentResult::FrameNotFound => {
-                    plan.push_error(-32000, "No frame for given id found");
-                }
-                RendererSetDocumentContentResult::DocumentNotFound => {
-                    plan.push_error(-32000, "No Document instance to set HTML for");
-                }
-            }
-            plan
-        }
-        CompletedPageCommandKind::SameDocumentNavigate(completed) => {
-            return navigation::complete_pending_same_document_navigate_command(
-                conn,
-                &owner_scope,
-                *completed,
-                command_context,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::GetFrameTree {
-            output_kind,
-            target_id,
-            target_loader_id,
-            target_url,
-            target_unreachable_url,
-            target_security_origin,
-            target_secure_context_type,
-            target_mime_type,
-            completed,
-        } => {
-            if conn
-                .ensure_document_accessible_for_owner(&owner_scope)
-                .is_err()
-            {
-                return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
-                    output_kind,
-                    target_id,
-                    target_loader_id,
-                    target_url,
-                    target_unreachable_url,
-                    target_security_origin,
-                    target_secure_context_type,
-                    target_mime_type,
-                    Vec::new(),
-                    &[],
-                ));
-            }
-            let Some(page) = conn.loaded_page_mut_for_owner(&owner_scope) else {
-                return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
-                    output_kind,
-                    target_id,
-                    target_loader_id,
-                    target_url,
-                    target_unreachable_url,
-                    target_security_origin,
-                    target_secure_context_type,
-                    target_mime_type,
-                    Vec::new(),
-                    &[],
-                ));
-            };
-            let child_frames = match *completed {
-                Ok(completion) => match page.finish_child_frame_tree_snapshot(completion) {
-                    Ok(frames) => frames,
-                    Err(error) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            format!("Failed to snapshot child frame tree: {error}"),
-                        ));
-                    }
-                },
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to snapshot child frame tree: {message}"),
-                    ));
-                }
-            };
-            get_frame_tree_command_output_plan(
-                output_kind,
-                target_id,
-                target_loader_id,
-                target_url,
-                target_unreachable_url,
-                target_security_origin,
-                target_secure_context_type,
-                target_mime_type,
-                child_frames,
-                page.subresource_network_records(),
-            )
-        }
-        CompletedPageCommandKind::CaptureSnapshot { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to serialize page snapshot: {message}"),
-                    ));
-                }
-            };
-            let Some(page) = conn.loaded_page_mut_for_owner(&owner_scope) else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            let html = match page.finish_serialize_html(completion) {
-                Ok(html) => html,
-                Err(error) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to serialize page snapshot: {error}"),
-                    ));
-                }
-            };
-            let url = page.final_url().as_str().to_owned();
-            CommandOutputPlan::result(json!({ "data": build_mhtml_snapshot(&url, &html) }))
-        }
-        CompletedPageCommandKind::GetLayoutMetrics { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to produce layout metrics: {message}"),
-                    ));
-                }
-            };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            match page.finish_layout_metrics(completion) {
-                Ok(metrics) => CommandOutputPlan::from_devtools_result(
-                    AutomationResult::LayoutMetrics(layout_metrics_result_from_renderer(metrics)),
-                ),
-                Err(error) => CommandOutputPlan::error(
-                    -32000,
-                    format!("Failed to finish layout metrics: {error}"),
-                ),
-            }
-        }
-        CompletedPageCommandKind::CaptureScreenshot { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture page screenshot: {message}"),
-                    ));
-                }
-            };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            match page.finish_capture_screenshot(completion) {
-                Ok(RendererCaptureScreenshotReply::Captured(image)) => {
-                    CommandOutputPlan::from_devtools_result(AutomationResult::CaptureScreenshot(
-                        DevToolsCaptureScreenshotResult {
-                            mime_type: image.mime_type,
-                            width: image.width,
-                            height: image.height,
-                            bytes: image.bytes,
-                        },
-                    ))
-                }
-                Ok(RendererCaptureScreenshotReply::LayoutDisabled) => {
-                    CommandOutputPlan::error(-32000, CAPTURE_SCREENSHOT_LAYOUT_DISABLED_MESSAGE)
-                }
-                Ok(RendererCaptureScreenshotReply::NoDocument) => {
-                    CommandOutputPlan::error(-32000, "NoDocumentLoaded")
-                }
-                Err(error) => CommandOutputPlan::error(
-                    -32000,
-                    format!("Failed to capture page screenshot: {error}"),
-                ),
-            }
-        }
-        CompletedPageCommandKind::PrintToPdf {
-            completed,
-            transfer_mode,
-        } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture PDF content: {message}"),
-                    ));
-                }
-            };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let pdf = match page.finish_print_to_pdf(completion) {
-                Ok(moli_core::page::RendererPrintToPdfReply::Printed(bytes)) => bytes,
-                Ok(moli_core::page::RendererPrintToPdfReply::Failed(message)) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-                Ok(moli_core::page::RendererPrintToPdfReply::LayoutDisabled) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        PRINT_TO_PDF_LAYOUT_DISABLED_MESSAGE,
-                    ));
-                }
-                Ok(moli_core::page::RendererPrintToPdfReply::NoDocument) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "NoDocumentLoaded",
-                    ));
-                }
-                Err(error) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture PDF content: {error}"),
-                    ));
-                }
-            };
-            match transfer_mode {
-                DevToolsPrintToPdfTransferMode::ReturnAsBase64 => {
-                    CommandOutputPlan::result(json!({
-                        "data": BASE64_STANDARD.encode(pdf),
-                    }))
-                }
-                DevToolsPrintToPdfTransferMode::ReturnAsStream => {
-                    let stream = match conn.open_io_stream_body_source_for_owner(
-                        &owner_scope,
-                        CapturedBody::from_bytes_spooled(pdf),
-                    ) {
-                        Ok(stream) => stream,
-                        Err(message) => {
-                            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                                -32000, message,
-                            ));
-                        }
-                    };
-                    CommandOutputPlan::result(json!({
-                        "data": "",
-                        "stream": stream,
-                    }))
-                }
-            }
-        }
-        CompletedPageCommandKind::CreateIsolatedWorld(completed) => {
-            return preload::complete_pending_create_isolated_world_command(
-                conn,
-                command_id,
-                &owner_scope,
-                *completed,
-                command_context,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::ChildFrameNavigate(completed) => {
-            return navigation::complete_pending_child_frame_navigate_command(
-                conn,
-                &owner_scope,
-                *completed,
-                command_context,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::Navigate(completed) => {
-            return navigation::complete_pending_navigate_load_command(
-                conn,
-                *completed,
-                command_context,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::TraverseSameDocumentHistory(completed) => {
-            return navigation::complete_pending_same_document_history_traversal_command(
-                conn, command_id, *completed,
-            );
-        }
-        CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(completed) => {
-            return navigation::complete_pending_continue_navigation_without_request_pause_command(
-                conn, *completed,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::StopLoading => {
-            return termination::complete_stop_loading_command_dispatch(
-                conn,
-                command_id,
-                &owner_scope,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::Crash => {
-            return termination::complete_crash_command_dispatch(
-                conn,
-                command_id,
-                &owner_scope,
-                command_context,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::Close => {
-            return termination::complete_close_command_dispatch(
-                conn,
-                command_id,
-                &owner_scope,
-                command_context,
-            )
-            .await;
-        }
-    };
-    PageCommandTaskStep::Complete(plan)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2428,8 +1949,6 @@ pub(crate) fn settle_popup_output(
     );
     events
 }
-
-pub(crate) use termination::PreparedPageTargetTermination;
 
 pub(crate) fn prepare_page_output_close(
     conn: &mut CdpConnection,
@@ -2455,5 +1974,5 @@ pub(crate) use output::PreparedPageOutputClose;
 
 mod renderer_navigation;
 pub(crate) use renderer_navigation::{
-    PreparedRendererNavigation, PreparedRendererNavigationResult,
+    PreparedPageNavigationCompletion, PreparedRendererNavigation, PreparedRendererNavigationResult,
 };

@@ -857,9 +857,18 @@ impl TargetOwnerState {
     }
 
     pub(crate) fn clear_committed_document_navigation_state(&mut self) {
+        self.clear_committed_document_navigation_state_for_document(None);
+    }
+
+    pub(crate) fn clear_committed_document_navigation_state_for_document(
+        &mut self,
+        document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+    ) {
         self.committed_document_title = None;
         self.clear_observable_output_state();
-        self.clear_loaded_document_context_state();
+        if document.is_none() || document != self.attached_child_frame_document {
+            self.clear_loaded_document_context_state();
+        }
     }
 
     pub(crate) fn record_session_history_update(

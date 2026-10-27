@@ -1,5 +1,6 @@
 //! Stable page-target registry behavior and foreground target selection.
 
+#[cfg(test)]
 use anyhow::Result;
 
 use super::super::state::{
@@ -643,6 +644,7 @@ impl BrowserContext {
             .then_some(target_id)
     }
 
+    #[cfg(test)]
     pub(crate) async fn select_page_target_async(&mut self, target_id: &str) -> Result<bool> {
         let Some(updates) = self.start_select_page_target(target_id) else {
             return Ok(false);

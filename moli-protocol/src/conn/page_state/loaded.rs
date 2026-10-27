@@ -234,7 +234,15 @@ impl PageTargetHost {
                 (history_url.to_string(), committed_document_title.clone()),
                 Some(browsing_context_group),
             );
-        self.owner_state.clear_committed_document_navigation_state();
+        let native_document = self
+            .runtime_slot
+            .page_slot()
+            .prepared_document_output_binding()
+            .map(|(_, binding)| binding.renderer_document_identity());
+        // Concrete child output may precede Page-handle adoption. Retain only
+        // the tree already observed for this exact Native Document.
+        self.owner_state
+            .clear_committed_document_navigation_state_for_document(native_document);
         self.owner_state
             .commit_document_title(committed_document_title);
         for session in self.devtools_sessions.states_mut() {

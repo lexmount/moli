@@ -573,7 +573,7 @@ fn streaming_response_job(
     navigation: &NavigationDispatchState,
 ) -> (
     Result<
-        crate::conn::runtime_load::BackgroundStreamingResponseNavigationLoadJob,
+        crate::conn::runtime_load::PreparedStreamingNavigationResponse,
         BackgroundNavigationClaimError,
     >,
     moli_fetch::FetchCancelHandle,

@@ -69,16 +69,6 @@ impl PageTargetTerminationOwnerAction {
     }
 }
 
-fn complete_success_with_background_events(
-    events: Vec<BackgroundProtocolEvent>,
-) -> PageCommandTaskStep {
-    let mut plan = CommandOutputPlan::success();
-    for event in events {
-        plan.push_background_event(event);
-    }
-    PageCommandTaskStep::Complete(plan)
-}
-
 async fn complete_tokened_materialized_navigation_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -391,63 +381,91 @@ fn fail_crashed_subresource_fetches_background_events(
 }
 
 pub(super) fn try_start_stop_loading_command_dispatch(
-    conn: &CdpConnection,
+    conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
+    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
+    let prepared = PreparedPageStopLoading::prepare(conn, &owner_scope);
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::StopLoading),
+        owner_scope,
+        kind: Box::new(super::PendingPageCommandKind::StopLoading(prepared)),
     })
 }
 
-pub(super) async fn complete_stop_loading_command_dispatch(
-    conn: &mut CdpConnection,
-    _command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-) -> PageCommandTaskStep {
-    let mut out = Vec::new();
-    if let Some(page) = conn.loaded_page_mut_for_owner(owner)
-        && let Err(error) = page.stop_document_lifecycle_async().await
-    {
-        tracing::debug!(%error, "failed to stop renderer document lifecycle");
-    }
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = take_pending_fetch_state_for_owner(conn, owner);
+pub(crate) struct PreparedPageStopLoading {
+    lifecycle: Option<(
+        crate::conn::TargetPageResidenceIdentity,
+        Result<moli_core::page::PendingPageCommand>,
+    )>,
+    cleanup: crate::domains::fetch::PreparedFetchCleanup,
+}
 
-    let renderer_output_predecessor = fail_pending_fetch_state_for_owner_background_events_async(
-        conn,
-        &mut out,
-        owner,
-        "Navigation stopped",
-        moli_fetch::NET_ERR_ABORTED_ERROR_TEXT,
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    )
-    .await;
-    let mut plan = CommandOutputPlan::success();
-    for event in out {
-        plan.push_background_event(event);
+impl PreparedPageStopLoading {
+    pub(crate) fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Self {
+        let lifecycle = conn
+            .target_page_residence_identity_for_owner(owner)
+            .and_then(|page_owner| {
+                conn.loaded_page_mut_for_owner(owner)
+                    .map(|page| (page_owner, page.start_stop_document_lifecycle()))
+            });
+        // Capture the interrupted work now. A navigation admitted while the
+        // original Native stop waits must not become part of this cleanup.
+        let pending = take_pending_fetch_state_for_owner(conn, owner);
+        let cleanup = crate::domains::fetch::prepare_page_stop_loading(conn, owner, pending);
+        Self { lifecycle, cleanup }
     }
-    if let Some(predecessor) = renderer_output_predecessor {
-        plan.set_renderer_output_predecessor(predecessor);
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<CommandOutputPlan> {
+        if let Some((owner, pending)) = self.lifecycle {
+            let completed = match pending {
+                Ok(pending) => pending.wait().await,
+                Err(error) => Err(error),
+            };
+            let result = match completed {
+                Ok(completed) => {
+                    context
+                        .with_state(driver, move |state, context| {
+                            state.finish_page_stop_lifecycle(
+                                owner,
+                                completed,
+                                context.context_mut(),
+                            )
+                        })
+                        .await?
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                tracing::debug!(%error, "failed to stop renderer document lifecycle");
+            }
+        }
+        let mut events = Vec::new();
+        let result = self
+            .cleanup
+            .run_using(driver)
+            .await
+            .into_disposal_output(&mut events);
+        if let Some(error) = result.first_error {
+            tracing::debug!(%error, "failed to clear pending Fetch work while stopping navigation");
+        }
+        let mut plan = CommandOutputPlan::success();
+        plan.extend_background_events(events);
+        if let Some(predecessor) = result.predecessor {
+            plan.set_renderer_output_predecessor(predecessor);
+        }
+        Ok(plan)
     }
-    PageCommandTaskStep::Complete(plan)
 }
 
 pub(super) fn try_start_crash_command_dispatch(
-    conn: &CdpConnection,
+    conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
     match cmd.get_params::<serde_json::Value>() {
         Ok(Some(_)) | Ok(None) => {}
@@ -458,164 +476,156 @@ pub(super) fn try_start_crash_command_dispatch(
             ));
         }
     }
+    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
+    let prepared = match PreparedPageCrash::prepare(conn, &owner_scope, command_context) {
+        Ok(prepared) => prepared,
+        Err(plan) => return PageCommandTaskStep::Complete(plan),
+    };
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::Crash),
+        owner_scope,
+        kind: Box::new(super::PendingPageCommandKind::Crash(Box::new(prepared))),
     })
 }
 
-pub(super) async fn complete_crash_command_dispatch(
-    conn: &mut CdpConnection,
-    _command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> PageCommandTaskStep {
-    let mut out = Vec::new();
-    let session_id = owner.session_id();
-    let Some((_, target_id)) = conn.target_owner_identity_for_owner(owner) else {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
-            -31998,
-            super::missing_page_target_error_message(conn, session_id),
-        ));
-    };
-    let Some(target_id) = target_id else {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
-            -31998,
-            "TargetNotLoaded",
-        ));
-    };
-
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = take_pending_fetch_state_for_owner(conn, owner);
-
-    // Chromium handles Page.crash directly at the renderer IO-agent boundary;
-    // it never enters a V8InspectorSession or the ordinary target IO task FIFO.
-    // Seal both DevTools receivers and interrupt active V8 synchronously so
-    // target retirement cannot wait behind earlier JavaScript or IO work.
-    if let Some(page) = conn.loaded_page_mut_for_owner(owner) {
-        page.crash_devtools_target_from_io();
-    }
-
-    // Page.crash retires the target, not merely the DevTools session which
-    // issued the command. Settle every attached session before dropping the
-    // Page; otherwise a late completion from (for example) the primary
-    // session can wait forever on a response sender owned by the retired
-    // renderer while the crash was issued by an attached session.
-    let target_inspector_session_ids = conn.page_event_session_ids_for_owner(owner);
-    let mut pending_await_events = Vec::new();
-    for inspector_session_id in &target_inspector_session_ids {
-        let inspector_owner = inspector_session_id
-            .as_deref()
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
-        conn.fail_pending_inspector_awaits_for_owner_background_events_into(
-            &mut pending_await_events,
-            command_context.protocol_events_mut(),
-            &inspector_owner,
-            "Page crashed",
-        );
-    }
-    out.extend(pending_await_events);
-
-    let renderer_output_predecessor = fail_pending_fetch_state_for_owner_background_events_async(
-        conn,
-        &mut out,
-        owner,
-        "Page crashed",
-        "Page crashed",
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-    )
-    .await;
-    fail_crashed_subresource_fetches_background_events(
-        conn,
-        &mut out,
-        owner,
-        "Page crashed",
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    );
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
-
-    out.extend(mark_page_target_crashed_background_events_async(conn, owner, &target_id).await);
-    complete_success_with_background_events(out)
+pub(crate) struct PreparedPageCrash {
+    cleanup: crate::domains::fetch::PreparedFetchCleanup,
+    page: Option<moli_core::page::Page>,
+    failures: Vec<BackgroundProtocolEvent>,
+    subresource_failures: Vec<BackgroundProtocolEvent>,
+    crashed: Vec<BackgroundProtocolEvent>,
+    action: PageTargetTerminationOwnerAction,
 }
 
-async fn mark_page_target_crashed_background_events_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    target_id: &str,
-) -> Vec<BackgroundProtocolEvent> {
-    let inspector_session_ids = conn.page_event_session_ids_for_owner(owner);
-    for inspector_session_id in &inspector_session_ids {
-        let inspector_owner = inspector_session_id
-            .as_deref()
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
-        let _ = conn.with_target_devtools_session_state_for_owner_mut(&inspector_owner, |state| {
-            state
-                .runtime_session_state
-                .record_inspector_target_crashed();
-        });
-    }
-    let _ = conn.mark_target_crashed_for_owner_async(owner).await;
-    let mut out = inspector_session_ids
-        .into_iter()
-        .map(|inspector_session_id| {
-            BackgroundProtocolEvent::inspector_target_crashed(inspector_session_id.as_deref())
+impl PreparedPageCrash {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        context: &mut crate::conn::CommandDispatchContext,
+    ) -> Result<Self, CommandOutputPlan> {
+        let Some((_, Some(target_id))) = conn.target_owner_identity_for_owner(owner) else {
+            return Err(CommandOutputPlan::error_without_session(
+                -31998,
+                super::missing_page_target_error_message(conn, owner.session_id()),
+            ));
+        };
+        let action = PageTargetTerminationOwnerAction::new(conn, owner.clone(), target_id.clone());
+        let mut pending = take_pending_fetch_state_for_owner(conn, owner);
+        if let Some(page) = conn.loaded_page_mut_for_owner(owner) {
+            page.crash_devtools_target_from_io();
+        }
+        let sessions = conn.page_event_session_ids_for_owner(owner);
+        let mut failures = Vec::new();
+        for session in &sessions {
+            let inspector = session
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
+            conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+                &mut failures,
+                context.protocol_events_mut(),
+                &inspector,
+                "Page crashed",
+            );
+            conn.with_target_devtools_session_state_for_owner_mut(&inspector, |state| {
+                state
+                    .runtime_session_state
+                    .record_inspector_target_crashed();
+            });
+        }
+        let mut subresource_failures = Vec::new();
+        fail_crashed_subresource_fetches_background_events(
+            conn,
+            &mut subresource_failures,
+            owner,
+            "Page crashed",
+            std::mem::take(&mut pending.3),
+            std::mem::take(&mut pending.4),
+            std::mem::take(&mut pending.5),
+        );
+        let cleanup = crate::domains::fetch::prepare_page_crash(conn, owner, pending);
+        let page = conn.take_crashed_page_for_owner(owner);
+        let mut crashed = sessions
+            .into_iter()
+            .map(|session| BackgroundProtocolEvent::inspector_target_crashed(session.as_deref()))
+            .collect::<Vec<_>>();
+        crashed
+            .extend(conn.target_crashed_events_for_all_discovery_owners(&target_id, "crashed", 1));
+        Ok(Self {
+            cleanup,
+            page,
+            failures,
+            subresource_failures,
+            crashed,
+            action,
         })
-        .collect::<Vec<_>>();
-    out.extend(conn.target_crashed_events_for_all_discovery_owners(target_id, "crashed", 1));
-    out
+    }
+
+    pub(crate) fn finish_events(
+        conn: &CdpConnection,
+        action: PageTargetTerminationOwnerAction,
+        events: Vec<BackgroundProtocolEvent>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        if action.is_current_host(conn)
+            && conn
+                .target_owner_state_for_owner(action.owner_scope())
+                .is_some_and(|state| state.target_crash_state.is_crashed())
+        {
+            events
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<CommandOutputPlan> {
+        let mut events = self.failures;
+        let result = self
+            .cleanup
+            .run_using(driver)
+            .await
+            .into_disposal_output(&mut events);
+        events.extend(self.subresource_failures);
+        if let Some(predecessor) = result.predecessor {
+            context
+                .context_mut()
+                .set_renderer_output_predecessor(predecessor);
+        }
+        if let Some(error) = result.first_error {
+            tracing::debug!(%error, "Page crash Fetch cleanup failed");
+        }
+        if let Some(page) = self.page {
+            let _ = page.close_async().await;
+        }
+        let crashed = driver
+            .with_state(move |state| state.finish_page_crash_events(self.action, self.crashed))
+            .await?;
+        events.extend(crashed);
+        let mut plan = CommandOutputPlan::success();
+        plan.extend_background_events(events);
+        Ok(plan)
+    }
 }
 
 pub(super) fn try_start_close_command_dispatch(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-) -> PageCommandTaskStep {
-    PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
-        command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::Close),
-    })
-}
-
-pub(super) async fn complete_close_command_dispatch(
     conn: &mut CdpConnection,
-    _command_id: Option<u64>,
-    owner: &CommandOwnerScope,
+    cmd: &Cmd<'_>,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
-    let session_id = owner.session_id();
-    let Some((_, target_id)) = conn.target_owner_identity_for_owner(owner) else {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
-            -31998,
-            super::missing_page_target_error_message(conn, session_id),
-        ));
-    };
-    if target_id.is_none() {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
-            -31998,
-            "TargetNotLoaded",
-        ));
-    };
-    let target_id = target_id.expect("validated Page target identity");
-    let out = prepare_page_target_termination_async(conn, owner, target_id, command_context).await;
-    complete_success_with_background_events(out)
+    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
+    let prepared =
+        match PreparedPageTargetTermination::try_prepare(conn, &owner_scope, command_context) {
+            Ok(prepared) => prepared,
+            Err(plan) => return PageCommandTaskStep::Complete(plan),
+        };
+    PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
+        command_id: cmd.id,
+        owner_scope,
+        kind: Box::new(super::PendingPageCommandKind::Close(prepared)),
+    })
 }
 
 pub(crate) struct PreparedPageTargetTermination {
@@ -624,6 +634,20 @@ pub(crate) struct PreparedPageTargetTermination {
 }
 
 impl PreparedPageTargetTermination {
+    pub(crate) fn try_prepare(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        context: &mut crate::conn::CommandDispatchContext,
+    ) -> Result<Self, CommandOutputPlan> {
+        let Some((_, Some(target_id))) = conn.target_owner_identity_for_owner(owner) else {
+            return Err(CommandOutputPlan::error_without_session(
+                -31998,
+                super::missing_page_target_error_message(conn, owner.session_id()),
+            ));
+        };
+        Ok(Self::prepare(conn, owner, target_id, context))
+    }
+
     pub(super) fn prepare(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -667,28 +691,6 @@ impl PreparedPageTargetTermination {
             .with_state(move |state| state.publish_page_output_close(self.action))
             .await
     }
-}
-
-pub(super) async fn prepare_page_target_termination_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    target_id: String,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> Vec<BackgroundProtocolEvent> {
-    let prepared = PreparedPageTargetTermination::prepare(conn, owner, target_id, command_context);
-    let mut local =
-        crate::conn::CommandDispatchContext::new(command_context.response_flush().clone());
-    let (mut context, _scope) =
-        crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
-    prepared
-        .run(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-            &mut context,
-        )
-        .await
-        .expect("inline Page close retains its protocol state");
-    context.finish_projection_inline(conn, command_context);
-    Vec::new()
 }
 
 pub(crate) async fn complete_page_target_termination_owner_action_async(

@@ -7,14 +7,24 @@ use crate::domains::page::PreparedRendererNavigationResult;
 use anyhow::{Context as _, Result};
 
 impl ProtocolWorkflowState<'_> {
-    pub(crate) fn prepare_renderer_navigation_result(
+    pub(crate) fn prepare_renderer_navigation_result_with_output(
         self,
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
         response: Result<NavigationLoadOutcome>,
         context: &mut CommandWorkflowContext,
+        output: crate::domains::page::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> PreparedRendererNavigationResult {
-        PreparedRendererNavigationResult::prepare(self.connection, token, state, response, context)
+        PreparedRendererNavigationResult::prepare_with_output(
+            self.connection,
+            token,
+            state,
+            response,
+            context,
+            output,
+            prefix,
+        )
     }
 
     pub(crate) fn finish_renderer_navigation_result(

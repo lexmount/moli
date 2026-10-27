@@ -1007,16 +1007,17 @@ impl ProtocolDeliveryEnvelope {
         conn: &CdpConnection,
         source: &super::TargetRootDocumentProtocolAttachmentIdentity,
     ) -> Option<Self> {
-        let event_owner = self
+        let owner = self
             .protocol_session_id()
             .map(CommandOwnerScope::for_session)
             .unwrap_or_else(|| {
                 CommandOwnerScope::for_page_residence(source.attachment().page_owner())
             });
-        let binding = conn.target_root_document_protocol_attachment_identity_for_owner(
-            &event_owner,
-            source.root_document(),
-        )?;
+        let binding =
+            conn.target_root_document_output_identity_for_owner(&owner, source.root_document())?;
+        if binding.attachment().page_owner() != source.attachment().page_owner() {
+            return None;
+        }
         self.route.bind_root_document(binding);
         Some(self)
     }

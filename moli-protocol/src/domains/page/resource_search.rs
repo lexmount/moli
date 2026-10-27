@@ -35,7 +35,7 @@ pub(super) struct PendingSearchInResourceCommand {
 }
 
 pub(super) struct CompletedSearchInResourceCommand {
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 impl CompletedSearchInResourceCommand {
@@ -50,7 +50,7 @@ impl CompletedSearchInResourceCommand {
 impl PendingSearchInResourceCommand {
     pub(super) async fn wait(self) -> CompletedSearchInResourceCommand {
         CompletedSearchInResourceCommand {
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }

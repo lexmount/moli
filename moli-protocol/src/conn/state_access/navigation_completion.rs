@@ -22,6 +22,22 @@ use moli_core::page::{
 use url::Url;
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_navigation_protocol_completion_with_output(
+        self,
+        completion: BackgroundPreparedNavigationCommit,
+        context: &mut CommandWorkflowContext,
+        output: crate::domains::page::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
+    ) -> PreparedNavigationProtocolCompletion {
+        PreparedNavigationProtocolCompletion::prepare_with_output(
+            self.connection,
+            completion,
+            context,
+            output,
+            prefix,
+        )
+    }
+
     pub(crate) fn prepare_navigation_protocol_completion(
         self,
         completion: BackgroundPreparedNavigationCommit,

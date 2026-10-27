@@ -58,7 +58,6 @@ pub(crate) use helpers::{
 };
 #[cfg(test)]
 pub(crate) use moli_fetch::url_pattern_matches;
-pub(crate) use navigation::continue_navigation_without_request_pause_into_buffer_async;
 use params::EnableParams;
 use patterns::supported_pattern_config;
 pub(crate) use subresource::{
@@ -141,6 +140,36 @@ pub(in crate::domains) fn prepare_browser_context_disposal(
         pending,
         None,
         cleanup::FetchCleanupReason::BrowserContextDisposed,
+        false,
+    )
+}
+
+pub(in crate::domains) fn prepare_page_stop_loading(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::NavigationStopped,
+        true,
+    )
+}
+
+pub(in crate::domains) fn prepare_page_crash(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::PageCrashed,
         false,
     )
 }

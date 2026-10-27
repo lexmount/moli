@@ -69,6 +69,51 @@ impl NavigationProtocolCleanup {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum NavigationCommandOutput {
+    Background,
+    Command,
+    Composite,
+}
+
+impl NavigationCommandOutput {
+    fn project(
+        self,
+        state: &NavigationDispatchState,
+        plan: CommandOutputPlan,
+    ) -> CommandOutputPlan {
+        match self {
+            Self::Background => {
+                plan.into_background_event_plan(state.navigate_id, state.owner.session_id())
+            }
+            Self::Command => plan,
+            Self::Composite if plan.command_status().is_some_and(|status| status.is_err()) => plan,
+            Self::Composite => plan.into_composite_command_prefix(),
+        }
+    }
+
+    pub(crate) fn retain_projected(
+        self,
+        context: &mut CommandWorkflowContext,
+        plan: CommandOutputPlan,
+    ) {
+        if !matches!(self, Self::Background) && plan.command_status().is_some() {
+            context.retain_terminal(plan);
+        } else {
+            context.retain_output(plan);
+        }
+    }
+
+    pub(crate) fn retain(
+        self,
+        context: &mut CommandWorkflowContext,
+        state: &NavigationDispatchState,
+        plan: CommandOutputPlan,
+    ) {
+        self.retain_projected(context, self.project(state, plan));
+    }
+}
+
 /// The native commit is already owned. This tail installs its exact Page,
 /// retires the previous resources, and returns one finite publication for the
 /// consuming actor turn. It never owns a connection across a wait.
@@ -78,6 +123,8 @@ pub(crate) struct PreparedNavigationProtocolCompletion {
     binding: Option<SessionDisposalWait>,
     loaded: Option<PreparedLoadedNavigation>,
     failed_page: Option<moli_core::page::Page>,
+    output_mode: NavigationCommandOutput,
+    prefix_output: Option<CommandOutputBuffer>,
 }
 
 impl PreparedNavigationProtocolCompletion {
@@ -85,6 +132,22 @@ impl PreparedNavigationProtocolCompletion {
         conn: &mut CdpConnection,
         completion: BackgroundPreparedNavigationCommit,
         context: &mut CommandWorkflowContext,
+    ) -> Self {
+        Self::prepare_with_output(
+            conn,
+            completion,
+            context,
+            NavigationCommandOutput::Background,
+            Vec::new(),
+        )
+    }
+
+    pub(crate) fn prepare_with_output(
+        conn: &mut CdpConnection,
+        completion: BackgroundPreparedNavigationCommit,
+        context: &mut CommandWorkflowContext,
+        output_mode: NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Self {
         let BackgroundPreparedNavigationCommit {
             token,
@@ -98,12 +161,15 @@ impl PreparedNavigationProtocolCompletion {
             .session_id()
             .and_then(|id| conn.session_binding_lifetime(id));
         let mut output = CommandOutputBuffer::default();
+        output.extend_background_events_after_messages(prefix);
         let mut result = Self {
             token,
             state,
             binding,
             loaded: None,
             failed_page: None,
+            output_mode,
+            prefix_output: None,
         };
         if !conn.accepts_pending_document_navigation_for_owner(&result.state.owner, &result.token) {
             super::super::push_superseded_navigation_result(&mut output, &result.state);
@@ -136,7 +202,11 @@ impl PreparedNavigationProtocolCompletion {
                 }
             }
         }
-        result.retain(context, output.into_plan());
+        if result.loaded.is_some() {
+            result.prefix_output = Some(output);
+        } else {
+            result.retain(context, output.into_plan());
+        }
         result
     }
 
@@ -235,10 +305,7 @@ impl PreparedNavigationProtocolCompletion {
     }
 
     fn retain(&self, context: &mut CommandWorkflowContext, output: CommandOutputPlan) {
-        context.retain_output(
-            output
-                .into_background_event_plan(self.state.navigate_id, self.state.owner.session_id()),
-        );
+        self.output_mode.retain(context, &self.state, output);
     }
 
     pub(crate) async fn run(
@@ -268,6 +335,7 @@ impl PreparedNavigationProtocolCompletion {
         driver: &mut ProtocolWorkflowDriver<'_>,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
+        let output_mode = self.output_mode;
         let cleanup = NavigationProtocolCleanup::default();
         let completed = match self.run_inner(driver, context, cleanup.clone()).await {
             Ok(completed) => completed,
@@ -276,15 +344,15 @@ impl PreparedNavigationProtocolCompletion {
                 return Err(error);
             }
         };
-        let output = context
+        context
             .with_state(driver, move |state, context| {
-                state.publish_prepared_navigation_protocol_completion(
+                let output = state.publish_prepared_navigation_protocol_completion(
                     completed,
                     context.context_mut(),
-                )
+                );
+                output_mode.retain_projected(context, output);
             })
             .await?;
-        context.retain_output(output);
         Ok(())
     }
 
@@ -365,6 +433,8 @@ impl PreparedNavigationProtocolCompletion {
             publication,
             attachment,
             finish_events: events,
+            output_mode: self.output_mode,
+            prefix_output: self.prefix_output.take(),
         })
     }
 }
@@ -376,6 +446,8 @@ pub(crate) struct CompletedNavigationProtocolCompletion {
     publication: Option<LoadedNavigationPublication>,
     attachment: Option<moli_core::page::RendererAgentAttachmentId>,
     finish_events: Vec<crate::conn::BackgroundProtocolEvent>,
+    output_mode: NavigationCommandOutput,
+    prefix_output: Option<CommandOutputBuffer>,
 }
 
 impl CompletedNavigationProtocolCompletion {
@@ -384,7 +456,7 @@ impl CompletedNavigationProtocolCompletion {
         conn: &mut CdpConnection,
         _context: &mut CommandDispatchContext,
     ) -> CommandOutputPlan {
-        let mut output = CommandOutputBuffer::default();
+        let mut output = self.prefix_output.unwrap_or_default();
         let current = self
             .binding
             .as_ref()
@@ -413,8 +485,6 @@ impl CompletedNavigationProtocolCompletion {
                 &self.state.loader_id,
             );
         }
-        output
-            .into_plan()
-            .into_background_event_plan(self.state.navigate_id, self.state.owner.session_id())
+        self.output_mode.project(&self.state, output.into_plan())
     }
 }

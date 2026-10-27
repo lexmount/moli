@@ -78,6 +78,7 @@ impl TargetActivationTransition {
             .filter(|target_id| *target_id != self.selected_target_id())
     }
 
+    #[cfg(test)]
     fn changed_active_target(&self) -> bool {
         self.previous_active_target_id() != Some(self.selected_target_id())
     }
@@ -126,6 +127,7 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn apply_browser_document_activity_async(&mut self) -> Result<()> {
         for update in self.start_browser_document_activity_updates()? {
             let completed = update.updates.wait().await;
@@ -281,6 +283,7 @@ impl CdpConnection {
         CompletedTargetActivation::new(events)
     }
 
+    #[cfg(test)]
     pub(crate) async fn select_page_target_for_connection_async(
         &mut self,
         target_id: &str,

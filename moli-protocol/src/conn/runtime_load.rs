@@ -991,7 +991,7 @@ pub(crate) struct BackgroundNavigationLoadJob {
     shared_resource_runtime: Option<moli_core::network::BrowserResourceRuntime>,
 }
 
-pub(crate) struct BackgroundStreamingResponseNavigationLoadJob {
+pub(crate) struct PreparedStreamingNavigationResponse {
     engine: NavigationEngine,
     page_reservation: RendererDocumentPreparationTarget,
     load_inputs: TargetNavigationLoadInputs,
@@ -1004,6 +1004,7 @@ pub(crate) struct BackgroundStreamingResponseNavigationLoadJob {
     response_headers_override: Vec<(String, Vec<u8>)>,
     body_progress_source: MainDocumentBodyProgressSource,
     shared_resource_runtime: Option<moli_core::network::BrowserResourceRuntime>,
+    reply_boundary: RendererReplyBoundary,
 }
 
 pub(crate) struct BackgroundNavigationEarlyResult {
@@ -1296,7 +1297,7 @@ impl BackgroundNavigationLoadJob {
     }
 }
 
-impl BackgroundStreamingResponseNavigationLoadJob {
+impl PreparedStreamingNavigationResponse {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
@@ -1322,7 +1323,7 @@ impl BackgroundStreamingResponseNavigationLoadJob {
             body_completion_sink,
             None,
             CommittedDocumentResourceSource::Synthetic,
-            RendererReplyBoundary::DocumentCommit,
+            self.reply_boundary,
         )
         .await
     }
@@ -2733,6 +2734,36 @@ impl CdpConnection {
         ))
     }
 
+    pub(crate) fn prepare_streaming_navigation_response(
+        &mut self,
+        token: Option<&DocumentNavigationToken>,
+        navigation: &NavigationDispatchState,
+        response: NetworkFetchResult<StreamingRawResponse>,
+        body_progress_source: MainDocumentBodyProgressSource,
+    ) -> Result<PreparedStreamingNavigationResponse> {
+        let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
+        let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
+        let page_reservation =
+            self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
+        let (response, network_observation_journal) =
+            response.into_parts_with_observation_journal();
+        Ok(PreparedStreamingNavigationResponse {
+            engine,
+            page_reservation,
+            load_inputs,
+            requested_url: navigation.requested_url.clone(),
+            request_method: navigation.request_method.clone(),
+            request_headers: navigation.request_headers.clone(),
+            response,
+            network_observation_journal,
+            response_code: None,
+            response_headers_override: Vec::new(),
+            body_progress_source,
+            shared_resource_runtime: None,
+            reply_boundary: RendererReplyBoundary::Stage,
+        })
+    }
+
     pub(crate) fn background_streaming_response_navigation_load_job_for_navigation(
         &mut self,
         token: &DocumentNavigationToken,
@@ -2742,7 +2773,7 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<BackgroundStreamingResponseNavigationLoadJob, BackgroundNavigationClaimError> {
+    ) -> Result<PreparedStreamingNavigationResponse, BackgroundNavigationClaimError> {
         // Reject stale or duplicate work before reserving a renderer Page.
         // Dropping the rejected response cancels only its own transport.
         let BackgroundNavigationClaim { load_inputs, .. } = self.claim_background_navigation(
@@ -2755,7 +2786,7 @@ impl CdpConnection {
         let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
-        Ok(BackgroundStreamingResponseNavigationLoadJob {
+        Ok(PreparedStreamingNavigationResponse {
             engine,
             page_reservation,
             load_inputs,
@@ -2768,6 +2799,7 @@ impl CdpConnection {
             response_headers_override,
             body_progress_source,
             shared_resource_runtime,
+            reply_boundary: RendererReplyBoundary::DocumentCommit,
         })
     }
 

@@ -539,6 +539,31 @@ impl CdpConnection {
         self.pending_step(PendingCdpCommandDispatchKind::Workflow(pending))
     }
 
+    fn pending_page_command_step(
+        &mut self,
+        pending: crate::domains::page::PendingPageCommandDispatch,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let pending = if let Some(access) = self.protocol_state_access() {
+            let command_id = pending.command_id();
+            let session_id = pending.session_id().map(str::to_owned);
+            match pending.try_into_workflow(access) {
+                Ok(workflow) => {
+                    return self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        context,
+                    );
+                }
+                Err(pending) => pending,
+            }
+        } else {
+            pending
+        };
+        self.pending_step(PendingCdpCommandDispatchKind::Page(pending))
+    }
+
     fn pending_native_command_step(
         &mut self,
         pending: crate::domains::native::PendingNativeCommand,
@@ -915,10 +940,10 @@ impl CdpConnection {
                 })
             }
             "Page" => {
-                crate::domains::page::try_start_page_command_dispatch(self, &cmd).map(|step| {
+                crate::domains::page::try_start_page_command_dispatch(self, &cmd, command_context).map(|step| {
                     match step {
                         crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Page(pending))
+                            self.pending_page_command_step(pending, command_context)
                         }
                         crate::domains::page::PageCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -1095,6 +1120,32 @@ impl CdpConnection {
     ) -> Result<CdpCommandTaskStep, CompletedCdpCommandDispatch> {
         let completed = if matches!(
             completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Page(_)
+        ) && let Some(access) = self.protocol_state_access()
+        {
+            let CompletedCdpCommandDispatchKind::Page(page) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = page.command_id();
+            let session_id = page.session_id().map(str::to_owned);
+            match page.try_into_workflow(access) {
+                Ok(workflow) => {
+                    return Ok(self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    ));
+                }
+                Err(page) => CompletedCdpCommandDispatch {
+                    inner: Box::new(CompletedCdpCommandDispatchKind::Page(page)),
+                },
+            }
+        } else {
+            completed
+        };
+        let completed = if matches!(
+            completed.inner.as_ref(),
             CompletedCdpCommandDispatchKind::Target(_)
         ) && let Some(access) = self.protocol_state_access()
         {
@@ -1200,6 +1251,7 @@ impl CdpConnection {
                 | CompletedCdpCommandDispatchKind::Dom(_)
                 | CompletedCdpCommandDispatchKind::Performance(_)
                 | CompletedCdpCommandDispatchKind::Target(_)
+                | CompletedCdpCommandDispatchKind::Page(_)
         ) {
             return Err(completed);
         }
@@ -1377,6 +1429,33 @@ impl CdpConnection {
                             command_id,
                             session_id.as_deref(),
                         );
+                    }
+                }
+            }
+            CompletedCdpCommandDispatchKind::Page(completed) => {
+                let command_id = completed.command_id();
+                let session_id = completed.session_id().map(str::to_owned);
+                match crate::domains::page::try_complete_ready_page_command(
+                    self,
+                    completed,
+                    command_context,
+                ) {
+                    Ok(crate::domains::page::PageCommandTaskStep::Pending(pending)) => {
+                        return Ok(self.pending_page_command_step(pending, command_context));
+                    }
+                    Ok(crate::domains::page::PageCommandTaskStep::Complete(plan)) => {
+                        append_command_output_plan(
+                            &mut out,
+                            command_context,
+                            plan,
+                            command_id,
+                            session_id.as_deref(),
+                        );
+                    }
+                    Err(completed) => {
+                        return Err(CompletedCdpCommandDispatch {
+                            inner: Box::new(CompletedCdpCommandDispatchKind::Page(completed)),
+                        });
                     }
                 }
             }
@@ -1587,7 +1666,7 @@ impl CdpConnection {
                 .await
                 {
                     crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Page(pending));
+                        return self.pending_page_command_step(pending, command_context);
                     }
                     crate::domains::page::PageCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(

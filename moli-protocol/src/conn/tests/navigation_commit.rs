@@ -1,7 +1,7 @@
 use super::*;
 use crate::conn::{
-    CapturedBody, CdpCommandTaskStep, DocumentNavigationToken, NavigationLoadOutcome,
-    ProtocolStateRequestReceiver, ResponseCommitReady,
+    CapturedBody, CdpCommandTaskStep, CommandOwnerScope, DocumentNavigationToken,
+    NavigationLoadOutcome, ProtocolStateRequestReceiver, ResponseCommitReady,
 };
 use crate::domains::page::BackgroundNavigationCompletion;
 use serde_json::Value;
@@ -76,6 +76,64 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
     ctx.process_async(json!({"id": id, "method": "Browser.getVersion"}))
         .await;
     assert!(ctx.take_response_by_id(id)["result"]["product"].is_string());
+}
+
+async fn project_child_fact_during_handoff(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    source: moli_core::RendererDocumentLifecycleIdentity,
+) -> Vec<crate::conn::BackgroundProtocolEvent> {
+    use moli_core::page::{ChildFrameAttachmentSnapshot, ChildFrameTreeEventSnapshot};
+    use moli_core::{
+        RendererOutputCursor, RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
+    };
+    let (page, binding) = conn
+        .runtime_session_owner_slot_for_owner(owner)
+        .unwrap()
+        .page_slot()
+        .prepared_document_output_binding()
+        .unwrap();
+    let page_owner = conn
+        .pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner))
+        .unwrap();
+    assert_eq!(page_owner.page_attachment_id(), binding.page_attachment_id);
+    let publication_owner = crate::domains::activity::RendererPublicationOwner::PageTarget {
+        browser_context_id: page_owner.browser_context_id().into(),
+        target_id: page_owner.target_id().map(str::to_owned),
+        renderer_page: page,
+        page_owner,
+    };
+    let stream =
+        moli_core::RendererOutputStreamIdentity::new_page_for_protocol_test(source.frame.page_id);
+    let mut command = CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let child = crate::domains::activity::RendererOutputProjection::prepare_record(
+        conn,
+        publication_owner,
+        RendererOutputCursor::new_for_test(stream, 1),
+        RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
+            RendererOwnerAction::ChildFrameTree {
+                source_document: source,
+                event: ChildFrameTreeEventSnapshot::Attached(ChildFrameAttachmentSnapshot {
+                    frame_id: "child-during-binding-handoff".into(),
+                    parent_frame_id: Some(binding.frame_id),
+                }),
+            },
+        )),
+        &mut context,
+    )
+    .unwrap();
+    child
+        .run_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+            &mut context,
+        )
+        .await
+        .unwrap();
+    context.finish_projection_inline(conn, &mut command);
+    command.take_protocol_events()
 }
 
 async fn drain_owned_background_turns(
@@ -392,9 +450,18 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         .dom_content_loaded = None;
                     loaded.page_creation_artifacts.lifecycle_snapshot.load = None;
                     let predecessor = loaded.renderer_output_predecessor.clone().unwrap();
+                    let source = moli_core::RendererDocumentLifecycleIdentity {
+                        frame: snapshot.frame,
+                        document: snapshot.document,
+                        epoch: snapshot.epoch,
+                    };
+                    let mut child_events = Vec::new();
                     if !observe_commit_in_gap {
                         ctx.route_direct_command_renderer_predecessor_for_test(predecessor.clone())
                             .await;
+                        child_events = project_child_fact_during_handoff(&mut ctx.conn, &navigation.owner, source).await;
+                        assert_eq!(child_events.len(), 1, "Native child output precedes Page-handle adoption");
+                        assert!(child_events[0].route_is_current(&ctx.conn));
                     }
                     let mut context = CommandDispatchContext::default();
                     let pending =
@@ -420,11 +487,6 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
                             .await;
                     }
-                    let source = moli_core::RendererDocumentLifecycleIdentity {
-                        frame: snapshot.frame,
-                        document: snapshot.document,
-                        epoch: snapshot.epoch,
-                    };
                     let slot = ctx
                         .conn
                         .runtime_session_owner_slot_for_owner(&navigation.owner)
@@ -440,6 +502,11 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                     assert_eq!(page.page_id(), snapshot.frame.page_id);
                     assert_eq!(binding.renderer_document_identity(), source);
                     assert!(ctx.conn.target_root_document_protocol_attachment_identity_for_owner(&navigation.owner, source).is_none(), "retaining metadata does not grant the unbound Document new business authority");
+                    let late_child = project_child_fact_during_handoff(&mut ctx.conn, &navigation.owner, source).await;
+                    assert_eq!(late_child.len(), usize::from(observe_commit_in_gap), "adoption must preserve the original child fact without replaying it");
+                    child_events.extend(late_child);
+                    assert_eq!(child_events.len(), 1, "the exact Native child fact must survive protocol binding handoff");
+                    assert!(child_events[0].route_is_current(&ctx.conn));
                     for title in ["first unbound title", "latest unbound title"] {
                         assert_eq!(
                             ctx.conn.apply_renderer_document_title_for_owner(
@@ -475,6 +542,7 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         panic!("no wait remains")
                     };
                     let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                    assert!(child_events[0].route_is_current(&ctx.conn), "adoption retains the original Native child event route");
                     assert_eq!(
                         ctx.conn
                             .devtools_target_info("TID-1")
@@ -707,6 +775,46 @@ async fn prepared_document_lifecycle_arriving_before_protocol_binding_is_replaye
         .await;
 }
 
+async fn process_preload_with_state_requests(
+    ctx: &mut TestContext,
+    requests: &mut ProtocolStateRequestReceiver,
+    command: Value,
+) {
+    let command = crate::conn::ParsedCdpCommand::parse_value(command).unwrap();
+    let mut context = CommandDispatchContext::default();
+    let mut step = ctx
+        .conn
+        .start_parsed_command_dispatch_with_context(&command, &mut context);
+    loop {
+        match step {
+            CdpCommandTaskStep::Complete(outcome) => {
+                let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                ctx.sent.extend(messages);
+                return;
+            }
+            CdpCommandTaskStep::Pending(pending) => {
+                let mut wait = Box::pin(pending.wait());
+                let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        tokio::select! {
+                            completed = &mut wait => break completed,
+                            request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+                step = ctx
+                    .conn
+                    .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                    .unwrap_or_else(|_| {
+                        panic!("preload completion is finite or owns its next wait")
+                    });
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn queued_commit_captures_preload_changes_at_native_admission() {
     tokio::task::LocalSet::new()
@@ -723,7 +831,7 @@ async fn queued_commit_captures_preload_changes_at_native_admission() {
                     } = commit_fixture(replace_existing).await;
                     let mut preload_id = None;
                     if remove_preload {
-                        ctx.process_async(json!({
+                        process_preload_with_state_requests(&mut ctx, &mut requests, json!({
                             "id": 70, "sessionId": "SID-1",
                             "method": "Page.addScriptToEvaluateOnNewDocument",
                             "params": {"source": "globalThis.__commitConfiguration = 'removed'"}
@@ -740,14 +848,14 @@ async fn queued_commit_captures_preload_changes_at_native_admission() {
                     let admission = requests.recv().await.unwrap();
                     if let Some(identifier) = preload_id {
                         assert!(identifier.is_string());
-                        ctx.process_async(json!({
+                        process_preload_with_state_requests(&mut ctx, &mut requests, json!({
                             "id": 71, "sessionId": "SID-1",
                             "method": "Page.removeScriptToEvaluateOnNewDocument",
                             "params": {"identifier": identifier}
                         })).await;
                         ctx.expect_result(71, json!({}), Some("SID-1"));
                     } else {
-                        ctx.process_async(json!({
+                        process_preload_with_state_requests(&mut ctx, &mut requests, json!({
                             "id": 71, "sessionId": "SID-1",
                             "method": "Page.addScriptToEvaluateOnNewDocument",
                             "params": {"source": "globalThis.__commitConfiguration = 'latest'"}

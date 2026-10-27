@@ -21,7 +21,7 @@ use moli_core::page::{
 
 mod owned;
 pub(crate) use owned::{
-    CompletedNavigationProtocolCompletion, NavigationProtocolCleanup,
+    CompletedNavigationProtocolCompletion, NavigationCommandOutput, NavigationProtocolCleanup,
     PreparedNavigationProtocolCompletion,
 };
 

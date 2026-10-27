@@ -525,6 +525,7 @@ mod tests {
 
 mod initial_document;
 mod output_projection;
+mod page_command;
 mod page_runtime;
 mod popup;
 mod subresource;

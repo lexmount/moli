@@ -351,10 +351,12 @@ async fn capture_screenshot_uses_pending_renderer_page_command_residence() {
         Some("SID-SCREENSHOT-FENCE"),
         r#"{"id":151,"method":"Page.captureScreenshot","sessionId":"SID-SCREENSHOT-FENCE"}"#,
     );
-    let PageCommandTaskStep::Pending(pending) =
-        try_start_page_command_dispatch(&mut ctx.conn, &cmd)
-            .expect("Page.captureScreenshot should be handled by Page domain")
-    else {
+    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
+        &mut ctx.conn,
+        &cmd,
+        &mut CommandDispatchContext::default(),
+    )
+    .expect("Page.captureScreenshot should be handled by Page domain") else {
         panic!("captureScreenshot should use the pending renderer page-command lane");
     };
 
@@ -395,10 +397,12 @@ async fn capture_screenshot_rejects_completion_from_replaced_renderer_attachment
         Some("SID-SCREENSHOT-STALE"),
         r#"{"id":152,"method":"Page.captureScreenshot","sessionId":"SID-SCREENSHOT-STALE"}"#,
     );
-    let PageCommandTaskStep::Pending(pending) =
-        try_start_page_command_dispatch(&mut ctx.conn, &cmd)
-            .expect("Page.captureScreenshot should be handled by Page domain")
-    else {
+    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
+        &mut ctx.conn,
+        &cmd,
+        &mut CommandDispatchContext::default(),
+    )
+    .expect("Page.captureScreenshot should be handled by Page domain") else {
         panic!("captureScreenshot should use the pending renderer page-command lane");
     };
 
@@ -580,8 +584,12 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
         None,
         r#"{"id":1120,"method":"Page.captureSnapshot"}"#,
     );
-    let step = try_start_page_command_dispatch(&mut ctx.conn, &cmd)
-        .expect("Page.captureSnapshot should be handled by Page domain");
+    let step = try_start_page_command_dispatch(
+        &mut ctx.conn,
+        &cmd,
+        &mut CommandDispatchContext::default(),
+    )
+    .expect("Page.captureSnapshot should be handled by Page domain");
     let PageCommandTaskStep::Pending(pending) = step else {
         panic!("Page.captureSnapshot should serialize HTML with a renderer page command");
     };

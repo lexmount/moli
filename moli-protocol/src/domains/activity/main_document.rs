@@ -898,11 +898,13 @@ pub(crate) struct PreparedMainDocumentDownload {
 }
 
 impl PreparedMainDocumentDownload {
-    pub(crate) fn prepare(
+    pub(crate) fn prepare_with_output(
         conn: &mut CdpConnection,
         state: NavigationDispatchState,
         download: crate::domains::network::MaterializedDownloadDocumentProgress,
         context: &mut crate::conn::CommandWorkflowContext,
+        output_mode: crate::domains::page::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Self {
         let mut activity = MainDocumentNavigationActivity::new(
             state,
@@ -911,6 +913,7 @@ impl PreparedMainDocumentDownload {
             None,
         );
         let mut output = CommandOutputBuffer::default();
+        output.extend_background_events_after_messages(prefix);
         activity.emit_download_navigation_result_into_buffer(&mut output);
         let mut events = Vec::new();
         activity.emit_download_frame_stop_background_events(&mut events);
@@ -927,10 +930,7 @@ impl PreparedMainDocumentDownload {
                 None
             }
         };
-        context.retain_output(output.into_plan().into_background_event_plan(
-            activity.state.navigate_id,
-            activity.state.owner.session_id(),
-        ));
+        output_mode.retain(context, activity.state(), output.into_plan());
         Self { pending }
     }
 

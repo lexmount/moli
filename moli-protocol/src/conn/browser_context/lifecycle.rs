@@ -107,6 +107,7 @@ impl CdpConnection {
         )
     }
 
+    #[cfg(test)]
     pub(crate) async fn refresh_active_browser_context_loader_async(&mut self) {
         self.apply_active_engine_fetch_overrides();
         self.invalidate_resource_runtime_async().await;

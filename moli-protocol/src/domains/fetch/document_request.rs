@@ -37,6 +37,7 @@ pub(crate) enum FetchNavigationResponse {
 
 pub(crate) enum PreparedFetchNavigationResponse {
     Captured(Box<Result<PreparedCapturedNavigationResponse>>),
+    Streaming(Box<Result<crate::conn::PreparedStreamingNavigationResponse>>),
     Result(Result<NavigationLoadOutcome>),
     Transferred(CommandOutputPlan),
     Superseded,
@@ -232,11 +233,20 @@ pub(crate) fn accept_navigation_response(
                     response,
                 );
             } else {
+                let Some(sender) = conn
+                    .background_navigation_completion_sender_for_owner(&pending.navigation.owner)
+                else {
+                    return PreparedFetchNavigationResponse::Streaming(Box::new(
+                        conn.prepare_streaming_navigation_response(
+                            Some(&token),
+                            &pending.navigation,
+                            response,
+                            network::MainDocumentBodyProgressSource::default(),
+                        ),
+                    ));
+                };
                 let (response, network_observation_journal) =
                     response.into_parts_with_observation_journal();
-                let sender = conn
-                    .background_navigation_completion_sender_for_owner(&pending.navigation.owner)
-                    .expect("prepared navigation retains its source owner");
                 super::commands::continue_streaming_document_response_in_background(
                     conn,
                     sender,

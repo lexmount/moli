@@ -729,9 +729,12 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
         None,
         &raw_search,
     );
-    let PageCommandTaskStep::Pending(pending) =
-        try_start_page_command_dispatch(&mut ctx.conn, &cmd).unwrap()
-    else {
+    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
+        &mut ctx.conn,
+        &cmd,
+        &mut CommandDispatchContext::default(),
+    )
+    .unwrap() else {
         panic!("resource search must query the renderer before adapter settlement");
     };
     let held_search = pending.wait().await;
@@ -849,9 +852,12 @@ async fn search_in_resource_rejects_completion_from_replaced_document() {
         None,
         &raw_search,
     );
-    let PageCommandTaskStep::Pending(pending) =
-        try_start_page_command_dispatch(&mut ctx.conn, &cmd).unwrap()
-    else {
+    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
+        &mut ctx.conn,
+        &cmd,
+        &mut CommandDispatchContext::default(),
+    )
+    .unwrap() else {
         panic!("subresource search should execute one renderer command");
     };
     // Complete the old search in the renderer, then replace its Document

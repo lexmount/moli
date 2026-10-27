@@ -78,10 +78,28 @@ impl RendererNavigationSource {
     }
 
     async fn finish_response(
+        self,
+        response: Result<NavigationLoadOutcome>,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        self.finish_response_with_output(
+            response,
+            driver,
+            context,
+            super::NavigationCommandOutput::Background,
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn finish_response_with_output(
         mut self,
         response: Result<NavigationLoadOutcome>,
         driver: &mut ProtocolWorkflowDriver<'_>,
         context: &mut CommandWorkflowContext,
+        output_mode: super::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Result<()> {
         let response = match response {
             Err(error) => {
@@ -110,7 +128,12 @@ impl RendererNavigationSource {
                         .complete(self.token.clone(), self.state.clone(), committed);
                 let prepared = context
                     .with_state(driver, move |state, context| {
-                        state.prepare_navigation_protocol_completion(completion, context)
+                        state.prepare_navigation_protocol_completion_with_output(
+                            completion,
+                            context,
+                            output_mode,
+                            prefix,
+                        )
                     })
                     .await?;
                 prepared.run_into_context(driver, context).await?;
@@ -120,8 +143,13 @@ impl RendererNavigationSource {
                 let navigation = self.state.clone();
                 let prepared = context
                     .with_state(driver, move |state, context| {
-                        state.prepare_renderer_navigation_result(
-                            token, navigation, response, context,
+                        state.prepare_renderer_navigation_result_with_output(
+                            token,
+                            navigation,
+                            response,
+                            context,
+                            output_mode,
+                            prefix,
                         )
                     })
                     .await?;
@@ -293,6 +321,10 @@ impl PreparedRendererNavigation {
                         Ok(response) => response.run().await,
                         Err(error) => Err(error),
                     },
+                    PreparedFetchNavigationResponse::Streaming(response) => match *response {
+                        Ok(response) => response.run(None).await,
+                        Err(error) => Err(error),
+                    },
                     PreparedFetchNavigationResponse::Result(response) => response,
                     PreparedFetchNavigationResponse::Transferred(plan) => {
                         retain_background(context, plan);
@@ -334,16 +366,20 @@ pub(crate) enum PreparedRendererNavigationResult {
 }
 
 impl PreparedRendererNavigationResult {
-    pub(crate) fn prepare(
+    pub(crate) fn prepare_with_output(
         conn: &mut CdpConnection,
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
         response: Result<NavigationLoadOutcome>,
         context: &mut CommandWorkflowContext,
+        output_mode: super::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Self {
         match network::materialize_navigation_load_result(conn, &state, response) {
             network::MaterializedNavigationLoadOutcome::Failed(failure) => {
                 let mut output = CommandOutputBuffer::default();
+                output.extend_background_events_after_messages(prefix);
+                let output_state = state.clone();
                 let pending = super::prepare_failed_navigation_cleanup(
                     conn,
                     &mut output,
@@ -351,7 +387,7 @@ impl PreparedRendererNavigationResult {
                     state,
                     failure,
                 );
-                retain_background(context, output.into_plan());
+                output_mode.retain(context, &output_state, output.into_plan());
                 Self::Failure(pending)
             }
             network::MaterializedNavigationLoadOutcome::Download(download) => {
@@ -365,12 +401,15 @@ impl PreparedRendererNavigationResult {
                     );
                 }
                 let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
-                let download = crate::domains::activity::PreparedMainDocumentDownload::prepare(
-                    conn,
-                    state.clone(),
-                    download,
-                    context,
-                );
+                let download =
+                    crate::domains::activity::PreparedMainDocumentDownload::prepare_with_output(
+                        conn,
+                        state.clone(),
+                        download,
+                        context,
+                        output_mode,
+                        prefix,
+                    );
                 Self::Download {
                     download,
                     token,
@@ -426,4 +465,95 @@ impl PreparedRendererNavigationResult {
 fn retain_background(context: &mut CommandWorkflowContext, plan: CommandOutputPlan) {
     let (_, events) = plan.into_command_status_and_background_events();
     context.context_mut().protocol_events_mut().extend(events);
+}
+
+pub(crate) struct PreparedPageNavigationCompletion {
+    source: RendererNavigationSource,
+    response: PageNavigationResponse,
+    prefix: Vec<crate::conn::BackgroundProtocolEvent>,
+}
+
+enum PageNavigationResponse {
+    Result(Result<NavigationLoadOutcome>),
+    Request(Box<PreparedInterceptedNavigationRequest>),
+}
+
+impl PreparedPageNavigationCompletion {
+    pub(super) fn from_result(
+        conn: &CdpConnection,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        response: Result<NavigationLoadOutcome>,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
+    ) -> Self {
+        Self {
+            source: RendererNavigationSource::new(conn, token, state),
+            response: PageNavigationResponse::Result(response),
+            prefix,
+        }
+    }
+
+    pub(super) fn from_request(
+        conn: &mut CdpConnection,
+        pending: crate::conn::PendingFetchNavigation,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
+    ) -> Self {
+        let source = RendererNavigationSource::new(
+            conn,
+            pending
+                .document_navigation_token
+                .as_ref()
+                .expect("pending navigation owns its token")
+                .clone(),
+            pending.navigation.clone(),
+        );
+        let transfer = source
+            .termination
+            .as_ref()
+            .map(NavigationTermination::response_transfer)
+            .unwrap_or_default();
+        let request =
+            PreparedInterceptedNavigationRequest::new(conn, pending, None, None, transfer);
+        Self {
+            source,
+            response: PageNavigationResponse::Request(Box::new(request)),
+            prefix,
+        }
+    }
+
+    pub(crate) async fn run(
+        mut self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+        output_mode: super::NavigationCommandOutput,
+    ) -> Result<()> {
+        let response = match self.response {
+            PageNavigationResponse::Result(response) => response,
+            PageNavigationResponse::Request(request) => match request.prepare(driver).await {
+                PreparedFetchNavigationResponse::Captured(response) => match *response {
+                    Ok(response) => response.run().await,
+                    Err(error) => Err(error),
+                },
+                PreparedFetchNavigationResponse::Streaming(response) => match *response {
+                    Ok(response) => response.run(None).await,
+                    Err(error) => Err(error),
+                },
+                PreparedFetchNavigationResponse::Result(response) => response,
+                PreparedFetchNavigationResponse::Transferred(plan) => {
+                    let mut output = CommandOutputPlan::default();
+                    output.extend_background_events(self.prefix);
+                    output.extend(plan);
+                    context.retain_output(output);
+                    self.source.disarm();
+                    return Ok(());
+                }
+                PreparedFetchNavigationResponse::Superseded => {
+                    Err(moli_fetch::FetchCancelled.into())
+                }
+            },
+        };
+        self.source
+            .finish_response_with_output(response, driver, context, output_mode, self.prefix)
+            .await
+    }
 }

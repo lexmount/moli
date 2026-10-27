@@ -2231,6 +2231,116 @@ async fn prepared_child_frame_activity_does_not_follow_root_document_open_replac
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_changes() {
+    let mut conn = CdpConnection::default();
+    let mut browser = BrowserContext::new("BID-child-owner".into());
+    browser.set_active_target_id("TID-1");
+    browser.attach_active_session("SID-1");
+    browser.active_page_target_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
+        .page_session_state
+        .page_domain_enabled = true;
+    browser.stage_background_target(
+        "TID-2".into(),
+        Some("SID-2".into()),
+        "about:blank".into(),
+        None,
+        None,
+    );
+    conn.install_browser_context_fixture_for_test(browser);
+    assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
+    assert!(conn.enable_network_listener_for_session_owner(Some("SID-2")));
+    let source = renderer_document_identity_for_test(1, 1);
+    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source);
+    let residence = conn
+        .target_page_residence_identity_for_session(Some("SID-1"))
+        .unwrap();
+    let binding = crate::conn::TargetRootDocumentProtocolAttachmentIdentity::new(
+        crate::conn::TargetPageProtocolAttachmentIdentity::new(residence, None),
+        source,
+    );
+    let child_id = "child-with-implicit-owner";
+    let loader_id = "child-with-implicit-owner-loader";
+    let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
+        12.5,
+        vec![super::PagePreparedChildFrameTreeEvent::Attached {
+            frame_id: child_id.into(),
+            parent_frame_id: "TID-1".into(),
+        }],
+        Vec::new(),
+        vec![ChildFrameDocumentNetworkActivitySnapshot {
+            frame_id: child_id.into(),
+            parent_frame_id: Some("TID-1".into()),
+            loader_id: loader_id.into(),
+            snapshot: ChildFrameDocumentNetworkSnapshot {
+                request_url: "https://example.test/child".into(),
+                request_method: "GET".into(),
+                request_headers: Vec::new(),
+                final_url: "https://example.test/child".into(),
+                status: 200,
+                response_headers: Vec::new(),
+                encoded_data_length: 5,
+                response_body: Some(SubresourceResponseBody::from_bytes(b"child".to_vec())),
+                from_cache: false,
+            },
+        }],
+        Vec::new(),
+        "https://example.test".into(),
+        "Secure".into(),
+    );
+    let activity = super::PagePreparedChildFrameActivity::from_document(binding, document);
+    conn.with_target_owner_state_for_session_mut(Some("SID-2"), |state| {
+        state.observe_child_frame_document(renderer_document_identity_for_test(2, 1));
+        state.insert_attached_child_frame_id("peer-child".into());
+    })
+    .unwrap();
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .set_active_target_id("TID-2");
+
+    let mut events = Vec::new();
+    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|event| event.route_is_current(&conn)));
+    assert!(
+        conn.target_owner_state_for_session(Some("SID-1"))
+            .unwrap()
+            .has_attached_child_frame_id(child_id)
+    );
+    let peer = conn.target_owner_state_for_session(Some("SID-2")).unwrap();
+    assert!(peer.has_attached_child_frame_id("peer-child"));
+    assert!(!peer.has_attached_child_frame_id(child_id));
+    assert!(
+        conn.runtime_session_owner_slot(Some("SID-1"))
+            .unwrap()
+            .has_captured_response_body(loader_id)
+    );
+    assert!(
+        !conn
+            .runtime_session_owner_slot(Some("SID-2"))
+            .unwrap()
+            .has_captured_response_body(loader_id)
+    );
+    let messages = protocol_messages_from_background_events(events);
+    assert!(
+        messages
+            .iter()
+            .all(|message| message["sessionId"] == "SID-1")
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["method"] == "Page.frameAttached")
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["method"] == "Network.loadingFinished")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery() {
     let mut conn = CdpConnection::default();
     let mut browser_context = BrowserContext::new("BID-child-delivery-route".into());
@@ -2337,7 +2447,7 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
     super::emit_prepared_child_frame_tree_background_events(
         &mut conn,
         &mut emitted,
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        &CommandOwnerScope::for_session("SID-1"),
         vec![super::PagePreparedChildFrameTreeEvent::Attached {
             frame_id: child_frame_id.clone(),
             parent_frame_id: "TID-1".to_owned(),
@@ -2360,7 +2470,7 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
     super::emit_prepared_child_frame_tree_background_events(
         &mut conn,
         &mut emitted,
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        &CommandOwnerScope::for_session("SID-1"),
         vec![
             super::PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: child_frame_id.clone(),

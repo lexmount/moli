@@ -799,17 +799,6 @@ pub(super) fn append_prior_network_observations<R>(
     NetworkFetchResult::with_observation_journal(response, prior)
 }
 
-pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-) {
-    Box::pin(load_or_pause_navigation_for_auth_into_buffer_async(
-        conn, out, pending, None, None,
-    ))
-    .await;
-}
-
 fn navigation_auth_required_blocked_intercepts(
     conn: &CdpConnection,
     pending: &PendingFetchNavigation,

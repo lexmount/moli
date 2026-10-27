@@ -206,8 +206,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -252,8 +252,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameDocumentOpenedSnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -288,8 +288,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentNetworkActivitySnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -321,8 +321,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };

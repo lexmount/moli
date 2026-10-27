@@ -643,7 +643,7 @@ pub(crate) use runtime_load::{
     CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
     PreparedCapturedNavigationResponse, PreparedNavigationLoadError, PreparedNavigationRequest,
-    ResponseCommitReady, StablePageNavigationCommitTarget,
+    PreparedStreamingNavigationResponse, ResponseCommitReady, StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;

@@ -841,9 +841,15 @@ async fn runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_for_parser_b
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
-        .fetch(&server.url("/compat/runtime-inserted-stylesheet-href-mutation-uses-fresh-fetch"))
-        .await?;
+    // The second parser script releases the stale stylesheet response. If it
+    // waits on that stale request, the fixture never supplies CSS to unblock it.
+    let page = tokio::time::timeout(
+        Duration::from_secs(5),
+        browser.fetch(
+            &server.url("/compat/runtime-inserted-stylesheet-href-mutation-uses-fresh-fetch"),
+        ),
+    )
+    .await??;
 
     assert_eq!(
         diagnostic_global(&page, "runtimeInsertedHrefMutationParserNotBlocked"),

@@ -143,6 +143,12 @@ impl PendingDocumentNavigation {
                     Err(error) => Err(error),
                 }
             }
+            super::document_request::PreparedFetchNavigationResponse::Streaming(response) => {
+                match *response {
+                    Ok(response) => response.run(None).await,
+                    Err(error) => Err(error),
+                }
+            }
             super::document_request::PreparedFetchNavigationResponse::Result(response) => response,
             super::document_request::PreparedFetchNavigationResponse::Transferred(plan) => {
                 return CompletedDocumentNavigation {
