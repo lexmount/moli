@@ -2,7 +2,8 @@ use super::*;
 use crate::network_host::ResolveContextUrlError;
 use crate::network_host::controlled_resource::{ControlledXhrContext, start_buffered_xhr};
 use crate::network_host::{CapturedBlobUrl, blob_url_entry, local_url_response_with_blob_entry};
-use crossbeam_channel::{after, never, select};
+use crate::network_host::{ResolveContextUrlError, filter_cors_exposed_response_headers};
+use crossbeam_channel::{after, never};
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -578,11 +579,24 @@ fn send_synchronous_worker_xhr(
             let _ = completion_tx.send(WorkerXhrEvent::ResourceTiming { xhr_id: None, timing: worker_timing });
         },
     );
-    let result = select! {
-        recv(response_rx) -> result => result.unwrap_or_else(|_| Err("worker sync XHR resource task dropped response channel".into())),
-        recv(timeout_rx) -> _ => {
+
+    let mut wait = crossbeam_channel::Select::new();
+    let response = wait.recv(&response_rx);
+    wait.recv(&timeout_rx);
+    let selected = {
+        let _native_wait =
+            crate::v8_execution_watchdog::V8ExecutionWatchdog::pause_for_native_wait();
+        wait.select()
+    };
+    let result = match selected.index() {
+        index if index == response => selected.recv(&response_rx).unwrap_or_else(|_| {
+            Err("worker sync XHR resource task dropped response channel".to_owned())
+        }),
+        _ => {
+            let _ = selected.recv(&timeout_rx);
             timing.abort(scope);
             load.cancel();
+
             throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "TimeoutError");
             return;
         }
