@@ -39,6 +39,7 @@ mod stylo_to_parley;
 mod table;
 mod taffy_tree;
 mod text;
+mod text_normalization;
 mod world;
 
 pub use anonymous_style::LayoutAnonymousStyleContext;
@@ -49,6 +50,7 @@ pub use capture::{
 };
 pub use environment::LayoutEnvironment;
 pub use error::LayoutError;
+pub use form::{form_control_text, select_control_texts};
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
@@ -63,6 +65,7 @@ pub use layout_tree::{
     LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
     MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
+pub use list::{ListCounter, list_marker_text};
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
@@ -96,6 +99,7 @@ pub use source::{
     LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind,
     LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
     LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    html_display_contents_is_none,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
@@ -109,4 +113,9 @@ pub use text::{
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld,
+};
+
+pub use text_normalization::{
+    TextCaseMapping, TextCharacter, TextTransform, TextTransformState, TextWhiteSpaceCollapse,
+    classify_text_character,
 };

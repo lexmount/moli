@@ -12,6 +12,9 @@ use moli_layout::{
     WebFontRegistrationError, WebFontRegistrationOutcome, WebFontRegistrationScope,
 };
 
+pub(crate) mod demand;
+pub(crate) mod usage;
+
 pub(crate) type FontFaceLoad = Rc<RefCell<FontFaceResource>>;
 pub(crate) type FontSourceLoad = Rc<RefCell<FontSourceResource>>;
 
@@ -160,6 +163,16 @@ impl FontFaceResource {
 
     pub(crate) fn was_started(&self) -> bool {
         self.started
+    }
+
+    pub(crate) fn font_data(&self) -> Option<FontFaceData> {
+        if !self.activated {
+            return None;
+        }
+        match &self.source.borrow().state {
+            LoadState::Loaded(data) => Some(data.clone()),
+            _ => None,
+        }
     }
 
     pub(crate) fn fail(&mut self, name: &'static str, message: &'static str) {

@@ -39,10 +39,7 @@ use style::{
             ui::GenericScrollbarColor,
         },
         specified::box_::{DisplayInside, DisplayOutside},
-        specified::{
-            TextAlignKeyword, WillChangeBits,
-            text::{TextTransform, TextTransformCase},
-        },
+        specified::{TextAlignKeyword, WillChangeBits, text::TextTransform},
     },
 };
 use taffy::{
@@ -102,25 +99,9 @@ pub enum LayoutListMarkerPosition {
     Outside,
 }
 
-/// CSS whitespace processing mode retained before Parley shaping.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum InlineWhiteSpaceCollapse {
-    #[default]
-    Collapse,
-    Preserve,
-    PreserveBreaks,
-    BreakSpaces,
-}
-
-/// Case transform applied while producing an IFC's shared logical text.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum InlineTextTransform {
-    #[default]
-    None,
-    Uppercase,
-    Lowercase,
-    Capitalize,
-}
+pub(crate) use crate::text_normalization::{
+    TextTransform as InlineTextTransform, TextWhiteSpaceCollapse as InlineWhiteSpaceCollapse,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum InlineDirection {
@@ -604,7 +585,7 @@ impl ResolvedLayoutStyle {
     /// Converts one retained Stylo style while preserving its allocation for
     /// the full lifetime of the pass-local Taffy projection.
     pub fn from_stylo(computed: ServoArc<ComputedValues>) -> Self {
-        let display = classify_display(&computed);
+        let display = LayoutDisplay::from(&*computed);
         let background_color = stylo_background_color(&computed);
         let border_colors = stylo_border_colors(&computed);
         let generated_content = stylo_generated_content(&computed);
@@ -614,28 +595,10 @@ impl ResolvedLayoutStyle {
             style::values::computed::font::LineHeight::Normal
         );
         let text_color = stylo_text_color(&computed);
-        let white_space_collapse = match computed.clone_white_space_collapse() {
-            style::computed_values::white_space_collapse::T::Collapse => {
-                InlineWhiteSpaceCollapse::Collapse
-            }
-            style::computed_values::white_space_collapse::T::Preserve => {
-                InlineWhiteSpaceCollapse::Preserve
-            }
-            style::computed_values::white_space_collapse::T::PreserveBreaks => {
-                InlineWhiteSpaceCollapse::PreserveBreaks
-            }
-            style::computed_values::white_space_collapse::T::BreakSpaces => {
-                InlineWhiteSpaceCollapse::BreakSpaces
-            }
-        };
+        let white_space_collapse =
+            InlineWhiteSpaceCollapse::from(computed.clone_white_space_collapse());
         let text_transform_value = computed.clone_text_transform();
-        let text_transform = match text_transform_value.case() {
-            // Mathematical character substitution is not supported by the text adapter yet.
-            TextTransformCase::None | TextTransformCase::MathAuto => InlineTextTransform::None,
-            TextTransformCase::Uppercase => InlineTextTransform::Uppercase,
-            TextTransformCase::Lowercase => InlineTextTransform::Lowercase,
-            TextTransformCase::Capitalize => InlineTextTransform::Capitalize,
-        };
+        let text_transform = InlineTextTransform::from(text_transform_value.case());
         let text_align = match computed.clone_text_align() {
             TextAlignKeyword::Start => parley::Alignment::Start,
             TextAlignKeyword::End => parley::Alignment::End,
@@ -792,7 +755,7 @@ impl ResolvedLayoutStyle {
                 | WillChangeBits::VIEW_TRANSITION_NAME,
         );
         let order = computed.clone_order();
-        let list_marker_type = stylo_list_marker_type(&computed);
+        let list_marker_type = LayoutListMarkerType::from(&*computed);
         let list_marker_position = match computed.clone_list_style_position() {
             style::computed_values::list_style_position::T::Inside => {
                 LayoutListMarkerPosition::Inside
@@ -2245,6 +2208,12 @@ fn taffy_display(display: LayoutDisplay) -> TaffyDisplay {
     }
 }
 
+impl From<&ComputedValues> for LayoutDisplay {
+    fn from(computed: &ComputedValues) -> Self {
+        classify_display(computed)
+    }
+}
+
 fn classify_display(computed: &ComputedValues) -> LayoutDisplay {
     let display = computed.clone_display();
     if display.is_none() {
@@ -2497,33 +2466,35 @@ fn stylo_generated_content(computed: &ComputedValues) -> GeneratedContent {
     }
 }
 
-fn stylo_list_marker_type(computed: &ComputedValues) -> LayoutListMarkerType {
-    use style::counter_style::{CounterStyle, Symbol};
+impl From<&ComputedValues> for LayoutListMarkerType {
+    fn from(computed: &ComputedValues) -> Self {
+        use style::counter_style::{CounterStyle, Symbol};
 
-    match computed.clone_list_style_type().0 {
-        CounterStyle::None => LayoutListMarkerType::None,
-        CounterStyle::Name(name) => match &*name.0 {
-            "decimal" => LayoutListMarkerType::Decimal,
-            "lower-alpha" | "lower-latin" => LayoutListMarkerType::LowerAlpha,
-            "upper-alpha" | "upper-latin" => LayoutListMarkerType::UpperAlpha,
-            "disc" => LayoutListMarkerType::Disc,
-            "circle" => LayoutListMarkerType::Circle,
-            "square" => LayoutListMarkerType::Square,
-            "disclosure-open" => LayoutListMarkerType::DisclosureOpen,
-            "disclosure-closed" => LayoutListMarkerType::DisclosureClosed,
-            _ => LayoutListMarkerType::Fallback,
-        },
-        CounterStyle::String(value) => LayoutListMarkerType::String(Arc::from(value.as_ref())),
-        CounterStyle::Symbols { symbols, .. } => LayoutListMarkerType::Symbols(
-            symbols
-                .0
-                .iter()
-                .map(|symbol| match symbol {
-                    Symbol::String(value) => Arc::from(value.as_ref()),
-                    Symbol::Ident(value) => Arc::from(value.0.as_ref()),
-                })
-                .collect(),
-        ),
+        match computed.clone_list_style_type().0 {
+            CounterStyle::None => LayoutListMarkerType::None,
+            CounterStyle::Name(name) => match &*name.0 {
+                "decimal" => LayoutListMarkerType::Decimal,
+                "lower-alpha" | "lower-latin" => LayoutListMarkerType::LowerAlpha,
+                "upper-alpha" | "upper-latin" => LayoutListMarkerType::UpperAlpha,
+                "disc" => LayoutListMarkerType::Disc,
+                "circle" => LayoutListMarkerType::Circle,
+                "square" => LayoutListMarkerType::Square,
+                "disclosure-open" => LayoutListMarkerType::DisclosureOpen,
+                "disclosure-closed" => LayoutListMarkerType::DisclosureClosed,
+                _ => LayoutListMarkerType::Fallback,
+            },
+            CounterStyle::String(value) => LayoutListMarkerType::String(Arc::from(value.as_ref())),
+            CounterStyle::Symbols { symbols, .. } => LayoutListMarkerType::Symbols(
+                symbols
+                    .0
+                    .iter()
+                    .map(|symbol| match symbol {
+                        Symbol::String(value) => Arc::from(value.as_ref()),
+                        Symbol::Ident(value) => Arc::from(value.0.as_ref()),
+                    })
+                    .collect(),
+            ),
+        }
     }
 }
 

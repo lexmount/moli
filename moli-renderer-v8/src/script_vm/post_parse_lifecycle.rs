@@ -2403,7 +2403,7 @@ impl ScriptVm {
             .prime_document_lifecycle_processing_for_owner(self._context_host.as_ref().as_ptr());
         self.apply_connected_style_load_prime_result(prime_result);
         self.record_ready_stylesheet_network_results();
-        self.reconcile_document_web_fonts_for_layout();
+        self.reconcile_document_font_resources();
     }
 
     pub(crate) fn apply_connected_style_load_prime_result(

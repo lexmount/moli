@@ -2,6 +2,12 @@ use super::*;
 use base64::Engine;
 use std::time::Duration;
 
+mod automatic;
+mod automatic_boundaries;
+mod automatic_controls;
+mod automatic_lists;
+mod automatic_normalization;
+mod automatic_participation;
 mod descriptor_ranges;
 mod layers;
 mod matching;
@@ -242,8 +248,7 @@ fontPromise.then(value => fontResult.push(value === face, face.status));
     if !css_starts {
         assert_eq!(vm.eval("face.load() === fontPromise").unwrap(), "true");
     }
-    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-        .unwrap();
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.eval("[face.status, face.load() === fontPromise, document.fonts.status, fontResult.length].join('|')").unwrap(),
         "loading|true|loading|0"
@@ -261,8 +266,7 @@ fontPromise.then(value => fontResult.push(value === face, face.status));
         .unwrap();
     if remove_rule {
         vm.eval("style.remove()").unwrap();
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-            .unwrap();
+        vm.reconcile_document_font_resources();
         assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
     }
     release_tx.send(()).unwrap();
@@ -337,9 +341,8 @@ globalThis.face = [...document.fonts][0];
 globalThis.fontResult = [];
 face.loaded.catch(error => fontResult.push(error.name, face.status));
 "#).unwrap();
-    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-        .unwrap();
-    // Layout demand is body-only. This evaluation observes the native terminal
+    vm.reconcile_document_font_resources();
+    // Resource reconciliation is body-only. This evaluation observes the native terminal
     // and runs the normal input-independent microtask checkpoint for its promise.
     assert_eq!(vm.eval("face.status").unwrap(), "error");
     assert_eq!(
@@ -380,8 +383,7 @@ face.loaded.then(value => fontResult.push(value === face, face.status));
         fixture_font_url()
     ))
     .unwrap();
-    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-        .unwrap();
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert_eq!(
         vm.eval("JSON.stringify(fontResult)").unwrap(),
@@ -389,8 +391,7 @@ face.loaded.then(value => fontResult.push(value === face, face.status));
     );
     assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
     vm.eval("style.remove()").unwrap();
-    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-        .unwrap();
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
     assert_eq!(
         vm.eval("face.status").unwrap(),
@@ -417,8 +418,7 @@ document.head.append(style);
 globalThis.NativeFontFace = FontFace;
 globalThis.FontFace = function() {{ throw new Error('CSS must not call the page constructor'); }};
 "#, fixture_font_url())).unwrap();
-    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-        .unwrap();
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
     assert_eq!(
         vm.eval(

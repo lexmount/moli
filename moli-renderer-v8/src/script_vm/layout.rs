@@ -210,14 +210,8 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
-        // Font-source reconciliation is a pre-pass lifecycle step. CSS image
-        // URLs come back from the actual box-construction traversal below.
-        // Once the guard is entered, layout performs no JS, event-loop,
-        // observer, or resource completion work and owns no state beyond this
-        // call.
-        if environment_override.is_none() {
-            self.reconcile_document_web_fonts_for_layout();
-        }
+        // Font resources are reconciled by the document resource lifecycle.
+        // Layout consumes registered data and performs no font loading work.
         let requests_paint = request.requests_paint();
         // Printing consumes a temporary projection. Screenshots, screencast
         // frames and explicit refreshes publish geometry for subsequent reads.
@@ -335,15 +329,6 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn reconcile_document_web_fonts_for_layout(&mut self) {
-        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
-            DocumentRuntime::reconcile_document_web_fonts_in_current_scope(scope, host_ptr);
-            Ok(())
-        }) {
-            tracing::warn!(%error, "failed to reconcile current document web fonts");
-        }
-    }
-
     pub(super) fn start_css_images_discovered_by_layout(
         &mut self,
         references: Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
@@ -450,74 +435,6 @@ impl ScriptVm {
             point,
             ignore_pointer_events_none,
         )
-    }
-
-    pub(super) fn complete_document_web_font(
-        &mut self,
-        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
-        terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
-    ) {
-        let Some(document) = self
-            ._context_host
-            .borrow()
-            .stylesheet_web_font_document(binding)
-        else {
-            return;
-        };
-        let completion = self
-            ._context_host
-            .borrow()
-            .complete_document_web_font(document, terminal);
-        match completion {
-            web_fonts::DocumentWebFontCompletion::Registered(outcome) => tracing::debug!(
-                ?outcome,
-                "registered current document web font for the next fresh layout refresh"
-            ),
-            web_fonts::DocumentWebFontCompletion::Invalid(error) => tracing::warn!(
-                %error,
-                "discarded invalid current document web font response"
-            ),
-            web_fonts::DocumentWebFontCompletion::NetworkFailed => {
-                tracing::debug!("current document web font request reached a failed terminal")
-            }
-            web_fonts::DocumentWebFontCompletion::Stale => {
-                tracing::debug!("discarded superseded document web font response")
-            }
-            web_fonts::DocumentWebFontCompletion::Retry(request) => {
-                let binding = self
-                    ._context_host
-                    .borrow_mut()
-                    .accept_current_stylesheet_subresource_load_delay_for_document(document);
-                if let Some(binding) = binding
-                    && let Err(error) = self.with_default_context_scope(move |scope, host_ptr| {
-                        crate::document_runtime::DocumentRuntime::start_stylesheet_subresource_requests_in_current_scope(
-                            scope, host_ptr, vec![(binding, *request)],
-                        );
-                        Ok(())
-                    })
-                {
-                    self.record_runtime_warning(format_args!(
-                        "failed to enter stylesheet subresource request scope: {error}"
-                    ));
-                }
-            }
-        }
-        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
-            crate::context_bootstrap::publish_font_face_load_changes(scope);
-            crate::context_bootstrap::settle_document_font_face_set_ready(
-                scope, host_ptr, document,
-            );
-            Ok(())
-        }) {
-            tracing::warn!(%error, "failed to settle current document font readiness");
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn document_web_font_counts_for_test(&mut self) -> (usize, usize, usize) {
-        self._context_host
-            .borrow()
-            .document_web_font_counts_for_test()
     }
 
     #[cfg(test)]

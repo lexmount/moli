@@ -215,9 +215,7 @@ impl<'a> ComputedStyleRead<'a> {
         )
     }
 
-    pub(in crate::native_bridge::element) fn rendered_style_facts(
-        &self,
-    ) -> Option<ComputedRenderedStyleFacts> {
+    pub(crate) fn rendered_style_facts(&self) -> Option<ComputedRenderedStyleFacts> {
         Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 

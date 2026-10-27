@@ -11,14 +11,6 @@ use moli_layout::{
 
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
-pub(crate) fn current_native_stylesheet_resources(
-    runtime: &JsContextHost,
-    root: DomHandle,
-) -> Option<crate::style_engine::StylesheetResourceSnapshot> {
-    let mut reads = crate::native_bridge::element::StyleObservation::new(runtime);
-    reads.read(root).stylesheet_resource_snapshot()
-}
-
 pub(crate) fn build_native_layout_pass(
     runtime: &JsContextHost,
     root: DomHandle,

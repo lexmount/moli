@@ -403,6 +403,10 @@ fn font_set_is_loading_and_idle<'s>(
 }
 
 fn finish_font_set_task<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'s, v8::Object>) {
+    // A completed face can expose another source (for example after a missing
+    // glyph or a load error). Settle resource selection before resolving ready.
+    super::automatic::discover_requests(scope);
+    super::loading::start_queued_font_set_loads(scope, owner);
     // Another font may have started between queuing this task and running it.
     // Keep its ready promise pending and let its completion queue a new task.
     if !font_set_is_loading_and_idle(scope, owner) {

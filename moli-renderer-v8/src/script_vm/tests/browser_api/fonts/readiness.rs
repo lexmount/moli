@@ -304,10 +304,9 @@ async fn assert_loaded_promise_lifetime(mode: &str) {
             style.textContent='@font-face{{font-family:Lifetime;src:url("{origin}/lifetime.woff2")}}';
             document.head.append(style);document.body.style.fontFamily='Lifetime';"#
         )).unwrap();
-        // Only native CSS/layout admission starts this request. Do not call
+        // Only native CSS resource admission starts this request. Do not call
         // FontFace.load(), which installs a separate strong request root.
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-            .unwrap();
+        vm.reconcile_document_font_resources();
         let query_promise = if mode.contains("query-then") {
             "document.fonts.load('16px Lifetime','A').then(faces => faces)"
         } else if mode.contains("query-await") {
@@ -353,8 +352,7 @@ async fn assert_loaded_promise_lifetime(mode: &str) {
                 .unwrap(),
             "0"
         );
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
-            .unwrap();
+        vm.reconcile_document_font_resources();
         assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
     }
     assert_eq!(vm.eval("JSON.stringify(promiseResults)").unwrap(), "[]");

@@ -111,7 +111,7 @@ async fn native_font_layer_reordering_needs_no_javascript_font_projection() {
         ("order.sheet.deleteRule(0)", "160"),
     ] {
         vm.eval(edit).unwrap();
-        vm.reconcile_document_web_fonts_for_layout();
+        vm.reconcile_document_font_resources();
         assert_eq!(
             vm.eval("String(probe.getBoundingClientRect().width)")
                 .unwrap(),

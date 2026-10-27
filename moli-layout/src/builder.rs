@@ -1490,10 +1490,10 @@ fn is_leaf_element(
     kind: LayoutBoxKind,
     style: &ResolvedLayoutStyle,
 ) -> bool {
-    semantics.is_replaced()
-        || semantics.category == LayoutElementCategory::LineBreak
+    semantics
+        .category
+        .is_leaf(semantics.is_replaced(), style.display())
         || kind == LayoutBoxKind::TableColumn
-        || style.display() == LayoutDisplay::TableColumn
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

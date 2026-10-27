@@ -147,6 +147,8 @@ fn reconcile_document_font_face_set_ready<'s>(
     crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
         scope, host_ptr, handle,
     );
+    super::automatic::discover_requests(scope);
+    super::loading::start_queued_font_set_loads(scope, fonts);
     if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(handle) {
         super::events::font_face_set_loading_started(scope, fonts);
     } else {
@@ -305,7 +307,7 @@ fn sync_font_face_set_matching_order<'s>(
             .dom()
             .document_element_handle_for_document(document)
         && let Some(resources) =
-            crate::layout_renderer::current_native_stylesheet_resources(host, root)
+            crate::document_runtime::DocumentRuntime::current_stylesheet_resources(host, root)
     {
         let cascade_order = resources
             .web_fonts()
@@ -323,6 +325,7 @@ fn sync_font_face_set_matching_order<'s>(
                 .unwrap_or(usize::MAX)
         });
     }
+    super::automatic::update_sources(scope, fonts, host_ptr, document, &connected, &manual);
     if host.with_font_services(document, |services| {
         services.set_web_font_order(&connected, &manual)
     }) {

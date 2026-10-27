@@ -228,7 +228,7 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
                 child.document.close();
                 globalThis.childTarget=child.document.getElementById('target');
             "#)).unwrap();
-            vm.reconcile_document_web_fonts_for_layout();
+            vm.reconcile_document_font_resources();
             let fonts_enabled = mask == OptionalResourceFetchMask::FONT;
             {
                 let host = vm._context_host.borrow();

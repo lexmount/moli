@@ -19,6 +19,8 @@ use parley::{
 };
 use taffy::{MaybeResolve as _, Point, Size};
 
+use crate::text_normalization::{TextCharacter, TextTransformState, classify_text_character};
+
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintRect,
     style::{
@@ -2540,7 +2542,7 @@ struct InlineNormalizer {
     pending: Option<PendingWhitespace>,
     pending_carriage_return: Option<PendingCarriageReturn>,
     line_has_content: bool,
-    capitalize_word_start: bool,
+    text_transform: TextTransformState,
 }
 
 impl InlineNormalizer {
@@ -2555,7 +2557,7 @@ impl InlineNormalizer {
             pending: None,
             pending_carriage_return: None,
             line_has_content: false,
-            capitalize_word_start: true,
+            text_transform: TextTransformState::default(),
         }
     }
 
@@ -2570,6 +2572,7 @@ impl InlineNormalizer {
         let mut utf16_offset = 0;
         let mut characters = text.char_indices().peekable();
         if let Some(pending) = self.pending_carriage_return.take() {
+            self.text_transform.reset();
             if let Some(&(byte_offset, '\n')) = characters.peek() {
                 characters.next();
                 let utf16_end = '\n'.len_utf16();
@@ -2609,6 +2612,7 @@ impl InlineNormalizer {
             utf16_offset = utf16_end;
             if source_char == '\r' {
                 if let Some(&(next_byte, '\n')) = characters.peek() {
+                    self.text_transform.reset();
                     characters.next();
                     let lf_utf16_end = utf16_offset + '\n'.len_utf16();
                     self.push_character(
@@ -2638,31 +2642,11 @@ impl InlineNormalizer {
                     break;
                 }
             }
-            let transformed = self.transform_char(source_char, transform);
+            let transformed = self.text_transform.transform(source_char, transform);
             for character in transformed {
                 self.push_character(box_id, character, mode, ancestors, vec![origin.clone()]);
             }
         }
-    }
-
-    fn transform_char(&mut self, character: char, transform: InlineTextTransform) -> Vec<char> {
-        let transformed = match transform {
-            InlineTextTransform::None => vec![character],
-            InlineTextTransform::Uppercase => character.to_uppercase().collect(),
-            InlineTextTransform::Lowercase => character.to_lowercase().collect(),
-            InlineTextTransform::Capitalize
-                if self.capitalize_word_start && character.is_alphabetic() =>
-            {
-                character.to_uppercase().collect()
-            }
-            InlineTextTransform::Capitalize => vec![character],
-        };
-        if character.is_alphanumeric() {
-            self.capitalize_word_start = false;
-        } else if !is_combining_mark(character) {
-            self.capitalize_word_start = true;
-        }
-        transformed
     }
 
     fn push_character(
@@ -2673,45 +2657,29 @@ impl InlineNormalizer {
         ancestors: &[LayoutBoxId],
         sources: Vec<SourceOrigin>,
     ) {
-        let is_segment_break = matches!(character, '\n' | '\r' | '\u{000C}');
-        let collapsible = character == ' ' || character == '\t' || is_segment_break;
-        match mode {
-            InlineWhiteSpaceCollapse::Collapse if collapsible => {
-                self.queue_whitespace(style_box, ancestors, sources, is_segment_break);
+        match classify_text_character(character, mode) {
+            TextCharacter::Collapsible { segment_break } => {
+                self.queue_whitespace(style_box, ancestors, sources, segment_break);
             }
-            InlineWhiteSpaceCollapse::PreserveBreaks if is_segment_break => {
+            TextCharacter::ForcedBreak { preserve_pending } => {
+                if preserve_pending {
+                    self.flush_pending();
+                }
                 self.pending = None;
                 self.append_forced_break(style_box, ancestors, sources);
             }
-            InlineWhiteSpaceCollapse::PreserveBreaks if collapsible => {
-                self.queue_whitespace(style_box, ancestors, sources, false);
-            }
-            InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => {
+            TextCharacter::Preserved {
+                character,
+                break_after,
+            } => {
                 self.flush_pending();
-                let character = if matches!(character, '\r' | '\u{000C}') {
-                    '\n'
-                } else {
-                    character
-                };
-                if character == '\n' {
-                    self.append_forced_break(style_box, ancestors, sources);
-                } else {
-                    self.append_unit(style_box, character, ancestors, sources, false);
-                }
-                if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
-                    // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
-                    // the required opportunity after every preserved space;
-                    // its control brush keeps it out of paint and source
-                    // fragments while the actual space remains measurable.
+                self.append_unit(style_box, character, ancestors, sources, false);
+                if break_after {
+                    // Parley needs a non-source break opportunity after a preserved space.
                     let unit_index = self.units.len();
                     self.append_unit(style_box, '\u{200B}', ancestors, Vec::new(), true);
                     self.units[unit_index].break_spaces_opportunity = true;
                 }
-                self.line_has_content = character != '\n';
-            }
-            InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks => {
-                self.flush_pending();
-                self.append_unit(style_box, character, ancestors, sources, false);
                 self.line_has_content = true;
             }
         }
@@ -2806,7 +2774,7 @@ impl InlineNormalizer {
             self.append_unit(box_id, enter, ancestors, Vec::new(), true);
         }
         self.line_has_content = false;
-        self.capitalize_word_start = true;
+        self.text_transform.reset();
     }
 
     fn open_inline(
@@ -2948,6 +2916,7 @@ impl InlineNormalizer {
         let Some(pending) = self.pending_carriage_return.take() else {
             return;
         };
+        self.text_transform.reset();
         self.push_character(
             pending.style_box,
             '\n',
@@ -2975,13 +2944,86 @@ fn bidi_controls(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<(ch
     }
 }
 
-fn is_combining_mark(character: char) -> bool {
-    matches!(character as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carriage_returns_separate_space_styles_at_atomic_and_float_objects() {
+        let root = LayoutBoxId::from_index(0);
+        let prefix = LayoutBoxId::from_index(1);
+        let object = LayoutBoxId::from_index(2);
+        let tail = LayoutBoxId::from_index(3);
+        for (role, expected, tail_spaces) in [
+            (InlineObjectRole::Atomic, "a  b", 1),
+            (InlineObjectRole::Float, "a  b", 1),
+            (InlineObjectRole::OutOfFlow, "a b", 0),
+            (InlineObjectRole::StartEdge, "a b", 0),
+            (InlineObjectRole::EndEdge, "a b", 0),
+        ] {
+            let mut normalizer = InlineNormalizer::new(root);
+            normalizer.push_text(
+                prefix,
+                "a\r",
+                InlineWhiteSpaceCollapse::Collapse,
+                InlineTextTransform::None,
+                &[root],
+            );
+            let kind = match role {
+                InlineObjectRole::Float => InlineBoxKind::CustomOutOfFlow,
+                InlineObjectRole::OutOfFlow => InlineBoxKind::OutOfFlow,
+                _ => InlineBoxKind::InFlow,
+            };
+            normalizer.push_object(object, role, kind, &[root], InlineVerticalAlign::default());
+            normalizer.push_text(
+                tail,
+                "\nb",
+                InlineWhiteSpaceCollapse::Collapse,
+                InlineTextTransform::None,
+                &[root],
+            );
+            let input = normalizer.finish();
+            assert_eq!(input.text, expected, "{role:?}");
+            assert_eq!(
+                input
+                    .units
+                    .iter()
+                    .filter(|unit| unit.style_box == tail
+                        && &input.text[unit.output_range.clone()] == " ")
+                    .count(),
+                tail_spaces,
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capitalize_keeps_boundaries_across_segment_breaks_and_text_runs() {
+        for (runs, expected) in [
+            (vec!["a\nb"], "A B"),
+            (vec!["a\tb"], "A B"),
+            (vec!["a\r\nb"], "A B"),
+            (vec!["a\r", "\nb"], "A B"),
+            (vec!["a", "b"], "Ab"),
+            (vec!["a\u{0301}", "b"], "A\u{0301}b"),
+        ] {
+            let input = runs
+                .iter()
+                .enumerate()
+                .map(|(index, text)| (LayoutBoxId::from_index(index + 1), *text))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                normalize(
+                    &input,
+                    InlineWhiteSpaceCollapse::Collapse,
+                    InlineTextTransform::Capitalize
+                )
+                .text,
+                expected,
+                "{runs:?}"
+            );
+        }
+    }
 
     #[test]
     fn ordered_output_range_lookup_handles_duplicates_gaps_and_bidi_order() {

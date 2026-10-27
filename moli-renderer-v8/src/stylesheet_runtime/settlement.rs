@@ -11,6 +11,14 @@ use crate::css_resource_urls::{
 };
 
 impl DocumentRuntime {
+    pub(crate) fn current_stylesheet_resources(
+        host: &JsContextHost,
+        root: DomHandle,
+    ) -> Option<crate::style_engine::StylesheetResourceSnapshot> {
+        let mut reads = crate::native_bridge::element::StyleObservation::new(host);
+        reads.read(root).stylesheet_resource_snapshot()
+    }
+
     pub(crate) fn reconcile_document_web_fonts_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -19,7 +27,7 @@ impl DocumentRuntime {
         host.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
         // The shared resource mask is checked before allocating a document
         // list. Default resource-free pages keep their existing cheap path.
-        if !host
+        if host
             .current_main_document_resource_loader()
             .is_some_and(|loader| {
                 loader
@@ -27,11 +35,11 @@ impl DocumentRuntime {
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Font)
             })
         {
-            return;
+            for document in host.active_layout_document_handles() {
+                Self::reconcile_web_fonts_for_document_in_current_scope(scope, host_ptr, document);
+            }
         }
-        for document in host.active_layout_document_handles() {
-            Self::reconcile_web_fonts_for_document_in_current_scope(scope, host_ptr, document);
-        }
+        crate::context_bootstrap::discover_font_requests(scope);
     }
 
     pub(crate) fn reconcile_web_fonts_for_document_in_current_scope(
@@ -67,7 +75,7 @@ impl DocumentRuntime {
             return;
         }
         let Some(resources) =
-            crate::layout_renderer::current_native_stylesheet_resources(host, root)
+            crate::document_runtime::DocumentRuntime::current_stylesheet_resources(host, root)
         else {
             return;
         };

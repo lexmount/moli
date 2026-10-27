@@ -2299,7 +2299,7 @@ async fn web_font_reconciliation_keeps_style_world_lazy_without_active_author_so
         .borrow()
         .style_world_update_materializations_for_test();
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.retained_style_system_rebuild_count_for_document_for_test(document),
         rebuilds,
@@ -2335,7 +2335,7 @@ initial;
         ._context_host
         .borrow()
         .style_world_update_materializations_for_test();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert!(
         vm._context_host
             .borrow()

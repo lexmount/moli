@@ -8,9 +8,36 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutElementCategory, LayoutError,
-    LayoutListMarkerPosition, LayoutListMarkerType, LayoutListRole, LayoutPseudo, LayoutWorld,
-    ResolvedLayoutStyle,
+    LayoutListData, LayoutListMarkerPosition, LayoutListMarkerType, LayoutListRole, LayoutPseudo,
+    LayoutWorld, ResolvedLayoutStyle,
 };
+
+/// HTML list numbering shared by rendering and resource text discovery.
+pub struct ListCounter {
+    value: i32,
+    step: i32,
+}
+
+impl ListCounter {
+    pub fn new(data: LayoutListData, item_count: usize) -> Self {
+        Self {
+            value: data.start.unwrap_or_else(|| {
+                if data.reversed {
+                    i32::try_from(item_count).unwrap_or(i32::MAX)
+                } else {
+                    1
+                }
+            }),
+            step: if data.reversed { -1 } else { 1 },
+        }
+    }
+
+    pub fn next_value(&mut self, explicit_value: Option<i32>) -> i32 {
+        let value = explicit_value.unwrap_or(self.value);
+        self.value = value.saturating_add(self.step);
+        value
+    }
+}
 
 pub(crate) fn prepare_list_markers<N>(world: &mut LayoutWorld<N>) -> Result<(), LayoutError>
 where
@@ -38,24 +65,15 @@ where
             .as_ref()
             .and_then(|semantics| semantics.metadata.list)
             .unwrap_or_default();
-        let mut counter = data.start.unwrap_or_else(|| {
-            if data.reversed {
-                i32::try_from(items.len()).unwrap_or(i32::MAX)
-            } else {
-                1
-            }
-        });
-        let step = if data.reversed { -1 } else { 1 };
+        let mut counter = ListCounter::new(data, items.len());
         for item in items {
             let value = world.boxes[item.index()]
                 .element_semantics
                 .as_ref()
                 .and_then(|semantics| semantics.metadata.list)
-                .and_then(|item| item.value)
-                .unwrap_or(counter);
-            prepare_item_marker(world, item, value)?;
+                .and_then(|item| item.value);
+            prepare_item_marker(world, item, counter.next_value(value))?;
             handled[item.index()] = true;
-            counter = value.saturating_add(step);
         }
     }
 
@@ -124,7 +142,7 @@ where
     if !world.boxes[marker.index()].children.is_empty() {
         return Ok(());
     }
-    let Some(text) = marker_text(&marker_type, counter) else {
+    let Some(text) = list_marker_text(&marker_type, counter) else {
         return Ok(());
     };
 
@@ -172,7 +190,8 @@ where
     None
 }
 
-fn marker_text(marker_type: &LayoutListMarkerType, counter: i32) -> Option<String> {
+/// Default marker text for the counter styles supported by the renderer.
+pub fn list_marker_text(marker_type: &LayoutListMarkerType, counter: i32) -> Option<String> {
     let output = match marker_type {
         LayoutListMarkerType::None => return None,
         LayoutListMarkerType::Decimal => format!("{counter}. "),
@@ -220,13 +239,13 @@ fn push_diagnostic(
 
 #[cfg(test)]
 mod tests {
-    use super::{alpha_marker, marker_text};
+    use super::{alpha_marker, list_marker_text};
     use crate::LayoutListMarkerType;
 
     #[test]
     fn common_marker_families_include_html_counter_values() {
         assert_eq!(
-            marker_text(&LayoutListMarkerType::Decimal, -2).as_deref(),
+            list_marker_text(&LayoutListMarkerType::Decimal, -2).as_deref(),
             Some("-2. ")
         );
         assert_eq!(alpha_marker(1, false), "a");

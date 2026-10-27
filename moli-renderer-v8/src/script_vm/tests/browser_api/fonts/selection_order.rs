@@ -135,7 +135,7 @@ async fn font_face_css_selection_keeps_declaration_order_without_js_projection()
             style.textContent='@font-face{{font-family:OrderFace;src:url(data:font/ttf;base64,{})}}@font-face{{font-family:OrderFace;src:url(data:font/ttf;base64,{})}}';
             document.head.append(style);
         "#, sources[0], sources[1])).unwrap();
-        vm.reconcile_document_web_fonts_for_layout();
+        vm.reconcile_document_font_resources();
         assert_eq!(vm.document_web_font_counts_for_test(), (2, 2, 2));
         assert_eq!(
             vm.eval("String(probe.getBoundingClientRect().width)")
@@ -168,7 +168,7 @@ async fn font_face_css_reordering_preserves_last_duplicate_and_manual_priority()
         }});
     "#)).unwrap();
     let width = |vm: &mut StandaloneScriptVmHarness| {
-        vm.reconcile_document_web_fonts_for_layout();
+        vm.reconcile_document_font_resources();
         let declarations = if vm
             .eval("String(!!globalThis.duplicate?.isConnected)")
             .unwrap()
@@ -199,10 +199,10 @@ async fn font_face_css_reordering_preserves_last_duplicate_and_manual_priority()
         document.fonts.add(new FontFace('OrderFace',Uint8Array.from(atob('{wide}'),c=>c.charCodeAt(0))));
         document.head.append(styles[1]);
     "#)).unwrap();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.document_web_font_counts_for_test(), (2, 2, 3));
     vm.eval("document.head.append(styles[0])").unwrap();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.eval("String(probe.getBoundingClientRect().width)")
             .unwrap(),
@@ -238,7 +238,7 @@ async fn font_face_css_order_is_published_before_child_font_admission() {
             child.close();
             Object.defineProperty(child,'fonts',{{configurable:true,get(){{throw new Error('unexpected child.fonts access')}}}});
         "#)).unwrap();
-        vm.reconcile_document_web_fonts_for_layout();
+        vm.reconcile_document_font_resources();
         assert_eq!(
             vm.eval("String(child.getElementById('target').getBoundingClientRect().width)")
                 .unwrap(),
@@ -442,12 +442,12 @@ async fn local_only_css_font_is_admitted_without_js_projection() {
         style.textContent='@font-face{font-family:LocalOnly;src:local("MoliDefinitelyNotAFont-LocalOnly-92741")}';
         document.head.append(style);
     "#).unwrap();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     // The local lookup reaches a synchronous error, with no URL request and
     // no registration. Its native load still belongs to the declaration.
     assert_eq!(vm.document_web_font_counts_for_test(), (1, 0, 0));
     assert_eq!(take_owner_font_face_projection_count_for_test(), 0);
     vm.eval("style.remove()").unwrap();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
 }

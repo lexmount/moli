@@ -15,8 +15,11 @@ mod chrome_runtime;
 mod constructors;
 mod crypto;
 mod css_fontface_runtime;
+#[cfg(test)]
+pub(crate) use css_fontface_runtime::font_request_discovery_count;
 pub(crate) use css_fontface_runtime::{
-    bind_stylesheet_font_face, finish_font_face_url_load, publish_font_face_load_changes,
+    bind_stylesheet_font_face, discover_font_requests, finish_font_face_url_load,
+    publish_font_face_load_changes,
 };
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;

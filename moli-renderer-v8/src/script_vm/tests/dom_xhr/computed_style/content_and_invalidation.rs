@@ -1090,7 +1090,7 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
         .document_element_handle()
         .expect("fixture should retain a document element");
 
-    let first = crate::layout_renderer::current_native_stylesheet_resources(
+    let first = crate::document_runtime::DocumentRuntime::current_stylesheet_resources(
         &vm._context_host.borrow(),
         root,
     )
@@ -1108,7 +1108,7 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
         .borrow()
         .style_world_update_materializations_for_test();
 
-    let clean = crate::layout_renderer::current_native_stylesheet_resources(
+    let clean = crate::document_runtime::DocumentRuntime::current_stylesheet_resources(
         &vm._context_host.borrow(),
         root,
     )
@@ -1127,7 +1127,7 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
          '@font-face { font-family: Second; src: url(font-b.woff2); }'",
     )
     .expect("resource stylesheet should mutate");
-    let revised = crate::layout_renderer::current_native_stylesheet_resources(
+    let revised = crate::document_runtime::DocumentRuntime::current_stylesheet_resources(
         &vm._context_host.borrow(),
         root,
     )

@@ -33,6 +33,7 @@ pub(super) const FONT_FACE_SET_STATUS_SLOT: &str = "__moliFontFaceSetStatus";
 pub(super) const FONT_FACE_SET_SIZE_SLOT: &str = "__moliFontFaceSetSize";
 const FONT_FACE_SET_READY_SLOT: &str = "__moliFontFaceSetReady";
 
+mod automatic;
 mod events;
 mod font_face;
 mod font_face_set;
@@ -41,6 +42,9 @@ mod query;
 mod state;
 mod storage;
 
+pub(crate) use automatic::discover_requests as discover_font_requests;
+#[cfg(test)]
+pub(crate) use automatic::discovery_count as font_request_discovery_count;
 pub(in crate::context_bootstrap) use events::{
     FontFaceSetLoadEventInit, install_font_face_set_event_handler_accessors,
     install_font_face_set_load_event_template_accessors,

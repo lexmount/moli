@@ -192,6 +192,22 @@ pub(super) fn changed_wrappers<'s>(
         .collect()
 }
 
+pub(super) fn wrappers_for_slots<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    slots: &std::collections::BTreeSet<String>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let Some(store) = scope.get_slot::<Store>().cloned() else {
+        return Vec::new();
+    };
+    store
+        .borrow()
+        .entries
+        .values()
+        .filter(|observer| slots.contains(observer.load.borrow().slot()))
+        .filter_map(|observer| observer.wrapper.to_local(scope))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

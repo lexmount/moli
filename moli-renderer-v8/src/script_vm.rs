@@ -791,6 +791,7 @@ pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };
 mod execution_contexts;
+mod font_resources;
 mod layout;
 mod prepared_scripts;
 mod rendering_update;

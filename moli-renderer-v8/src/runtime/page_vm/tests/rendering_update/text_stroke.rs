@@ -29,6 +29,9 @@ background:red;background-clip:text;-webkit-text-fill-color:transparent;
 document.body.innerHTML = '<div id=title>A</div>';
 "#
         ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
         let viewport = moli_layout::PaintViewport::new(160, 120, 1.0);
         let plain = page_vm
             .vm_mut()
@@ -102,6 +105,9 @@ color:transparent;-webkit-text-stroke:0 red}}
 document.body.innerHTML = '<div id=title>A</div>';
 "#
         ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
         let viewport = moli_layout::PaintViewport::new(160, 60, 1.0);
         page_vm
             .vm_mut()
