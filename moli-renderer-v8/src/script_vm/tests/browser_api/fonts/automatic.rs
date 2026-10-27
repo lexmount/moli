@@ -1,14 +1,17 @@
-use super::selection_order::{order_font_data, order_vm};
+use super::selection_order::{order_font_data, order_vm_with_resource_completions};
 use super::*;
 use crate::protocol_types::OptionalResourceFetchMask;
 
-fn automatic_vm() -> StandaloneScriptVmHarness {
-    let vm = order_vm();
+fn automatic_vm() -> (
+    StandaloneScriptVmHarness,
+    RendererResourceCompletionTestHarness,
+) {
+    let (vm, completions) = order_vm_with_resource_completions();
     vm.current_main_document_resource_loader()
         .unwrap()
         .request_client()
         .set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
-    vm
+    (vm, completions)
 }
 
 #[test]
@@ -21,7 +24,7 @@ fn automatic_font_requests_follow_the_document_resource_policy() {
         OptionalResourceFetchMask::ALL,
     ] {
         for child in [false, true] {
-            let mut vm = order_vm();
+            let (mut vm, mut completions) = order_vm_with_resource_completions();
             vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
             vm.current_main_document_resource_loader()
                 .unwrap()
@@ -46,7 +49,7 @@ fn automatic_font_requests_follow_the_document_resource_policy() {
             vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
             vm.eval("targetDocument.fonts.ready.then(()=>ready.push(true));void targetDocument.fonts.status")
                 .unwrap();
-            run_font_tasks(&mut vm);
+            complete_local_font_resources(&mut vm, &mut completions);
             let enabled = mask.contains(OptionalResourceFetchMask::FONT);
             assert_eq!(
                 vm.eval("[face.status,cssFace.status].join(',')").unwrap(),
@@ -68,7 +71,7 @@ fn automatic_font_requests_follow_the_document_resource_policy() {
 
 #[test]
 fn explicit_font_loading_keeps_working_without_automatic_font_requests() {
-    let mut vm = order_vm();
+    let (mut vm, mut completions) = order_vm_with_resource_completions();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.face=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');
@@ -77,13 +80,16 @@ fn explicit_font_loading_keeps_working_without_automatic_font_requests() {
         face.load().then(value=>results.push(value===face));
         document.fonts.load('40px OrderFace','AAAA').then(faces=>results.push(faces.length===1 && faces[0]===face));
     "#)).unwrap();
+    assert_eq!(vm.eval("face.status").unwrap(), "loading");
+    assert_eq!(vm.eval("JSON.stringify(results)").unwrap(), "[]");
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert_eq!(vm.eval("JSON.stringify(results)").unwrap(), "[true,true]");
 }
 
 #[test]
 fn document_resources_load_fonts_even_when_layout_is_disabled() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
     vm.eval(
         r#"
@@ -95,7 +101,7 @@ fn document_resources_load_fonts_even_when_layout_is_disabled() {
     .unwrap();
     let publishes = vm.layout_snapshot_cache_observability_for_test().2;
     vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify(result)").unwrap(),
         r#"["NetworkError"]"#
@@ -109,7 +115,7 @@ fn document_resources_load_fonts_even_when_layout_is_disabled() {
 
 #[test]
 fn font_discovery_reuses_clean_inputs_and_rechecks_cssom_changes() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.face=new FontFace('LaterFace','url(data:font/ttf;base64,{wide})');document.fonts.add(face);
@@ -128,7 +134,7 @@ fn font_discovery_reuses_clean_inputs_and_rechecks_cssom_changes() {
     vm.eval("style.sheet.insertRule('#probe {font-family:LaterFace !important}',0)")
         .unwrap();
     vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("JSON.stringify(result)").unwrap(), r#"["loaded"]"#);
     refresh_layout_for_test(&mut vm);
     assert_eq!(
@@ -140,7 +146,7 @@ fn font_discovery_reuses_clean_inputs_and_rechecks_cssom_changes() {
 
 #[test]
 fn child_font_discovery_rechecks_parent_cssom_viewport_changes() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
@@ -153,7 +159,7 @@ fn child_font_discovery_rechecks_parent_cssom_viewport_changes() {
         child.fonts.add(face);
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "unloaded");
     let before = discovery_count(&mut vm);
     let dom_version = vm._context_host.borrow().dom_host().dom_version();
@@ -169,7 +175,7 @@ fn child_font_discovery_rechecks_parent_cssom_viewport_changes() {
         visual_generation
     );
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert!(discovery_count(&mut vm) > before);
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
@@ -177,7 +183,7 @@ fn child_font_discovery_rechecks_parent_cssom_viewport_changes() {
 
 #[test]
 fn child_font_ready_observes_parent_cssom_in_the_same_script() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
@@ -190,7 +196,7 @@ fn child_font_ready_observes_parent_cssom_in_the_same_script() {
         globalThis.states=[];
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "unloaded");
     vm.eval(
         r#"
@@ -199,7 +205,7 @@ fn child_font_ready_observes_parent_cssom_in_the_same_script() {
     "#,
     )
     .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert_eq!(vm.eval("JSON.stringify(states)").unwrap(), r#"["loaded"]"#);
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
@@ -207,7 +213,7 @@ fn child_font_ready_observes_parent_cssom_in_the_same_script() {
 
 #[test]
 fn resources_load_used_faces_without_loading_unused_hidden_empty_or_range_misses() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.result=[];
@@ -230,7 +236,7 @@ fn resources_load_used_faces_without_loading_unused_hidden_empty_or_range_misses
     );
     vm.eval("document.fonts.ready.then(fonts=>result.push(fonts===document.fonts))")
         .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("String(probe.getBoundingClientRect().width)")
@@ -248,7 +254,7 @@ fn resources_load_used_faces_without_loading_unused_hidden_empty_or_range_misses
 #[test]
 fn implicit_load_errors_preserve_observed_promises_and_font_set_events() {
     for observe in [false, true] {
-        let mut vm = automatic_vm();
+        let (mut vm, mut completions) = automatic_vm();
         vm.eval(r#"
             globalThis.result=[];globalThis.rejections=[];globalThis.errors=[];
             addEventListener('unhandledrejection',event=>{rejections.push(event.reason.name);event.preventDefault()});
@@ -261,7 +267,7 @@ fn implicit_load_errors_preserve_observed_promises_and_font_set_events() {
                 .unwrap();
         }
         vm.reconcile_document_font_resources();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(vm.eval("face.status").unwrap(), "error");
         assert_eq!(
             vm.eval("JSON.stringify(result)").unwrap(),
@@ -277,7 +283,7 @@ fn implicit_load_errors_preserve_observed_promises_and_font_set_events() {
 
 #[test]
 fn resources_match_capabilities_before_unicode_ranges() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.regular=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})',{{weight:'400',unicodeRange:'U+4E00'}});
@@ -291,7 +297,7 @@ fn resources_match_capabilities_before_unicode_ranges() {
     );
     vm.eval("probe.style.fontWeight='700'").unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("[regular.status,bold.status].join(',')").unwrap(),
         "unloaded,loaded"
@@ -306,7 +312,7 @@ fn resources_match_capabilities_before_unicode_ranges() {
 
 #[test]
 fn font_resource_requests_run_as_window_owned_tasks() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!("globalThis.face=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');document.fonts.add(face)")).unwrap();
     vm.reconcile_document_font_resources();
@@ -314,7 +320,7 @@ fn font_resource_requests_run_as_window_owned_tasks() {
         vm.has_ready_timeout(),
         "resource processing must schedule a load without another JS read"
     );
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("[face.status,probe.getBoundingClientRect().width].join(',')")
@@ -325,14 +331,14 @@ fn font_resource_requests_run_as_window_owned_tasks() {
 
 #[test]
 fn font_set_ready_observes_resource_requests_before_their_tasks_run() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!("globalThis.face=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');document.fonts.add(face)")).unwrap();
     vm.reconcile_document_font_resources();
     vm.eval("globalThis.ready=false;document.fonts.ready.then(()=>ready=true)")
         .unwrap();
     assert_eq!(vm.eval("String(ready)").unwrap(), "false");
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify([ready,face.status,probe.getBoundingClientRect().width])")
@@ -343,7 +349,7 @@ fn font_set_ready_observes_resource_requests_before_their_tasks_run() {
 
 #[test]
 fn resources_keep_lower_priority_faces_unloaded_until_they_are_selected() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (narrow, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.pending=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');
@@ -351,7 +357,7 @@ fn resources_keep_lower_priority_faces_unloaded_until_they_are_selected() {
         document.fonts.add(pending);document.fonts.add(loaded);
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("[pending.status,probe.getBoundingClientRect().width].join(',')")
@@ -361,7 +367,7 @@ fn resources_keep_lower_priority_faces_unloaded_until_they_are_selected() {
     vm.eval("document.fonts.delete(pending);document.fonts.add(pending)")
         .unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("[pending.status,probe.getBoundingClientRect().width].join(',')")
@@ -372,7 +378,7 @@ fn resources_keep_lower_priority_faces_unloaded_until_they_are_selected() {
 
 #[test]
 fn geometry_and_screenshots_do_not_start_or_advance_font_loads() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.face=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');document.fonts.add(face);
@@ -390,7 +396,7 @@ fn geometry_and_screenshots_do_not_start_or_advance_font_loads() {
         "layout must not enqueue font resource work"
     );
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("JSON.stringify([face.status,result])").unwrap(),
         r#"["loaded",[true]]"#
@@ -399,7 +405,7 @@ fn geometry_and_screenshots_do_not_start_or_advance_font_loads() {
 
 #[test]
 fn another_document_requests_a_shared_face_in_its_creation_window() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.face=new FontFace('ChildDemand','url(data:font/ttf;base64,{wide})');
@@ -409,7 +415,7 @@ fn another_document_requests_a_shared_face_in_its_creation_window() {
         globalThis.result=[];face.loaded.then(value=>result.push(value===face));
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     refresh_layout_for_test(&mut vm);
     assert_eq!(vm.eval("JSON.stringify([face.status,result,document.fonts.has(face),document.getElementById('frame').contentDocument.getElementById('childProbe').getBoundingClientRect().width])").unwrap(), r#"["loaded",[true],false,160]"#);
 }
@@ -514,7 +520,7 @@ fn discovery_count(vm: &mut ScriptVm) -> u64 {
 
 #[test]
 fn resources_recheck_live_control_values_and_shadow_slot_text_without_layout() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
@@ -529,7 +535,7 @@ fn resources_recheck_live_control_values_and_shadow_slot_text_without_layout() {
         host.attachShadow({{mode:'open'}}).innerHTML='<slot name="used"></slot>';
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("[controlFace.status,shadowFace.status,unslottedFace.status].join(',')")
             .unwrap(),
@@ -537,14 +543,14 @@ fn resources_recheck_live_control_values_and_shadow_slot_text_without_layout() {
     );
     vm.eval("input.value='A'").unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("controlFace.status").unwrap(), "loaded");
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
 }
 
 #[test]
 fn resources_match_generated_and_transformed_text() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
@@ -552,14 +558,14 @@ fn resources_match_generated_and_transformed_text() {
         const style=document.createElement('style');style.textContent='#probe::before {{content:"a";font-family:GeneratedFace;text-transform:uppercase}}';document.head.append(style);
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
 }
 
 #[test]
 fn font_requests_follow_text_and_descriptor_changes_without_geometry() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
@@ -567,22 +573,22 @@ fn font_requests_follow_text_and_descriptor_changes_without_geometry() {
         document.fonts.add(face);
     "#)).unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "unloaded");
     vm.eval("face.family='OrderFace'").unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "unloaded");
     vm.eval("probe.firstChild.data='BBBB'").unwrap();
     vm.reconcile_document_font_resources();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("face.status").unwrap(), "loaded");
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
 }
 
 #[test]
 fn failed_faces_allow_lower_priority_font_resources_to_load() {
-    let mut vm = automatic_vm();
+    let (mut vm, mut completions) = automatic_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(
         r#"
@@ -594,7 +600,7 @@ fn failed_faces_allow_lower_priority_font_resources_to_load() {
     .unwrap();
     vm.eval("globalThis.readyStates=[];document.fonts.ready.then(()=>readyStates.push([missing.status,fallback.status]))").unwrap();
     assert_eq!(vm.eval("JSON.stringify(readyStates)").unwrap(), "[]");
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("[missing.status,fallback.status].join(',')")
             .unwrap(),
@@ -617,7 +623,7 @@ fn failed_faces_allow_lower_priority_font_resources_to_load() {
 fn font_set_ready_waits_for_all_synchronous_fallback_failures() {
     let (_, wide) = order_font_data();
     for failures in [2, 3] {
-        let mut vm = automatic_vm();
+        let (mut vm, mut completions) = automatic_vm();
         vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
         vm.eval(&format!(r#"
             globalThis.fallback=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');
@@ -636,7 +642,7 @@ fn font_set_ready_waits_for_all_synchronous_fallback_failures() {
             ready.then(()=>readyStates.push([...missing].reverse().map(face=>face.status).concat(fallback.status)));
         "#)).unwrap();
         assert_eq!(vm.eval("JSON.stringify(readyStates)").unwrap(), "[]");
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         let mut expected = vec!["error"; failures];
         expected.push("loaded");
         assert_eq!(
@@ -656,7 +662,7 @@ fn font_set_ready_waits_for_all_synchronous_fallback_failures() {
 #[test]
 fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
     for retirement in ["before-demand", "after-queue", "live"] {
-        let mut vm = automatic_vm();
+        let (mut vm, mut completions) = automatic_vm();
         vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
         let (_, wide) = order_font_data();
         vm.eval(&format!(
@@ -683,7 +689,7 @@ fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
         // synchronously start a stranded queued face and mask this failure.
         for _ in 0..3 {
             vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
-            run_font_tasks(&mut vm);
+            complete_local_font_resources(&mut vm, &mut completions);
         }
         assert_eq!(
             vm.eval("[retired.status,fallback.status].join(',')")
