@@ -1,3 +1,4 @@
+#[cfg(test)]
 use anyhow::Result;
 
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
@@ -424,27 +425,6 @@ impl BrowserContext {
 
     pub fn document_visibility_state(&self) -> &'static str {
         SurfaceOverrideInputs::from_active(self).document_visibility_state()
-    }
-
-    pub(crate) async fn apply_background_target_surface_overrides_async(
-        &mut self,
-        target_id: &str,
-    ) -> Result<bool> {
-        let overrides = self
-            .navigator_overrides_for_target(target_id)
-            .expect("resolved background target retains navigator state");
-        let activity = self
-            .document_activity_for_target(target_id)
-            .expect("resolved background target retains document activity");
-        let Some(page) = self
-            .background_target_mut(target_id)
-            .and_then(|target| target.runtime_slot.loaded_page_mut())
-        else {
-            return Ok(false);
-        };
-        page.set_navigator_overrides_async(&overrides).await?;
-        page.set_document_activity_async(activity).await?;
-        Ok(true)
     }
 
     pub(crate) fn start_session_surface_restoration(

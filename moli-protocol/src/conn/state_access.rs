@@ -14,6 +14,7 @@ use super::{
 };
 
 mod direct;
+mod target_opening;
 pub use direct::{ProtocolStateHandle, ProtocolStateOwner};
 
 type StateOperation = Box<dyn FnOnce(&mut CdpConnection)>;

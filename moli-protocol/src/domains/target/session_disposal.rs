@@ -436,25 +436,6 @@ pub(super) async fn dispose_browser_session_without_event_async(
     conn.commit_browser_session_disposal_without_event(&plan)
 }
 
-/// Rolls back a prepared attachment after it has become capable of owning
-/// renderer/domain state but before its attached event is published. No
-/// protocol event is emitted because the frontend never observed the session.
-pub(crate) async fn dispose_uncommitted_session_async(
-    conn: &mut CdpConnection,
-    plan: &SessionDisposalPlan,
-) -> Result<()> {
-    let mut discarded_background_events = Vec::new();
-    let mut discarded_protocol_events = Vec::new();
-    dispose_live_session_domains_async(
-        conn,
-        &mut discarded_background_events,
-        &mut discarded_protocol_events,
-        plan,
-    )
-    .await?;
-    conn.commit_session_disposal(plan)
-}
-
 pub(super) async fn dispose_target_session_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,

@@ -8,6 +8,7 @@ mod blank_navigation_inheritance;
 mod browser_close;
 mod noopener_blank_inheritance;
 mod popup_navigation_referrer;
+mod target_opening;
 
 type TestCdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

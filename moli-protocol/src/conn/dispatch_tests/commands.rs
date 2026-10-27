@@ -1642,37 +1642,45 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_emulation_timezone_keeps_background_owner_route_across_completion() {
-    let mut conn = CdpConnection::new();
-    let active_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>active timezone</title>")
-        .await
-        .expect("active page should load");
-    let background_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>background timezone</title>")
-        .await
-        .expect("background page should load");
-
-    let mut browser_context = BrowserContext::new("BID-emulation-timezone-owner-route".to_owned());
-    browser_context.set_active_target_id("TID-emulation-timezone-active".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(active_page);
+    let mut ctx = crate::testing::TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-emulation-timezone-owner-route".into());
+    browser_context.set_active_target_id("TID-emulation-timezone-active");
+    browser_context.attach_active_session("SID-timezone-active");
     browser_context.stage_background_target(
-        "TID-emulation-timezone-background".to_owned(),
-        None,
-        "data:text/html,<title>background timezone</title>".to_owned(),
+        "TID-emulation-timezone-background".into(),
+        Some("SID-timezone-background".into()),
+        "data:text/html,<title>background timezone</title>".into(),
         None,
         None,
     );
-    browser_context
-        .background_target_mut("TID-emulation-timezone-background")
-        .expect("background target")
-        .replace_loaded_page(Some(background_page));
-    conn.install_browser_context_fixture_for_test(browser_context);
-
-    let background_session =
-        attach_page_session_for_test(&mut conn, "TID-emulation-timezone-background").await;
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
+    for (session, url) in [
+        (
+            "SID-timezone-active",
+            "data:text/html,<title>active timezone</title>",
+        ),
+        (
+            "SID-timezone-background",
+            "data:text/html,<title>background timezone</title>",
+        ),
+    ] {
+        ctx.install_navigation_fixture_for_session_owner(url, Some(session))
+            .await;
+    }
+    ctx.process_async(json!({
+        "id":9900001,"method":"Target.attachToTarget",
+        "params":{"targetId":"TID-emulation-timezone-background","flatten":true},
+    }))
+    .await;
+    let attached = ctx.take_all();
+    let background_session = attached
+        .iter()
+        .find(|message| message["id"] == 9900001)
+        .and_then(|message| message["result"]["sessionId"].as_str())
+        .unwrap_or_else(|| panic!("attach through the original renderer fence: {attached:?}"))
+        .to_owned();
+    let conn = &mut ctx.conn;
     let raw = serde_json::to_string(&json!({
         "id": 689,
         "method": "Emulation.setTimezoneOverride",
@@ -1729,37 +1737,42 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_security_tls_keeps_background_owner_route_across_completion() {
-    let mut conn = CdpConnection::new();
-    let active_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>active tls</title>")
-        .await
-        .expect("active page should load");
-    let background_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>background tls</title>")
-        .await
-        .expect("background page should load");
-
-    let mut browser_context = BrowserContext::new("BID-security-owner-route".to_owned());
-    browser_context.set_active_target_id("TID-security-active".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(active_page);
+    let mut ctx = crate::testing::TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-security-owner-route".into());
+    browser_context.set_active_target_id("TID-security-active");
+    browser_context.attach_active_session("SID-tls-active");
     browser_context.stage_background_target(
-        "TID-security-background".to_owned(),
-        None,
-        "data:text/html,<title>background tls</title>".to_owned(),
+        "TID-security-background".into(),
+        Some("SID-tls-background".into()),
+        "data:text/html,<title>background tls</title>".into(),
         None,
         None,
     );
-    browser_context
-        .background_target_mut("TID-security-background")
-        .expect("background target")
-        .replace_loaded_page(Some(background_page));
-    conn.install_browser_context_fixture_for_test(browser_context);
-
-    let background_session =
-        attach_page_session_for_test(&mut conn, "TID-security-background").await;
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
+    for (session, url) in [
+        ("SID-tls-active", "data:text/html,<title>active tls</title>"),
+        (
+            "SID-tls-background",
+            "data:text/html,<title>background tls</title>",
+        ),
+    ] {
+        ctx.install_navigation_fixture_for_session_owner(url, Some(session))
+            .await;
+    }
+    ctx.process_async(json!({
+        "id":9900001,"method":"Target.attachToTarget",
+        "params":{"targetId":"TID-security-background","flatten":true},
+    }))
+    .await;
+    let attached = ctx.take_all();
+    let background_session = attached
+        .iter()
+        .find(|message| message["id"] == 9900001)
+        .and_then(|message| message["result"]["sessionId"].as_str())
+        .unwrap_or_else(|| panic!("attach through the original renderer fence: {attached:?}"))
+        .to_owned();
+    let conn = &mut ctx.conn;
     let raw = serde_json::to_string(&json!({
         "id": 687,
         "method": "Security.setIgnoreCertificateErrors",
@@ -1777,7 +1790,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         }
     };
 
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(conn, *pending).await;
 
     assert_eq!(
         messages,

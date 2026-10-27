@@ -518,41 +518,28 @@ pub(super) async fn rollback_incomplete_popup_target_async(
         .await;
 }
 
-pub(super) async fn start_target_url_navigation_if_allowed_background_events_async(
+pub(super) fn prepare_initial_target_url_navigation(
     conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
     target_id: &str,
-) {
+) -> Option<PreparedPopupNavigation> {
     if conn.target_has_waiting_for_debugger_session(target_id) {
-        return;
+        return None;
     }
-    let Some(route) = conn.target_session_route_for_target_id(target_id) else {
-        return;
-    };
-    let Some(browser_context_id) = route.browser_context_id().map(str::to_owned) else {
-        return;
-    };
-    let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
-        return;
-    };
+    let route = conn.target_session_route_for_target_id(target_id)?;
+    let browser_context_id = route.browser_context_id()?.to_owned();
+    let browser_context = conn.browser_context_by_id(&browser_context_id)?;
     if !browser_context.target_needs_initial_document_navigation(target_id) {
-        return;
+        return None;
     }
-    let Some(target_url) = browser_context
-        .devtools_target_info(target_id)
-        .map(|target_info| target_info.url)
-    else {
-        return;
-    };
-    let owner_scope = CommandOwnerScope::for_route(route);
-    crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
+    let target_url = browser_context.devtools_target_info(target_id)?.url;
+    let action = PopupTargetNavigationOwnerAction::capture(
         conn,
-        out,
-        &owner_scope,
-        &target_url,
-    )
-    .await;
-    emit_target_info_changed_for_target_background_event(conn, out, &browser_context_id, target_id);
+        &browser_context_id,
+        target_id,
+        target_url,
+        PopupTargetNavigationKind::InitialDocument,
+    )?;
+    PreparedPopupNavigation::prepare(conn, action)
 }
 
 pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_resume(

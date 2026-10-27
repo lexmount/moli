@@ -1305,6 +1305,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
     .await;
 }
 
+#[cfg(test)]
 pub(crate) async fn navigate_command_owner_from_renderer_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -1381,6 +1382,7 @@ pub(in crate::domains) fn prepare_renderer_navigation_request(
     PreparedRendererNavigation::prepare(conn, owner, step)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -1425,6 +1427,7 @@ pub(crate) async fn traverse_session_owner_history_from_renderer_background_even
     run_renderer_navigation_inline(conn, out, prepared).await;
 }
 
+#[cfg(any(test, feature = "test-support"))]
 async fn run_renderer_navigation_inline(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,

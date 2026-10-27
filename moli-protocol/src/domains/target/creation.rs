@@ -12,7 +12,7 @@ pub(super) struct DevToolsCreateTargetExecution {
     pub(super) commit: TargetCreationCommit,
 }
 
-pub(super) struct TargetCreationCommit {
+pub(crate) struct TargetCreationCommit {
     page_target_id: String,
     tab_target_id: String,
     activation: Option<TargetActivationTransition>,

@@ -18,6 +18,7 @@ use super::page;
 pub(crate) mod activation;
 mod attachment;
 pub(crate) use attachment::TargetDetachmentFailureCleanup;
+pub(crate) use attachment::commit_target_attachment;
 mod auto_attach;
 mod browser_context;
 mod browser_context_disposal;
@@ -25,14 +26,17 @@ mod closing;
 mod creation;
 mod events;
 mod info;
+mod opening;
+pub(crate) use opening::prepare_creation_outputs;
+pub(crate) use opening::rollback_attachment;
 mod popup;
 #[cfg(test)]
 mod protocol_neutral_tests;
 pub(crate) mod session_disposal;
-pub(crate) use session_disposal::dispose_uncommitted_session_async;
 #[cfg(test)]
 mod tests;
 mod worker_target;
+pub(crate) use creation::TargetCreationCommit;
 pub(crate) use worker_target::{
     CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity,
     PreparedDedicatedWorkerProjectionDisposal, PreparedDedicatedWorkerRetirement,
@@ -474,6 +478,70 @@ impl PendingTargetCommandDispatch {
 }
 
 impl CompletedTargetCommandDispatch {
+    pub(crate) fn try_into_opening_workflow(
+        self,
+        access: crate::conn::ProtocolStateAccess,
+    ) -> Result<crate::conn::PreparedCommandWorkflow, Self> {
+        match *self.kind {
+            CompletedTargetCommandKind::AttachToTarget {
+                prepared_session,
+                target_info,
+                initial_document,
+            } => {
+                let recovery_session = prepared_session.clone();
+                let recovery_access = access.clone();
+                Ok(
+                    crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+                        let result = Box::pin(opening::complete_attachment(
+                            &mut crate::conn::ProtocolWorkflowDriver::owned(access),
+                            prepared_session,
+                            target_info,
+                            initial_document,
+                            &mut context,
+                        ))
+                        .await;
+                        match result {
+                            Ok(plan) => context.complete(plan),
+                            Err(error) => context
+                                .fail(CommandOutputPlan::error_without_session(-32000, error)),
+                        }
+                    })
+                    .with_failure_cleanup(move |response| {
+                        opening::attachment_rollback_workflow(
+                            recovery_access,
+                            recovery_session,
+                            response,
+                        )
+                    }),
+                )
+            }
+            CompletedTargetCommandKind::CreateTarget {
+                response_plan,
+                creation_commit,
+                initial_document,
+            } => Ok(crate::conn::PreparedCommandWorkflow::new(
+                move |mut context| async move {
+                    let result = Box::pin(opening::complete_creation(
+                        &mut crate::conn::ProtocolWorkflowDriver::owned(access),
+                        response_plan,
+                        creation_commit,
+                        initial_document,
+                        &mut context,
+                    ))
+                    .await;
+                    match result {
+                        Ok(plan) => context.complete(plan),
+                        Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+                    }
+                },
+            )),
+            kind => Err(Self {
+                kind: Box::new(kind),
+                ..self
+            }),
+        }
+    }
+
     pub(crate) fn try_finish_ready(
         self,
         conn: &mut CdpConnection,
@@ -792,33 +860,6 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
     }
 }
 
-async fn target_creation_response_plan_after_initial_document(
-    conn: &mut CdpConnection,
-    response_plan: CommandOutputPlan,
-    creation_commit: creation::TargetCreationCommit,
-    activation_events: Vec<BackgroundProtocolEvent>,
-) -> CommandOutputPlan {
-    let target_id = creation_commit.page_target_id().to_owned();
-    let mut plan = CommandOutputPlan::default();
-    let mut events = activation_events;
-    if let Err(error) =
-        creation::emit_target_creation_protocol_events(conn, creation_commit, &mut events)
-    {
-        return CommandOutputPlan::from_devtools_error(error);
-    }
-    popup::start_target_url_navigation_if_allowed_background_events_async(
-        conn,
-        &mut events,
-        &target_id,
-    )
-    .await;
-    for event in events {
-        plan.push_background_event(event);
-    }
-    plan.extend(response_plan);
-    plan
-}
-
 pub(crate) fn recover_failed_target_command(
     conn: &mut CdpConnection,
     context: &mut crate::conn::CommandDispatchContext,
@@ -866,6 +907,7 @@ pub(crate) async fn complete_pending_target_command(
                     prepared_session,
                     target_info,
                     initial_document,
+                    command_context,
                 )
                 .await,
             );
@@ -898,51 +940,24 @@ pub(crate) async fn complete_pending_target_command(
             creation_commit,
             initial_document,
         } => {
-            let activation_events = if let Some(activation) = creation_commit.activation() {
-                conn.complete_staged_target_activation_async(activation)
-                    .await
-                    .into_protocol_events()
-            } else {
-                Vec::new()
+            let (mut context, _scope) = crate::conn::CommandWorkflowContext::take_from(
+                command_context,
+                completed.command_id,
+                completed.session_id,
+            );
+            let result = Box::pin(opening::complete_creation(
+                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+                response_plan,
+                creation_commit,
+                initial_document,
+                &mut context,
+            ))
+            .await;
+            let completed = match result {
+                Ok(plan) => context.complete(plan),
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
             };
-            match initial_document {
-                Some(Ok(completed_initial_document)) => {
-                    let completed_initial_document = *completed_initial_document;
-                    let result = conn
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed_initial_document,
-                        )
-                        .await;
-                    match result {
-                        Ok(diagnostics) => {
-                            if let Some(predecessor) = diagnostics.renderer_output_predecessor {
-                                command_context.set_renderer_output_predecessor(predecessor);
-                            }
-                        }
-                        Err(message) => {
-                            return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
-                                -32000, message,
-                            ));
-                        }
-                    }
-                }
-                Some(Err(failed)) => {
-                    let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
-                    return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-                None => {}
-            }
-            TargetCommandTaskStep::Complete(
-                target_creation_response_plan_after_initial_document(
-                    conn,
-                    response_plan,
-                    creation_commit,
-                    activation_events,
-                )
-                .await,
-            )
+            TargetCommandTaskStep::Complete(completed.finish(conn, command_context))
         }
         CompletedTargetCommandKind::DetachFromTarget(output) => {
             TargetCommandTaskStep::Complete(output.finish(conn, command_context))
@@ -1320,6 +1335,11 @@ mod devtools_runtime_entry_tests {
     #[tokio::test]
     async fn attach_to_target_completion_plan_preserves_typed_attached_sidecar() {
         let mut conn = CdpConnection::new();
+        let mut browser = BrowserContext::new("BID-child".into());
+        browser.set_active_target_id("TID-child");
+        browser.attach_active_session("SID-child");
+        conn.install_browser_context_fixture_for_test(browser);
+        conn.register_session_route_for_test("SID-parent", crate::conn::CdpSessionRoute::Browser);
         let plan = attachment::complete_attach_to_target_command_async(
             &mut conn,
             TargetAttachSessionCommit::direct(
@@ -1345,6 +1365,7 @@ mod devtools_runtime_entry_tests {
                 moli_popup_id: None,
             },
             None,
+            &mut Default::default(),
         )
         .await;
 

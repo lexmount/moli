@@ -1095,6 +1095,32 @@ impl CdpConnection {
     ) -> Result<CdpCommandTaskStep, CompletedCdpCommandDispatch> {
         let completed = if matches!(
             completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Target(_)
+        ) && let Some(access) = self.protocol_state_access()
+        {
+            let CompletedCdpCommandDispatchKind::Target(target) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = target.command_id();
+            let session_id = target.session_id().map(str::to_owned);
+            match target.try_into_opening_workflow(access) {
+                Ok(workflow) => {
+                    return Ok(self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    ));
+                }
+                Err(target) => CompletedCdpCommandDispatch {
+                    inner: Box::new(CompletedCdpCommandDispatchKind::Target(target)),
+                },
+            }
+        } else {
+            completed
+        };
+        let completed = if matches!(
+            completed.inner.as_ref(),
             CompletedCdpCommandDispatchKind::Runtime(_)
         ) && let Some(access) = self.protocol_state_access()
         {

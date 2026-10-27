@@ -42,6 +42,29 @@ impl TargetActivationTransition {
         }
     }
 
+    pub(crate) async fn complete_using(
+        self,
+        driver: &mut super::super::ProtocolWorkflowDriver<'_>,
+    ) -> Result<Vec<BackgroundProtocolEvent>> {
+        let updates = driver
+            .with_state(|state| state.start_browser_document_activity_updates())
+            .await?;
+        let result = match updates {
+            Ok(updates) => {
+                crate::domains::target::activation::wait_for_surface_updates(driver, updates).await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "failed to update document activity after target creation");
+        }
+        let (events, updates) = driver
+            .with_state(move |state| state.prepare_staged_target_activation(self))
+            .await?;
+        crate::domains::target::activation::wait_for_surface_updates(driver, updates).await?;
+        Ok(events)
+    }
+
     fn selected_target_id(&self) -> &str {
         &self.selected_target_id
     }
@@ -216,22 +239,18 @@ impl CdpConnection {
         self.start_browser_document_activity_updates()
     }
 
-    /// Completes the renderer-surface half of a foreground transition that was
-    /// staged synchronously while creating a new target.
-    pub(crate) async fn complete_staged_target_activation_async(
+    /// Freezes the original transition's visibility events and Native work.
+    pub(crate) fn prepare_staged_target_activation(
         &mut self,
         transition: &TargetActivationTransition,
-    ) -> CompletedTargetActivation {
-        if let Err(error) = self.apply_browser_document_activity_async().await {
-            tracing::warn!(%error, "failed to update document activity after target creation");
-        }
+    ) -> (Vec<BackgroundProtocolEvent>, Vec<TargetSurfaceUpdate>) {
         let Some(previous_target_id) = transition.deactivated_target_id() else {
-            return CompletedTargetActivation::new(Vec::new());
+            return (Vec::new(), Vec::new());
         };
         if self.target_document_is_visible(previous_target_id) {
-            return CompletedTargetActivation::new(Vec::new());
+            return (Vec::new(), Vec::new());
         }
-        let protocol_events = self
+        let events = self
             .page_screencast_session_ids_for_target(previous_target_id)
             .into_iter()
             .map(|session_id| {
@@ -241,18 +260,38 @@ impl CdpConnection {
                 )
             })
             .collect();
-        if let Err(error) = self
-            .apply_background_target_surface_overrides_async(previous_target_id)
-            .await
+        let mut updates = Vec::new();
+        if let Some(context_id) = self
+            .browser_context_id_for_target(previous_target_id)
+            .map(str::to_owned)
+            && let Some(context) = self.browser_context_by_id_mut(&context_id)
+            && context.background_target(previous_target_id).is_some()
         {
-            tracing::warn!(
-                target_id = previous_target_id,
-                selected_target_id = transition.selected_target_id(),
-                %error,
-                "failed to update Page visibility after target activation"
-            );
+            let mut pending = crate::conn::SessionPageUpdates::default();
+            context.start_session_surface_restoration(previous_target_id, &mut pending);
+            updates.push(TargetSurfaceUpdate {
+                browser_context_id: context_id,
+                target_id: previous_target_id.to_owned(),
+                updates: pending,
+                required: false,
+            });
         }
-        CompletedTargetActivation::new(protocol_events)
+        (events, updates)
+    }
+
+    pub(crate) async fn complete_staged_target_activation_async(
+        &mut self,
+        transition: &TargetActivationTransition,
+    ) -> CompletedTargetActivation {
+        let events = transition
+            .clone()
+            .complete_using(&mut super::super::ProtocolWorkflowDriver::inline(self))
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "failed to complete target creation activation");
+                Vec::new()
+            });
+        CompletedTargetActivation::new(events)
     }
 
     pub(crate) async fn select_page_target_for_connection_async(

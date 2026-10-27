@@ -189,6 +189,10 @@ pub(crate) struct TargetAttachSessionCommit {
 }
 
 impl TargetAttachSessionCommit {
+    pub(crate) fn owner_session_id(&self) -> Option<&str> {
+        self.owner_session_id.as_deref()
+    }
+
     pub(crate) fn worker_attachment(
         &self,
     ) -> Option<&super::TargetWorkerProtocolAttachmentIdentity> {

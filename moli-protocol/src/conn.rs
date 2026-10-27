@@ -55,7 +55,8 @@ mod command_view;
 mod command_wait_lifetime;
 mod command_workflow;
 pub(crate) use command_workflow::{
-    CommandWorkflowContext, CompletedCommandWorkflow, PreparedCommandWorkflow,
+    CommandWorkflowContext, CommandWorkflowFailureCleanup, CompletedCommandWorkflow,
+    PreparedCommandWorkflow,
 };
 mod cookie_manager_surface;
 mod cookie_owner;

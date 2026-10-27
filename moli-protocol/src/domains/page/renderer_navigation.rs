@@ -263,6 +263,7 @@ impl PreparedRendererNavigation {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn target_id(&self, conn: &CdpConnection) -> Option<String> {
         conn.target_owner_identity_for_owner(&self.owner)
             .and_then(|(_, target)| target)

@@ -59,6 +59,12 @@ pub(crate) struct CommandWorkflowFailureCleanup(
 );
 
 impl CommandWorkflowFailureCleanup {
+    pub(crate) fn new(
+        cleanup: impl FnOnce(CommandOutputPlan) -> PreparedCommandWorkflow + 'static,
+    ) -> Self {
+        Self(Box::new(cleanup))
+    }
+
     pub(super) fn recover(self, plan: CommandOutputPlan) -> PreparedCommandWorkflow {
         (self.0)(plan)
     }
@@ -79,7 +85,7 @@ impl PreparedCommandWorkflow {
         mut self,
         cleanup: impl FnOnce(CommandOutputPlan) -> Self + 'static,
     ) -> Self {
-        self.failure_cleanup = Some(CommandWorkflowFailureCleanup(Box::new(cleanup)));
+        self.failure_cleanup = Some(CommandWorkflowFailureCleanup::new(cleanup));
         self
     }
 
@@ -327,8 +333,23 @@ impl CommandWorkflowContext {
         ) -> CommandOutputPlan
         + 'static,
     ) -> CompletedCommandWorkflow {
-        self.state_completion = Some(Box::new(operation));
+        self.defer_owner_turn_completion(operation);
         self.complete_retaining_cleanup(plan)
+    }
+
+    pub(crate) fn defer_owner_turn_completion(
+        &mut self,
+        operation: impl for<'state, 'context> FnOnce(
+            ProtocolWorkflowState<'state>,
+            &'context mut CommandDispatchContext,
+        ) -> CommandOutputPlan
+        + 'static,
+    ) {
+        assert!(
+            self.state_completion.is_none(),
+            "one final state operation per command"
+        );
+        self.state_completion = Some(Box::new(operation));
     }
 
     pub(crate) fn fail(self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
@@ -433,14 +454,22 @@ impl CompletedCommandWorkflow {
             .expect("completed workflow owns its terminal");
         let mut completion_output = None;
         if let Some(completion) = self.context.state_completion.take() {
+            // The final operation may discover that its original owner has
+            // retired and install the corresponding resource rollback. Keep
+            // that new cleanup; only the preceding phase's authority ends here.
+            let previous_cleanup = target.take_command_failure_cleanup();
             match std::panic::catch_unwind(AssertUnwindSafe(|| {
                 completion(ProtocolWorkflowState::new(connection), target)
             })) {
                 Ok(output) => {
-                    target.take_command_failure_cleanup();
                     completion_output = Some(output);
                 }
                 Err(_) => {
+                    if let Some(cleanup) = previous_cleanup
+                        && target.command_failure_cleanup.borrow().is_none()
+                    {
+                        target.register_command_failure_cleanup(cleanup);
+                    }
                     plan = CommandOutputPlan::error(-32000, OwnedProtocolWaitFailure::Panicked);
                 }
             }

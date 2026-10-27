@@ -293,61 +293,86 @@ pub(super) async fn complete_attach_to_target_command_async(
             crate::conn::FailedInitialDocumentPageBuild,
         >,
     >,
+    command_context: &mut crate::conn::CommandDispatchContext,
 ) -> CommandOutputPlan {
-    let attached_session_id = prepared_session.session_id().to_owned();
-    match initial_document {
-        Some(Ok(completed_initial_document)) => {
-            let completed_initial_document = *completed_initial_document;
-            if let Err(message) = conn
-                .complete_initial_document_page_build_for_owner(completed_initial_document)
-                .await
-            {
-                conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-                    .await;
-                return CommandOutputPlan::error_without_session(-32000, message);
-            }
-        }
-        Some(Err(failed)) => {
-            let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
-            conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-                .await;
-            return CommandOutputPlan::error_without_session(-32000, message);
-        }
-        None => {}
-    }
-    if let Err(message) = conn
-        .apply_runtime_binding_state_for_owner_async(&crate::conn::CommandOwnerScope::for_route(
-            prepared_session.route().clone(),
-        ))
-        .await
-        && !message.is::<crate::conn::NoDocumentLoaded>()
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(command_context, None, None);
+    let result = Box::pin(super::opening::complete_attachment(
+        &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
+        prepared_session,
+        target_info,
+        initial_document,
+        &mut context,
+    ))
+    .await;
+    let completed = match result {
+        Ok(plan) => context.complete(plan),
+        Err(error) => context.fail(CommandOutputPlan::error_without_session(-32000, error)),
+    };
+    completed.finish(conn, command_context)
+}
+
+pub(crate) fn commit_target_attachment(
+    conn: &mut CdpConnection,
+    prepared: TargetAttachSessionCommit,
+    target_info: DevToolsTargetInfo,
+) -> Result<CommandOutputPlan, CommandOutputPlan> {
+    use super::session_disposal::SessionDisposalError;
+    let owner = CommandOwnerScope::for_route(prepared.route().clone());
+    if conn.target_is_closing_for_owner(&owner)
+        || prepared
+            .owner_session_id()
+            .is_some_and(|session| conn.session_is_closing(session))
     {
-        tracing::warn!(
-            %message,
-            session_id = attached_session_id.as_str(),
-            "target attach renderer binding state apply failed"
-        );
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            SessionDisposalError::Closing,
+        ));
     }
-    if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
-        conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-            .await;
-        return CommandOutputPlan::error_without_session(-32000, message);
-    }
-    let Some(attached_target_id) = target_info
+    let Some(target_id) = target_info
         .target_id
         .as_ref()
-        .map(|target_id| target_id.as_str().to_owned())
+        .map(|id| id.as_str().to_owned())
     else {
-        conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-            .await;
-        return CommandOutputPlan::error_without_session(-32000, "MissingTargetId");
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            SessionDisposalError::UnknownTarget,
+        ));
     };
-    let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-        &attached_target_id,
+    let binding_exists = prepared
+        .route()
+        .browser_context_id()
+        .and_then(|context| conn.browser_context_by_id(context))
+        .and_then(|context| context.page_target(&target_id))
+        .is_some_and(|target| {
+            target
+                .devtools_sessions
+                .key_for_wire_session_id(prepared.session_id())
+                .is_some()
+        });
+    if !binding_exists
+        || prepared
+            .owner_session_id()
+            .is_some_and(|session| conn.session_route(Some(session)).is_none())
+    {
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            SessionDisposalError::UnknownTarget,
+        ));
+    }
+    if let Some(error) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
+        return Err(CommandOutputPlan::error_without_session(-32000, error));
+    }
+    let session_id = prepared.session_id().to_owned();
+    let events = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
+        target_id,
         target_info,
-        [prepared_session],
+        [prepared],
     ));
-    attach_session_events_then_result_plan(attached_session_id, event_plan.into_background_events())
+    Ok(attach_session_events_then_result_plan(
+        session_id,
+        events.into_background_events(),
+    ))
 }
 
 fn do_attach_shared_worker_target(

@@ -897,10 +897,19 @@ impl CdpConnection {
         &mut self,
         prepared: &TargetAttachSessionCommit,
     ) -> TargetEventPlan {
-        self.rollback_attached_session_with_cleanup_without_event_async(
-            TargetAttachRollbackPlan::from_prepared_attach_session(prepared),
+        match crate::domains::target::rollback_attachment(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            prepared.clone(),
         )
         .await
+        {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::warn!(session_id = prepared.session_id(), %error,
+                    "failed to clean prepared target binding during attach rollback");
+                TargetEventPlan::default()
+            }
+        }
     }
 
     pub(crate) fn rollback_prepared_attach_session_sync_without_event(
@@ -977,27 +986,6 @@ impl CdpConnection {
                 ..
             } => {}
         }
-    }
-
-    async fn rollback_attached_session_with_cleanup_without_event_async(
-        &mut self,
-        rollback_plan: TargetAttachRollbackPlan,
-    ) -> TargetEventPlan {
-        if let Some(cleanup_plan) = rollback_plan.cleanup_plan()
-            && let Err(error) =
-                crate::domains::target::dispose_uncommitted_session_async(self, cleanup_plan).await
-        {
-            tracing::warn!(
-                session_id = rollback_plan.session_id(),
-                %error,
-                "failed to clean prepared target binding during attach rollback"
-            );
-            // Keep both the domain binding and its control-plane route as
-            // retry authority. Dropping only the latter would make any
-            // renderer-owned state unreachable.
-            return TargetEventPlan::default();
-        }
-        self.rollback_attached_session_without_event(rollback_plan.session_id())
     }
 
     pub(crate) fn auto_attached_session_detach_plan(

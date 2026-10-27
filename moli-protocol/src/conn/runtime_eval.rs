@@ -581,6 +581,12 @@ pub struct CompletedRuntimeBindingPageCommandDispatch {
     completion: moli_core::page::CompletedPageCommand,
 }
 
+impl CompletedRuntimeBindingPageCommandDispatch {
+    pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.completion.renderer_output_predecessor()
+    }
+}
+
 pub struct CompletedRuntimeChildDefaultContextLookupDispatch {
     owner: CommandOwnerScope,
     completion: moli_core::page::CompletedPageCommand,
