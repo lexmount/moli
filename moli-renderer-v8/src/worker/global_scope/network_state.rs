@@ -18,7 +18,9 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(crate) enum WorkerFetchEvent {
+    RedirectAdmission { fetch_id: u32, admission: crate::network_host::RedirectAdmission },
     PolicyViolations(Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>),
+
     Completion(Box<WorkerFetchCompletion>),
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),
@@ -124,6 +126,10 @@ pub(in crate::worker) struct WorkerWebSocketState {
 }
 
 pub(in crate::worker) enum WorkerXhrEvent {
+    RedirectAdmission {
+        xhr_id: u32,
+        admission: crate::network_host::RedirectAdmission,
+    },
     ResourceTiming {
         xhr_id: Option<u32>,
         timing: WorkerResourceTiming,

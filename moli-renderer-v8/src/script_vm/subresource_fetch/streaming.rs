@@ -389,6 +389,19 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::RedirectAdmission {
+                internal_id,
+                admission,
+            } => {
+                if self
+                    ._context_host
+                    .borrow()
+                    .admit_subresource_redirect(internal_id)
+                {
+                    admission.grant();
+                }
+                Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
+            }
             AsyncSubresourceFetchEvent::InterceptionOutputReady(output) => {
                 output.drain();
                 Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)

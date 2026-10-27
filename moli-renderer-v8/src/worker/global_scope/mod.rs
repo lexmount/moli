@@ -111,12 +111,15 @@ mod nested_workers;
 mod network_state;
 mod origin;
 mod performance;
+mod redirect_owner;
 mod resource_timing;
 mod service_worker_api;
 mod service_worker_results;
 mod state;
 mod timers;
 mod xhr;
+
+pub(crate) use redirect_owner::WorkerRedirectOwner;
 
 use self::service_worker_api::*;
 pub(super) use self::service_worker_api::{

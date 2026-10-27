@@ -297,6 +297,7 @@ impl ServiceWorkerRuntimeService {
             job.request.method,
             job.request.request_headers.clone(),
             request_body_text(&job.request.body),
+            None,
         );
     }
 
@@ -1778,6 +1779,8 @@ mod tests {
                         completion.response_filter,
                         Some(AsyncSubresourceFetchResponseFilter::service_worker(
                             moli_fetch_types::FetchResponseMetadata {
+                                request_include_credentials: false,
+
                                 response_type: if mode == Manual {
                                     moli_fetch_types::FetchResponseType::OpaqueRedirect
                                 } else {

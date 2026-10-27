@@ -209,6 +209,7 @@ fn start_dictionary_fetch(
             "GET".into(),
             Default::default(),
             None,
+            None,
         );
     }
     Ok(())

@@ -274,6 +274,7 @@ pub(crate) fn start_event_source_request<'s>(
         "GET".to_owned(),
         prepared.request_headers,
         None,
+        None,
     );
 }
 
