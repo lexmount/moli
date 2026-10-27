@@ -52,6 +52,7 @@ pub struct Document {
     ready_state: DocumentReadyState,
     quirks_mode: QuirksMode,
     kind: DocumentKind,
+    is_inert_template_document: bool,
     design_mode_enabled: bool,
     css_target: Option<NativeNodeId>,
     default_language: Option<Box<str>>,
@@ -73,6 +74,7 @@ impl Document {
             ready_state: DocumentReadyState::Complete,
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Html,
+            is_inert_template_document: false,
             design_mode_enabled: false,
             css_target: None,
             default_language: None,
@@ -89,11 +91,21 @@ impl Document {
             ready_state: DocumentReadyState::Complete,
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Xml,
+            is_inert_template_document: false,
             design_mode_enabled: false,
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
         }
+    }
+
+    pub(super) fn new_inert_template(url: Url, kind: DocumentKind) -> Self {
+        let mut document = match kind {
+            DocumentKind::Html => Self::new_html(url),
+            DocumentKind::Xml => Self::new_xml(url),
+        };
+        document.is_inert_template_document = true;
+        document
     }
 
     pub fn url(&self) -> &Url {
@@ -142,6 +154,10 @@ impl Document {
 
     pub fn is_html_document(&self) -> bool {
         self.kind == DocumentKind::Html
+    }
+
+    pub fn is_inert_template_document(&self) -> bool {
+        self.is_inert_template_document
     }
 
     pub fn design_mode_enabled(&self) -> bool {

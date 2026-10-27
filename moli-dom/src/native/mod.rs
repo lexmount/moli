@@ -13,6 +13,7 @@ mod scripts;
 
 use std::sync::Arc;
 
+use document::DocumentKind;
 pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
@@ -518,21 +519,17 @@ impl NativeDom {
         document_handle: NativeNodeId,
         host: Option<NativeNodeId>,
     ) -> NativeNodeId {
-        let (url, is_html_document) = self
+        let (url, kind) = self
             .node(document_handle)
             .and_then(Node::as_document)
-            .map(|document| (document.url().clone(), document.is_html_document()))
+            .map(|document| (document.url().clone(), document.kind()))
             .unwrap_or_else(|| {
                 (
                     url::Url::parse("about:blank").expect("about:blank is valid"),
-                    true,
+                    DocumentKind::Html,
                 )
             });
-        let document = if is_html_document {
-            Document::new_html(url)
-        } else {
-            Document::new_xml(url)
-        };
+        let document = Document::new_inert_template(url, kind);
         let owner_document =
             self.create_node(NodeData::Document(Box::new(document)), None, false, false);
         self.create_node(

@@ -908,6 +908,62 @@ fn detached_html_template_contents_preserve_html_element_names() {
 }
 
 #[test]
+fn template_contents_use_the_document_interface_with_source_document_semantics() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-content-interface.test/",
+        r#"<!doctype html><body>
+          <template id="parsed"><div>main</div></template>
+          <iframe></iframe>
+        </body>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"(() => {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  const child = document.querySelector('iframe').contentDocument;
+  child.open();
+  child.write('<!doctype html><body><template id="parsed"><div>child</div></template>');
+  child.close();
+  const documents = [
+    ['main', document],
+    ['child', child],
+    ['created', document.implementation.createHTMLDocument('')],
+    ['parsed', new DOMParser().parseFromString('<body></body>', 'text/html')]
+  ];
+  const checkTemplate = (template, label, html) => {
+    const owner = template.content.ownerDocument;
+    check(Object.prototype.toString.call(owner) === '[object Document]', label + ' interface');
+    check(owner.defaultView === null, label + ' inert');
+    check(owner.createElement('DIV').localName === (html ? 'div' : 'DIV'), label + ' kind');
+  };
+  for (const [label, doc] of documents) {
+    check(Object.prototype.toString.call(doc) === '[object HTMLDocument]', label + ' normal interface');
+    checkTemplate(doc.createElement('template'), label + ' created', true);
+    const host = doc.createElement('div');
+    host.innerHTML = '<template><div>content</div></template>';
+    checkTemplate(host.firstElementChild, label + ' fragment parsed', true);
+    const parsed = doc.querySelector('#parsed');
+    if (label === 'main' || label === 'child') {
+      check(parsed !== null, label + ' parsed fixture');
+      checkTemplate(parsed, label + ' document parsed', true);
+    }
+  }
+  const xml = new DOMParser().parseFromString(
+    '<template xmlns="http://www.w3.org/1999/xhtml"><title>xml</title></template>',
+    'application/xhtml+xml'
+  );
+  check(Object.prototype.toString.call(xml) === '[object Document]', 'normal XML interface');
+  checkTemplate(xml.documentElement, 'XML template', false);
+  return 'ok';
+})()"#,
+        )
+        .expect("inert document interfaces should be independent of HTML/XML semantics");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn template_content_host_rejects_insertion_cycles_after_adoption() {
     let mut vm = new_storage_test_vm("https://template-content-host.test/");
 
