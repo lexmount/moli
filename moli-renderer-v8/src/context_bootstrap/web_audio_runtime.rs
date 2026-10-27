@@ -11,6 +11,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 mod audio_param;
 mod biquad;
 mod graph;
+mod listener;
 mod node;
 
 use audio_param::{audio_param, detune_param};
@@ -377,6 +378,9 @@ struct AudioWorkletNodeTemplateDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(accessor_property, getter = listener::get, enumerable, receiver = web_api_interfaces::BaseAudioContext::is_instance)]
+    listener: (),
+
     #[webapi(
         accessor_property = "onstatechange",
         getter = simple_event_target_handler_getter_callback,
@@ -459,6 +463,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
             template.prototype_template(scope),
         ),
         "AudioParam" => audio_param::install(scope, template),
+        "AudioListener" => listener::install(scope, template),
         "BiquadFilterNode" => biquad::install(scope, template),
         "BaseAudioContext" => {
             BaseAudioContextPrototypeDeclaration::initialize_prototype_template(
