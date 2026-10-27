@@ -1,6 +1,6 @@
 use super::*;
 
-async fn run_rejection_task(
+pub(super) async fn run_rejection_task(
     vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     loader: &ResourceRequestClient,
 ) {

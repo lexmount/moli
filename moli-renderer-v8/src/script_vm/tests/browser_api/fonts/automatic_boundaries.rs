@@ -32,7 +32,7 @@ fn automatic_fonts_end_crlf_pairing_at_rendered_inline_objects() {
         ("<i style='display:contents'></i>", "unloaded"),
         ("<i style='display:none'></i>", "unloaded"),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, mut completions) = font_usage_vm();
         let object = serde_json::to_string(object).unwrap();
         vm.eval(&format!(r#"
             const container=document.createElement('div');
@@ -47,7 +47,7 @@ fn automatic_fonts_end_crlf_pairing_at_rendered_inline_objects() {
         vm.reconcile_document_font_resources();
         vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
             .unwrap();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(vm.eval("face.status").unwrap(), expected, "{object}");
         assert_eq!(vm.eval("globalThis.ready===true").unwrap(), "true");
         assert_eq!(vm.layout_pass_observability_for_test().1, 0);

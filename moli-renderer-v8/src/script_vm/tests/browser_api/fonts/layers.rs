@@ -1,4 +1,4 @@
-use super::selection_order::{order_font_data, order_vm};
+use super::selection_order::{order_font_data, order_vm_with_resource_completions};
 use super::*;
 
 #[test]
@@ -6,7 +6,7 @@ fn font_face_layers_select_loaded_fonts_independently_of_source_and_iteration_or
     let (narrow, wide) = order_font_data();
     for (layers, expected) in [("first, second", "160"), ("second, first", "80")] {
         for reversed in [false, true] {
-            let mut vm = order_vm();
+            let (mut vm, mut completions) = order_vm_with_resource_completions();
             let mut rules = [
                 format!(
                     "@layer first {{ @font-face {{ font-family:OrderFace;src:url(data:font/ttf;base64,{narrow}) }} }}"
@@ -25,6 +25,7 @@ fn font_face_layers_select_loaded_fonts_independently_of_source_and_iteration_or
                 globalThis.faces=[...document.fonts];
                 document.fonts.load('40px OrderFace','AAAA');
             "#)).unwrap();
+            complete_local_font_resources(&mut vm, &mut completions);
             assert_eq!(
                 vm.eval("faces.every(face => face.status === 'loaded')")
                     .unwrap(),
@@ -53,7 +54,7 @@ fn font_face_layers_select_loaded_fonts_independently_of_source_and_iteration_or
 
 #[test]
 fn empty_layer_edits_reorder_other_sheets_without_replacing_font_faces() {
-    let mut vm = order_vm();
+    let (mut vm, mut completions) = order_vm_with_resource_completions();
     let (narrow, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.order=document.createElement('style');document.head.append(order);
@@ -72,6 +73,7 @@ fn empty_layer_edits_reorder_other_sheets_without_replacing_font_faces() {
         vm.eval(edit).unwrap();
         vm.eval("document.fonts.load('40px OrderFace','AAAA')")
             .unwrap();
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(
             vm.eval("String(probe.getBoundingClientRect().width)")
                 .unwrap(),
@@ -125,7 +127,7 @@ async fn native_font_layer_reordering_needs_no_javascript_font_projection() {
 #[test]
 fn unlayered_font_faces_outrank_nested_layers_and_manual_faces_outrank_css() {
     let (narrow, wide) = order_font_data();
-    let mut vm = order_vm();
+    let (mut vm, mut completions) = order_vm_with_resource_completions();
     vm.eval(&format!(r#"
         const style=document.createElement('style');
         style.textContent=`@font-face {{ font-family:OrderFace;src:url(data:font/ttf;base64,{narrow}) }}
@@ -135,6 +137,7 @@ fn unlayered_font_faces_outrank_nested_layers_and_manual_faces_outrank_css() {
           }}`;
         document.head.append(style);document.fonts.load('40px OrderFace','AAAA');
     "#)).unwrap();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("String(probe.getBoundingClientRect().width)")
             .unwrap(),

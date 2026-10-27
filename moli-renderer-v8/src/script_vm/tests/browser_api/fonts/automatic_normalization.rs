@@ -3,7 +3,7 @@ use super::selection_order::order_font_data;
 use super::*;
 
 fn load_text_subset(runs: &[&str], whitespace: &str, range: &str) -> String {
-    let mut vm = font_usage_vm();
+    let (mut vm, mut completions) = font_usage_vm();
     let (_, wide) = order_font_data();
     let runs = serde_json::to_string(runs).unwrap();
     vm.eval(&format!(r#"
@@ -17,7 +17,7 @@ fn load_text_subset(runs: &[&str], whitespace: &str, range: &str) -> String {
     vm.reconcile_document_font_resources();
     vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
         .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("String(ready)").unwrap(), "true");
     assert_eq!(vm.layout_pass_observability_for_test().1, 0);
     vm.eval("face.status").unwrap()
@@ -117,7 +117,7 @@ fn automatic_fonts_follow_inline_and_generated_text_order_and_block_boundaries()
             "unloaded",
         ),
     ] {
-        let mut vm = font_usage_vm();
+        let (mut vm, mut completions) = font_usage_vm();
         let markup = serde_json::to_string(markup).unwrap();
         let css = serde_json::to_string(css).unwrap();
         vm.eval(&format!(r#"
@@ -128,14 +128,14 @@ fn automatic_fonts_follow_inline_and_generated_text_order_and_block_boundaries()
             container.innerHTML={markup};document.body.append(container);
         "#)).unwrap();
         vm.reconcile_document_font_resources();
-        run_font_tasks(&mut vm);
+        complete_local_font_resources(&mut vm, &mut completions);
         assert_eq!(vm.eval("face.status").unwrap(), expected, "{markup}/{css}");
         assert_eq!(vm.layout_pass_observability_for_test().1, 0);
     }
 }
 
 fn assert_contents_subset(markup: &str, range: &str, expected: &str) {
-    let mut vm = font_usage_vm();
+    let (mut vm, mut completions) = font_usage_vm();
     let (_, wide) = order_font_data();
     let markup = serde_json::to_string(markup).unwrap();
     vm.eval(&format!(r#"
@@ -151,7 +151,7 @@ fn assert_contents_subset(markup: &str, range: &str, expected: &str) {
     vm.reconcile_document_font_resources();
     vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
         .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("face.status").unwrap(),
         expected,
