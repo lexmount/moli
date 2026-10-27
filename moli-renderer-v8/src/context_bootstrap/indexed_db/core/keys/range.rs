@@ -29,18 +29,13 @@ pub(in crate::context_bootstrap::indexed_db) fn convert_key_range_key<'s>(
     value: v8::Local<'s, v8::Value>,
     invalid_message: &str,
 ) -> Option<Key> {
-    let result = {
-        v8::tc_scope!(let conversion, scope);
-        let result = parse_idb_key(conversion, value);
-        if conversion.has_caught() {
-            conversion.rethrow();
-            return None;
-        }
-        result
-    };
-    match result {
+    match parse_idb_key(scope, value) {
         Ok(Some(key)) => Some(key),
-        _ => {
+        Err(error @ KeyConversionError::Exception(_)) => {
+            error.throw(scope);
+            None
+        }
+        Ok(None) | Err(KeyConversionError::Invalid(_)) => {
             let error = crate::context_bootstrap::indexed_db::dom_exception_value(
                 scope,
                 invalid_message,

@@ -12,8 +12,8 @@ pub(super) fn execute_started_object_store_write<'s>(
 ) -> bool {
     let explicit_key = match parse_idb_key(scope, key_value) {
         Ok(key) => key,
-        Err(message) => {
-            throw_type_error(scope, message);
+        Err(error) => {
+            error.throw(scope);
             return false;
         }
     };

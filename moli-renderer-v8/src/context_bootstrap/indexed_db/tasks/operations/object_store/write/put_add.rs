@@ -12,8 +12,8 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
 ) {
     let explicit_key = match parse_idb_key(scope, key_value) {
         Ok(key) => key,
-        Err(message) => {
-            let error = dom_exception_value(scope, message, "TypeError");
+        Err(error) => {
+            let error = error.into_value(scope);
             store_request_error(scope, request, error);
             return;
         }

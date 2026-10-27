@@ -10,7 +10,7 @@ pub(in crate::context_bootstrap::indexed_db::stores) struct CollectionRequestArg
 
 pub(in crate::context_bootstrap::indexed_db::stores) enum CollectionRequestArgsError {
     WebIdl(webidl::WebIdlError),
-    InvalidQuery,
+    Key(KeyConversionError),
 }
 
 pub(in crate::context_bootstrap::indexed_db::stores) fn parse_collection_request_args<'s>(
@@ -28,8 +28,7 @@ pub(in crate::context_bootstrap::indexed_db::stores) fn parse_collection_request
             (positional_query, count, CursorDirection::default_next())
         };
     let (query_value, count, direction) = parsed;
-    let query = parse_key_or_range(scope, query_value)
-        .map_err(|_| CollectionRequestArgsError::InvalidQuery)?;
+    let query = parse_key_or_range(scope, query_value).map_err(CollectionRequestArgsError::Key)?;
     Ok(CollectionRequestArgs {
         query,
         count,
@@ -72,8 +71,9 @@ fn parse_get_all_options<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Result<(v8::Local<'s, v8::Value>, Option<usize>, CursorDirection), CollectionRequestArgsError>
 {
-    let object = v8::Local::<v8::Object>::try_from(value)
-        .map_err(|_| CollectionRequestArgsError::InvalidQuery)?;
+    let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| {
+        CollectionRequestArgsError::Key(KeyConversionError::Invalid("Invalid getAll options."))
+    })?;
     let query = webidl::property_result(
         scope,
         object,

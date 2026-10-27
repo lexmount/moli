@@ -1,6 +1,27 @@
 use super::pipe_disturbed::run_probe;
 use super::*;
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_keys_preserve_types_order_and_binary_snapshots() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-key-model.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nkeyModelProbe('key-model-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: keyChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            259,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

@@ -8,9 +8,10 @@ use super::{
     extract_index_keys_from_value, indexed_db_request_transaction_object, key_path_from_js_value,
     key_to_js_value, object_bool_property, object_hidden_value, object_number_property,
     object_property_as_object, object_string_property, parse_idb_key, prepare_cursor_request,
-    queue_transaction_request, request_error_object, serialize_js_value, set_indexed_db_slot_value,
-    storage_bucket_quota_check_for_object_store, store_request_error, store_request_success,
-    throw_type_error, transaction_handle_from_value, v8str, with_indexed_db_manager,
+    queue_transaction_request, request_error_object, require_idb_key, serialize_js_value,
+    set_indexed_db_slot_value, storage_bucket_quota_check_for_object_store, store_request_error,
+    store_request_success, throw_type_error, transaction_handle_from_value, v8str,
+    with_indexed_db_manager,
 };
 use crate::webidl;
 

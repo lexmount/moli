@@ -3450,38 +3450,40 @@ fn indexed_db_out_of_line_store_missing_key_throws_data_error() {
 }
 
 #[test]
-fn indexed_db_rejects_out_of_range_integer_keys() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-out-of-range-key.test/");
+fn indexed_db_roundtrips_explicit_number_keys_beyond_safe_integer_range() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-large-number-key.test/");
 
     vm.eval(
         r#"
-(() => {
-  globalThis.__indexedDbOutOfRangeKeyError = "pending";
-  const dbName = `app-${Math.random()}`;
-  const open = indexedDB.open(dbName, 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("outline");
-  open.onsuccess = () => {
-    try {
-      open.result
-        .transaction("outline", "readwrite")
-        .objectStore("outline")
-        .put({ value: 1 }, Number.MAX_SAFE_INTEGER + 1);
-      globalThis.__indexedDbOutOfRangeKeyError = "no-error";
-    } catch (error) {
-      globalThis.__indexedDbOutOfRangeKeyError = error.name;
-    }
+const key = Number.MAX_SAFE_INTEGER + 1;
+globalThis.largeNumberKeyResult = "pending";
+const open = indexedDB.open(`large-number-${Math.random()}`, 1);
+open.onupgradeneeded = () => open.result.createObjectStore("outline");
+open.onsuccess = () => {
+  const db = open.result;
+  const tx = db.transaction("outline", "readwrite");
+  const store = tx.objectStore("outline");
+  let savedKey, savedValue;
+  tx.onabort = () => { largeNumberKeyResult = `abort:${tx.error.name}`; };
+  tx.oncomplete = () => {
+    largeNumberKeyResult = JSON.stringify([savedKey, savedValue]);
+    db.close();
   };
-  return "scheduled";
-})()
+  const put = store.put({value: 1}, key);
+  put.onsuccess = () => {
+    savedKey = put.result;
+    const get = store.get(savedKey);
+    get.onsuccess = () => { savedValue = get.result.value; };
+  };
+};
 "#,
     )
-    .expect("indexeddb out-of-range key workflow should schedule");
+    .expect("large number key workflow should schedule");
 
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__indexedDbOutOfRangeKeyError)")
-        .expect("indexeddb out-of-range key result should be readable");
-
-    assert_eq!(result, "TypeError");
+        .eval_after_selected_page_tasks("String(globalThis.largeNumberKeyResult)")
+        .expect("large number key requests and commit should finish");
+    assert_eq!(result, "[9007199254740992,1]");
 }
 
 #[test]

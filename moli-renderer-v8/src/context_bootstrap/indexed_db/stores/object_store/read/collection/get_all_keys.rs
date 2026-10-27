@@ -7,8 +7,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_all_keys_ca
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let store = args.this();
-    let Some((request, transaction, store_name)) = object_store_operation_common(scope, store)
-    else {
+    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -23,15 +22,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_all_keys_ca
             webidl::throw_error(scope, &error);
             return;
         }
-        Err(CollectionRequestArgsError::InvalidQuery) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'getAllKeys': the query is not a valid key or key range.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(CollectionRequestArgsError::Key(error)) => {
+            error.throw(scope);
             return;
         }
+    };
+    let Some(request) = create_operation_request(scope, store, transaction) else {
+        return;
     };
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)

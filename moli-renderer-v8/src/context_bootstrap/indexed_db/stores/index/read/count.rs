@@ -17,8 +17,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
         return;
     };
     let index = args.this();
-    let Some((request, transaction, store_name, index_info)) = create_index_request(scope, index)
-    else {
+    let Some((transaction, store_name, index_info)) = index_operation_state(scope, index) else {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -30,15 +29,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
     let query_value = parsed.query.unwrap_or_else(|| v8::undefined(scope).into());
     let query = match parse_key_or_range(scope, query_value) {
         Ok(query) => query,
-        Err(_) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'count': the query is not a valid key or key range.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
+    };
+    let Some(request) = create_operation_request(scope, index, transaction) else {
+        return;
     };
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)

@@ -8,8 +8,7 @@ fn idb_index_open_cursor_impl<'s>(
     key_only: bool,
 ) {
     let index = args.this();
-    let Some((request, transaction, store_name, index_info)) = create_index_request(scope, index)
-    else {
+    let Some((transaction, store_name, index_info)) = index_operation_state(scope, index) else {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -24,6 +23,9 @@ fn idb_index_open_cursor_impl<'s>(
         "IDBIndex.openCursor"
     };
     let Some(parsed) = parse_open_cursor_args(scope, args, operation_name) else {
+        return;
+    };
+    let Some(request) = create_operation_request(scope, index, transaction) else {
         return;
     };
     let operation =

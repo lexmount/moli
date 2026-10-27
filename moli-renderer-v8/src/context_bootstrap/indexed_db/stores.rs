@@ -1,10 +1,11 @@
 use super::{
     CursorDirection, CursorSnapshotEntry, INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
     INDEXED_DB_TRANSACTION_STARTED_SLOT, IdbKeyRangeQuery, IndexInfo, IndexOptions,
-    IndexedDbCursorOpenOperation, IndexedDbError, IndexedDbTransactionOperation, KeyPath,
-    PreparedObjectStoreWriteError, TransactionHandle, apply_cursor_direction,
-    apply_index_collection_direction, apply_object_store_collection_direction, compare_idb_keys,
-    create_index_object, create_key_range_object, create_request_object, deserialize_js_value,
+    IndexedDbCursorOpenOperation, IndexedDbError, IndexedDbTransactionOperation,
+    KeyConversionError, KeyPath, PreparedObjectStoreWriteError, TransactionHandle,
+    apply_cursor_direction, apply_index_collection_direction,
+    apply_object_store_collection_direction, compare_idb_keys, create_index_object,
+    create_key_range_object, create_request_object, deserialize_js_value,
     discard_unreturned_request, dom_exception_value, enforce_object_store_unique_constraints,
     enqueue_transaction_operation, execute_object_store_clear_request,
     execute_object_store_delete_request, index_info_from_store_metadata,
@@ -17,8 +18,8 @@ use super::{
     remove_database_index_metadata, request_error_object, scan_index_entries,
     scan_object_store_entries, serialize_js_value, set_database_index_metadata,
     storage_bucket_quota_check_for_object_store, store_request_error, store_request_success,
-    submit_cursor_open_operation, sync_store_surface_from_metadata, throw_type_error,
-    transaction_handle_from_value, with_indexed_db_manager,
+    submit_cursor_open_operation, sync_store_surface_from_metadata, transaction_handle_from_value,
+    with_indexed_db_manager,
 };
 use crate::webidl;
 
@@ -32,3 +33,26 @@ use self::collection_args::{CollectionRequestArgsError, parse_collection_request
 pub(super) use self::index::*;
 pub(super) use self::key_range::*;
 pub(super) use self::object_store::*;
+
+// Allocate and admit only after key conversion has succeeded. Conversion can
+// run author code, so a transaction aborted by a getter must be checked again.
+fn create_operation_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+        .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "The transaction is not active.",
+            "TransactionInactiveError",
+        );
+        scope.throw_exception(error);
+        return None;
+    }
+    let request = create_request_object(scope, source.into(), transaction)?;
+    queue_transaction_request(scope, transaction, request);
+    Some(request)
+}

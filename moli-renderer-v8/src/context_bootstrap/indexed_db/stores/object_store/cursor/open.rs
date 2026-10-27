@@ -8,8 +8,7 @@ fn idb_object_store_open_cursor_impl<'s>(
     key_only: bool,
 ) {
     let store = args.this();
-    let Some((request, transaction, store_name)) = object_store_operation_common(scope, store)
-    else {
+    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -24,6 +23,9 @@ fn idb_object_store_open_cursor_impl<'s>(
         "IDBObjectStore.openCursor"
     };
     let Some(parsed) = parse_open_cursor_args(scope, args, operation_name) else {
+        return;
+    };
+    let Some(request) = create_operation_request(scope, store, transaction) else {
         return;
     };
     let operation =
