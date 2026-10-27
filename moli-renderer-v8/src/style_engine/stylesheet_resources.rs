@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 
@@ -97,6 +97,22 @@ impl StylesheetResourceManifest {
     ) -> Self {
         #[cfg(test)]
         STYLESHEET_RESOURCE_MANIFEST_BUILD_COUNT.with(|count| count.set(count.get() + 1));
+        // Identical stylesheet contents may share rule Arcs. Keep every
+        // occurrence's effective rank instead of collapsing an address to its
+        // last rank, then publish declaration identities in matching order.
+        let mut ranks = BTreeMap::<usize, VecDeque<usize>>::new();
+        for (rank, address) in stylist
+            .iter_extra_data_origins()
+            .filter(|(_, origin)| *origin == Origin::Author)
+            .flat_map(|(data, _)| {
+                data.font_faces
+                    .iter()
+                    .map(|(rule, _)| rule.raw_ptr().as_ptr() as usize)
+            })
+            .enumerate()
+        {
+            ranks.entry(address).or_default().push_back(rank);
+        }
         let mut web_fonts = Vec::new();
         let mut imports = BTreeMap::new();
         collect_resources(
@@ -118,11 +134,22 @@ impl StylesheetResourceManifest {
                 &mut imports,
             );
         }
+        let mut web_fonts = web_fonts
+            .into_iter()
+            .map(|(address, resource)| {
+                let rank = ranks
+                    .get_mut(&address)
+                    .and_then(VecDeque::pop_front)
+                    .unwrap_or(usize::MAX);
+                (rank, resource)
+            })
+            .collect::<Vec<_>>();
+        web_fonts.sort_by_key(|(rank, _)| *rank);
         // A declaration may be adopted by more than one scope. Keep its last
         // occurrence, while independent rules retain independent registrations.
         let mut seen = BTreeSet::new();
         web_fonts.reverse();
-        web_fonts.retain(|resource| {
+        web_fonts.retain(|(_, resource)| {
             seen.insert(
                 resource
                     .web_font()
@@ -133,7 +160,10 @@ impl StylesheetResourceManifest {
         });
         web_fonts.reverse();
         Self {
-            web_fonts: web_fonts.into(),
+            web_fonts: web_fonts
+                .into_iter()
+                .map(|(_, resource)| resource)
+                .collect(),
             imports: imports.into_values().collect::<Vec<_>>().into(),
         }
     }
@@ -154,7 +184,7 @@ fn collect_resources(
     stylesheets: &ActiveStylesheetCollection,
     device: &style::device::Device,
     custom_media: &style::stylesheets::CustomMediaMap,
-    web_fonts: &mut Vec<StylesheetLoadBlockingResource>,
+    web_fonts: &mut Vec<(usize, StylesheetLoadBlockingResource)>,
     imports: &mut BTreeMap<String, url::Url>,
 ) {
     for stylesheet in stylesheets.entries() {
@@ -167,9 +197,8 @@ fn collect_resources(
             if !effective_font_faces.contains(&resource.rule_address()) {
                 continue;
             }
-            let resource = resource.resource();
-            if resource.web_font().is_some() {
-                web_fonts.push(resource.clone());
+            if resource.resource().web_font().is_some() {
+                web_fonts.push((resource.rule_address(), resource.resource().clone()));
             }
         }
         for import in stylesheet.import_urls() {

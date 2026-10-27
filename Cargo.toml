@@ -120,10 +120,10 @@ stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba7648
 stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
 stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", branch = "moli" }
-taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
+taffy = { git = "https://github.com/ldm0/taffy", rev = "2f1a5e40a98c5fb26cb0b854ede058a5a8a6bf48" }
 
 [patch."https://github.com/DioxusLabs/taffy"]
-taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
+taffy = { git = "https://github.com/ldm0/taffy", rev = "2f1a5e40a98c5fb26cb0b854ede058a5a8a6bf48" }
 
 [workspace.lints.clippy]
 disallowed_methods = "deny"

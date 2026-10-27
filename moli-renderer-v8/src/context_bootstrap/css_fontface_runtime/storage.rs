@@ -280,6 +280,24 @@ fn sync_font_face_set_matching_order<'s>(
     };
     let connected = font_face_set_connected_faces_array(scope, fonts);
     let manual = font_face_set_manual_faces_array(scope, fonts);
+    // Native matching order is independent of FontFaceSet iteration. Stable
+    // declaration slots also distinguish cloned sheets sharing native rule Arcs.
+    let host = unsafe { &*host_ptr };
+    let order = host
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(document)
+        .and_then(|root| crate::layout_renderer::current_native_stylesheet_resources(host, root))
+        .map(|resources| {
+            resources
+                .web_fonts()
+                .iter()
+                .filter_map(|resource| resource.web_font())
+                .enumerate()
+                .map(|(index, font)| (font.registration_slot().to_owned(), index))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_default();
     let mut slots = |faces: Option<v8::Local<'s, v8::Array>>| {
         let mut slots = Vec::new();
         if let Some(faces) = faces {
@@ -295,10 +313,10 @@ fn sync_font_face_set_matching_order<'s>(
         }
         slots
     };
-    let connected = slots(connected);
+    let mut connected = slots(connected);
+    connected.sort_by_key(|slot| order.get(slot).copied().unwrap_or(usize::MAX));
     let manual = slots(manual);
     // SAFETY: the native font service cannot call V8 while borrowed.
-    let host = unsafe { &*host_ptr };
     if host.with_font_services(document, |services| {
         services.set_web_font_order(&connected, &manual)
     }) {
