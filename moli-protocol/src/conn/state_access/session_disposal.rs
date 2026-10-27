@@ -12,6 +12,29 @@ use crate::domains::target::session_disposal::{
 use crate::{conn::SessionDisposalPlan, domains::session::PreparedSessionHandlers};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn finish_removed_shared_worker_attachment(
+        self,
+        cleanup: Option<crate::domains::target::session_disposal::PreparedRemovedWorkerSession>,
+        retirement: crate::conn::TargetSharedWorkerProtocolAttachmentRetirement,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let events = cleanup
+            .map(|cleanup| cleanup.finish(self.connection).into_background_events())
+            .unwrap_or_default();
+        if retirement.is_current() {
+            retirement.retire();
+        }
+        events
+    }
+
+    pub(crate) fn finish_removed_worker_target(
+        self,
+        delta: crate::conn::PreparedTargetHostDelta,
+    ) -> Vec<BackgroundProtocolEvent> {
+        self.connection
+            .prepared_target_host_delta_event_plan(delta)
+            .into_background_events()
+    }
+
     pub(crate) fn finish_dedicated_worker_session_retirement(
         self,
         worker: crate::domains::target::DedicatedWorkerRetirementIdentity,

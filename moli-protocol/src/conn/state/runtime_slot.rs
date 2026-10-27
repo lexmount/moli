@@ -808,6 +808,27 @@ impl TargetRuntimeSlot {
             .abandon_unbound_prepared_document_navigation(token)
     }
 
+    pub(crate) fn stage_prepared_document_title(
+        &mut self,
+        change: &moli_core::RendererDocumentTitleChanged,
+    ) -> bool {
+        self.page_slot.stage_prepared_document_title(
+            self.devtools_renderer_channel
+                .current()
+                .map(|attachment| attachment.id()),
+            change,
+        )
+    }
+
+    pub(crate) fn take_prepared_document_title(
+        &mut self,
+        token: &DocumentNavigationToken,
+        artifacts: &moli_core::page::RendererPageCreationArtifacts,
+    ) -> Option<moli_core::RendererDocumentTitleChanged> {
+        self.page_slot
+            .take_prepared_document_title(token, artifacts)
+    }
+
     pub(crate) fn merge_prepared_document_lifecycle_events(
         &mut self,
         token: &DocumentNavigationToken,

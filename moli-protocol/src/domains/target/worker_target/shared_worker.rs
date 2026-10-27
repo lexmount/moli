@@ -207,30 +207,13 @@ pub(in crate::domains::target) async fn close_shared_worker_target_for_target_cl
     target_id: &str,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> bool {
-    let Some((browser_context_id, renderer_runtime, instance_id)) =
-        conn.browser_context.as_ref().and_then(|context| {
-            let target = context.shared_worker_target(target_id)?;
-            Some((
-                context.id.clone(),
-                context.renderer_runtime(),
-                target.renderer_instance_id,
-            ))
-        })
-    else {
+    let Some(prepared) = PreparedSharedWorkerRetirement::prepare_close(conn, target_id) else {
         return false;
     };
-
-    renderer_runtime.close_shared_worker_for_target_close(instance_id);
-    let outputs = remove_shared_worker_target(conn, &browser_context_id, instance_id);
-    let mut prepared_outputs =
-        ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(conn, None);
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, command_context),
-        &mut prepared_outputs,
-    )
-    .await;
+    prepared
+        .run_inline(conn, command_context)
+        .await
+        .expect("inline SharedWorker retirement retains its original protocol owner");
     true
 }
 

@@ -111,11 +111,14 @@ impl LoadedNavigationPublication {
     }
 
     fn publish(mut self, conn: &mut CdpConnection, out: &mut CommandOutputBuffer) {
-        if let Some(token) = self.token.as_ref()
+        let early_title = if let Some(token) = self.token.as_ref()
             && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&self.state.owner)
         {
             slot.merge_prepared_document_lifecycle_events(token, &mut self.page_creation_artifacts);
-        }
+            slot.take_prepared_document_title(token, &self.page_creation_artifacts)
+        } else {
+            None
+        };
         let Self {
             state,
             token,
@@ -162,6 +165,12 @@ impl LoadedNavigationPublication {
                 navigation_activity.state().frame_id.clone(),
                 navigation_activity.state().loader_id.clone(),
             );
+        if let Some(change) = early_title {
+            conn.apply_renderer_document_title_for_owner(
+                &navigation_activity.state().owner,
+                &change,
+            );
+        }
         let load_visibility_barrier_armed = renderer_document_binding.is_some()
             && conn.begin_renderer_document_load_visibility_barrier_for_owner(
                 &navigation_activity.state().owner,

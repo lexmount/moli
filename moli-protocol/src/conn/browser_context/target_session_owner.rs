@@ -2624,6 +2624,12 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         change: &moli_core::RendererDocumentTitleChanged,
     ) -> Option<bool> {
+        if self
+            .runtime_session_owner_slot_mut_for_owner(owner)
+            .is_some_and(|slot| slot.stage_prepared_document_title(change))
+        {
+            return Some(false);
+        }
         self.target_root_document_protocol_attachment_identity_for_owner(
             owner,
             change.source_document,

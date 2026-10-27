@@ -69,6 +69,14 @@ pub(super) fn start_devtools_close_target_command(
             Err(error) => super::target_command_error(-32000, error),
         };
     }
+    if let Some(access) = conn.protocol_state_access()
+        && let Some(retirement) = worker_target::PreparedSharedWorkerRetirement::prepare_close(
+            conn,
+            command.target_id.as_str(),
+        )
+    {
+        return TargetCommandTaskStep::Workflow(retirement.into_command_workflow(access));
+    }
     if let Some(closing) = PreparedPageTargetCloseCommand::prepare(conn, &command) {
         return TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
             command_id,

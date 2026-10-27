@@ -148,6 +148,7 @@ struct PendingRendererDocumentCommit {
     observed: bool,
     native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     early_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
+    early_document_title: Option<moli_core::RendererDocumentTitleChanged>,
 }
 
 impl Drop for PendingNavigationRequest {
@@ -832,6 +833,7 @@ impl TargetPageSlot {
             observed: false,
             native_document: None,
             early_lifecycle_events: Vec::new(),
+            early_document_title: None,
         });
         true
     }
@@ -865,6 +867,50 @@ impl TargetPageSlot {
         artifacts
             .initial_lifecycle_events
             .dedup_by_key(|event| event.sequence);
+    }
+
+    pub(crate) fn stage_prepared_document_title(
+        &mut self,
+        attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+        change: &moli_core::RendererDocumentTitleChanged,
+    ) -> bool {
+        let handoff_pending = self.prepared_document_navigation_handoff().is_some();
+        let Some(commit) = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|_| handoff_pending)
+            .and_then(|request| request.renderer_commit.as_mut())
+        else {
+            return false;
+        };
+        if Some(commit.attachment) != attachment
+            || commit.native_document != Some(change.source_document)
+        {
+            return false;
+        }
+        // This Document has no published protocol binding yet. Its latest
+        // title belongs to that commit, never to the predecessor's metadata.
+        commit.early_document_title = Some(change.clone());
+        true
+    }
+
+    pub(crate) fn take_prepared_document_title(
+        &mut self,
+        token: &DocumentNavigationToken,
+        artifacts: &RendererPageCreationArtifacts,
+    ) -> Option<moli_core::RendererDocumentTitleChanged> {
+        self.pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(token))?
+            .renderer_commit
+            .as_mut()?
+            .early_document_title
+            .take()
+            .filter(|change| {
+                change.source_document.frame == artifacts.lifecycle_snapshot.frame
+                    && change.source_document.document == artifacts.active_document
+                    && change.source_document.epoch == artifacts.active_epoch
+            })
     }
 
     fn prepared_document_navigation_handoff(&self) -> Option<&PendingNavigationRequest> {

@@ -199,15 +199,6 @@ impl DevToolsSessionHandlerDisposal {
     }
 }
 
-/// Runs the handlers whose state survives target destruction. Renderer-owned
-/// and target-owned handlers have already disappeared with the closed target.
-pub(crate) async fn dispose_closed_handlers_async(conn: &mut CdpConnection, session_id: &str) {
-    if let Some(pending) = prepare_closed_handlers(conn, session_id) {
-        pending.wait().await;
-    }
-    conn.cancel_tracing_for_session_owner(Some(session_id));
-}
-
 pub(crate) fn prepare_closed_handlers(
     conn: &mut CdpConnection,
     session_id: &str,

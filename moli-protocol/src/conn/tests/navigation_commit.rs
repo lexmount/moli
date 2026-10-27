@@ -439,6 +439,20 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         .expect("committed but unbound Document keeps its temporary output route");
                     assert_eq!(page.page_id(), snapshot.frame.page_id);
                     assert_eq!(binding.renderer_document_identity(), source);
+                    assert!(ctx.conn.target_root_document_protocol_attachment_identity_for_owner(&navigation.owner, source).is_none(), "retaining metadata does not grant the unbound Document new business authority");
+                    for title in ["first unbound title", "latest unbound title"] {
+                        assert_eq!(
+                            ctx.conn.apply_renderer_document_title_for_owner(
+                                &navigation.owner,
+                                &moli_core::RendererDocumentTitleChanged {
+                                    source_document: source,
+                                    title: title.into()
+                                },
+                            ),
+                            Some(false),
+                            "title facts are retained without changing predecessor metadata"
+                        );
+                    }
                     let (_, visible) = ctx
                         .conn
                         .ingest_renderer_document_lifecycle_events_for_owner(
@@ -461,6 +475,14 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         panic!("no wait remains")
                     };
                     let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+                    assert_eq!(
+                        ctx.conn
+                            .devtools_target_info("TID-1")
+                            .unwrap()
+                            .title,
+                        "latest unbound title",
+                        "the original Document title joins its binding before load publication"
+                    );
                     for method in std::iter::once("Page.domContentEventFired")
                         .chain(snapshot.load.map(|_| "Page.loadEventFired"))
                     {

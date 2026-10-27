@@ -1,4 +1,8 @@
 use anyhow::Result;
+use futures_util::{
+    FutureExt as _,
+    future::{LocalBoxFuture, Shared},
+};
 
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, ProtocolWorkflowDriver,
@@ -432,16 +436,6 @@ pub(super) async fn dispose_browser_session_without_event_async(
     conn.commit_browser_session_disposal_without_event(&plan)
 }
 
-/// Runs the connection-owned portion of domain disposal after a target has
-/// already destroyed its renderer-owned state but before its session binding
-/// is removed from the control plane.
-pub(crate) async fn dispose_closed_session_domains_async(
-    conn: &mut CdpConnection,
-    plan: &SessionDisposalPlan,
-) {
-    crate::domains::session::dispose_closed_handlers_async(conn, plan.session_id()).await;
-}
-
 /// Rolls back a prepared attachment after it has become capable of owning
 /// renderer/domain state but before its attached event is published. No
 /// protocol event is emitted because the frontend never observed the session.
@@ -536,21 +530,75 @@ pub(super) async fn dispose_dedicated_worker_session_after_prepared_state_delta_
 /// per-session state. Renderer-owned resources have already gone away with
 /// the target, but connection-owned handlers still retire before the control
 /// plane binding is removed.
+#[derive(Clone)]
+pub(crate) struct PreparedRemovedWorkerSession {
+    identity: SessionDisposalIdentity,
+    detachment: TargetSessionDetachCleanupPlan,
+    pending: Shared<LocalBoxFuture<'static, ()>>,
+}
+
+impl PreparedRemovedWorkerSession {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        cleanup_plan: TargetSessionDetachCleanupPlan,
+    ) -> Result<Self> {
+        let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
+        anyhow::ensure!(
+            matches!(
+                plan.target(),
+                SessionDisposalTarget::SharedWorkerTarget { .. }
+                    | SessionDisposalTarget::DedicatedWorkerTarget { .. }
+                    | SessionDisposalTarget::ServiceWorkerTarget { .. }
+            ),
+            SessionDisposalError::InvalidSession
+        );
+        let identity = SessionDisposalIdentity::capture(conn, plan);
+        let pending = match conn.session_disposal_wait(identity.plan().session_id()) {
+            Some(wait) => async move { wait.wait().await }.boxed_local().shared(),
+            None => {
+                conn.mark_session_closing(identity.plan());
+                let pending = crate::domains::session::prepare_closed_handlers(
+                    conn,
+                    identity.plan().session_id(),
+                );
+                async move {
+                    if let Some(pending) = pending {
+                        pending.wait().await;
+                    }
+                }
+                .boxed_local()
+                .shared()
+            }
+        };
+        Ok(Self {
+            identity,
+            detachment,
+            pending,
+        })
+    }
+
+    pub(crate) async fn wait(&self) {
+        self.pending.clone().await;
+    }
+
+    pub(crate) fn finish(self, conn: &mut CdpConnection) -> TargetEventPlan {
+        if !self.identity.is_current(conn) {
+            return TargetEventPlan::default();
+        }
+        // Only this binding may release its connection-owned trace and detach.
+        // A later binding can reuse every literal id, including its route.
+        conn.cancel_tracing_for_session_owner(Some(self.identity.plan().session_id()));
+        conn.commit_target_session_detachment_event_plan(self.detachment)
+    }
+}
+
 pub(super) async fn dispose_removed_worker_session_async(
     conn: &mut CdpConnection,
     cleanup_plan: TargetSessionDetachCleanupPlan,
 ) -> Result<TargetEventPlan> {
-    let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
-    if !matches!(
-        plan.target(),
-        SessionDisposalTarget::SharedWorkerTarget { .. }
-            | SessionDisposalTarget::DedicatedWorkerTarget { .. }
-            | SessionDisposalTarget::ServiceWorkerTarget { .. }
-    ) {
-        anyhow::bail!(SessionDisposalError::InvalidSession);
-    }
-    dispose_closed_session_domains_async(conn, &plan).await;
-    Ok(conn.commit_target_session_detachment_event_plan(detachment))
+    let pending = PreparedRemovedWorkerSession::prepare(conn, cleanup_plan)?;
+    pending.wait().await;
+    Ok(pending.finish(conn))
 }
 
 /// Emergency completion for a DedicatedWorker retirement whose renderer
