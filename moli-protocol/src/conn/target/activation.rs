@@ -151,6 +151,7 @@ impl CdpConnection {
             .browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
+            .filter(|context| !context.closing)
         {
             let activities = context
                 .page_targets
@@ -204,22 +205,6 @@ impl CdpConnection {
         Ok(updates)
     }
 
-    pub(crate) async fn restore_browser_focus_after_removal_async(&mut self) {
-        let result = match self.start_restore_browser_focus_after_removal() {
-            Ok(updates) => {
-                crate::domains::target::activation::wait_for_surface_updates(
-                    &mut super::super::ProtocolWorkflowDriver::inline(self),
-                    updates,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
-        if let Err(error) = result {
-            tracing::warn!(%error, "failed to update document activity after target removal");
-        }
-    }
-
     pub(crate) fn start_restore_browser_focus_after_removal(
         &mut self,
     ) -> Result<Vec<TargetSurfaceUpdate>> {
@@ -227,11 +212,13 @@ impl CdpConnection {
             .browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
+            .filter(|context| !context.closing)
             .any(|context| context.window_is_focused && context.active_target_id().is_some())
             && let Some(target_id) = self
                 .browser_context
                 .iter()
                 .chain(self.inactive_browser_contexts.iter())
+                .filter(|context| !context.closing)
                 .find_map(BrowserContext::active_target_id_owned)
         {
             self.select_browser_focus_for_target(&target_id);

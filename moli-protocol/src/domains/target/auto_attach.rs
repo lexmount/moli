@@ -134,6 +134,12 @@ fn service_worker_auto_attach_related_target(
             "BrowserContextNotLoaded",
         ));
     };
+    if browser_context.closing {
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            "Browser context is closing",
+        ));
+    }
     let Some(target) = browser_context.service_worker_target(target_id) else {
         return Err(CommandOutputPlan::error_without_session(
             -32000,
@@ -402,6 +408,12 @@ fn prepare_context_sweep(
     owner_session_id: Option<&str>,
     rollback: &AutoAttachSweepRollback,
 ) -> Option<workflow::AutoAttachSweepContext> {
+    if conn
+        .browser_context_by_id(context_id)
+        .is_none_or(|context| context.closing)
+    {
+        return None;
+    }
     let restore = previously_active_browser_context_id(conn);
     if !conn.activate_browser_context_by_id(context_id) {
         return None;

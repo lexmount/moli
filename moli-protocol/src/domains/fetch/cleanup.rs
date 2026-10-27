@@ -13,6 +13,20 @@ use crate::domains::{
 };
 use moli_core::page::PendingPageCommand;
 
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(super) enum FetchCleanupReason {
+    #[error("Fetch interception disabled")]
+    Disabled,
+    #[error("Target detached")]
+    Detached,
+    #[error("Target closed")]
+    TargetClosed,
+    #[error("Page closed")]
+    PageClosed,
+    #[error("Browser context disposed")]
+    BrowserContextDisposed,
+}
+
 pub(crate) struct PreparedFetchCleanup {
     access: Option<ProtocolStateAccess>,
     policy: Option<Result<PendingPageCommand>>,
@@ -93,7 +107,7 @@ impl PreparedFetchCleanup {
         owner: &CommandOwnerScope,
         pending: FetchDisablePendingState,
         policy: Option<Result<PendingPageCommand>>,
-        reason: &str,
+        reason: FetchCleanupReason,
         preserve_document: bool,
     ) -> Self {
         let (requests, auths, responses, subrequests, subauths, subresponses) = pending;
@@ -112,7 +126,9 @@ impl PreparedFetchCleanup {
                     .into_iter()
                     .map(|(_, pending)| CleanupSubresource::Response(pending)),
             )
-            .filter_map(|resource| admit_subresource_failure(conn, owner, resource, reason))
+            .filter_map(|resource| {
+                admit_subresource_failure(conn, owner, resource, &reason.to_string())
+            })
             .collect();
         let navigations = requests
             .into_iter()
@@ -123,7 +139,7 @@ impl PreparedFetchCleanup {
                     .map(|pending| (pending.document_navigation_token, pending.navigation)),
             )
             .chain(responses.into_iter().map(|pending| {
-                let (token, state, _) = pending.fail(anyhow::Error::msg(reason.to_owned()));
+                let (token, state, _) = pending.fail(anyhow::Error::new(reason));
                 (token, state)
             }))
             .map(|(token, state)| {
@@ -136,13 +152,13 @@ impl PreparedFetchCleanup {
                         network::materialize_navigation_failure_preserving_committed_document(
                             conn,
                             &state,
-                            reason.to_owned(),
+                            reason.to_string(),
                         )
                     } else {
                         network::materialize_navigation_load_result(
                             conn,
                             &state,
-                            Err(anyhow::Error::msg(reason.to_owned())),
+                            Err(anyhow::Error::new(reason)),
                         )
                     };
                     let network::MaterializedNavigationLoadOutcome::Failed(failure) = failure
@@ -175,6 +191,21 @@ impl PreparedFetchCleanup {
             navigations,
             subresources,
         }
+    }
+
+    pub(in crate::domains) fn take_navigation_events_for_context_disposal(
+        &mut self,
+    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
+        self.navigations
+            .iter_mut()
+            .flat_map(|navigation| {
+                let mut plan = std::mem::take(&mut navigation.plan);
+                // The Browser lifetime command does not join unrelated Page
+                // streams. Their existing ingress still owns each native FIFO.
+                plan.take_renderer_output_predecessor();
+                plan.into_background_events(None, None)
+            })
+            .collect()
     }
 
     async fn wait_policy(&mut self) -> FetchCleanupOutput {

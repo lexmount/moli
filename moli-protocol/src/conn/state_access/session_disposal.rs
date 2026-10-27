@@ -91,6 +91,7 @@ impl ProtocolWorkflowState<'_> {
         self.connection.start_restore_browser_focus_after_removal()
     }
 
+    #[cfg(test)]
     pub(crate) fn start_page_target_close(
         self,
         target_id: &str,
@@ -101,6 +102,7 @@ impl ProtocolWorkflowState<'_> {
             .start_page_target_close(target_id, events, reason)
     }
 
+    #[cfg(test)]
     pub(crate) fn finish_page_target_close(
         self,
         completed: crate::conn::CompletedPageTargetClose,

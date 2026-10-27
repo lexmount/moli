@@ -548,7 +548,10 @@ struct DisposeBcParams {
     browser_context_id: Option<String>,
 }
 
-pub(super) fn start_dispose_browser_context_command(cmd: &Cmd<'_>) -> TargetCommandTaskStep {
+pub(super) fn start_dispose_browser_context_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> TargetCommandTaskStep {
     let params: DisposeBcParams = match cmd.get_params() {
         Ok(Some(p)) => p,
         _ => {
@@ -561,28 +564,16 @@ pub(super) fn start_dispose_browser_context_command(cmd: &Cmd<'_>) -> TargetComm
             return super::target_command_error(-32602, "InvalidParams");
         }
     };
-    pending_dispose_browser_context_command(cmd.id, cmd.session_id, wanted_id)
-}
-
-pub(super) async fn complete_dispose_browser_context_command_async(
-    conn: &mut CdpConnection,
-    wanted_id: String,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> CommandOutputPlan {
-    let mut side_effects = events::TargetProtocolSideEffects::default();
-    match super::browser_context_disposal::execute_browser_context_disposal_async(
-        conn,
-        wanted_id,
-        &mut side_effects,
-        command_context,
-    )
-    .await
-    {
-        Ok(()) => {
-            let mut plan = CommandOutputPlan::success();
-            plan.extend(side_effects.into_plan());
-            plan
+    let disposal = match super::browser_context_disposal::PreparedBrowserContextDisposal::prepare(
+        conn, wanted_id,
+    ) {
+        Ok(disposal) => disposal,
+        Err(error) => {
+            return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
         }
-        Err(error) => CommandOutputPlan::from_devtools_error(error),
+    };
+    if let Some(access) = conn.protocol_state_access() {
+        return TargetCommandTaskStep::Workflow(disposal.into_workflow(access));
     }
+    pending_dispose_browser_context_command(cmd.id, cmd.session_id, disposal)
 }

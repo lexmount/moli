@@ -90,7 +90,7 @@ pub(in crate::domains) fn prepare_owner_disposal(
         &owner,
         pending,
         policy,
-        "Target detached",
+        cleanup::FetchCleanupReason::Detached,
         true,
     ))
 }
@@ -105,7 +105,7 @@ pub(in crate::domains) fn prepare_target_close(
         owner,
         pending,
         policy,
-        "Target closed",
+        cleanup::FetchCleanupReason::TargetClosed,
         false,
     ))
 }
@@ -115,7 +115,34 @@ pub(in crate::domains) fn prepare_page_close(
     owner: &CommandOwnerScope,
     pending: FetchDisablePendingState,
 ) -> PreparedFetchCleanup {
-    PreparedFetchCleanup::new(conn, owner, pending, None, "Page closed", true)
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::PageClosed,
+        true,
+    )
+}
+
+pub(in crate::domains) fn prepare_browser_context_disposal(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    mut pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    // The renderer lifetime retires subresource promises without synthetic
+    // loadingFailed events; only main-document commands still owe terminals.
+    pending.3.clear();
+    pending.4.clear();
+    pending.5.clear();
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::BrowserContextDisposed,
+        false,
+    )
 }
 
 pub(crate) struct PendingFetchCommandDispatch {
@@ -932,7 +959,7 @@ fn start_disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchComman
                 &owner,
                 pending_fetch_state,
                 pending,
-                "Fetch interception disabled",
+                cleanup::FetchCleanupReason::Disabled,
                 false,
             );
             FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(

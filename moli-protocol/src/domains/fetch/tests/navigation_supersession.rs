@@ -116,7 +116,7 @@ async fn disable_cleanup_reports_policy_failure_after_settling_its_navigation() 
         Some(Err(
             std::io::Error::other("controlled policy rejection").into()
         )),
-        "Fetch interception disabled",
+        crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
         false,
     );
     let plan = cleanup.wait_inline(&mut ctx.conn).await.into_command_plan();
@@ -171,7 +171,7 @@ async fn cancelled_disable_cleanup_settles_once_without_touching_a_successor_pag
                     &owner,
                     pending,
                     policy,
-                    "Fetch interception disabled",
+                    crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
                     false,
                 );
                 if before_wait {

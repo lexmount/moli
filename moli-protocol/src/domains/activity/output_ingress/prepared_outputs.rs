@@ -47,6 +47,19 @@ impl ProtocolOutputProjectionMode {
 }
 
 impl PreparedProtocolOutputs {
+    pub(in crate::domains) fn from_worker_target_removal(
+        outputs: crate::domains::target::TargetPreparedOutputSlot,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        if outputs.is_empty() {
+            return prepared;
+        }
+        prepared.push_produced_slot(ProtocolOutputSlot::SharedWorkerTargetLifecycle);
+        prepared.push_produced_slot(ProtocolOutputSlot::ServiceWorkerTargetLifecycle);
+        prepared.push_prepared_payload(outputs.into());
+        prepared
+    }
+
     pub(crate) async fn project_using(
         self,
         driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,

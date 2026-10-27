@@ -16,6 +16,13 @@ pub(crate) struct TargetTermination {
     selection: TargetTerminationSelection,
     activity: Rc<RefCell<Option<TargetTerminationActivity>>>,
     commit: Rc<RefCell<Option<TargetTerminationCommit>>>,
+    cause: TargetTerminationCause,
+}
+
+#[derive(Clone, Copy)]
+enum TargetTerminationCause {
+    Target,
+    BrowserContext,
 }
 
 type TargetTerminationActivity =
@@ -54,6 +61,28 @@ impl TargetTermination {
         conn: &mut CdpConnection,
         action: PageTargetTerminationOwnerAction,
     ) -> Option<Self> {
+        Self::prepare_with_cause(conn, action, TargetTerminationCause::Target, None)
+    }
+
+    pub(crate) fn prepare_for_browser_context_disposal(
+        conn: &mut CdpConnection,
+        action: PageTargetTerminationOwnerAction,
+        closure: PreparedTargetHostClosure,
+    ) -> Option<Self> {
+        Self::prepare_with_cause(
+            conn,
+            action,
+            TargetTerminationCause::BrowserContext,
+            Some(closure),
+        )
+    }
+
+    fn prepare_with_cause(
+        conn: &mut CdpConnection,
+        action: PageTargetTerminationOwnerAction,
+        cause: TargetTerminationCause,
+        closure: Option<PreparedTargetHostClosure>,
+    ) -> Option<Self> {
         let (owner, target_id, host) = action.into_parts();
         let host = host?;
         let (browser_context_id, current_target_id) =
@@ -71,14 +100,18 @@ impl TargetTermination {
             .then(|| context.page_targets.adjacent_target_id(&target_id))
             .flatten()
             .map(str::to_owned);
-        let closure = conn.prepare_target_host_closure(&target_id);
+        let closure = closure.unwrap_or_else(|| conn.prepare_target_host_closure(&target_id));
         let tab_plan = conn.prepare_closed_top_level_target_sessions_cleanup_plan(
             &target_id,
             Some("Render process gone."),
         );
         let tab_target_id = tab_plan.as_ref().map(|plan| plan.target_id().to_owned());
         let mut events = Vec::new();
-        let page = conn.start_page_target_close(&target_id, &mut events, "Target closed")?;
+        let reason = match cause {
+            TargetTerminationCause::Target => "Target closed",
+            TargetTerminationCause::BrowserContext => "Browser context disposed",
+        };
+        let page = conn.start_page_target_close(&target_id, &mut events, reason)?;
         let page_sessions = PreparedClosedTargetSessions::prepare(
             conn,
             page.session_cleanup_plan(Some("Render process gone.")),
@@ -113,6 +146,7 @@ impl TargetTermination {
                 closure,
                 events,
             }))),
+            cause,
         })
     }
 
@@ -121,7 +155,9 @@ impl TargetTermination {
         driver: &mut ProtocolWorkflowDriver<'_>,
     ) -> CompletedTargetTermination {
         let native = self.native.clone().await;
-        let activation = if let Some(access) = driver.owned_access() {
+        let activation = if matches!(self.cause, TargetTerminationCause::BrowserContext) {
+            None
+        } else if let Some(access) = driver.owned_access() {
             let activity = {
                 let mut activity = self.activity.borrow_mut();
                 activity.get_or_insert_with(|| {
@@ -235,11 +271,13 @@ impl CompletedTargetTermination {
         if let Some(activation) = self.activation {
             events.extend(activation.finish(conn));
         }
-        for sid in self.native.page_sessions.open_session_ids(conn) {
-            events.push(BackgroundProtocolEvent::inspector_detached(
-                Some(sid),
-                "Render process gone.",
-            ));
+        if matches!(self.termination.cause, TargetTerminationCause::Target) {
+            for sid in self.native.page_sessions.open_session_ids(conn) {
+                events.push(BackgroundProtocolEvent::inspector_detached(
+                    Some(sid),
+                    "Render process gone.",
+                ));
+            }
         }
         let (detached, destroyed) = commit.closure.into_parts();
         if !successor_exists {
@@ -258,7 +296,9 @@ impl CompletedTargetTermination {
         if !successor_exists {
             events.extend(conn.prepared_target_host_deltas_event_plan(destroyed));
         }
-        conn.release_idle_navigation_engine_memory_after_target_close();
+        if matches!(self.termination.cause, TargetTerminationCause::Target) {
+            conn.release_idle_navigation_engine_memory_after_target_close();
+        }
         crate::conn::CdpTurnOutcome::new_with_protocol_events(events, conn.take_scheduler_events())
     }
 }

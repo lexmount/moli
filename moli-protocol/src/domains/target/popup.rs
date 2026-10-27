@@ -159,12 +159,15 @@ pub(crate) fn prepare_popup_target(
             ..
         }
     );
-    let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
+    let Some(browser_context) = conn
+        .browser_context_by_id(&browser_context_id)
+        .filter(|context| !context.closing)
+    else {
         tracing::debug!(
             browser_context_id,
             ?popup_id,
             ?target_name,
-            "dropping accepted popup action after its browser context was removed"
+            "dropping accepted popup action after its browser context started closing or was removed"
         );
         return None;
     };

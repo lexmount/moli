@@ -1040,3 +1040,71 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
 
     server.abort();
 }
+
+#[tokio::test]
+async fn closing_browser_context_rejects_new_worker_attachments_before_declaration() {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    load_bc(&mut ctx, "BID-closing-attachment");
+    push_shared_worker_target(
+        &mut ctx,
+        moli_shared_worker::SharedWorkerInstanceId::from_u64(171),
+        "TID-closing-shared",
+        "https://example.test/shared.js",
+        "closing",
+        None,
+    );
+    push_service_worker_target(
+        &mut ctx,
+        172,
+        "TID-closing-service",
+        "https://example.test/service.js",
+        "https://example.test/",
+        None,
+    );
+    let disposal = crate::domains::target::PreparedBrowserContextDisposal::prepare(
+        &mut ctx.conn,
+        "BID-closing-attachment".into(),
+    )
+    .unwrap();
+    for (id, target) in [
+        (301_u64, "TID-closing-shared"),
+        (302, "TID-closing-service"),
+    ] {
+        ctx.process_async(json!({
+            "id":id,"method":"Target.attachToTarget",
+            "params":{"targetId":target,"flatten":true},
+        }))
+        .await;
+        let messages = ctx.take_all();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message["id"] == id && message["error"].is_object()),
+            "Closing must reject attachment before publishing a nonexistent session: {messages:?}"
+        );
+        assert!(ctx.conn.attached_sessions_for_target(target).is_empty());
+        let context = ctx
+            .conn
+            .browser_context_by_id("BID-closing-attachment")
+            .unwrap();
+        assert!(
+            context.devtools_session_ids_for_target(target).is_empty(),
+            "a rejected attachment cannot leave a provisional inspector declaration"
+        );
+    }
+    ctx.process_async(json!({
+        "id":303,"method":"Target.autoAttachRelated",
+        "params":{"targetId":"TID-closing-service","waitForDebuggerOnStart":false},
+    }))
+    .await;
+    assert!(
+        ctx.take_all()
+            .iter()
+            .any(|message| message["id"] == 303 && message["error"].is_object()),
+        "a closing target cannot install a new related-worker policy"
+    );
+    let mut command_context = crate::conn::CommandDispatchContext::default();
+    disposal
+        .complete_inline(&mut ctx.conn, &mut command_context, Default::default())
+        .await;
+}

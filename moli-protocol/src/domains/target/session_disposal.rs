@@ -20,30 +20,6 @@ pub(crate) enum SessionDisposalError {
     Closing,
 }
 
-pub(crate) async fn close_page_target_using(
-    driver: &mut ProtocolWorkflowDriver<'_>,
-    target_id: String,
-    events: &mut Vec<BackgroundProtocolEvent>,
-    reason: &'static str,
-) -> Result<Option<crate::conn::ClosedPageTarget>> {
-    let (pending, claimed_events) = driver
-        .with_state(move |state| {
-            let mut events = Vec::new();
-            let pending = state.start_page_target_close(&target_id, &mut events, reason);
-            (pending, events)
-        })
-        .await?;
-    events.extend(claimed_events);
-    let Some(pending) = pending else {
-        return Ok(None);
-    };
-    let completed = pending.wait().await;
-    driver
-        .with_state(move |state| state.finish_page_target_close(completed))
-        .await
-        .map(Some)
-}
-
 pub(crate) async fn dispose_closed_target_sessions_using(
     driver: &mut ProtocolWorkflowDriver<'_>,
     plan: crate::conn::TargetClosureCleanupPlan,

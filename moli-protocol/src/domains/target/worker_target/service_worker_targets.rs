@@ -513,11 +513,11 @@ pub(super) fn remove_service_worker_target_with_reason(
     outputs
 }
 
-pub(in crate::domains::target) async fn close_browser_context_worker_targets_for_dispose_async(
+pub(in crate::domains::target) fn prepare_browser_context_worker_targets_for_disposal(
     conn: &mut CdpConnection,
     browser_context_id: &str,
     reason: &'static str,
-) -> Vec<BackgroundProtocolEvent> {
+) -> crate::domains::activity::PreparedProtocolOutputs {
     let Some((renderer_runtime, shared_worker_ids, service_worker_ids)) = conn
         .browser_context_by_id(browser_context_id)
         .map(|context| {
@@ -536,7 +536,9 @@ pub(in crate::domains::target) async fn close_browser_context_worker_targets_for
             )
         })
     else {
-        return Vec::new();
+        return crate::domains::activity::PreparedProtocolOutputs::from_worker_target_removal(
+            TargetPreparedOutputSlot::from_outputs(TargetPreparedOutputs::default()),
+        );
     };
 
     let mut outputs = TargetPreparedOutputs::default();
@@ -566,24 +568,9 @@ pub(in crate::domains::target) async fn close_browser_context_worker_targets_for
         ));
     }
 
-    worker_target_removal_background_events_async(conn, outputs).await
-}
-
-pub(super) async fn worker_target_removal_background_events_async(
-    conn: &mut CdpConnection,
-    outputs: TargetPreparedOutputs,
-) -> Vec<BackgroundProtocolEvent> {
-    let owner = CommandOwnerScope::capture(conn, None);
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    let mut prepared_outputs =
-        ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
-        &mut prepared_outputs,
+    crate::domains::activity::PreparedProtocolOutputs::from_worker_target_removal(
+        TargetPreparedOutputSlot::from_outputs(outputs),
     )
-    .await;
-    command_context.take_protocol_events()
 }
 
 pub(super) fn record_service_worker_target_console_message(

@@ -313,12 +313,9 @@ impl BrowserContext {
     }
 
     pub(crate) fn assign_session_to_target(&mut self, target_id: &str, session_id: String) -> bool {
-        let Some(target) = self.page_target_mut(target_id) else {
+        let Some(target) = self.page_target_mut_for_session_attachment(target_id) else {
             return false;
         };
-        if target.closing {
-            return false;
-        }
         target.attach_session(session_id);
         true
     }
@@ -328,12 +325,9 @@ impl BrowserContext {
         target_id: &str,
         session_id: String,
     ) -> bool {
-        let Some(target) = self.page_target_mut(target_id) else {
+        let Some(target) = self.page_target_mut_for_session_attachment(target_id) else {
             return false;
         };
-        if target.closing {
-            return false;
-        }
         if target.has_session() {
             target.devtools_sessions.ensure_attached(&session_id);
         } else {
@@ -347,14 +341,22 @@ impl BrowserContext {
         target_id: &str,
         session_id: String,
     ) -> bool {
-        let Some(target) = self.page_target_mut(target_id) else {
+        let Some(target) = self.page_target_mut_for_session_attachment(target_id) else {
             return false;
         };
-        if target.closing {
-            return false;
-        }
         target.devtools_sessions.ensure_attached(&session_id);
         true
+    }
+
+    fn page_target_mut_for_session_attachment(
+        &mut self,
+        target_id: &str,
+    ) -> Option<&mut PageTargetHost> {
+        if self.closing {
+            return None;
+        }
+        self.page_target_mut(target_id)
+            .filter(|target| !target.closing)
     }
 
     #[cfg(test)]
@@ -927,6 +929,9 @@ impl BrowserContext {
         target_id: &str,
         session_id: String,
     ) -> bool {
+        if self.closing {
+            return false;
+        }
         let Some(target) = self.shared_worker_target_mut(target_id) else {
             return false;
         };
@@ -1026,6 +1031,9 @@ impl BrowserContext {
         target_id: &str,
         session_id: String,
     ) -> bool {
+        if self.closing {
+            return false;
+        }
         let Some(renderer_instance_id) = self
             .dedicated_worker_target(target_id)
             .filter(|target| {
@@ -1141,6 +1149,9 @@ impl BrowserContext {
         target_id: &str,
         session_id: String,
     ) -> bool {
+        if self.closing {
+            return false;
+        }
         let attached_version_id = {
             let Some(target) = self.service_worker_target_mut(target_id) else {
                 return false;

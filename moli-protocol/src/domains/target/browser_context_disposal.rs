@@ -1,7 +1,22 @@
-use std::collections::HashSet;
+use std::{
+    cell::RefCell,
+    collections::{HashSet, VecDeque},
+    rc::Rc,
+};
+
+use anyhow::Result;
+use moli_core::RendererBrowserContextRuntimeId;
 
 use crate::automation::{DevToolsError, DevToolsErrorKind, DevToolsTargetKind};
-use crate::conn::{CdpConnection, CommandDispatchContext, PreparedTargetHostClosure};
+use crate::conn::{
+    BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpSessionRoute,
+    CommandDispatchContext, CommandOwnerScope, CommandWorkflowContext, PreparedCommandWorkflow,
+    PreparedTargetHostClosure, ProtocolStateAccess, ProtocolWorkflowDriver,
+};
+use crate::domains::{
+    command_output::CommandOutputPlan,
+    page::{CompletedTargetTermination, PageTargetTerminationOwnerAction, TargetTermination},
+};
 
 use super::{events, worker_target};
 
@@ -9,115 +24,361 @@ const DISPOSE_REASON: &str = "Browser context disposed";
 const INSPECTOR_DETACHED_REASON: &str = "Render process gone.";
 
 struct PageTargetDisposal {
-    target_id: String,
-    fetch_owner_session_id: Option<Option<String>>,
-    host_closure: PreparedTargetHostClosure,
+    action: PageTargetTerminationOwnerAction,
+    closure: Option<PreparedTargetHostClosure>,
+    termination: Option<TargetTermination>,
 }
 
-struct BrowserContextDisposal {
-    browser_context_id: String,
-    page_targets: Vec<PageTargetDisposal>,
-    inspector_session_ids: Vec<String>,
-    pending_inspector_session_owners: Vec<Option<String>>,
+/// The original lifetime, rather than a reusable frontend context id.
+#[derive(Clone)]
+pub(crate) struct BrowserContextDisposalIdentity {
+    id: String,
+    runtime: RendererBrowserContextRuntimeId,
 }
 
-impl BrowserContextDisposal {
-    fn prepare(conn: &CdpConnection, browser_context_id: &str) -> Result<Self, DevToolsError> {
-        let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
-            return Err(browser_context_not_found(browser_context_id));
+impl BrowserContextDisposalIdentity {
+    fn is_current(&self, conn: &CdpConnection) -> bool {
+        conn.browser_context_by_id(&self.id)
+            .is_some_and(|context| context.routes_renderer_browser_context_runtime(self.runtime))
+    }
+}
+
+struct BrowserContextDisposalState {
+    pages: Vec<PageTargetDisposal>,
+    fetch: VecDeque<crate::domains::fetch::PreparedFetchCleanup>,
+    inspector_events: Option<Vec<BackgroundProtocolEvent>>,
+    events: Vec<BackgroundProtocolEvent>,
+}
+
+/// Keeps admitted cleanup and its output with the command through waiter
+/// cancellation and a discarded ready result. Native Page close reuses the
+/// same receipts as Target.closeTarget, with one context-wide focus restore.
+#[derive(Clone)]
+pub(crate) struct PreparedBrowserContextDisposal {
+    identity: BrowserContextDisposalIdentity,
+    state: Rc<RefCell<BrowserContextDisposalState>>,
+}
+
+impl PreparedBrowserContextDisposal {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        browser_context_id: String,
+    ) -> Result<Self, DevToolsError> {
+        let context = conn
+            .browser_context_by_id(&browser_context_id)
+            .ok_or_else(|| browser_context_not_found(&browser_context_id))?;
+        if context.closing {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchTarget,
+                "Browser context is closing",
+            ));
+        }
+        let identity = BrowserContextDisposalIdentity {
+            id: browser_context_id.clone(),
+            runtime: context.renderer_runtime().id(),
         };
-
-        let active_page_target_id = browser_context.active_target_id().map(str::to_owned);
-        let mut page_target_ids = browser_context
+        let mut target_ids = context
             .background_targets()
             .rev()
             .map(|target| target.target_id().to_owned())
             .collect::<Vec<_>>();
-        if let Some(active_page_target_id) = active_page_target_id {
-            page_target_ids.push(active_page_target_id);
-        }
-
-        let target_ids = browser_context
+        target_ids.extend(context.active_target_id().map(str::to_owned));
+        let mut seen = HashSet::new();
+        let inspector_sessions = context
             .devtools_target_infos()
             .into_iter()
-            .filter_map(|target_info| {
-                target_info
-                    .target_id
-                    .map(|target_id| (target_info.kind, target_id.into_string()))
-            })
-            .collect::<Vec<_>>();
-
-        let page_targets = page_target_ids
-            .into_iter()
-            .map(|target_id| {
-                let session_ids = target_session_ids(conn, browser_context, &target_id);
-                let fetch_owner_session_id =
-                    page_fetch_owner_session_id(browser_context, &target_id, &session_ids);
-                PageTargetDisposal {
-                    fetch_owner_session_id,
-                    host_closure: conn.prepare_target_host_closure(&target_id),
-                    target_id,
-                }
-            })
-            .collect();
-
-        let mut seen_sessions = HashSet::new();
-        let inspector_session_ids = target_ids
-            .into_iter()
-            .filter(|(kind, _)| {
+            .filter(|target| {
                 matches!(
-                    kind,
+                    target.kind,
                     DevToolsTargetKind::Page
                         | DevToolsTargetKind::SharedWorker
                         | DevToolsTargetKind::ServiceWorker
                 )
             })
-            .flat_map(|(_, target_id)| target_session_ids(conn, browser_context, &target_id))
-            .filter(|session_id| seen_sessions.insert(session_id.clone()))
+            .filter_map(|target| target.target_id)
+            .flat_map(|target| target_session_ids(conn, context, target.as_str()))
+            .filter(|session| seen.insert(session.clone()))
             .collect::<Vec<_>>();
-
-        let mut pending_inspector_session_owners = browser_context
-            .active_target_id()
-            .is_some()
-            .then_some(None)
-            .into_iter()
-            .collect::<Vec<_>>();
-        pending_inspector_session_owners.extend(inspector_session_ids.iter().cloned().map(Some));
-
+        let active_owner = context.active_target_id().and_then(|id| {
+            conn.target_session_route_for_target_id(id)
+                .map(CommandOwnerScope::for_route)
+        });
+        let mut pending_owners = active_owner.into_iter().collect::<Vec<_>>();
+        pending_owners.extend(
+            inspector_sessions
+                .iter()
+                .map(|sid| CommandOwnerScope::for_session(sid)),
+        );
+        let mut events = Vec::new();
+        let mut claimed = Vec::new();
+        for owner in pending_owners {
+            conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+                &mut events,
+                &mut claimed,
+                &owner,
+                DISPOSE_REASON,
+            );
+        }
+        conn.browser_context_by_id_mut(&browser_context_id)
+            .expect("the validated context remains present during preparation")
+            .closing = true;
+        let mut pages = Vec::new();
+        let mut fetch = VecDeque::new();
+        for target_id in target_ids {
+            let Some(route) = conn.target_session_route_for_target_id(&target_id) else {
+                continue;
+            };
+            let owner = CommandOwnerScope::for_route(route);
+            let action =
+                PageTargetTerminationOwnerAction::new(conn, owner.clone(), target_id.clone());
+            conn.mark_page_target_closing(&owner);
+            if let Some(pending) = conn.take_pending_fetch_state_for_owner(&owner) {
+                let mut cleanup =
+                    crate::domains::fetch::prepare_browser_context_disposal(conn, &owner, pending);
+                // Main-resource terminals precede detach. Subresource promises
+                // disappear with their realm, without synthetic loadingFailed
+                // or a Browser ACK fence joining unrelated Page streams.
+                events.extend(cleanup.take_navigation_events_for_context_disposal());
+                fetch.push_back(cleanup);
+            }
+            pages.push(PageTargetDisposal {
+                action,
+                closure: Some(conn.prepare_target_host_closure(&target_id)),
+                termination: None,
+            });
+        }
+        events.extend(claimed);
         Ok(Self {
-            browser_context_id: browser_context_id.to_owned(),
-            page_targets,
-            inspector_session_ids,
-            pending_inspector_session_owners,
+            identity,
+            state: Rc::new(RefCell::new(BrowserContextDisposalState {
+                pages,
+                fetch,
+                inspector_events: Some(
+                    inspector_sessions
+                        .into_iter()
+                        .map(|session| {
+                            events::inspector_detached_event(&session, INSPECTOR_DETACHED_REASON)
+                        })
+                        .collect(),
+                ),
+                events,
+            })),
         })
+    }
+
+    pub(crate) fn into_workflow(self, access: ProtocolStateAccess) -> PreparedCommandWorkflow {
+        let recovery = self.clone();
+        let recovery_access = access.clone();
+        self.workflow(access, CommandOutputPlan::success())
+            .with_failure_cleanup(move |response| recovery.workflow(recovery_access, response))
+    }
+
+    fn workflow(
+        self,
+        access: ProtocolStateAccess,
+        response: CommandOutputPlan,
+    ) -> PreparedCommandWorkflow {
+        PreparedCommandWorkflow::new(move |mut context| async move {
+            let result =
+                Box::pin(self.run(&mut ProtocolWorkflowDriver::owned(access), &mut context)).await;
+            match result {
+                Ok(()) => context.complete_in_owner_turn(response, move |state, _| {
+                    state.finish_browser_context_disposal(self)
+                }),
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+            }
+        })
+    }
+
+    pub(crate) async fn run(
+        &self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        loop {
+            let Some(cleanup) = self.state.borrow_mut().fetch.pop_front() else {
+                break;
+            };
+            let mut events = Vec::new();
+            let result = cleanup
+                .run_using(driver)
+                .await
+                .into_disposal_output(&mut events);
+            self.state.borrow_mut().events.extend(events);
+            if let Some(error) = result.first_error {
+                tracing::warn!(%error, "failed to clear Fetch state while disposing browser context");
+            }
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            if let Some(events) = state.inspector_events.take() {
+                state.events.extend(events);
+            }
+        }
+        self.close_workers(driver, context).await?;
+        let page_count = self.state.borrow().pages.len();
+        for index in 0..page_count {
+            let disposal = self.clone();
+            let termination = driver
+                .with_state(move |state| state.prepare_browser_context_page_close(disposal, index))
+                .await?;
+            if let Some(termination) = termination {
+                let completed = termination.run(driver).await;
+                let disposal = self.clone();
+                driver
+                    .with_state(move |state| {
+                        state.finish_browser_context_page_close(disposal, completed);
+                    })
+                    .await?;
+            }
+        }
+        // A script already running at admission may have created a worker
+        // while the Pages were closing. Sweep once more after their close.
+        self.close_workers(driver, context).await?;
+        let identity = self.identity.clone();
+        let removed = driver
+            .with_state(move |state| state.remove_disposed_browser_context(identity))
+            .await?;
+        if let Some(mut removed) = removed {
+            removed.close_all_pages_async().await;
+        }
+        let updates = driver
+            .with_state(|state| state.start_restore_browser_focus_after_removal())
+            .await?;
+        let focus = match updates {
+            Ok(updates) => super::activation::wait_for_surface_updates(driver, updates).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = focus {
+            tracing::warn!(%error, "failed to restore focus after browser context disposal");
+        }
+        Ok(())
+    }
+
+    async fn close_workers(
+        &self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<()> {
+        let identity = self.identity.clone();
+        let outputs = driver
+            .with_state(move |state| state.prepare_browser_context_worker_disposal(identity))
+            .await?;
+        let Some(outputs) = outputs else {
+            return Ok(());
+        };
+        context.materialize_projection_output();
+        let start = context.context_mut().protocol_events_mut().len();
+        let owner = CommandOwnerScope::for_route(CdpSessionRoute::BrowserContext {
+            browser_context_id: self.identity.id.clone(),
+        });
+        let result = outputs.project_using(driver, owner, context).await;
+        context.materialize_projection_output();
+        self.state
+            .borrow_mut()
+            .events
+            .extend(context.context_mut().protocol_events_mut().split_off(start));
+        if let Err(error) = result {
+            tracing::warn!(%error, "failed to close browser context worker targets");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_page_close(
+        &self,
+        conn: &mut CdpConnection,
+        index: usize,
+    ) -> Option<TargetTermination> {
+        if !self.identity.is_current(conn) {
+            return None;
+        }
+        let mut state = self.state.borrow_mut();
+        let page = &mut state.pages[index];
+        if let Some(closure) = page.closure.take() {
+            page.termination = TargetTermination::prepare_for_browser_context_disposal(
+                conn,
+                page.action.clone(),
+                closure,
+            );
+        }
+        page.termination.clone()
+    }
+
+    pub(crate) fn finish_page_close(
+        &self,
+        conn: &mut CdpConnection,
+        completed: CompletedTargetTermination,
+    ) {
+        let (events, scheduler) = completed.finish(conn).into_protocol_event_parts();
+        self.state.borrow_mut().events.extend(events);
+        conn.extend_scheduler_events(scheduler);
+    }
+
+    pub(crate) fn finish(self, conn: &mut CdpConnection) -> CommandOutputPlan {
+        conn.release_idle_navigation_engine_memory_after_target_close();
+        let mut output = CommandOutputPlan::default();
+        output.extend_background_events(std::mem::take(&mut self.state.borrow_mut().events));
+        output
+    }
+
+    pub(crate) async fn complete_inline(
+        self,
+        conn: &mut CdpConnection,
+        command_context: &mut CommandDispatchContext,
+        mut response: CommandOutputPlan,
+    ) -> CommandOutputPlan {
+        let (mut context, _scope) = CommandWorkflowContext::take_from(command_context, None, None);
+        let result =
+            Box::pin(self.run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)).await;
+        context.finish_projection_inline(conn, command_context);
+        if let Err(error) = result {
+            tracing::warn!(%error, "browser context disposal cleanup failed");
+        }
+        response.extend(self.finish(conn));
+        response
+    }
+}
+
+impl BrowserContextDisposalIdentity {
+    pub(crate) fn prepare_worker_disposal(
+        &self,
+        conn: &mut CdpConnection,
+    ) -> Option<crate::domains::activity::PreparedProtocolOutputs> {
+        if !self.is_current(conn) {
+            return None;
+        }
+        Some(
+            worker_target::prepare_browser_context_worker_targets_for_disposal(
+                conn,
+                &self.id,
+                DISPOSE_REASON,
+            ),
+        )
+    }
+
+    pub(crate) fn remove(self, conn: &mut CdpConnection) -> Option<BrowserContext> {
+        if !self.is_current(conn) {
+            return None;
+        }
+        conn.download_behavior.clear_browser_context(&self.id);
+        conn.permission_overrides
+            .retain(|entry| entry.browser_context_id.as_deref() != Some(&self.id));
+        // Keep any selection made by a peer while native cleanup was waiting.
+        let restore = super::previously_active_browser_context_id(conn);
+        conn.remove_browser_context_by_id_restoring_active(&self.id, restore.as_deref())
     }
 }
 
 fn target_session_ids(
     conn: &CdpConnection,
-    browser_context: &crate::conn::BrowserContext,
+    context: &BrowserContext,
     target_id: &str,
 ) -> Vec<String> {
-    let mut session_ids = browser_context.devtools_session_ids_for_target(target_id);
-    session_ids.extend(conn.attached_sessions_for_target(target_id));
-    session_ids.sort();
-    session_ids.dedup();
-    session_ids
-}
-
-fn page_fetch_owner_session_id(
-    browser_context: &crate::conn::BrowserContext,
-    target_id: &str,
-    session_ids: &[String],
-) -> Option<Option<String>> {
-    if browser_context.is_active_target(target_id) {
-        return Some(browser_context.active_session_id_owned());
-    }
-    browser_context
-        .background_target(target_id)
-        .and_then(|target| target.session_id().map(str::to_owned))
-        .or_else(|| session_ids.first().cloned())
-        .map(Some)
+    let mut sessions = context.devtools_session_ids_for_target(target_id);
+    sessions.extend(conn.attached_sessions_for_target(target_id));
+    sessions.sort();
+    sessions.dedup();
+    sessions
 }
 
 pub(super) async fn execute_browser_context_disposal_async(
@@ -126,182 +387,12 @@ pub(super) async fn execute_browser_context_disposal_async(
     out: &mut events::TargetProtocolSideEffects,
     command_context: &mut CommandDispatchContext,
 ) -> Result<(), DevToolsError> {
-    if !conn.has_browser_context_id(&browser_context_id) {
-        return Err(browser_context_not_found(&browser_context_id));
-    }
-
-    let restore_browser_context_id = super::previously_active_browser_context_id(conn);
-    if !conn
-        .activate_browser_context_by_id_async(&browser_context_id)
-        .await
-    {
-        return Err(browser_context_not_found(&browser_context_id));
-    }
-    let disposal = BrowserContextDisposal::prepare(conn, &browser_context_id)?;
-
-    fail_target_pending_work(conn, &disposal, out, command_context).await;
-    out.extend_background_events(command_context.take_protocol_events());
-
-    for session_id in &disposal.inspector_session_ids {
-        out.background_events_mut()
-            .push(events::inspector_detached_event(
-                session_id,
-                INSPECTOR_DETACHED_REASON,
-            ));
-    }
-
-    out.extend_background_events(
-        worker_target::close_browser_context_worker_targets_for_dispose_async(
-            conn,
-            &disposal.browser_context_id,
-            DISPOSE_REASON,
-        )
-        .await,
-    );
-
-    for page_target in disposal.page_targets {
-        close_page_target(conn, out, page_target).await;
-    }
-
-    conn.download_behavior
-        .clear_browser_context(disposal.browser_context_id.as_str());
-    conn.permission_overrides.retain(|entry| {
-        entry.browser_context_id.as_deref() != Some(disposal.browser_context_id.as_str())
-    });
-
-    let removed = conn
-        .remove_browser_context_by_id_restoring_active_async(
-            &disposal.browser_context_id,
-            restore_browser_context_id.as_deref(),
-        )
+    let disposal = PreparedBrowserContextDisposal::prepare(conn, browser_context_id)?;
+    let plan = disposal
+        .complete_inline(conn, command_context, CommandOutputPlan::default())
         .await;
-    if let Some(mut removed) = removed {
-        removed.close_all_pages_async().await;
-    }
-    conn.restore_browser_focus_after_removal_async().await;
-    conn.release_idle_navigation_engine_memory_after_target_close();
+    out.extend_background_events(plan.into_background_events(None, None));
     Ok(())
-}
-
-async fn fail_target_pending_work(
-    conn: &mut CdpConnection,
-    disposal: &BrowserContextDisposal,
-    out: &mut events::TargetProtocolSideEffects,
-    command_context: &mut CommandDispatchContext,
-) {
-    for session_id in &disposal.pending_inspector_session_owners {
-        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            session_id.as_deref(),
-            DISPOSE_REASON,
-        );
-    }
-    for page_target in &disposal.page_targets {
-        if let Some(session_id) = &page_target.fetch_owner_session_id {
-            fail_pending_navigations_for_disposed_target_async(
-                conn,
-                out.background_events_mut(),
-                session_id.as_deref(),
-            )
-            .await;
-        }
-    }
-}
-
-async fn fail_pending_navigations_for_disposed_target_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-    session_id: Option<&str>,
-) {
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        _pending_subresource_fetches,
-        _pending_subresource_auths,
-        _pending_subresource_responses,
-    ) = crate::domains::page::take_pending_fetch_state(conn, session_id);
-
-    // Chromium closes an incognito BrowserContext as a renderer-lifetime
-    // boundary. Pending main-resource navigations still receive their
-    // protocol terminal before the target detaches, but fetch/XHR promises
-    // disappear with the renderer realm and do not synthesize
-    // Network.loadingFailed. In particular, disposal must not join concrete
-    // output cursors from every Page stream merely to report subresource
-    // cancellation.
-    let _ = crate::domains::page::fail_pending_fetch_state_background_events_async(
-        conn,
-        out,
-        session_id,
-        DISPOSE_REASON,
-        DISPOSE_REASON,
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-    )
-    .await;
-}
-
-async fn close_page_target(
-    conn: &mut CdpConnection,
-    out: &mut events::TargetProtocolSideEffects,
-    page_target: PageTargetDisposal,
-) {
-    let target_id = page_target.target_id;
-    let is_active_target = conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|browser_context| browser_context.is_active_target(&target_id));
-    let closed = if is_active_target {
-        conn.close_active_page_target_for_target_close_async(
-            out.background_events_mut(),
-            DISPOSE_REASON,
-        )
-        .await
-    } else {
-        conn.close_background_page_target_for_target_close_async(
-            &target_id,
-            out.background_events_mut(),
-            DISPOSE_REASON,
-        )
-        .await
-    };
-    let Some(closed) = closed else {
-        tracing::warn!(
-            target_id,
-            "browser context disposal could not close a prepared page target"
-        );
-        return;
-    };
-
-    let (target_detached_info_deltas, target_destroyed_deltas) =
-        page_target.host_closure.into_parts();
-    out.extend_background_events(
-        conn.prepared_target_host_deltas_event_plan(target_detached_info_deltas),
-    );
-    out.extend_background_events(
-        conn.dispose_target_closure_sessions_event_plan_async(
-            closed.into_detach_cleanup_plan(Some(INSPECTOR_DETACHED_REASON)),
-            None,
-        )
-        .await,
-    );
-    if let Some(tab_cleanup) = conn.take_closed_top_level_target_sessions_cleanup_plan(
-        &target_id,
-        Some(INSPECTOR_DETACHED_REASON),
-    ) {
-        out.extend_background_events(
-            conn.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
-                .await,
-        );
-    }
-    out.extend_background_events(
-        conn.prepared_target_host_deltas_event_plan(target_destroyed_deltas),
-    );
 }
 
 fn browser_context_not_found(browser_context_id: &str) -> DevToolsError {

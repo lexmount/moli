@@ -424,6 +424,14 @@ impl CdpConnection {
         let mut attached_state_delta_plan = None;
         let mut plan = TargetEventPlan::default();
         for session in sessions {
+            if session
+                .route()
+                .browser_context_id()
+                .and_then(|id| self.browser_context_by_id(id))
+                .is_some_and(|context| context.closing)
+            {
+                continue;
+            }
             let worker_attachment = session.worker_attachment().cloned();
             assert!(
                 worker_attachment.is_some()

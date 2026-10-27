@@ -119,11 +119,12 @@ pub(crate) use bidi_channel_work::{
     BidiChannelPageOwner,
 };
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
+#[cfg(test)]
+pub(crate) use browser_context::{ClosedPageTarget, PendingPageTargetClose};
 pub(crate) use browser_context::{
-    ClosedPageTarget, CompletedPageTargetClose, PageLifecycleEventsEnableResult,
-    PendingPageTargetClose, PreparedPopupTargetRollback, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
-    TargetNavigationLoadInputs,
+    CompletedPageTargetClose, PageLifecycleEventsEnableResult, PreparedPopupTargetRollback,
+    SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
+    TargetEmulationStateUpdate, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;

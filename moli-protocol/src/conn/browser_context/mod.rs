@@ -18,7 +18,8 @@ pub(crate) use page_owner::PageLifecycleEventsEnableResult;
 pub(crate) use runtime_owner::{
     SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
 };
+#[cfg(test)]
+pub(crate) use target_session_owner::{ClosedPageTarget, PendingPageTargetClose};
 pub(crate) use target_session_owner::{
-    ClosedPageTarget, CompletedPageTargetClose, PendingPageTargetClose,
-    PreparedPopupTargetRollback, TargetNavigationLoadInputs,
+    CompletedPageTargetClose, PreparedPopupTargetRollback, TargetNavigationLoadInputs,
 };

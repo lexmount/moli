@@ -29,6 +29,9 @@ mod info;
 mod opening;
 pub(crate) use attachment::TargetDetachmentOutput;
 pub(crate) use auto_attach::{AutoAttachSweepRollback, PreparedAutoAttachSweep};
+pub(crate) use browser_context_disposal::{
+    BrowserContextDisposalIdentity, PreparedBrowserContextDisposal,
+};
 pub(crate) use opening::prepare_creation_outputs;
 #[cfg(test)]
 pub(crate) use opening::rollback_attachment;
@@ -285,7 +288,7 @@ enum PendingTargetCommandKind {
         access: Option<crate::conn::ProtocolStateAccess>,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: browser_context_disposal::PreparedBrowserContextDisposal,
     },
     SendMessageToTarget {
         message: String,
@@ -333,7 +336,7 @@ enum CompletedTargetCommandKind {
         response: CommandOutputPlan,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: browser_context_disposal::PreparedBrowserContextDisposal,
     },
     SendMessageToTarget {
         message: String,
@@ -441,8 +444,8 @@ impl PendingTargetCommandDispatch {
                 }
                 None => CompletedTargetCommandKind::InlineClosePageTarget { closing, response },
             },
-            PendingTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
-                CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id }
+            PendingTargetCommandKind::DisposeBrowserContext { disposal } => {
+                CompletedTargetCommandKind::DisposeBrowserContext { disposal }
             }
             PendingTargetCommandKind::SendMessageToTarget {
                 message,
@@ -618,9 +621,9 @@ pub(crate) fn try_start_target_command_dispatch(
             Some(attachment::start_detach_from_target_command(conn, cmd))
         }
         Some(TargetAction::CloseTarget) => Some(closing::start_close_target_command(conn, cmd)),
-        Some(TargetAction::DisposeBrowserContext) => {
-            Some(browser_context::start_dispose_browser_context_command(cmd))
-        }
+        Some(TargetAction::DisposeBrowserContext) => Some(
+            browser_context::start_dispose_browser_context_command(conn, cmd),
+        ),
         Some(TargetAction::SendMessageToTarget) => {
             Some(attachment::start_send_message_to_target_command(cmd))
         }
@@ -985,14 +988,11 @@ pub(crate) async fn complete_pending_target_command(
                 response,
             ))
         }
-        CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
+        CompletedTargetCommandKind::DisposeBrowserContext { disposal } => {
             return TargetCommandTaskStep::Complete(
-                browser_context::complete_dispose_browser_context_command_async(
-                    conn,
-                    browser_context_id,
-                    command_context,
-                )
-                .await,
+                disposal
+                    .complete_inline(conn, command_context, CommandOutputPlan::success())
+                    .await,
             );
         }
         CompletedTargetCommandKind::SendMessageToTarget {
@@ -1054,12 +1054,12 @@ fn pending_close_target_command(
 fn pending_dispose_browser_context_command(
     command_id: Option<u64>,
     session_id: Option<&str>,
-    browser_context_id: String,
+    disposal: browser_context_disposal::PreparedBrowserContextDisposal,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
         command_id,
         session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { browser_context_id }),
+        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { disposal }),
     })
 }
 

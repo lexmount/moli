@@ -14,6 +14,7 @@ use super::{
 };
 
 mod auto_attach;
+mod browser_context_disposal;
 mod direct;
 mod target_opening;
 pub use direct::{ProtocolStateHandle, ProtocolStateOwner};

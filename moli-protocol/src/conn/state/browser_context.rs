@@ -39,6 +39,7 @@ use super::{
 
 pub struct BrowserContext {
     pub id: String,
+    pub(crate) closing: bool,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
     /// Browser focus is independent of which context is selected for routing.
@@ -511,6 +512,7 @@ impl BrowserContext {
 
         Self {
             id,
+            closing: false,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
             window_is_focused: true,

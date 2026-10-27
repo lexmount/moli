@@ -310,6 +310,17 @@ fn execute_devtools_create_target_command_in_window(
         return Err(error);
     }
     conn.ensure_browser_context_for_implicit_target_creation();
+    if conn
+        .browser_context
+        .as_ref()
+        .is_some_and(|context| context.closing)
+    {
+        restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::NoSuchTarget,
+            "Browser context is closing",
+        ));
+    }
     let browser_context_id = conn
         .browser_context
         .as_ref()

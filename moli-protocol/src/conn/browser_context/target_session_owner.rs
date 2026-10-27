@@ -1233,6 +1233,15 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
 impl CdpConnection {
     pub(crate) fn target_is_closing_for_owner(&self, owner: &CommandOwnerScope) -> bool {
+        if owner
+            .resolve_route(self)
+            .as_ref()
+            .and_then(crate::conn::CdpSessionRoute::browser_context_id)
+            .and_then(|id| self.browser_context_by_id(id))
+            .is_some_and(|context| context.closing)
+        {
+            return true;
+        }
         if let Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget {
             browser_context_id,
             target_id,
@@ -1581,22 +1590,6 @@ impl CdpConnection {
             .take_loaded_page_after_failed_navigation(final_url)
     }
 
-    async fn close_page_target_for_target_close_async(
-        &mut self,
-        target_id: &str,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        crate::domains::target::session_disposal::close_page_target_using(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            target_id.to_owned(),
-            out,
-            reason,
-        )
-        .await
-        .expect("inline Page close retains its protocol state")
-    }
-
     pub(crate) fn start_page_target_close(
         &mut self,
         target_id: &str,
@@ -1665,73 +1658,6 @@ impl CdpConnection {
             },
             collected_network_data_artifacts,
         })
-    }
-
-    pub(crate) async fn close_background_page_target_for_target_close_async(
-        &mut self,
-        target_id: &str,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        let is_background = self
-            .browser_context
-            .as_ref()
-            .is_some_and(|browser_context| {
-                browser_context.page_target(target_id).is_some()
-                    && !browser_context.is_active_target(target_id)
-            });
-        if !is_background {
-            return None;
-        }
-        let closed = self
-            .close_page_target_for_target_close_async(target_id, out, reason)
-            .await;
-        self.restore_browser_focus_after_removal_async().await;
-        closed
-    }
-
-    pub(crate) async fn close_active_page_target_for_target_close_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        let target_id = self.browser_context.as_ref()?.active_target_id_owned()?;
-        let next_target_id = self
-            .browser_context
-            .as_ref()?
-            .page_targets
-            .adjacent_target_id(&target_id)
-            .map(str::to_owned);
-        let closed = self
-            .close_page_target_for_target_close_async(&target_id, out, reason)
-            .await?;
-        let selected_target_id = if let Some(browser_context) = self.browser_context.as_mut()
-            && let Some(next_target_id) = next_target_id
-        {
-            browser_context
-                .select_page_target_async(&next_target_id)
-                .await
-                .expect("applying selected target visibility should succeed")
-                .then_some(next_target_id)
-        } else {
-            None
-        };
-        self.refresh_active_browser_context_loader_async().await;
-        if let Some(selected_target_id) = selected_target_id {
-            self.notify_target_host_activated(&selected_target_id);
-            out.extend(
-                self.page_screencast_session_ids_for_target(&selected_target_id)
-                    .into_iter()
-                    .map(|session_id| {
-                        BackgroundProtocolEvent::page_screencast_visibility_changed(
-                            session_id.as_deref(),
-                            true,
-                        )
-                    }),
-            );
-        }
-        self.restore_browser_focus_after_removal_async().await;
-        Some(closed)
     }
 
     pub(crate) fn prepare_popup_target_rollback(

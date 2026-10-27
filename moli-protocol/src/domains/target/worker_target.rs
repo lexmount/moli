@@ -91,7 +91,7 @@ pub(in crate::domains) use lifecycle_projection::{
     service_worker_target_lifecycle_prepared_outputs_for_event,
     shared_worker_target_lifecycle_prepared_outputs_for_event,
 };
-pub(super) use service_worker_targets::close_browser_context_worker_targets_for_dispose_async;
+pub(super) use service_worker_targets::prepare_browser_context_worker_targets_for_disposal;
 pub(super) use shared_worker::{
     close_dedicated_worker_target_for_target_close_async,
     close_shared_worker_target_for_target_close_async,
@@ -323,6 +323,10 @@ impl TargetPreparedOutputs {
 }
 
 impl TargetPreparedOutputSlot {
+    pub(in crate::domains) fn is_empty(&self) -> bool {
+        self.outputs.is_empty()
+    }
+
     pub(in crate::domains) fn from_outputs(outputs: TargetPreparedOutputs) -> Self {
         Self { outputs }
     }
