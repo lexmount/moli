@@ -19,7 +19,7 @@ fn negative_end_delay_clips_both_css_phase_endpoints() {
             |e| matches!(e,AnimationEvent::Phase{kind:PhaseEvent::End,elapsed} if *elapsed==0.5)
         )
     );
-    state
+    let _ = state
         .command(
             AnimationCommand::SetRate(-1.0),
             now + Duration::from_millis(500),

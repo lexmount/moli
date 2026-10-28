@@ -26,6 +26,16 @@ enum CssPhase {
     After,
 }
 
+/// Play and pause tasks share a ready promise, but commit different clock
+/// changes. Switching between them preserves the pending promise's identity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PendingOperation {
+    #[default]
+    None,
+    Play,
+    Pause,
+}
+
 /// Stable playback and effect state, independent of DOM, JS wrappers and timers.
 #[derive(Debug)]
 pub struct AnimationState {
@@ -44,8 +54,8 @@ pub struct AnimationState {
     pub direction: String,
     pub frames: Vec<PropertyKeyframes>,
     idle: bool,
-    pending_cancel: bool,
-    pending_play: bool,
+    pending_cancel: Option<ReadyPromiseUpdate>,
+    pending: PendingOperation,
     timeline_attached: bool,
     pub has_effect: bool,
     finish_notified: bool,
@@ -143,8 +153,8 @@ impl AnimationState {
             direction: "normal".to_owned(),
             frames: Vec::new(),
             idle: true,
-            pending_cancel: false,
-            pending_play: false,
+            pending_cancel: None,
+            pending: PendingOperation::None,
             timeline_attached: true,
             has_effect: false,
             finish_notified: false,
@@ -164,6 +174,11 @@ impl AnimationState {
             ready: self.ready_generation,
             finished: self.finished_generation,
             synchronous_finish: false,
+            ready_update: if kind == PlaybackNotificationKind::Ready {
+                ReadyPromiseUpdate::Resolve
+            } else {
+                ReadyPromiseUpdate::Unchanged
+            },
         }
     }
     pub fn accepts(&self, notification: PlaybackNotification) -> bool {
@@ -188,7 +203,7 @@ impl AnimationState {
         self.idle
     }
     pub fn is_pending(&self) -> bool {
-        self.pending_play
+        self.pending != PendingOperation::None
     }
     pub fn timeline_attached(&self) -> bool {
         self.timeline_attached
@@ -210,7 +225,7 @@ impl AnimationState {
             play_state: self.play_state(now),
             local_time: self.current_seconds(now),
             progress: self.progress(now),
-            pending: self.pending_play,
+            pending: self.is_pending(),
         }
     }
     /// Controls playback without consuming any lifecycle notifications.
@@ -218,16 +233,17 @@ impl AnimationState {
         &mut self,
         command: AnimationCommand,
         now: Instant,
-    ) -> Result<ReadyPromiseUpdate, InvalidPlaybackState> {
-        let was_pending = self.pending_play;
+    ) -> Result<CommandOutcome, InvalidPlaybackState> {
+        let was_pending = self.is_pending();
+        let was_idle = self.idle;
         let generation = self.ready_generation;
         if !self.apply_command(command, now) {
             return Err(InvalidPlaybackState);
         }
-        Ok(
-            if self.pending_play && self.ready_generation != generation {
+        Ok(CommandOutcome {
+            ready: if self.is_pending() && self.ready_generation != generation {
                 ReadyPromiseUpdate::Pending
-            } else if was_pending && !self.pending_play {
+            } else if was_pending && !self.is_pending() {
                 if command == AnimationCommand::Cancel {
                     ReadyPromiseUpdate::Reject
                 } else {
@@ -236,7 +252,17 @@ impl AnimationState {
             } else {
                 ReadyPromiseUpdate::Unchanged
             },
-        )
+            finished: if command == AnimationCommand::Cancel && !was_idle {
+                FinishedPromiseUpdate::RejectAndRenew
+            } else if command == AnimationCommand::Finish
+                && !self.is_pending()
+                && self.play_state(now) == "finished"
+            {
+                FinishedPromiseUpdate::Resolve
+            } else {
+                FinishedPromiseUpdate::Unchanged
+            },
+        })
     }
     fn apply_command(&mut self, command: AnimationCommand, now: Instant) -> bool {
         match command {
@@ -247,15 +273,30 @@ impl AnimationState {
             AnimationCommand::Seek(local) => {
                 self.finished_hold = None;
                 self.clock.seek(now, local);
-                if self.idle || !self.timeline_attached {
+                if self.idle || !self.timeline_attached || self.pending == PendingOperation::Pause {
                     self.clock.update_play_state(now, true);
                     self.idle = false;
+                }
+                if self.pending == PendingOperation::Pause {
+                    self.pending = PendingOperation::None;
                 }
                 if self.is_finished_at(local) {
                     self.finished_hold = Some(local);
                 }
             }
-            AnimationCommand::SetRate(rate) => self.set_rate(now, rate),
+            AnimationCommand::SetRate(rate) => {
+                self.set_rate(now, rate);
+                // The playbackRate setter sets the current time again; like
+                // seek, that synchronously completes a pending pause.
+                if self.pending == PendingOperation::Pause
+                    && self.timeline_attached
+                    && let Some(local) = self.current_seconds(now)
+                {
+                    self.clock.hold(now, Some(local));
+                    self.finished_hold = None;
+                    self.pending = PendingOperation::None;
+                }
+            }
             AnimationCommand::Reverse => {
                 let rate = self.clock.rate;
                 self.set_rate(now, -rate);
@@ -265,9 +306,7 @@ impl AnimationState {
                 }
                 // Reverse is a pending play operation even when playback was
                 // already running. Preserve an existing pending ready promise.
-                if !self.pending_play {
-                    self.queue_pending_play();
-                }
+                self.queue_pending(PendingOperation::Play);
             }
             AnimationCommand::AttachTimeline(attached) => {
                 // Timeline availability does not change the start/hold mapping
@@ -287,7 +326,7 @@ impl AnimationState {
                 } else {
                     self.current_seconds(now)
                 };
-                self.pending_play = false;
+                self.pending = PendingOperation::None;
                 self.finished_hold = None;
                 self.clock.set_start_time(now, origin, seconds, previous);
                 self.idle = seconds.is_none() && previous.is_none();
@@ -351,6 +390,16 @@ impl AnimationState {
     }
     /// CSS play-state updates preserve the existing CSS timeline mapping.
     pub fn set_css_paused(&mut self, paused: bool, now: Instant) {
+        // A pending WAAPI operation already owns a ready promise. CSS may
+        // replace its requested operation, but must not complete it early.
+        if self.is_pending() {
+            if paused {
+                self.pause(now);
+            } else {
+                self.play(now);
+            }
+            return;
+        }
         let local = self.current_seconds(now).unwrap_or(0.0);
         self.clock.seek(now, local);
         self.finished_hold = None;
@@ -360,21 +409,20 @@ impl AnimationState {
     pub fn advance(&mut self, now: Instant, mode: AdvanceMode) -> Vec<AnimationEvent> {
         let mut events = Vec::new();
         let synchronous_finish = std::mem::take(&mut self.synchronous_finish);
-        if mode == AdvanceMode::Tick && self.commit_pending_play(now) {
+        if mode == AdvanceMode::Tick && self.commit_pending(now) {
             events.push(AnimationEvent::Playback(
                 self.notification(PlaybackNotificationKind::Ready),
             ));
         }
         self.update_finished_hold();
-        if self.pending_cancel {
-            self.pending_cancel = false;
-            events.push(AnimationEvent::Playback(
-                self.notification(PlaybackNotificationKind::Cancel),
-            ));
+        if let Some(ready) = self.pending_cancel.take() {
+            let mut notification = self.notification(PlaybackNotificationKind::Cancel);
+            notification.ready_update = ready;
+            events.push(AnimationEvent::Playback(notification));
         }
         let next = if self.idle {
             CssPhase::Idle
-        } else if self.pending_play && matches!(self.css_phase, CssPhase::Idle | CssPhase::Pending)
+        } else if self.is_pending() && matches!(self.css_phase, CssPhase::Idle | CssPhase::Pending)
         {
             CssPhase::Pending
         } else if self.current_seconds(now).is_none() {
@@ -434,7 +482,7 @@ impl AnimationState {
         if self.idle {
             return events;
         }
-        let finished = self.play_state(now) == "finished";
+        let finished = !self.is_pending() && self.play_state(now) == "finished";
         if finished != self.finish_notified {
             if !finished {
                 self.finished_generation = self.finished_generation.wrapping_add(1);
@@ -454,7 +502,7 @@ impl AnimationState {
     pub fn retire(&mut self, now: Instant) {
         self.cancel(now);
         self.timeline_attached = false;
-        self.pending_cancel = false;
+        self.pending_cancel = None;
         self.css_phase = CssPhase::Idle;
     }
     /// Copy effect configuration without copying identity, playback or host ownership.
@@ -536,9 +584,9 @@ impl AnimationState {
     pub fn play_state(&self, now: Instant) -> &'static str {
         if self.idle {
             "idle"
-        } else if self.pending_play {
-            "running"
-        } else if self.clock.is_paused() {
+        } else if self.pending == PendingOperation::Pause
+            || (self.pending != PendingOperation::Play && self.clock.is_paused())
+        {
             "paused"
         } else if self
             .current_seconds(now)
@@ -550,7 +598,11 @@ impl AnimationState {
         }
     }
     pub fn pause(&mut self, now: Instant) -> bool {
-        let local = self.current_seconds(now).unwrap_or_else(|| {
+        if self.pending == PendingOperation::Pause || self.play_state(now) == "paused" {
+            return true;
+        }
+        let current = self.current_seconds(now);
+        let local = current.unwrap_or_else(|| {
             if self.clock.rate < 0.0 {
                 self.end_time()
             } else {
@@ -560,11 +612,13 @@ impl AnimationState {
         if !local.is_finite() {
             return false;
         }
-        self.clock.seek(now, local);
-        self.finished_hold = None;
-        self.clock.update_play_state(now, true);
+        // A running clock is frozen when the pause task commits, not when
+        // pause() is called. Idle animations need an initial hold immediately.
+        if current.is_none() {
+            self.clock.hold(now, Some(local));
+        }
         self.idle = false;
-        self.pending_play = false;
+        self.queue_pending(PendingOperation::Pause);
         true
     }
     pub fn play(&mut self, now: Instant) -> bool {
@@ -590,35 +644,53 @@ impl AnimationState {
             self.clock.seek(now, local);
             self.finished_hold = None;
         }
-        if self.pending_play || (!rewind && self.play_state(now) == "running") {
+        if self.pending == PendingOperation::Play || (!rewind && self.play_state(now) == "running")
+        {
             return true;
         }
         self.idle = false;
-        self.clock.update_play_state(now, true);
-        self.queue_pending_play();
+        if rewind || !self.clock.has_start_time() {
+            self.clock.update_play_state(now, true);
+        }
+        self.queue_pending(PendingOperation::Play);
         true
     }
-    fn queue_pending_play(&mut self) {
-        self.pending_play = true;
-        self.ready_generation = self.ready_generation.wrapping_add(1);
+    fn queue_pending(&mut self, operation: PendingOperation) {
+        if !self.is_pending() {
+            self.ready_generation = self.ready_generation.wrapping_add(1);
+        }
+        self.pending = operation;
     }
-    pub fn commit_pending_play(&mut self, now: Instant) -> bool {
-        if !self.pending_play || !self.timeline_attached {
+    pub fn commit_pending(&mut self, now: Instant) -> bool {
+        if !self.is_pending() || !self.timeline_attached {
             return false;
         }
-        self.pending_play = false;
-        self.clock.update_play_state(now, false);
+        let pause = self.pending == PendingOperation::Pause;
+        if pause {
+            self.clock.hold(now, self.current_seconds(now));
+            self.finished_hold = None;
+        } else {
+            self.clock.update_play_state(now, false);
+        }
+        self.pending = PendingOperation::None;
         true
     }
     pub fn cancel(&mut self, now: Instant) {
+        if self.idle {
+            return;
+        }
         let local = self.current_seconds(now).unwrap_or(0.0);
         self.clock.seek(now, local);
         self.finished_hold = None;
         self.clock.update_play_state(now, true);
-        self.pending_cancel |= !self.idle;
+        self.pending_cancel = Some(if self.is_pending() {
+            ReadyPromiseUpdate::Reject
+        } else {
+            ReadyPromiseUpdate::Unchanged
+        });
         self.cycle = self.cycle.wrapping_add(1);
         self.idle = true;
-        self.pending_play = false;
+        self.pending = PendingOperation::None;
     }
     pub fn finish(&mut self, now: Instant) -> bool {
         let end = self.end_time();
@@ -626,7 +698,9 @@ impl AnimationState {
             return false;
         }
         self.idle = false;
-        self.pending_play = false;
+        if self.timeline_attached {
+            self.pending = PendingOperation::None;
+        }
         self.clock
             .seek(now, if self.clock.rate < 0.0 { 0.0 } else { end });
         self.clock.update_play_state(now, !self.timeline_attached);
@@ -784,7 +858,7 @@ impl AnimationState {
         if !self.timeline_attached {
             return None;
         }
-        if self.pending_play {
+        if self.is_pending() {
             return self.timeline_attached.then_some(now);
         }
         if self.idle {
@@ -865,8 +939,13 @@ pub struct PlaybackNotification {
     ready: u64,
     finished: u64,
     synchronous_finish: bool,
+    ready_update: ReadyPromiseUpdate,
 }
 impl PlaybackNotification {
+    /// Native cancellation follows the same ready contract as a JS command.
+    pub fn ready_update(self) -> ReadyPromiseUpdate {
+        self.ready_update
+    }
     /// A synchronous finish/cancel has queued its DOM event before a later
     /// state change. An ordinary finish must first pass publication checks.
     pub fn event_is_queued(self) -> bool {
@@ -897,6 +976,22 @@ pub enum ReadyPromiseUpdate {
     Pending,
     Resolve,
     Reject,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FinishedPromiseUpdate {
+    Unchanged,
+    Resolve,
+    RejectAndRenew,
+}
+
+/// Immediate host actions of an accepted command. Timed playback and CSS
+/// notifications remain in advance(); a host must not recreate command rules.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub struct CommandOutcome {
+    pub ready: ReadyPromiseUpdate,
+    pub finished: FinishedPromiseUpdate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

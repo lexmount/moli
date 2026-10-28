@@ -16,7 +16,11 @@ fn reverse_completion_retires_time_service_but_preserves_fill_sampling() {
     let animation = engine.create(effect(now));
     let id = animation.borrow().id();
     engine.advance(now + Duration::from_secs(1));
-    assert!(engine.command(id, AnimationCommand::Reverse, now + Duration::from_secs(1)));
+    assert!(
+        engine
+            .command(id, AnimationCommand::Reverse, now + Duration::from_secs(1))
+            .is_ok()
+    );
     engine.advance(now + Duration::from_secs(1));
     let end = now + Duration::from_millis(1600);
     let batch = engine.advance(end);
@@ -92,7 +96,9 @@ fn reverse_crosses_phase_boundaries_before_reaching_the_playback_end() {
     let animation = engine.create(state);
     let id = animation.borrow().id();
     engine.advance(now + Duration::from_secs(1));
-    engine.command(id, AnimationCommand::Reverse, now + Duration::from_secs(1));
+    let _ = engine
+        .command(id, AnimationCommand::Reverse, now + Duration::from_secs(1))
+        .unwrap();
     let reversed = engine.advance(now + Duration::from_secs(1));
     assert_eq!(reversed.next_wake, Some(now + Duration::from_millis(1100)));
     assert_eq!(

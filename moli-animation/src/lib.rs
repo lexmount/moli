@@ -22,7 +22,8 @@
 //! let mut engine = AnimationEngine::default();
 //! let animation = engine.create(state);
 //! let id = animation.borrow().id();
-//! assert!(engine.command(id, AnimationCommand::Play, now));
+//! let outcome = engine.command(id, AnimationCommand::Play, now).unwrap();
+//! assert_eq!(outcome.ready, moli_animation::ReadyPromiseUpdate::Pending);
 //! let batch = engine.advance(now);
 //! assert_eq!(batch.next_wake, Some(now + Duration::from_secs(1)));
 //! let sample = engine.sample(id, now + Duration::from_millis(250)).unwrap();
@@ -42,9 +43,9 @@ pub use engine::{Advance, AnimationEngine, AnimationUpdate, PlaybackState};
 pub use keyframes::resolve_keyframe_offsets;
 pub use playback::{
     AdvanceMode, AnimationCommand, AnimationEvent, AnimationId, AnimationPhase, AnimationSample,
-    AnimationState, EffectProgress, InvalidPlaybackState, KeyframeValue, PhaseEvent,
-    PlaybackNotification, PlaybackNotificationKind, PropertyKeyframes, PropertySample,
-    ReadyPromiseUpdate,
+    AnimationState, CommandOutcome, EffectProgress, FinishedPromiseUpdate, InvalidPlaybackState,
+    KeyframeValue, PhaseEvent, PlaybackNotification, PlaybackNotificationKind, PropertyKeyframes,
+    PropertySample, ReadyPromiseUpdate,
 };
 pub use timing::{CssTime, FillMode, active_duration, duration};
 pub use transition::{ReversalTiming, reverse_transition_timing};

@@ -301,7 +301,7 @@ async fn infinite_effects_keep_demand_sampling_without_arming_periodic_deadlines
         let animation = crate::animation_bindings::instance(scope, value).unwrap();
         // Advance only the clock. No DOM mutation or JS currentTime setter
         // invalidates layout on behalf of this demand.
-        animation
+        let _ = animation
             .borrow_mut()
             .playback
             .command(

@@ -10,10 +10,10 @@ fn observations_do_not_commit_transient_css_phase_crossings() {
     let now = Instant::now();
     let mut state = effect(now);
     state.pause(now);
-    state.command(AnimationCommand::Seek(0.5), now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(0.5), now).unwrap();
     state.advance(now, AdvanceMode::Tick);
     for t in [1.0, 0.5] {
-        state.command(AnimationCommand::Seek(t), now).unwrap();
+        let _ = state.command(AnimationCommand::Seek(t), now).unwrap();
         assert!(
             !state
                 .advance(now, AdvanceMode::Observe)

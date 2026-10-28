@@ -1,5 +1,6 @@
 use crate::{
     AdvanceMode, AnimationCommand, AnimationEvent, AnimationId, AnimationSample, AnimationState,
+    CommandOutcome, InvalidPlaybackState,
 };
 use std::{
     cell::RefCell,
@@ -77,20 +78,19 @@ impl<T: PlaybackState> AnimationEngine<T> {
     pub fn get(&self, id: AnimationId) -> Option<Rc<RefCell<T>>> {
         self.instances.get(&id)?.instance.upgrade()
     }
-    pub fn command(&mut self, id: AnimationId, command: AnimationCommand, now: Instant) -> bool {
-        let Some(animation) = self.get(id) else {
-            return false;
-        };
-        if animation
+    pub fn command(
+        &mut self,
+        id: AnimationId,
+        command: AnimationCommand,
+        now: Instant,
+    ) -> Result<CommandOutcome, InvalidPlaybackState> {
+        let animation = self.get(id).ok_or(InvalidPlaybackState)?;
+        let outcome = animation
             .borrow_mut()
             .playback_mut()
-            .command(command, now)
-            .is_err()
-        {
-            return false;
-        }
+            .command(command, now)?;
         self.activate(&animation);
-        true
+        Ok(outcome)
     }
     pub fn sample(&self, id: AnimationId, now: Instant) -> Option<AnimationSample> {
         Some(self.get(id)?.borrow().playback().sample(now))

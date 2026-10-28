@@ -63,7 +63,11 @@ fn every_instance_is_committed_before_the_host_receives_a_batch() {
     assert_eq!(batch.updates[0].animation.borrow().id(), a.borrow().id());
     assert_eq!(b.borrow().committed_phase(), AnimationPhase::After);
     // Simulate A's end callback changing B. The committed batch remains intact.
-    assert!(engine.command(b_id, AnimationCommand::Seek(0.5), later));
+    assert!(
+        engine
+            .command(b_id, AnimationCommand::Seek(0.5), later)
+            .is_ok()
+    );
     assert_eq!(phases(&batch.updates[1].events), [(PhaseEvent::End, 1.0)]);
     let next = engine.advance(later);
     assert_eq!(phases(&next.updates[0].events), [(PhaseEvent::Start, 1.0)]);
@@ -84,14 +88,14 @@ fn repeated_admission_and_advance_do_not_duplicate_start_or_cancel() {
     assert_eq!(batch.updates.len(), 1);
     assert_eq!(phases(&batch.updates[0].events), [(PhaseEvent::Start, 0.0)]);
     assert!(engine.advance(now).updates[0].events.is_empty());
-    assert!(engine.command(id, AnimationCommand::Cancel, now));
+    assert!(engine.command(id, AnimationCommand::Cancel, now).is_ok());
     let batch = engine.advance(now);
     assert_eq!(
         phases(&batch.updates[0].events),
         [(PhaseEvent::Cancel, 0.0)]
     );
     assert!(!engine.is_active());
-    assert!(engine.command(id, AnimationCommand::Cancel, now));
+    assert!(engine.command(id, AnimationCommand::Cancel, now).is_ok());
     assert!(engine.advance(now).updates[0].events.is_empty());
 }
 
@@ -103,13 +107,17 @@ fn pause_seek_and_resume_rearm_the_same_id_without_sampling_side_effects() {
     let id = animation.borrow().id();
     engine.advance(now);
     let paused = now + Duration::from_millis(200);
-    assert!(engine.command(id, AnimationCommand::Pause, paused));
+    assert!(engine.command(id, AnimationCommand::Pause, paused).is_ok());
     assert_eq!(engine.advance(paused).next_wake, None);
     assert!(!engine.is_active());
     let later = now + Duration::from_secs(100);
     assert_eq!(engine.sample(id, later).unwrap().local_time, Some(0.2));
-    assert!(engine.command(id, AnimationCommand::Seek(0.4), later));
-    assert!(engine.command(id, AnimationCommand::Play, later));
+    assert!(
+        engine
+            .command(id, AnimationCommand::Seek(0.4), later)
+            .is_ok()
+    );
+    assert!(engine.command(id, AnimationCommand::Play, later).is_ok());
     assert!(engine.sample(id, later).unwrap().pending);
     let resumed = engine.advance(later);
     assert!(resumed.updates[0].events.iter().any(|event|
@@ -149,12 +157,12 @@ fn registry_does_not_keep_dormant_instances_or_host_data_alive() {
     let animation = engine.create(effect(now));
     let id = animation.borrow().id();
     let weak = Rc::downgrade(&animation);
-    assert!(engine.command(id, AnimationCommand::Pause, now));
+    assert!(engine.command(id, AnimationCommand::Pause, now).is_ok());
     drop(engine.advance(now));
     drop(animation);
     assert!(weak.upgrade().is_none());
     assert!(engine.sample(id, now).is_none());
-    assert!(!engine.command(id, AnimationCommand::Play, now));
+    assert!(engine.command(id, AnimationCommand::Play, now).is_err());
     engine.prune();
     assert!(engine.into_instances().next().is_none());
 }
@@ -190,7 +198,11 @@ fn cancellation_generations_reject_stale_ready_and_finished_records() {
         })
         .unwrap();
     assert!(animation.borrow().accepts(notification));
-    assert!(engine.command(id, AnimationCommand::Play, now + Duration::from_secs(2)));
+    assert!(
+        engine
+            .command(id, AnimationCommand::Play, now + Duration::from_secs(2))
+            .is_ok()
+    );
     assert!(!animation.borrow().accepts(notification));
 }
 
@@ -214,18 +226,22 @@ fn detached_timeline_keeps_pending_play_until_reattachment() {
     let now = Instant::now();
     let mut engine = AnimationEngine::default();
     let mut state = effect(now);
-    state.command(AnimationCommand::Pause, now).unwrap();
-    state.command(AnimationCommand::Seek(0.25), now).unwrap();
-    state
+    let _ = state.command(AnimationCommand::Pause, now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(0.25), now).unwrap();
+    let _ = state
         .command(AnimationCommand::AttachTimeline(false), now)
         .unwrap();
     let animation = engine.create(state);
     let id = animation.borrow().id();
-    assert!(engine.command(id, AnimationCommand::Play, now));
+    assert!(engine.command(id, AnimationCommand::Play, now).is_ok());
     assert_eq!(engine.advance(now).next_wake, None);
     let later = now + Duration::from_secs(100);
     assert_eq!(engine.sample(id, later).unwrap().local_time, Some(0.25));
-    assert!(engine.command(id, AnimationCommand::AttachTimeline(true), later));
+    assert!(
+        engine
+            .command(id, AnimationCommand::AttachTimeline(true), later)
+            .is_ok()
+    );
     let batch = engine.advance(later);
     assert!(batch.updates[0].events.iter().any(|event|
         matches!(event, AnimationEvent::Playback(n) if n.kind == PlaybackNotificationKind::Ready)));
@@ -237,11 +253,11 @@ fn observation_preserves_pending_play_and_defers_css_phase_commit_until_tick() {
     use moli_animation::AdvanceMode;
     let now = Instant::now();
     let mut animation = effect(now);
-    animation.command(AnimationCommand::Pause, now).unwrap();
-    animation
+    let _ = animation.command(AnimationCommand::Pause, now).unwrap();
+    let _ = animation
         .command(AnimationCommand::Seek(0.25), now)
         .unwrap();
-    animation.command(AnimationCommand::Play, now).unwrap();
+    let _ = animation.command(AnimationCommand::Play, now).unwrap();
     let observed = animation.advance(now, AdvanceMode::Observe);
     assert!(animation.sample(now).pending);
     assert!(phases(&observed).is_empty());
@@ -268,7 +284,7 @@ fn retirement_enumerates_active_and_dormant_instances_once() {
     let active = engine.create(effect(now));
     let dormant = engine.create(effect(now));
     let id = dormant.borrow().id();
-    engine.command(id, AnimationCommand::Pause, now);
+    let _ = engine.command(id, AnimationCommand::Pause, now).unwrap();
     engine.advance(now);
     let instances = engine.into_instances().collect::<Vec<_>>();
     assert_eq!(instances.len(), 2);

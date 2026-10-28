@@ -17,22 +17,24 @@ fn pause_seek_resume_and_rate_share_one_local_clock() {
     let mut animation = effect(now);
     assert!(animation.play(now));
     assert_eq!(animation.next_deadline(now), Some(now));
-    assert!(animation.commit_pending_play(now));
+    assert!(animation.commit_pending(now));
     animation.pause(now + Duration::from_millis(200));
+    assert!(animation.is_pending());
+    assert!(animation.commit_pending(now + Duration::from_millis(200)));
     let resumed = now + Duration::from_secs(10);
     assert_eq!(animation.current_seconds(resumed), Some(0.2));
     assert_eq!(animation.next_deadline(resumed), Some(resumed));
     animation.advance(resumed, AdvanceMode::Tick);
     assert_eq!(animation.next_deadline(resumed), None);
 
-    animation
+    let _ = animation
         .command(AnimationCommand::Seek(0.4), resumed)
         .unwrap();
     assert!(animation.play(resumed));
-    assert!(animation.commit_pending_play(resumed));
+    assert!(animation.commit_pending(resumed));
     let later = resumed + Duration::from_millis(100);
     assert_eq!(animation.current_seconds(later), Some(0.5));
-    animation
+    let _ = animation
         .command(AnimationCommand::SetRate(-2.0), later)
         .unwrap();
     assert!(
@@ -50,7 +52,7 @@ fn transferring_effect_configuration_preserves_identity_and_playback() {
     let now = Instant::now();
     let mut animation = effect(now);
     assert!(animation.play(now));
-    assert!(animation.commit_pending_play(now));
+    assert!(animation.commit_pending(now));
     let id = animation.id();
     let mut source = effect(now);
     source.duration = Duration::from_secs(2);
@@ -106,11 +108,13 @@ fn infinite_effects_need_sampling_without_repeated_timer_wakes() {
     let mut animation = effect(now);
     animation.iterations = f64::INFINITY;
     assert!(animation.play(now));
-    assert!(animation.commit_pending_play(now));
+    assert!(animation.commit_pending(now));
     animation.advance(now, AdvanceMode::Tick);
     let later = now + Duration::from_secs(100);
     assert!(animation.needs_timeline_service(later));
     assert_eq!(animation.next_deadline(later), None);
     animation.pause(later);
+    assert!(animation.needs_timeline_service(later));
+    assert!(animation.commit_pending(later));
     assert!(!animation.needs_timeline_service(later));
 }

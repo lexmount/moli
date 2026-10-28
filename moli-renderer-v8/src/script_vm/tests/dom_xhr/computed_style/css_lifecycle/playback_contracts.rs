@@ -103,7 +103,7 @@ fn assert_sample(html: &str, script: &str, expected: &str) {
     );
 }
 
-async fn assert_async_sample(html: &str, script: &str, expected: &str) {
+pub(super) async fn assert_async_sample(html: &str, script: &str, expected: &str) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_parsed_page_task_executor_test_vm(
         "https://animation-contract.test/async-sampling",

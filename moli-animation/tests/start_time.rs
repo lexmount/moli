@@ -12,7 +12,7 @@ fn clearing_start_time_holds_the_previously_exposed_finished_time() {
     state.finish(now);
     let later = now + Duration::from_millis(120);
     assert_eq!(state.current_seconds(later), Some(1.0));
-    state
+    let _ = state
         .command(
             AnimationCommand::SetStartTime {
                 origin: now,
@@ -29,10 +29,10 @@ fn clearing_start_time_holds_the_previously_exposed_finished_time() {
 fn clearing_an_unresolved_start_mapping_keeps_time_unresolved() {
     let now = Instant::now();
     let mut state = effect(now);
-    state
+    let _ = state
         .command(AnimationCommand::AttachTimeline(false), now)
         .unwrap();
-    state
+    let _ = state
         .command(
             AnimationCommand::SetStartTime {
                 origin: now,
@@ -42,7 +42,7 @@ fn clearing_an_unresolved_start_mapping_keeps_time_unresolved() {
         )
         .unwrap();
     assert_eq!(state.current_seconds(now), None);
-    state
+    let _ = state
         .command(
             AnimationCommand::SetStartTime {
                 origin: now,

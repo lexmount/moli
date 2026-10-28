@@ -16,7 +16,7 @@ fn reversing_running_playback_has_one_ready_completion() {
     let mut state = effect(now);
     state.advance(now, AdvanceMode::Tick);
     let half = now + Duration::from_millis(500);
-    state.command(AnimationCommand::Reverse, half).unwrap();
+    let _ = state.command(AnimationCommand::Reverse, half).unwrap();
     assert!(state.is_pending());
     let events = state.advance(half, AdvanceMode::Tick);
     assert_eq!(
@@ -38,8 +38,18 @@ fn reverse_before_first_ready_rewinds_without_replacing_the_pending_operation() 
     let mut state = AnimationState::new(now);
     state.has_effect = true;
     state.duration = Duration::from_secs(1);
-    assert_eq!(state.command(AnimationCommand::Play, now), Ok(Pending));
-    assert_eq!(state.command(AnimationCommand::Reverse, now), Ok(Unchanged));
+    assert_eq!(
+        state
+            .command(AnimationCommand::Play, now)
+            .map(|outcome| outcome.ready),
+        Ok(Pending)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Reverse, now)
+            .map(|outcome| outcome.ready),
+        Ok(Unchanged)
+    );
     assert_eq!(state.current_seconds(now), Some(1.0));
     let events = state.advance(now, AdvanceMode::Tick);
     assert_eq!(
@@ -63,7 +73,7 @@ fn reversing_during_end_delay_keeps_the_effect_relevant() {
     let mut state = effect(now);
     state.end_delay = CssTime::from_seconds(0.4).unwrap();
     state.finish(now);
-    state.command(AnimationCommand::Reverse, now).unwrap();
+    let _ = state.command(AnimationCommand::Reverse, now).unwrap();
     state.advance(now, AdvanceMode::Tick);
     assert_eq!(state.play_state(now), "running");
     assert!(state.is_relevant(now));
@@ -80,8 +90,8 @@ fn explicit_seek_outside_the_playback_range_is_a_finished_hold() {
     for (rate, seek) in [(1.0, 2.0), (-1.0, -0.5)] {
         let now = Instant::now();
         let mut state = effect(now);
-        state.command(AnimationCommand::SetRate(rate), now).unwrap();
-        state.command(AnimationCommand::Seek(seek), now).unwrap();
+        let _ = state.command(AnimationCommand::SetRate(rate), now).unwrap();
+        let _ = state.command(AnimationCommand::Seek(seek), now).unwrap();
         assert_eq!(state.current_seconds(now), Some(seek));
         state.advance(now, AdvanceMode::Tick);
         assert_eq!(state.play_state(now), "finished");
@@ -110,7 +120,7 @@ fn explicit_seek_outside_the_playback_range_is_a_finished_hold() {
 fn extending_an_effect_preserves_the_explicit_seek_position() {
     let now = Instant::now();
     let mut state = effect(now);
-    state.command(AnimationCommand::Seek(2.0), now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(2.0), now).unwrap();
     state.advance(now, AdvanceMode::Tick);
     state.duration = Duration::from_secs(3);
     state.advance(now, AdvanceMode::Observe);
@@ -128,8 +138,8 @@ fn seeking_past_the_end_before_ready_preserves_the_authors_hold() {
     let mut state = AnimationState::new(now);
     state.has_effect = true;
     state.duration = Duration::from_secs(1);
-    state.command(AnimationCommand::Play, now).unwrap();
-    state.command(AnimationCommand::Seek(2.0), now).unwrap();
+    let _ = state.command(AnimationCommand::Play, now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(2.0), now).unwrap();
     state.advance(now, AdvanceMode::Tick);
     assert_eq!(
         state.current_seconds(now + Duration::from_secs(10)),
@@ -162,21 +172,57 @@ fn ready_promise_updates_follow_pending_operation_transitions() {
     let now = Instant::now();
     let mut state = effect(now);
     state.pause(now);
-    assert_eq!(state.command(AnimationCommand::Play, now), Ok(Pending));
-    assert_eq!(state.command(AnimationCommand::Reverse, now), Ok(Unchanged));
-    assert_eq!(state.command(AnimationCommand::Pause, now), Ok(Resolve));
-    assert_eq!(state.command(AnimationCommand::Play, now), Ok(Pending));
-    assert_eq!(state.command(AnimationCommand::Finish, now), Ok(Resolve));
-    assert_eq!(state.command(AnimationCommand::Reverse, now), Ok(Pending));
-    assert_eq!(state.command(AnimationCommand::Cancel, now), Ok(Reject));
+    assert!(state.commit_pending(now));
+    assert_eq!(
+        state
+            .command(AnimationCommand::Play, now)
+            .map(|outcome| outcome.ready),
+        Ok(Pending)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Reverse, now)
+            .map(|outcome| outcome.ready),
+        Ok(Unchanged)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Pause, now)
+            .map(|outcome| outcome.ready),
+        Ok(Unchanged)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Play, now)
+            .map(|outcome| outcome.ready),
+        Ok(Unchanged)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Finish, now)
+            .map(|outcome| outcome.ready),
+        Ok(Resolve)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Reverse, now)
+            .map(|outcome| outcome.ready),
+        Ok(Pending)
+    );
+    assert_eq!(
+        state
+            .command(AnimationCommand::Cancel, now)
+            .map(|outcome| outcome.ready),
+        Ok(Reject)
+    );
 }
 
 #[test]
 fn zero_rate_keeps_an_out_of_range_seek_without_finishing() {
     let now = Instant::now();
     let mut state = effect(now);
-    state.command(AnimationCommand::SetRate(0.0), now).unwrap();
-    state.command(AnimationCommand::Seek(2.0), now).unwrap();
+    let _ = state.command(AnimationCommand::SetRate(0.0), now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(2.0), now).unwrap();
     state.advance(now, AdvanceMode::Tick);
     assert_eq!(
         state.current_seconds(now + Duration::from_secs(10)),
@@ -204,7 +250,7 @@ fn rejected_reverse_does_not_invalidate_existing_notification_generations() {
 fn a_delayed_finish_cannot_settle_a_later_finished_promise() {
     let now = Instant::now();
     let mut state = effect(now);
-    state.command(AnimationCommand::Finish, now).unwrap();
+    let _ = state.command(AnimationCommand::Finish, now).unwrap();
     let finish = state
         .advance(now, AdvanceMode::Observe)
         .into_iter()
@@ -214,9 +260,9 @@ fn a_delayed_finish_cannot_settle_a_later_finished_promise() {
         })
         .unwrap();
     assert!(state.accepts(finish));
-    state.command(AnimationCommand::Pause, now).unwrap();
+    let _ = state.command(AnimationCommand::Pause, now).unwrap();
     state.advance(now, AdvanceMode::Observe);
-    state.command(AnimationCommand::Seek(0.1), now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(0.1), now).unwrap();
     state.advance(now, AdvanceMode::Observe);
     assert!(!state.accepts(finish));
     assert_eq!(state.play_state(now), "paused");
@@ -229,19 +275,27 @@ fn setting_start_time_completes_pending_play_without_an_active_timeline() {
     for seconds in [Some(0.0), None] {
         let now = Instant::now();
         let mut state = effect(now);
-        state
+        state.pause(now);
+        assert!(state.commit_pending(now));
+        let _ = state
             .command(AnimationCommand::AttachTimeline(false), now)
             .unwrap();
-        state.pause(now);
-        assert_eq!(state.command(AnimationCommand::Play, now), Ok(Pending));
         assert_eq!(
-            state.command(
-                AnimationCommand::SetStartTime {
-                    origin: now,
-                    seconds
-                },
-                now
-            ),
+            state
+                .command(AnimationCommand::Play, now)
+                .map(|outcome| outcome.ready),
+            Ok(Pending)
+        );
+        assert_eq!(
+            state
+                .command(
+                    AnimationCommand::SetStartTime {
+                        origin: now,
+                        seconds
+                    },
+                    now
+                )
+                .map(|outcome| outcome.ready),
             Ok(Resolve)
         );
         assert!(!state.is_pending());
@@ -255,12 +309,13 @@ fn detaching_a_timeline_preserves_start_mapping_and_authored_pause() {
     let now = Instant::now();
     for paused in [false, true] {
         let mut state = effect(now);
-        state.command(AnimationCommand::Seek(0.5), now).unwrap();
+        let _ = state.command(AnimationCommand::Seek(0.5), now).unwrap();
         if paused {
-            state.command(AnimationCommand::Pause, now).unwrap();
+            let _ = state.command(AnimationCommand::Pause, now).unwrap();
+            assert!(state.commit_pending(now));
         }
         let start = state.clock().start_millis(now);
-        state
+        let _ = state
             .command(AnimationCommand::AttachTimeline(false), now)
             .unwrap();
         assert_eq!(
@@ -271,7 +326,7 @@ fn detaching_a_timeline_preserves_start_mapping_and_authored_pause() {
         assert_eq!(state.clock().start_millis(now), start);
         assert_eq!(state.next_deadline(now), None);
         assert!(!state.needs_timeline_service(now));
-        state
+        let _ = state
             .command(
                 AnimationCommand::AttachTimeline(true),
                 now + Duration::from_millis(100),
@@ -289,10 +344,10 @@ fn detaching_a_timeline_preserves_start_mapping_and_authored_pause() {
 fn a_start_time_on_an_inactive_timeline_can_be_resolved_without_a_current_time() {
     let now = Instant::now();
     let mut state = effect(now);
-    state
+    let _ = state
         .command(AnimationCommand::AttachTimeline(false), now)
         .unwrap();
-    state
+    let _ = state
         .command(
             AnimationCommand::SetStartTime {
                 origin: now,
@@ -312,16 +367,16 @@ fn a_start_time_on_an_inactive_timeline_can_be_resolved_without_a_current_time()
 fn explicitly_seeking_an_inactive_timeline_establishes_a_paused_hold() {
     let now = Instant::now();
     let mut state = effect(now);
-    state
+    let _ = state
         .command(AnimationCommand::AttachTimeline(false), now)
         .unwrap();
     assert_eq!(state.current_seconds(now), None);
-    state.command(AnimationCommand::Seek(0.3), now).unwrap();
+    let _ = state.command(AnimationCommand::Seek(0.3), now).unwrap();
     assert_eq!(state.current_seconds(now), Some(0.3));
     assert_eq!(state.clock().start_millis(now), None);
     assert_eq!(state.play_state(now), "paused");
     let later = now + Duration::from_millis(100);
-    state
+    let _ = state
         .command(AnimationCommand::AttachTimeline(true), later)
         .unwrap();
     assert_eq!(state.current_seconds(later), Some(0.3));
@@ -333,7 +388,7 @@ fn synchronous_finish_events_survive_settlement_invalidation_but_pending_finishe
     for synchronous in [false, true] {
         let now = Instant::now();
         let mut state = effect(now);
-        state
+        let _ = state
             .command(
                 if synchronous {
                     AnimationCommand::Finish
@@ -356,9 +411,9 @@ fn synchronous_finish_events_survive_settlement_invalidation_but_pending_finishe
             })
             .unwrap();
         assert_eq!(notification.event_is_queued(), synchronous);
-        state.command(AnimationCommand::Pause, now).unwrap();
+        let _ = state.command(AnimationCommand::Pause, now).unwrap();
         state.advance(now, AdvanceMode::Observe);
-        state.command(AnimationCommand::Seek(0.1), now).unwrap();
+        let _ = state.command(AnimationCommand::Seek(0.1), now).unwrap();
         state.advance(now, AdvanceMode::Observe);
         assert!(!state.accepts(notification));
         assert_eq!(notification.event_is_queued(), synchronous);
@@ -369,10 +424,10 @@ fn synchronous_finish_events_survive_settlement_invalidation_but_pending_finishe
 fn finishing_without_a_timeline_establishes_a_hold_without_finish_notification() {
     let now = Instant::now();
     let mut state = effect(now);
-    state
+    let _ = state
         .command(AnimationCommand::AttachTimeline(false), now)
         .unwrap();
-    state.command(AnimationCommand::Finish, now).unwrap();
+    let _ = state.command(AnimationCommand::Finish, now).unwrap();
     assert_eq!(state.current_seconds(now), Some(1.0));
     assert_eq!(state.clock().start_millis(now), None);
     assert_eq!(state.play_state(now), "paused");

@@ -367,7 +367,7 @@ pub(crate) fn notify_animation_playback<'s>(
                 continue;
             }
             if kind == "ready" {
-                resolve_ready(scope, object);
+                apply_ready_update(scope, object, notification.ready_update());
                 continue;
             }
             if kind == "reset" {
@@ -380,6 +380,7 @@ pub(crate) fn notify_animation_playback<'s>(
                     let cleared = v8::Boolean::new(scope, false);
                     set_private_value(scope, object, ANIMATION_CANCEL_SETTLED_SLOT, cleared.into());
                 } else {
+                    apply_ready_update(scope, object, notification.ready_update());
                     cancel_finished_promise(scope, object);
                     let cleared = v8::Boolean::new(scope, false);
                     set_private_value(scope, object, ANIMATION_CANCEL_SETTLED_SLOT, cleared.into());
@@ -511,32 +512,10 @@ pub(super) fn apply_command<'s>(
     command: moli_animation::AnimationCommand,
     error_message: &'static str,
 ) -> bool {
-    let (result, cancelled) = {
-        let mut state = instance.borrow_mut();
-        let now = animation_time(scope);
-        let was_paused = state.playback.play_state(now) == "paused";
-        let cancelled =
-            command == moli_animation::AnimationCommand::Cancel && !state.playback.is_idle();
-        let result = state.playback.command(command, now);
-        let changed_paused = was_paused != (state.playback.play_state(now) == "paused");
-        if result.is_ok()
-            && (matches!(
-                command,
-                moli_animation::AnimationCommand::Play
-                    | moli_animation::AnimationCommand::Pause
-                    | moli_animation::AnimationCommand::Cancel
-            ) || (changed_paused
-                && matches!(
-                    command,
-                    moli_animation::AnimationCommand::Reverse
-                        | moli_animation::AnimationCommand::SetStartTime { .. }
-                )))
-        {
-            state.ignore_css_play_state = true;
-        }
-        (result, cancelled)
-    };
-    let Ok(ready) = result else {
+    let result = instance
+        .borrow_mut()
+        .command(command, animation_time(scope));
+    let Ok(outcome) = result else {
         let error = crate::context_bootstrap::new_dom_exception_value(
             scope,
             error_message,
@@ -546,9 +525,17 @@ pub(super) fn apply_command<'s>(
         return false;
     };
     register_instance(scope, object, instance);
-    apply_ready_update(scope, object, ready);
-    if cancelled {
-        cancel_finished_promise(scope, object);
+    apply_ready_update(scope, object, outcome.ready);
+    match outcome.finished {
+        moli_animation::FinishedPromiseUpdate::Unchanged => {}
+        moli_animation::FinishedPromiseUpdate::Resolve => {
+            let generation = instance.borrow().playback.finished_generation();
+            instance.borrow_mut().published_finished_generation = Some(generation);
+            settle_finished_promise(scope, object);
+        }
+        moli_animation::FinishedPromiseUpdate::RejectAndRenew => {
+            cancel_finished_promise(scope, object)
+        }
     }
     true
 }
@@ -574,6 +561,7 @@ fn apply_ready_update<'s>(
                     "Animation canceled",
                     "AbortError",
                 );
+                resolver.get_promise(scope).mark_as_handled();
                 let _ = resolver.reject(scope, error);
             }
             pending_ready(scope, object);
@@ -622,10 +610,10 @@ pub(super) fn cancel_finished_promise<'s>(
                 "The animation was canceled",
                 "AbortError",
             );
+            resolver.get_promise(scope).mark_as_handled();
             let _ = resolver.reject(scope, error);
         }
     }
-    resolve_ready(scope, object);
     renew_finished_promise(scope, object);
     set_private_value(
         scope,

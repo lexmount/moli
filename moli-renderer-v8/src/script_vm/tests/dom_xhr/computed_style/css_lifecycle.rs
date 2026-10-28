@@ -1,6 +1,7 @@
 use super::*;
 
 mod animation_lists;
+mod command_sequences;
 mod computed_keyframes;
 mod document_batch;
 mod effect_conversion;

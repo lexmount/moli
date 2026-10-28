@@ -583,26 +583,16 @@ pub(super) fn animation_finish_callback<'s>(
     if !require_animation_receiver(scope, args.this(), "finish") {
         return;
     }
-    if let Some(instance) = animation_bindings::instance(scope, args.this()) {
-        if !native::apply_command(
+    if let Some(instance) = animation_bindings::instance(scope, args.this())
+        && !native::apply_command(
             scope,
             args.this(),
             &instance,
             moli_animation::AnimationCommand::Finish,
             "Cannot finish this animation",
-        ) {
-            return;
-        }
-        let finished = instance
-            .borrow()
-            .playback
-            .play_state(native::animation_time(scope))
-            == "finished";
-        if finished {
-            let generation = instance.borrow().playback.finished_generation();
-            instance.borrow_mut().published_finished_generation = Some(generation);
-            settle_finished_promise(scope, args.this());
-        }
+        )
+    {
+        return;
     }
     rv.set_undefined();
 }
@@ -853,19 +843,18 @@ fn set_animation_timeline_value<'s>(
     }
     {
         let mut state = instance.borrow_mut();
-        let now = native::animation_time(scope);
         state.timeline_document = v8::Local::<v8::Object>::try_from(value)
             .ok()
             .and_then(|timeline| native::timeline_document(scope, timeline));
-        let _ = state.playback.command(
-            moli_animation::AnimationCommand::AttachTimeline(attached),
-            now,
-        );
     }
     set_private_value(scope, animation, ANIMATION_TIMELINE_SLOT, value);
-    if !instance.borrow().playback.is_idle() {
-        native::register_instance(scope, animation, &instance);
-    }
+    native::apply_command(
+        scope,
+        animation,
+        &instance,
+        moli_animation::AnimationCommand::AttachTimeline(attached),
+        "Cannot set the animation timeline",
+    );
 }
 
 fn set_animation_start_time_value<'s>(
@@ -1098,14 +1087,13 @@ fn animation_current_time_setter<'s>(
             return;
         }
     };
-    {
-        let mut state = instance.borrow_mut();
-        let now = native::animation_time(scope);
-        let _ = state
-            .playback
-            .command(moli_animation::AnimationCommand::Seek(value / 1000.0), now);
-    }
-    native::register_instance(scope, args.this(), &instance);
+    native::apply_command(
+        scope,
+        args.this(),
+        &instance,
+        moli_animation::AnimationCommand::Seek(value / 1000.0),
+        "Cannot set the animation current time",
+    );
 }
 fn animation_playback_rate_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1139,11 +1127,13 @@ fn animation_playback_rate_setter<'s>(
         }
     };
     if let Some(instance) = animation_bindings::instance(scope, args.this()) {
-        let _ = instance.borrow_mut().playback.command(
+        native::apply_command(
+            scope,
+            args.this(),
+            &instance,
             moli_animation::AnimationCommand::SetRate(value),
-            native::animation_time(scope),
+            "Cannot set the animation playback rate",
         );
-        native::register_instance(scope, args.this(), &instance);
     }
 }
 fn css_animation_name_getter<'s>(

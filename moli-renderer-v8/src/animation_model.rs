@@ -85,6 +85,30 @@ pub(crate) struct AnimationInstance {
     pub(crate) css_effect_source: CssEffectSource,
 }
 impl AnimationInstance {
+    /// CSS control belongs to the browser association; playback and promise
+    /// changes are decided once by the renderer-independent command contract.
+    pub(crate) fn command(
+        &mut self,
+        command: moli_animation::AnimationCommand,
+        now: Instant,
+    ) -> Result<moli_animation::CommandOutcome, moli_animation::InvalidPlaybackState> {
+        use moli_animation::AnimationCommand;
+        let was_paused = self.playback.play_state(now) == "paused";
+        let outcome = self.playback.command(command, now)?;
+        let changed_paused = was_paused != (self.playback.play_state(now) == "paused");
+        if matches!(
+            command,
+            AnimationCommand::Play | AnimationCommand::Pause | AnimationCommand::Cancel
+        ) || (changed_paused
+            && matches!(
+                command,
+                AnimationCommand::Reverse | AnimationCommand::SetStartTime { .. }
+            ))
+        {
+            self.ignore_css_play_state = true;
+        }
+        Ok(outcome)
+    }
     pub(crate) fn new(kind: AnimationKind, name: String, now: Instant) -> Self {
         let playback = if kind == AnimationKind::Script {
             AnimationState::new(now)
