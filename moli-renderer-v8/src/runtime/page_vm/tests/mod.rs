@@ -2262,3 +2262,5 @@ mod extracted;
 
 mod blob_constructor;
 mod blob_text;
+
+mod range_contents_reentrancy;
