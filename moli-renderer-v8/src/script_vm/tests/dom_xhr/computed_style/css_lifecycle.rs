@@ -8,6 +8,7 @@ mod effect_conversion;
 mod initial_observation;
 mod keyframe_rules;
 mod playback_contracts;
+mod playback_events;
 mod playback_updates;
 mod projection_contracts;
 mod reentrant_transitions;

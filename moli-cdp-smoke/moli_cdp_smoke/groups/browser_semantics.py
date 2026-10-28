@@ -11,6 +11,7 @@ from ..config import is_moli_browser
 from ..helpers import attach_cdp_event_collector
 from ..progress import await_with_progress
 from ..state import SmokeState
+from .animation_rule_events import run_animation_rule_event_contracts
 from .animation_contracts import (
     run_animation_boundary_contracts,
     run_animation_command_contracts,
@@ -260,6 +261,13 @@ def _semantic_scenarios() -> tuple[
             "CSS Animations, Web Animations and Chromium 145/156 behavior",
             ["Runtime.evaluate Animation keyframes and cross-document timelines"],
             _animation_values_and_documents,
+        ),
+        (
+            "cdp_contract_animation_rules_and_playback_events",
+            "Effective keyframes use CSS conditions and exact names; retired CSS associations remain reusable, and trusted playback events retain enqueue-time values and live listeners.",
+            "CSS Animations and Web Animations event/lifecycle algorithms; Chromium reference",
+            ["Runtime.evaluate keyframe rule selection and AnimationPlaybackEvent"],
+            _animation_rules_and_playback_events,
         ),
     )
 
@@ -1621,6 +1629,12 @@ async def _animation_values_and_documents(state: SmokeState) -> dict[str, Any]:
     async with _isolated_page(state) as (_context, page, _cdp):
         await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
         return await run_animation_boundary_contracts(page)
+
+
+async def _animation_rules_and_playback_events(state: SmokeState) -> dict[str, Any]:
+    async with _isolated_page(state) as (_context, page, _cdp):
+        await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
+        return await run_animation_rule_event_contracts(page)
 
 
 async def _view_transition_script_lifecycle(state: SmokeState) -> dict[str, Any]:

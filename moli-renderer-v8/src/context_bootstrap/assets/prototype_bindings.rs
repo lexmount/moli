@@ -1,7 +1,9 @@
 use super::super::{
     animation_runtime::{
-        animation_effect_getter, animation_effect_setter, animation_start_time_getter,
-        animation_start_time_setter, install_animation_template_bindings,
+        animation_effect_getter, animation_effect_setter, animation_finished_getter,
+        animation_pending_getter, animation_play_state_getter, animation_ready_getter,
+        animation_start_time_getter, animation_start_time_setter, animation_timeline_getter,
+        animation_timeline_setter, install_animation_template_bindings,
     },
     broadcast_channel::install_broadcast_channel_template_bindings,
     constructors::{
@@ -123,12 +125,31 @@ struct HtmlDocumentTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Animation, enumerable)]
 struct AnimationTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "playState", getter = animation_play_state_getter)]
+    play_state: (),
+
+    #[webapi(accessor_property, getter = animation_pending_getter)]
+    pending: (),
+
+    #[webapi(accessor_property, getter = animation_ready_getter)]
+    ready: (),
+
+    #[webapi(accessor_property, getter = animation_finished_getter)]
+    finished: (),
+
     #[webapi(
         accessor_property,
         getter = animation_effect_getter,
         setter = animation_effect_setter
     )]
     effect: (),
+
+    #[webapi(
+        accessor_property,
+        getter = animation_timeline_getter,
+        setter = animation_timeline_setter
+    )]
+    timeline: (),
 
     #[webapi(
         accessor_property = "startTime",

@@ -26,7 +26,6 @@ const ANIMATION_TIMELINE_SLOT: &str = "__moliAnimationTimeline";
 const ANIMATION_TIMELINE_ORIGIN_SLOT: &str = "__moliAnimationTimelineOrigin";
 const TIMELINE_DOCUMENT_SLOT: &str = "__moliTimelineDocument";
 const TIMELINE_ORIGIN_SLOT: &str = "__moliTimelineOrigin";
-const ANIMATION_ONFINISH_SLOT: &str = "__moliAnimationOnfinish";
 const KEYFRAME_EFFECT_TARGET_SLOT: &str = "__moliKeyframeEffectTarget";
 
 #[derive(WebApiFunctionTemplate)]
@@ -52,6 +51,21 @@ struct AnimationPrototypeMethodsDeclaration {
     commit_styles: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::Animation, enumerable, receiver)]
+struct AnimationEventHandlersDeclaration {
+    #[webapi(accessor_property,
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onfinish"), setter_data = v8str(scope, "onfinish"))]
+    onfinish: (),
+    #[webapi(accessor_property,
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "oncancel"), setter_data = v8str(scope, "oncancel"))]
+    oncancel: (),
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Animation)]
 struct AnimationObjectDeclaration<'s> {
@@ -61,8 +75,6 @@ struct AnimationObjectDeclaration<'s> {
     effect: v8::Local<'s, v8::Value>,
     #[webapi(slot = ANIMATION_TIMELINE_SLOT)]
     timeline: v8::Local<'s, v8::Value>,
-    #[webapi(slot = ANIMATION_ONFINISH_SLOT, init = "null")]
-    onfinish: (),
     #[webapi(slot = ANIMATION_READY_RESOLVER_SLOT)]
     ready_resolver: v8::Local<'s, v8::Value>,
     #[webapi(slot = ANIMATION_FINISHED_RESOLVER_SLOT)]
@@ -204,6 +216,7 @@ pub(super) fn install_animation_template_bindings<'s>(
         "Animation" => {
             AnimationPrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
             AnimationTimeAccessors::initialize_prototype_template(scope, prototype);
+            AnimationEventHandlersDeclaration::initialize_prototype_template(scope, prototype);
         }
         "CSSAnimation" => CssAnimationAccessors::initialize_prototype_template(scope, prototype),
         "CSSTransition" => CssTransitionAccessors::initialize_prototype_template(scope, prototype),
@@ -496,33 +509,6 @@ pub(super) fn animation_start_time_setter<'s>(
     rv.set_undefined();
 }
 
-pub(super) fn animation_onfinish_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !require_animation_receiver(scope, args.this(), "onfinish getter") {
-        return;
-    }
-    rv.set(animation_slot_value(
-        scope,
-        args.this(),
-        ANIMATION_ONFINISH_SLOT,
-    ));
-}
-
-pub(super) fn animation_onfinish_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !require_animation_receiver(scope, args.this(), "onfinish setter") {
-        return;
-    }
-    set_animation_onfinish_value(scope, args.this(), args.get(0));
-    rv.set_undefined();
-}
-
 pub(super) fn animation_play_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -730,6 +716,9 @@ fn settle_finished_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     animation: v8::Local<'s, v8::Object>,
 ) {
+    if !native::promise_execution_is_current(scope, animation) {
+        return;
+    }
     if native::private_bool(scope, animation, ANIMATION_FINISHED_SETTLED_SLOT) {
         return;
     }
@@ -850,6 +839,7 @@ fn set_animation_timeline_value<'s>(
     }
     {
         let mut state = instance.borrow_mut();
+        state.timeline_origin = next_origin;
         state.timeline_document = v8::Local::<v8::Object>::try_from(value)
             .ok()
             .and_then(|timeline| native::timeline_document(scope, timeline));
@@ -899,25 +889,6 @@ fn set_animation_start_time_value<'s>(
             seconds: number.map(|v| v / 1000.0),
         },
         "Cannot set the animation start time",
-    );
-}
-
-fn set_animation_onfinish_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    animation: v8::Local<'s, v8::Object>,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let value = if value.is_null_or_undefined() || value.is_function() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    crate::context_bootstrap::simple_object_event_set_handler(
-        scope,
-        animation,
-        "finish",
-        ANIMATION_ONFINISH_SLOT,
-        value,
     );
 }
 

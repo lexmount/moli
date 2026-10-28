@@ -73,6 +73,7 @@ pub(crate) struct AnimationInstance {
     pub(crate) composite_order: u64,
     pub(crate) kind: AnimationKind,
     pub(crate) timeline_document: Option<crate::document_runtime::DomHandle>,
+    pub(crate) timeline_origin: Option<Instant>,
     pub(crate) execution_owner: Option<crate::native_bridge::WindowDocumentTaskTarget>,
     // Rendering service follows a live timeline/target, not the wrapper's realm.
     // Losing the creator realm does not cancel a script-owned animation.
@@ -128,6 +129,7 @@ impl AnimationInstance {
             kind,
             name,
             timeline_document: None,
+            timeline_origin: None,
             execution_owner: None,
             service_owner: None,
             target: None,
@@ -315,13 +317,42 @@ pub(crate) struct PlaybackEvent {
     pub(crate) animation: Animation,
     pub(crate) notification: PlaybackNotification,
     pub(crate) queued: bool,
+    // Playback events describe the enqueue-time state, independently of later
+    // commands, promise settlement or timeline replacement.
+    pub(crate) current_time: Option<f64>,
+    pub(crate) timeline_time: Option<f64>,
 }
 impl CssLifecycleEvent {
-    pub(crate) fn playback(animation: Animation, notification: PlaybackNotification) -> Self {
+    pub(crate) fn playback(
+        animation: Animation,
+        notification: PlaybackNotification,
+        now: Instant,
+    ) -> Self {
+        let (current_time, timeline_time) = {
+            let state = animation.borrow();
+            (
+                state
+                    .playback
+                    .current_seconds(now)
+                    .map(|seconds| seconds * 1000.0),
+                state
+                    .timeline_origin
+                    .filter(|_| state.playback.timeline().is_active())
+                    .map(|origin| {
+                        if now >= origin {
+                            now.duration_since(origin).as_secs_f64() * 1000.0
+                        } else {
+                            -origin.duration_since(now).as_secs_f64() * 1000.0
+                        }
+                    }),
+            )
+        };
         Self::Playback(PlaybackEvent {
             animation,
             queued: notification.event_is_queued(),
             notification,
+            current_time,
+            timeline_time,
         })
     }
 }

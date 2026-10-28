@@ -14,6 +14,13 @@ use std::collections::HashSet;
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
+struct HostAnimationPlaybackEventInitDeclaration<'scope> {
+    current_time: v8::Local<'scope, v8::Value>,
+    timeline_time: v8::Local<'scope, v8::Value>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
 struct HostAnimationEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -2128,9 +2135,45 @@ pub(crate) fn create_transition_event<'s>(
     Ok(event)
 }
 
+/// The payload was captured when the notification entered its Document queue.
+pub(crate) fn create_animation_playback_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    target: v8::Local<'s, v8::Value>,
+    current_time: Option<f64>,
+    timeline_time: Option<f64>,
+) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
+    let event = construct_value_event_instance(
+        scope,
+        "AnimationPlaybackEvent",
+        event_type,
+        ValueEventMembers::Playback {
+            current_time,
+            timeline_time,
+        },
+        false,
+        false,
+    )?;
+    mark_event_trusted(scope, event);
+    set_event_target(scope, event, target);
+    set_event_current_target(scope, event, target);
+    clear_event_composed_path(scope, event);
+    Ok(event)
+}
+
 enum ValueEventMembers<'a> {
-    Animation { name: &'a str, elapsed_time: f64 },
-    Transition { name: &'a str, elapsed_time: f64 },
+    Playback {
+        current_time: Option<f64>,
+        timeline_time: Option<f64>,
+    },
+    Animation {
+        name: &'a str,
+        elapsed_time: f64,
+    },
+    Transition {
+        name: &'a str,
+        elapsed_time: f64,
+    },
 }
 
 fn construct_value_event_instance<'s>(
@@ -2151,6 +2194,26 @@ fn construct_value_event_instance<'s>(
     let pseudo_element =
         v8_string(scope, "").ok_or_else(|| "failed to allocate string".to_owned())?;
     let init = match members {
+        ValueEventMembers::Playback {
+            current_time,
+            timeline_time,
+        } => {
+            let number = |scope: &mut v8::PinScope<'s, '_>,
+                          value: Option<f64>|
+             -> v8::Local<'s, v8::Value> {
+                match value {
+                    Some(value) => v8::Number::new(scope, value).into(),
+                    None => v8::null(scope).into(),
+                }
+            };
+            let current_time = number(scope, current_time);
+            let timeline_time = number(scope, timeline_time);
+            HostAnimationPlaybackEventInitDeclaration::new(current_time, timeline_time)
+                .bind(scope)
+                .map_err(|error| {
+                    format!("failed to build AnimationPlaybackEventInit dictionary: {error}")
+                })?
+        }
         ValueEventMembers::Animation { name, elapsed_time } => {
             let name =
                 v8_string(scope, name).ok_or_else(|| "failed to allocate string".to_owned())?;

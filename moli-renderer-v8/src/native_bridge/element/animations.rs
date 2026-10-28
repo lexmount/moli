@@ -844,6 +844,7 @@ pub(crate) fn queue_animation_instance_sample(runtime: &PageScriptHost, instance
 fn browser_animation_events(
     handle: &Animation,
     records: Vec<moli_animation::AnimationEvent>,
+    now: Instant,
 ) -> Vec<CssLifecycleEvent> {
     use moli_animation::{AnimationEvent, PhaseEvent};
     let animation = handle.borrow();
@@ -855,9 +856,11 @@ fn browser_animation_events(
                 .then(|| {
                     CssLifecycleEvent::Transition("transitionrun", animation.name.clone(), elapsed)
                 }),
-            AnimationEvent::Playback(notification) => {
-                Some(CssLifecycleEvent::playback(handle.clone(), notification))
-            }
+            AnimationEvent::Playback(notification) => Some(CssLifecycleEvent::playback(
+                handle.clone(),
+                notification,
+                now,
+            )),
             AnimationEvent::Phase { kind, elapsed } if animation.owned_by_css => {
                 match animation.kind {
                     AnimationKind::CssAnimation => Some(CssLifecycleEvent::Animation(
@@ -891,7 +894,7 @@ fn observe_animation_phase(animation: &Animation, now: Instant) -> Vec<CssLifecy
         .borrow_mut()
         .playback
         .advance(now, moli_animation::AdvanceMode::Observe);
-    browser_animation_events(animation, records)
+    browser_animation_events(animation, records, now)
 }
 
 fn animation_cancel_event(animation: Animation, now: Instant) -> Vec<CssLifecycleEvent> {
@@ -1073,7 +1076,7 @@ fn advance_active_animations(
                 .retain(|t| t.animation.borrow().playback.id() != id);
         }
         events.extend(
-            browser_animation_events(&animation, update.events)
+            browser_animation_events(&animation, update.events, now)
                 .into_iter()
                 .map(|event| (target, event)),
         );
@@ -1100,6 +1103,7 @@ fn advance_active_animations(
                         .borrow()
                         .playback
                         .notification(moli_animation::PlaybackNotificationKind::Release),
+                    now,
                 ),
             ));
         }
@@ -1402,12 +1406,8 @@ fn dispatch_lifecycle_events(
             return false;
         }
         if let CssLifecycleEvent::Playback(playback) = event {
-            playback.queued |= crate::context_bootstrap::notify_animation_playback(
-                scope,
-                &playback.animation,
-                playback.notification,
-                true,
-            );
+            playback.queued |=
+                crate::context_bootstrap::notify_animation_playback(scope, playback, true);
             published = true;
         }
     }
@@ -1429,12 +1429,7 @@ fn dispatch_lifecycle_events(
         }
         if let CssLifecycleEvent::Playback(playback) = &event {
             if playback.queued {
-                crate::context_bootstrap::notify_animation_playback(
-                    scope,
-                    &playback.animation,
-                    playback.notification,
-                    false,
-                );
+                crate::context_bootstrap::notify_animation_playback(scope, playback, false);
             }
             continue;
         }

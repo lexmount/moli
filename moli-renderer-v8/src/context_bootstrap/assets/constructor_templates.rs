@@ -111,6 +111,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::AnimationPlaybackEvent => {
+            build_value_event_template(scope, ValueEventKind::AnimationPlayback)
+        }
         ConstructorKind::AnimationEvent => {
             build_value_event_template(scope, ValueEventKind::Animation)
         }

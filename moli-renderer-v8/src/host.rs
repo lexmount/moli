@@ -33,10 +33,10 @@ pub(crate) use self::events::EventListenerInspectorSnapshot;
 pub(crate) use self::events::EventListenerRegistration;
 pub(super) use self::events::{
     DispatchStatus, HostEventTargetRegistry, PublicEventDispatchResult, create_animation_event,
-    create_host_event, create_transition_event, dispatch_host_event, dispatch_public_event,
-    dispatch_public_event_with_original_target, event_dispatch_status, event_target_value,
-    host_event_defaults, invoke_prepared_event_callback, report_event_callback_exception,
-    report_event_listener_exception,
+    create_animation_playback_event, create_host_event, create_transition_event,
+    dispatch_host_event, dispatch_public_event, dispatch_public_event_with_original_target,
+    event_dispatch_status, event_target_value, host_event_defaults, invoke_prepared_event_callback,
+    report_event_callback_exception, report_event_listener_exception,
 };
 pub(super) use self::scripts::{
     CommittedInlineClassicScript, FailedDynamicScript, HostScriptScheduler, ModuleFailurePolicy,

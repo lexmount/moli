@@ -297,6 +297,7 @@ pub(super) fn wrapper<'s>(
         && let Some(origin) = timeline_origin(scope, timeline)
     {
         set_animation_origin(scope, object, origin);
+        instance.borrow_mut().timeline_origin = Some(origin);
     }
     animation_bindings::bind(scope, object, instance.clone(), WrapperKind::Animation);
     element_registry::register(scope, object);
@@ -313,12 +314,32 @@ pub(super) fn wrapper<'s>(
     Some(object)
 }
 
+pub(super) fn promise_execution_is_current<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(realm) = object.get_creation_context(scope) else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, realm);
+    let Some((_, crate::common_runtime::RuntimeExecutionContext::Window(host))) =
+        crate::common_runtime::CommonRuntimeBinding::from_scope(scope)
+    else {
+        return false;
+    };
+    let host = unsafe { &*host };
+    host.window_execution_context_identity_for_v8_context(scope, realm)
+        .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))
+}
+
 pub(crate) fn notify_animation_playback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    instance: &Animation,
-    notification: moli_animation::PlaybackNotification,
+    playback: &crate::animation_model::PlaybackEvent,
     publish: bool,
 ) -> bool {
+    let instance = &playback.animation;
+    let notification = playback.notification;
+    let event_realm = scope.get_current_context();
     let kind = notification.kind.as_str();
     let current = {
         let state = instance.borrow();
@@ -335,6 +356,7 @@ pub(crate) fn notify_animation_playback<'s>(
     };
     let wrappers = common.animations.wrappers(scope, instance);
     for object in wrappers {
+        let can_publish_promises = promise_execution_is_current(scope, object);
         let Some(realm) = object.get_creation_context(scope) else {
             continue;
         };
@@ -342,35 +364,28 @@ pub(crate) fn notify_animation_playback<'s>(
             continue;
         }
         let scope = &mut v8::ContextScope::new(scope, realm);
-        let Some((_, crate::common_runtime::RuntimeExecutionContext::Window(host))) =
-            crate::common_runtime::CommonRuntimeBinding::from_scope(scope)
-        else {
-            continue;
-        };
-        let owner = instance.borrow().execution_owner;
-        let execution_is_current = owner.is_some_and(|owner| {
-            unsafe { &*host }
-                .current_window_document_task_target_for_dispatch_scope(owner.dispatch_scope())
-                == Some(owner)
-        });
-        // Native playback/sampling may outlive this realm, but notifications
-        // must not revive its retired execution context (including promises).
-        if !execution_is_current {
-            continue;
-        }
         if publish {
+            // Dropping an effect's native registration does not execute JS and
+            // must also happen when its promise realm has retired.
+            if current
+                && !instance
+                    .borrow()
+                    .playback
+                    .is_relevant(animation_time(scope))
+            {
+                element_registry::unregister(scope, object);
+            }
+            // Promise reactions remain owned by the wrapper's execution realm.
+            // DOM event callbacks have their own relevant-realm checks in the
+            // shared dispatcher and can belong to a still-live parent page.
+            if !can_publish_promises {
+                continue;
+            }
             sync_finished_promise(scope, object, instance);
             if !current {
                 continue;
             }
             if kind == "release" {
-                if !instance
-                    .borrow()
-                    .playback
-                    .is_relevant(animation_time(scope))
-                {
-                    element_registry::unregister(scope, object);
-                }
                 continue;
             }
             if kind == "ready" {
@@ -385,21 +400,21 @@ pub(crate) fn notify_animation_playback<'s>(
             } else {
                 apply_promise_update(scope, object, notification.promise_update().unwrap());
             }
-            if !instance
-                .borrow()
-                .playback
-                .is_relevant(animation_time(scope))
-            {
-                element_registry::unregister(scope, object);
-            }
             continue;
         }
         if !matches!(kind, "finish" | "cancel") {
             continue;
         }
-        if let Ok(event) =
-            crate::host::create_host_event(scope, kind, object.into(), object.into(), false, false)
-        {
+        // The rendering task's Document has already passed its owner check.
+        // Create the event in that live realm, not in a retired creator realm.
+        let scope = &mut v8::ContextScope::new(scope, event_realm);
+        if let Ok(event) = crate::host::create_animation_playback_event(
+            scope,
+            kind,
+            object.into(),
+            playback.current_time,
+            playback.timeline_time,
+        ) {
             crate::context_bootstrap::dispatch_simple_event_target_event(
                 scope, object, kind, event,
             );
@@ -445,13 +460,14 @@ pub(super) fn renew_finished_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
+    let Some(realm) = object.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, realm);
     let resolver = v8::PromiseResolver::new(scope).expect("Animation finished resolver");
-    set_private_value(
-        scope,
-        object,
-        ANIMATION_FINISHED_SLOT,
-        resolver.get_promise(scope).into(),
-    );
+    let promise = resolver.get_promise(scope);
+    let unset = v8::Boolean::new(scope, false);
+    set_private_value(scope, object, ANIMATION_FINISHED_SLOT, promise.into());
     set_private_value(
         scope,
         object,
@@ -460,22 +476,12 @@ pub(super) fn renew_finished_promise<'s>(
     );
     set_private_value(
         scope,
-        resolver.get_promise(scope).into(),
+        promise.into(),
         ANIMATION_PROMISE_OWNER_SLOT,
         object.into(),
     );
-    set_private_value(
-        scope,
-        object,
-        ANIMATION_FINISHED_EXPOSED_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
-    set_private_value(
-        scope,
-        object,
-        ANIMATION_FINISHED_SETTLED_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
+    set_private_value(scope, object, ANIMATION_FINISHED_EXPOSED_SLOT, unset.into());
+    set_private_value(scope, object, ANIMATION_FINISHED_SETTLED_SLOT, unset.into());
 }
 
 pub(super) fn resolver<'s>(
@@ -524,6 +530,13 @@ pub(super) fn apply_command<'s>(
         return false;
     };
     register_instance(scope, object, instance);
+    let settles_promise = matches!(
+        outcome.ready,
+        moli_animation::ReadyPromiseUpdate::Resolve | moli_animation::ReadyPromiseUpdate::Reject
+    ) || outcome.finished != moli_animation::FinishedPromiseUpdate::Unchanged;
+    if settles_promise && !promise_execution_is_current(scope, object) {
+        return true;
+    }
     apply_promise_update(scope, object, outcome);
     if outcome.finished == moli_animation::FinishedPromiseUpdate::Resolve {
         let generation = instance.borrow().playback.finished_generation();
@@ -596,13 +609,13 @@ fn apply_ready_update<'s>(
 }
 
 fn pending_ready<'s>(scope: &mut v8::PinScope<'s, '_>, object: v8::Local<'s, v8::Object>) {
+    let Some(realm) = object.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, realm);
     let resolver = v8::PromiseResolver::new(scope).expect("Animation ready resolver");
-    set_private_value(
-        scope,
-        object,
-        ANIMATION_READY_SLOT,
-        resolver.get_promise(scope).into(),
-    );
+    let promise = resolver.get_promise(scope);
+    set_private_value(scope, object, ANIMATION_READY_SLOT, promise.into());
     set_private_value(
         scope,
         object,
@@ -611,7 +624,7 @@ fn pending_ready<'s>(scope: &mut v8::PinScope<'s, '_>, object: v8::Local<'s, v8:
     );
     set_private_value(
         scope,
-        resolver.get_promise(scope).into(),
+        promise.into(),
         ANIMATION_PROMISE_OWNER_SLOT,
         object.into(),
     );
