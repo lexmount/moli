@@ -593,6 +593,7 @@ pub(super) struct ActiveTimer {
     callback: super::timer_callback::WorkerTimerCallback,
     delay: Duration,
     is_interval: bool,
+    nesting_level: Option<crate::timer_nesting::TimerNestingLevel>,
     extra_args: Vec<v8::Global<v8::Value>>,
     next_fire: tokio::time::Instant,
     explicit_deadline: bool,
@@ -2042,6 +2043,7 @@ async fn worker_main(
                     callback: timer.callback,
                     delay,
                     is_interval: timer.is_interval,
+                    nesting_level: timer.nesting_level,
                     extra_args: timer.extra_args,
                     next_fire: timer
                         .first_deadline
@@ -3686,8 +3688,14 @@ async fn worker_main(
         // Update or remove fired timers.
         let mut to_remove = Vec::new();
         for &idx in fired_ids.iter() {
-            if active_timers[idx].is_interval {
-                active_timers[idx].next_fire = now + active_timers[idx].delay;
+            let timer = &mut active_timers[idx];
+            if timer.is_interval {
+                if let Some(level) = timer.nesting_level {
+                    let next = level.next();
+                    timer.nesting_level = Some(next);
+                    timer.delay = next.clamp_duration(timer.delay);
+                }
+                timer.next_fire = now + timer.delay;
             } else {
                 to_remove.push(idx);
             }

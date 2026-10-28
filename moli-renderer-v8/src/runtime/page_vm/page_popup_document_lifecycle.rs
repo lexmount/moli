@@ -33,30 +33,6 @@ impl AuthorizedCurrentPagePopupDocumentLifecycle {
 }
 
 impl PageVm {
-    pub(super) async fn finish_popup_parser_producing_callback_task(
-        &mut self,
-        root_document: crate::runtime::RendererDocumentToken,
-        completions: Vec<crate::native_bridge::PopupDocumentParserCompletion>,
-        loader: &crate::network::ResourceRequestClient,
-    ) -> anyhow::Result<()> {
-        if completions.is_empty() {
-            return self.finish_selected_page_callback_task(loader).await;
-        }
-        // These obligations were returned by this callback body. Finish its
-        // script reactions before entering parser completion, without draining
-        // unrelated runtime work into a replacement Document.
-        self.vm_mut()
-            .finish_page_resource_completion_callback_checkpoint()?;
-        self.absorb_parser_no_execution_runs();
-        if root_document == self.document_lifecycle.identity().document {
-            for completion in completions {
-                let step = self.vm_mut().begin_popup_document_interactive(completion)?;
-                self.finish_popup_document_lifecycle_step(step)?;
-            }
-        }
-        Ok(())
-    }
-
     pub(super) fn finish_popup_document_lifecycle_step(
         &mut self,
         mut step: PopupDocumentLifecycleStep,
