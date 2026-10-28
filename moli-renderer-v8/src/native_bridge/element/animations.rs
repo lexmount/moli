@@ -74,8 +74,12 @@ struct AnimationDeclaration {
 }
 
 fn active_animation_declarations(style: &ComputedStyleRead<'_>) -> Vec<AnimationDeclaration> {
-    let names = style.property("animation-name");
-    if !css_list(&names).any(|name| !name.eq_ignore_ascii_case("none")) {
+    let Some(snapshot) = style.style_snapshot() else {
+        return Vec::new();
+    };
+    let values = snapshot.computed_values();
+    let names = values.get_ui();
+    if names.animation_name_iter().all(|name| name.is_none()) {
         return Vec::new();
     }
     let delays = css_delay_list(&style.property("animation-delay"));
@@ -102,12 +106,13 @@ fn active_animation_declarations(style: &ComputedStyleRead<'_>) -> Vec<Animation
             }
         })
         .collect::<Vec<_>>();
-    css_list(&names)
+    names
+        .animation_name_iter()
         .enumerate()
         // Preserve `none` positions when matching timing list components.
-        .filter(|(_, name)| !name.eq_ignore_ascii_case("none"))
+        .filter_map(|(index, name)| name.as_atom().map(|name| (index, name.to_string())))
         .map(|(index, name)| AnimationDeclaration {
-            name: name.to_owned(),
+            name,
             paused: cyclic_list_item(&paused, index).unwrap_or(false),
             fill: cyclic_list_item(&fills, index).unwrap_or_default(),
             easing: easing

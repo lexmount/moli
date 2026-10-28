@@ -154,3 +154,138 @@ fn css_nonadjacent_matching_groups_cascade_at_their_earliest_position() {
         "[0.3,0.85]",
     );
 }
+
+#[test]
+fn css_logical_keyframes_map_before_cascading_and_building_tracks() {
+    for (rules, style, property, expected) in [
+        (
+            "to{margin-inline-start:100px}",
+            "margin-left:20px",
+            "marginInlineStart",
+            "[20,60,100]",
+        ),
+        (
+            "from{margin-left:20px}to{margin-inline-start:100px}",
+            "margin-left:0px",
+            "marginInlineStart",
+            "[20,60,100]",
+        ),
+        (
+            "to{margin-inline-start:100px}",
+            "direction:rtl;margin-right:30px",
+            "marginInlineStart",
+            "[30,65,100]",
+        ),
+        (
+            "to{margin-inline-start:100px}",
+            "writing-mode:vertical-lr;margin-top:40px",
+            "marginInlineStart",
+            "[40,70,100]",
+        ),
+        (
+            "to{inset-inline-start:100px}",
+            "position:relative;left:20px",
+            "insetInlineStart",
+            "[20,60,100]",
+        ),
+        (
+            "from{margin-inline-start:10px;margin-left:20px}to{margin-inline-start:100px}",
+            "",
+            "marginInlineStart",
+            "[20,60,100]",
+        ),
+    ] {
+        assert_eq!(
+            sample(
+                &format!("@keyframes move{{{rules}}}"),
+                &format!(
+                    r#"
+            const box=document.getElementById('box');box.style.cssText='{style};animation:move 1s linear both paused';
+            const a=box.getAnimations()[0];
+            JSON.stringify([0,500,1000].map(t=>{{a.currentTime=t;return parseFloat(getComputedStyle(box).{property})}}))
+        "#
+                )
+            ),
+            expected,
+            "{rules} / {style}"
+        );
+    }
+}
+
+#[test]
+fn css_logical_tracks_follow_updated_writing_direction() {
+    assert_eq!(
+        sample(
+            "@keyframes move{to{margin-inline-start:100px}}",
+            r#"
+        const box=document.getElementById('box');box.style.cssText='margin-left:20px;margin-right:30px;animation:move 1s linear both paused';
+        box.getAnimations()[0].currentTime=500;const before=parseFloat(getComputedStyle(box).marginInlineStart);
+        box.style.direction='rtl';JSON.stringify([before,parseFloat(getComputedStyle(box).marginInlineStart)])
+    "#
+        ),
+        "[60,65]"
+    );
+}
+
+#[test]
+fn css_animation_names_preserve_decoded_tokens_and_list_positions() {
+    for (css, declaration, expected) in [
+        (
+            r"@keyframes \31 abc{from{opacity:0}to{opacity:1}}",
+            r"animation:\31 abc 1s linear both paused",
+            r#"[[["1abc",1000]],0.5]"#,
+        ),
+        (
+            r#"@keyframes "a,b"{from{opacity:0}to{opacity:1}}@keyframes plain{from{left:0px}to{left:100px}}"#,
+            r#"animation-name:"a,b",plain;animation-duration:1s,2s,3s;animation-timing-function:linear;animation-play-state:paused;animation-fill-mode:both"#,
+            r#"[[["a,b",1000],["plain",2000]],0.5]"#,
+        ),
+        (
+            r#"@keyframes "none"{from{opacity:0}to{opacity:1}}@keyframes plain{from{left:0px}to{left:100px}}"#,
+            r#"animation-name:none,"none",plain;animation-duration:1s,2s,3s;animation-timing-function:linear;animation-play-state:paused;animation-fill-mode:both"#,
+            r#"[[["none",2000],["plain",3000]],0.25]"#,
+        ),
+    ] {
+        assert_eq!(
+            sample(
+                css,
+                &format!(
+                    r#"
+            const box=document.getElementById('box');box.style.cssText=String.raw`{declaration}`;
+            const animations=box.getAnimations();animations.forEach(a=>a.currentTime=500);
+            JSON.stringify([animations.map(a=>[a.animationName,a.effect.getTiming().duration]),+getComputedStyle(box).opacity])
+        "#
+                )
+            ),
+            expected,
+            "{declaration}"
+        );
+    }
+}
+
+#[test]
+fn css_keyframe_wide_easing_uses_initial_and_inherited_computed_values() {
+    for (keyword, parent, expected) in [
+        ("initial", "linear", "802"),
+        ("unset", "linear", "802"),
+        ("inherit", "ease", "802"),
+        ("inherit", "steps(1,end)", "0"),
+    ] {
+        assert_eq!(
+            sample(
+                &format!(
+                    "@keyframes fade{{from{{opacity:0;animation-timing-function:{keyword}}}to{{opacity:1}}}}"
+                ),
+                &format!(
+                    r#"
+            document.body.style.animationTimingFunction='{parent}';
+            const box=document.getElementById('box');box.style.animation='fade 1s linear both paused';
+            box.getAnimations()[0].currentTime=500;Math.round(+getComputedStyle(box).opacity*1000)
+        "#
+                )
+            ),
+            expected,
+            "{keyword} / {parent}"
+        );
+    }
+}

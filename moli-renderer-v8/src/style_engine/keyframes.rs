@@ -3,7 +3,11 @@ use super::MoliStyleEngine;
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use style::{
     Atom,
-    properties::{Importance, PropertyDeclaration, PropertyDeclarationBlock},
+    dom::TElement,
+    properties::{
+        CSSWideKeyword, Importance, LonghandId, PropertyDeclaration, PropertyDeclarationBlock,
+        PropertyDeclarationId,
+    },
     stylesheets::keyframes_rule::KeyframesStepValue,
 };
 use style_traits::ToCss;
@@ -29,6 +33,7 @@ impl MoliStyleEngine {
         self.dom_adapter.with_bound_host(host, |adapter| {
             super::computed::install_shadow_cascade_data_for_resolution(&world, adapter);
             let element = adapter.element(host, handle)?;
+            let writing_mode = element.borrow_data()?.styles.primary().writing_mode;
             let guard = adapter.shared_lock().read();
             world.document_state.with_retained_style_system(|retained| {
                 let animation = retained
@@ -43,13 +48,39 @@ impl MoliStyleEngine {
                     let block = block.read_with(&guard);
                     let easing = block
                         .normal_declaration_iter()
-                        .find_map(|declaration| {
-                            if let PropertyDeclaration::AnimationTimingFunction(value) = declaration
-                            {
+                        .find_map(|declaration| match declaration {
+                            PropertyDeclaration::AnimationTimingFunction(value) => {
                                 value.0.first().map(ToCss::to_css_string)
-                            } else {
-                                None
                             }
+                            PropertyDeclaration::CSSWideKeyword(value)
+                                if declaration.id()
+                                    == PropertyDeclarationId::Longhand(
+                                        LonghandId::AnimationTimingFunction,
+                                    ) =>
+                            {
+                                let inherited = (value.keyword == CSSWideKeyword::Inherit)
+                                    .then(|| element.traversal_parent())
+                                    .flatten()
+                                    .and_then(|parent| {
+                                        parent.borrow_data().map(|data| {
+                                            data.styles
+                                                .primary()
+                                                .get_ui()
+                                                .animation_timing_function_mod(0)
+                                                .to_css_string()
+                                        })
+                                    });
+                                Some(inherited.unwrap_or_else(|| {
+                                    retained
+                                        .stylist
+                                        .device()
+                                        .default_computed_values()
+                                        .get_ui()
+                                        .animation_timing_function_mod(0)
+                                        .to_css_string()
+                                }))
+                            }
+                            _ => None,
                         })
                         .unwrap_or_else(|| default_easing.to_owned());
                     // CSS blocks cascade only within the same effective easing
@@ -68,7 +99,10 @@ impl MoliStyleEngine {
                         });
                     let destination = &mut merged[index].2;
                     for declaration in block.normal_declaration_iter() {
-                        destination.push(declaration.clone(), Importance::Normal);
+                        // Resolve logical aliases before cascading, so an
+                        // explicit physical endpoint shares the same track and
+                        // same-frame declaration order remains authoritative.
+                        destination.push(declaration.to_physical(writing_mode), Importance::Normal);
                     }
                 }
                 Some(

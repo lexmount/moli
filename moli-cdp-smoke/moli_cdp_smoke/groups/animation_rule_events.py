@@ -6,6 +6,7 @@ from typing import Any
 from playwright.async_api import Page
 
 from ..assertions import assert_equal
+from .animation_inputs import run_animation_input_contracts
 
 
 _RULE_EVENT_SCRIPT = r"""async mode => {
@@ -166,4 +167,5 @@ async def run_animation_rule_event_contracts(page: Page) -> dict[str, Any]:
         actual = await page.evaluate(_RULE_EVENT_SCRIPT, name)
         assert_equal(actual, expected, f'Animation rule/event contract {name}')
         observed[name] = actual
+    observed.update(await run_animation_input_contracts(page))
     return observed
