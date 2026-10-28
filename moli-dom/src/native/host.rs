@@ -15,6 +15,8 @@ mod clone;
 mod collections;
 mod document;
 mod flat_tree;
+#[cfg(test)]
+mod frame_candidate_tests;
 mod html_serialization;
 mod mutation;
 mod parser;
