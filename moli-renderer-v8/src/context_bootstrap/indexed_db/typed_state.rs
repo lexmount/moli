@@ -494,6 +494,7 @@ impl IndexedDbDatabaseLifecycleState {
 pub(super) struct IndexedDbCursorLifecycleState {
     pub(super) entries: Rc<[CursorSnapshotEntry]>,
     pub(super) position: Option<usize>,
+    pub(super) got_value: bool,
     pub(super) direction: CursorDirection,
     pub(super) key_only: bool,
 }
@@ -955,6 +956,7 @@ pub(super) fn register_indexed_db_cursor_lifecycle(
     let state = IndexedDbCursorLifecycleState {
         entries: entries.into(),
         position,
+        got_value: position.is_some(),
         direction,
         key_only,
     };
@@ -984,6 +986,18 @@ pub(super) fn set_indexed_db_cursor_position(
         state.entries.get(position)?;
     }
     state.position = position;
+    state.got_value = position.is_some();
+    Some(())
+}
+
+pub(super) fn begin_indexed_db_cursor_iteration(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
+) -> Option<()> {
+    let state = cursor_native_state(scope, cursor)?;
+    // Keep the position and exposed values until the asynchronous iteration
+    // settles, but reject further navigation and mutation immediately.
+    state.borrow_mut().got_value = false;
     Some(())
 }
 
