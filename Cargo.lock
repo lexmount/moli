@@ -3035,6 +3035,7 @@ name = "moli-indexeddb"
 version = "0.1.0"
 dependencies = [
  "moli-crypto",
+ "moli-sqlite",
  "parking_lot",
  "rusqlite",
  "serde",

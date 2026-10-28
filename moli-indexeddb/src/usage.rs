@@ -47,7 +47,7 @@ fn object_store_usage_bytes(name: &str, store: &ObjectStoreData) -> u64 {
         })))
 }
 
-fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
+pub(crate) fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
     value
         .wire_bytes
         .len()
@@ -96,7 +96,7 @@ fn optional_key_path_usage_bytes(key_path: &Option<KeyPath>) -> u64 {
     key_path.as_ref().map(key_path_usage_bytes).unwrap_or(0)
 }
 
-fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
+pub(crate) fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
     match key_path {
         KeyPath::String(value) => string_usage_bytes(value),
         KeyPath::Sequence(values) => {
@@ -105,7 +105,7 @@ fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
     }
 }
 
-fn key_usage_bytes(key: &Key) -> u64 {
+pub(crate) fn key_usage_bytes(key: &Key) -> u64 {
     match key {
         Key::String(value) => (value.len() as u64).saturating_mul(2),
         Key::Binary(value) => value.len() as u64,
