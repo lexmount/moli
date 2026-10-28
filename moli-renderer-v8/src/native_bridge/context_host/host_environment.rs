@@ -1928,9 +1928,14 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
         name: &str,
+        default_easing: &str,
     ) -> Option<Vec<crate::style_engine::ResolvedKeyframe>> {
-        self.style_engine
-            .resolved_animation_keyframes(self.dom_host(), handle, name)
+        self.style_engine.resolved_animation_keyframes(
+            self.dom_host(),
+            handle,
+            name,
+            default_easing,
+        )
     }
 
     pub(crate) fn animation_parent_style(

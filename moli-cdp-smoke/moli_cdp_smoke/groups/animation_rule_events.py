@@ -22,6 +22,24 @@ _RULE_EVENT_SCRIPT = r"""async mode => {
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
   };
+  if (mode.startsWith('frame-group-')) {
+    const rules = {
+      'frame-group-properties': 'from{opacity:0;animation-timing-function:steps(1,end)}from{left:0px;animation-timing-function:linear}to{opacity:1;left:100px}',
+      'frame-group-intervals': 'from{opacity:0}50%{opacity:.5;animation-timing-function:steps(1,end)}50%{opacity:.7;animation-timing-function:linear}to{opacity:1}',
+      'frame-group-default': 'from{opacity:0}50%{opacity:.5}50%{opacity:.7;animation-timing-function:linear}to{opacity:1}',
+      'frame-group-cascade': 'from{opacity:0}to{opacity:.4}to{opacity:1}',
+      'frame-group-alias': 'from{opacity:0}50%{opacity:.5;animation-timing-function:step-end}50%{opacity:.7;animation-timing-function:steps(1,end)}to{opacity:1}',
+    };
+    document.head.appendChild(document.createElement('style')).textContent =
+      '@keyframes mixed{' + rules[mode] + '}';
+    box.style.cssText = 'position:relative;animation:mixed 1s linear both paused';
+    const a = box.getAnimations()[0];
+    const times = mode === 'frame-group-properties' || mode === 'frame-group-cascade' ? [500] : [250,750];
+    return times.map(t => {
+      a.currentTime = t; const style = getComputedStyle(box);
+      return [+style.opacity,parseFloat(style.left) || 0];
+    });
+  }
   if (mode.startsWith('keyframes-')) {
     const rules = {
       'keyframes-print': '@media print {@keyframes fade{from,to{opacity:.8}}}',
@@ -108,6 +126,11 @@ _RULE_EVENT_EXPECTED = {'keyframes-print': 0.2,
  'keyframes-case': 0.2,
  'keyframes-active': 0.8,
  'keyframes-layer': 0.2,
+ 'frame-group-properties': [[0, 50]],
+ 'frame-group-intervals': [[0.25, 0], [0.85, 0]],
+ 'frame-group-default': [[0.35, 0], [0.85, 0]],
+ 'frame-group-cascade': [[0.5, 0]],
+ 'frame-group-alias': [[0.35, 0], [0.7, 0]],
  'borrowed-command-promises': [True, True, False, False],
  'creator-finish': [1, 1, 'finished', 1000],
  'creator-promises-and-events': ['pending', 'pending', 1, 'finished', 1000],

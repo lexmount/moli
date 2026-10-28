@@ -11,7 +11,7 @@ use style_traits::ToCss;
 pub(crate) struct ResolvedKeyframe {
     pub(crate) offset: f64,
     pub(crate) declarations: Vec<PropertyDeclaration>,
-    pub(crate) easing: Option<String>,
+    pub(crate) easing: String,
 }
 
 impl MoliStyleEngine {
@@ -22,6 +22,7 @@ impl MoliStyleEngine {
         host: &DomHost,
         handle: DomHandle,
         name: &str,
+        default_easing: &str,
     ) -> Option<Vec<ResolvedKeyframe>> {
         let document = host.owner_document_handle(handle)?;
         let world = self.document_worlds.active_world(document)?;
@@ -33,37 +34,49 @@ impl MoliStyleEngine {
                 let animation = retained
                     .stylist
                     .lookup_keyframes(&Atom::from(name), element)?;
-                let mut merged: Vec<(f64, PropertyDeclarationBlock)> = Vec::new();
+                let mut merged: Vec<(f64, String, PropertyDeclarationBlock)> = Vec::new();
                 for step in &animation.steps {
                     let KeyframesStepValue::Declarations { block } = &step.value else {
                         continue;
                     };
                     let offset = f64::from(step.start_offset.percentage.0);
-                    if merged
-                        .last()
-                        .is_none_or(|(previous, _)| *previous != offset)
-                    {
-                        merged.push((offset, PropertyDeclarationBlock::new()));
-                    }
-                    let destination = &mut merged.last_mut().unwrap().1;
-                    for declaration in block.read_with(&guard).normal_declaration_iter() {
+                    let block = block.read_with(&guard);
+                    let easing = block
+                        .normal_declaration_iter()
+                        .find_map(|declaration| {
+                            if let PropertyDeclaration::AnimationTimingFunction(value) = declaration
+                            {
+                                value.0.first().map(ToCss::to_css_string)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| default_easing.to_owned());
+                    // CSS blocks cascade only within the same effective easing
+                    // group. Preserve the group's earliest position, including
+                    // when another easing group appears between its blocks.
+                    let index = merged
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .take_while(|(_, (previous, _, _))| *previous == offset)
+                        .find(|(_, (_, previous, _))| *previous == easing)
+                        .map(|(index, _)| index)
+                        .unwrap_or_else(|| {
+                            merged.push((offset, easing, PropertyDeclarationBlock::new()));
+                            merged.len() - 1
+                        });
+                    let destination = &mut merged[index].2;
+                    for declaration in block.normal_declaration_iter() {
                         destination.push(declaration.clone(), Importance::Normal);
                     }
                 }
                 Some(
                     merged
                         .into_iter()
-                        .map(|(offset, block)| ResolvedKeyframe {
+                        .map(|(offset, easing, block)| ResolvedKeyframe {
                             offset,
-                            easing: block.declarations().iter().find_map(|declaration| {
-                                if let PropertyDeclaration::AnimationTimingFunction(value) =
-                                    declaration
-                                {
-                                    value.0.first().map(ToCss::to_css_string)
-                                } else {
-                                    None
-                                }
-                            }),
+                            easing,
                             declarations: block
                                 .declarations()
                                 .iter()

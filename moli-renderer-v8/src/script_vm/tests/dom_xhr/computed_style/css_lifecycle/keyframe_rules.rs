@@ -71,3 +71,86 @@ fn css_keyframes_are_resolved_in_the_elements_tree_scope() {
         r#"["0.2","0.6"]"#
     );
 }
+
+#[test]
+fn css_keyframes_keep_per_property_easing_at_the_same_offset() {
+    for first in [
+        "opacity:0;animation-timing-function:steps(1,end)",
+        "opacity:0",
+    ] {
+        assert_eq!(
+            sample(
+                &format!(
+                    "@keyframes mixed{{from{{{first}}}from{{left:0px;animation-timing-function:linear}}to{{opacity:1;left:100px}}}}"
+                ),
+                r#"JSON.stringify((()=>{
+                    const box=document.getElementById('box');
+                    box.style.cssText='position:relative;animation:mixed 1s steps(1,end) both paused';
+                    box.getAnimations()[0].currentTime=500;
+                    const style=getComputedStyle(box);return[+style.opacity,parseFloat(style.left)];
+                })())"#,
+            ),
+            "[0,50]",
+        );
+    }
+}
+
+#[test]
+fn css_keyframes_with_distinct_easings_keep_independent_interval_endpoints() {
+    assert_eq!(
+        sample(
+            "@keyframes mixed{from{opacity:0}50%{opacity:.5;animation-timing-function:steps(1,end)}50%{opacity:.7;animation-timing-function:linear}to{opacity:1}}",
+            r#"JSON.stringify((()=>{
+                const box=document.getElementById('box');box.style.animation='mixed 1s linear both paused';
+                const a=box.getAnimations()[0];
+                return[250,500,750].map(t=>{a.currentTime=t;return +getComputedStyle(box).opacity});
+            })())"#,
+        ),
+        "[0.25,0.7,0.85]",
+    );
+}
+
+#[test]
+fn css_keyframe_groups_use_the_effective_canonical_easing() {
+    for (first, last, expected) in [
+        ("", "animation-timing-function:linear", "0.35"),
+        (
+            "animation-timing-function:step-end",
+            "animation-timing-function:steps(1,end)",
+            "0.35",
+        ),
+        (
+            "animation-timing-function:ease",
+            "animation-timing-function:cubic-bezier(.25,.1,.25,1)",
+            "0.25",
+        ),
+    ] {
+        assert_eq!(
+            sample(
+                &format!(
+                    "@keyframes mixed{{from{{opacity:0}}50%{{opacity:.5;{first}}}50%{{opacity:.7;{last}}}to{{opacity:1}}}}"
+                ),
+                "const box=document.getElementById('box');box.style.animation='mixed 1s linear both paused';box.getAnimations()[0].currentTime=250;getComputedStyle(box).opacity",
+            ),
+            expected,
+            "{first} / {last}",
+        );
+    }
+}
+
+#[test]
+fn css_nonadjacent_matching_groups_cascade_at_their_earliest_position() {
+    // CSS Animations 2 preserves the group's earliest position. Blink records
+    // its remaining rightmost-merge difference in crbug.com/1408702.
+    assert_eq!(
+        sample(
+            "@keyframes mixed{from{opacity:0}50%{opacity:.5;animation-timing-function:steps(1,end)}50%{opacity:.7;animation-timing-function:linear}50%{opacity:.6;animation-timing-function:steps(1,end)}to{opacity:1}}",
+            r#"JSON.stringify((()=>{
+                const box=document.getElementById('box');box.style.animation='mixed 1s linear both paused';
+                const a=box.getAnimations()[0];
+                return[250,750].map(t=>{a.currentTime=t;return +getComputedStyle(box).opacity});
+            })())"#,
+        ),
+        "[0.3,0.85]",
+    );
+}

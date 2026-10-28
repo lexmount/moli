@@ -14,15 +14,15 @@ pub(crate) fn css_animation_effect_keyframes(
     name: &str,
     default_easing: &str,
 ) -> Option<Vec<crate::animation_model::SpecifiedKeyframes>> {
-    let selected = style
-        .runtime
-        .resolved_animation_keyframes(style.handle, name)?;
+    let selected =
+        style
+            .runtime
+            .resolved_animation_keyframes(style.handle, name, default_easing)?;
     let mut builder = crate::animation_model::KeyframeTrackBuilder::default();
     for frame in selected {
-        let easing = frame.easing.as_deref().unwrap_or(default_easing);
         builder.push_frame(
             frame.offset,
-            (easing != "linear").then(|| easing.to_owned()),
+            (frame.easing != "linear").then_some(frame.easing),
             crate::animation_model::KeyframeDeclarations::from_native(frame.declarations),
         );
     }
