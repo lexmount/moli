@@ -55,6 +55,7 @@ pub(crate) struct AnimationInstance {
     pub(crate) playback: AnimationState,
     pub(crate) composite_order: u64,
     pub(crate) kind: AnimationKind,
+    pub(crate) timeline_document: Option<crate::document_runtime::DomHandle>,
     pub(crate) execution_owner: Option<crate::native_bridge::WindowDocumentTaskTarget>,
     pub(crate) target: Option<crate::document_runtime::DomHandle>,
     pub(crate) registered_target: Option<crate::document_runtime::DomHandle>,
@@ -82,6 +83,7 @@ impl AnimationInstance {
             playback,
             kind,
             name,
+            timeline_document: None,
             execution_owner: None,
             target: None,
             registered_target: None,
@@ -143,6 +145,8 @@ impl AnimationInstance {
         Some(sample)
     }
     pub(crate) fn update_css_timing(&mut self, next: CssTiming, changed_at: Instant) {
+        self.playback
+            .preserve_current_time_on_timing_change(changed_at);
         if self.css_effect_source != CssEffectSource::ScriptEffect {
             macro_rules! update {
                 ($field:ident) => {

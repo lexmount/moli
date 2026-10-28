@@ -159,8 +159,8 @@ pub(crate) use animations::{
     dispatch_animation_timeline_tick, dispatch_animation_transition_scan,
     document_may_have_css_lifecycle, element_tree_has_inline_css_lifecycle,
     next_animation_transition_deadline, observe_animation_style, queue_animation_instance_sample,
-    queue_animation_start_for_listener_target, sample_animation_properties_through,
-    sample_animation_property, sample_animation_values,
+    queue_animation_start_for_listener_target, refresh_animation_timeline,
+    sample_animation_properties_through, sample_animation_property, sample_animation_values,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::scroll_node_into_view_if_needed;

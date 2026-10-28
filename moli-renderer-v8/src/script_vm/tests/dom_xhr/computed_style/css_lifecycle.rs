@@ -4,6 +4,7 @@ mod animation_lists;
 mod document_batch;
 mod effect_conversion;
 mod initial_observation;
+mod playback_contracts;
 mod playback_updates;
 mod projection_contracts;
 mod reentrant_transitions;

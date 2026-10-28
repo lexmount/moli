@@ -251,7 +251,11 @@ fn observation_preserves_pending_play_and_defers_css_phase_commit_until_tick() {
     let tick = animation.advance(now, AdvanceMode::Tick);
     assert!(!animation.sample(now).pending);
     assert_eq!(phases(&tick), [(PhaseEvent::Start, 0.0)]);
-    assert_eq!(tick.len(), 2);
+    assert_eq!(tick.len(), 3);
+    assert!(
+        tick.iter()
+            .any(|event| matches!(event, AnimationEvent::Run { elapsed: 0.0 }))
+    );
     assert!(tick.iter().any(|event|
         matches!(event, AnimationEvent::Playback(n) if n.kind == PlaybackNotificationKind::Ready))
     );

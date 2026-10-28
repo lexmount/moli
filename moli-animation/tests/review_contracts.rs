@@ -99,7 +99,7 @@ fn explicit_seek_outside_the_playback_range_is_a_finished_hold() {
             (state
                 .current_seconds(now + Duration::from_millis(10025))
                 .unwrap()
-                - (seek - rate * 0.025))
+                - (if rate > 0.0 { 1.0 } else { 0.0 } - rate * 0.025))
                 .abs()
                 < 1e-9
         );
@@ -158,7 +158,7 @@ fn extending_a_naturally_finished_effect_keeps_its_start_time_mapping() {
 
 #[test]
 fn ready_promise_updates_follow_pending_operation_transitions() {
-    use moli_animation::ReadyPromiseUpdate::{Pending, Resolve, Unchanged};
+    use moli_animation::ReadyPromiseUpdate::{Pending, Reject, Resolve, Unchanged};
     let now = Instant::now();
     let mut state = effect(now);
     state.pause(now);
@@ -168,7 +168,7 @@ fn ready_promise_updates_follow_pending_operation_transitions() {
     assert_eq!(state.command(AnimationCommand::Play, now), Ok(Pending));
     assert_eq!(state.command(AnimationCommand::Finish, now), Ok(Resolve));
     assert_eq!(state.command(AnimationCommand::Reverse, now), Ok(Pending));
-    assert_eq!(state.command(AnimationCommand::Cancel, now), Ok(Resolve));
+    assert_eq!(state.command(AnimationCommand::Cancel, now), Ok(Reject));
 }
 
 #[test]

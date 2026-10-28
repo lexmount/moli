@@ -179,11 +179,18 @@ pub(crate) fn instance<'s>(
     }
     let realm = object.get_creation_context(scope)?;
     let common = CommonRuntimeState::from_context(realm)?;
-    common
+    let instance = common
         .animations
         .entries
         .borrow()
         .get(&AnimationId(id))?
-        .first()
-        .map(|binding| binding.instance.clone())
+        .first()?
+        .instance
+        .clone();
+    if let Some((_, crate::common_runtime::RuntimeExecutionContext::Window(host))) =
+        crate::common_runtime::CommonRuntimeBinding::from_scope(scope)
+    {
+        crate::native_bridge::element::refresh_animation_timeline(unsafe { &*host }, &instance);
+    }
+    Some(instance)
 }

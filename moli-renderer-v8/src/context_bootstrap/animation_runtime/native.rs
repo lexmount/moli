@@ -232,6 +232,16 @@ pub(super) fn set_animation_origin<'s>(
         offset.into(),
     );
 }
+pub(super) fn timeline_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    timeline: v8::Local<'s, v8::Object>,
+) -> Option<crate::document_runtime::DomHandle> {
+    let document = get_private_object(scope, timeline, TIMELINE_DOCUMENT_SLOT)?;
+    node_runtime_and_handle_from_object(scope, document)
+        .ok()
+        .map(|(_, handle)| handle)
+}
+
 pub(super) fn timeline_is_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     timeline: v8::Local<'s, v8::Object>,
@@ -501,10 +511,12 @@ pub(super) fn apply_command<'s>(
     command: moli_animation::AnimationCommand,
     error_message: &'static str,
 ) -> bool {
-    let result = {
+    let (result, cancelled) = {
         let mut state = instance.borrow_mut();
         let now = animation_time(scope);
         let was_paused = state.playback.play_state(now) == "paused";
+        let cancelled =
+            command == moli_animation::AnimationCommand::Cancel && !state.playback.is_idle();
         let result = state.playback.command(command, now);
         let changed_paused = was_paused != (state.playback.play_state(now) == "paused");
         if result.is_ok()
@@ -522,7 +534,7 @@ pub(super) fn apply_command<'s>(
         {
             state.ignore_css_play_state = true;
         }
-        result
+        (result, cancelled)
     };
     let Ok(ready) = result else {
         let error = crate::context_bootstrap::new_dom_exception_value(
@@ -535,6 +547,9 @@ pub(super) fn apply_command<'s>(
     };
     register_instance(scope, object, instance);
     apply_ready_update(scope, object, ready);
+    if cancelled {
+        cancel_finished_promise(scope, object);
+    }
     true
 }
 
@@ -546,6 +561,24 @@ fn apply_ready_update<'s>(
     match update {
         moli_animation::ReadyPromiseUpdate::Pending => pending_ready(scope, object),
         moli_animation::ReadyPromiseUpdate::Resolve => resolve_ready(scope, object),
+        moli_animation::ReadyPromiseUpdate::Reject => {
+            if let Some(resolver) = resolver(scope, object, ANIMATION_READY_RESOLVER_SLOT) {
+                set_private_value(
+                    scope,
+                    resolver.get_promise(scope).into(),
+                    ANIMATION_PROMISE_OWNER_SLOT,
+                    v8::undefined(scope).into(),
+                );
+                let error = crate::context_bootstrap::new_dom_exception_value(
+                    scope,
+                    "Animation canceled",
+                    "AbortError",
+                );
+                let _ = resolver.reject(scope, error);
+            }
+            pending_ready(scope, object);
+            resolve_ready(scope, object);
+        }
         moli_animation::ReadyPromiseUpdate::Unchanged => {}
     }
 }

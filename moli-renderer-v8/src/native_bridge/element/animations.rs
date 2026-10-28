@@ -513,6 +513,7 @@ fn sample_effect_values(
     // Stable per-property composition is independent of dependency ordering.
     let mut values = Vec::new();
     for effect in effects {
+        refresh_animation_timeline(runtime, effect);
         let effect = effect.borrow();
         for frame in &effect.playback.frames {
             if property_can_animate(runtime, handle, &frame.property)
@@ -738,6 +739,7 @@ fn scan_element_animations(
                     );
                 }
                 instance.target = Some(handle);
+                instance.timeline_document = runtime.dom_host().owner_document_handle(handle);
                 instance.css_owner = Some(handle);
             }
             instance.update_css_timing(
@@ -809,6 +811,11 @@ fn browser_animation_events(
     records
         .into_iter()
         .filter_map(|record| match record {
+            AnimationEvent::Run { elapsed } => (animation.owned_by_css
+                && animation.kind == AnimationKind::CssTransition)
+                .then(|| {
+                    CssLifecycleEvent::Transition("transitionrun", animation.name.clone(), elapsed)
+                }),
             AnimationEvent::Playback(notification) => {
                 Some(CssLifecycleEvent::playback(handle.clone(), notification))
             }
@@ -868,11 +875,50 @@ pub(crate) fn next_animation_transition_deadline(
         .next_deadline(Instant::now())
 }
 
+pub(crate) fn refresh_animation_timeline(runtime: &JsContextHost, animation: &Animation) {
+    let changed = {
+        let mut state = animation.borrow_mut();
+        let Some(document) = state.timeline_document else {
+            return;
+        };
+        let active = runtime.document_is_fully_active(document);
+        if active == state.playback.timeline_attached() {
+            return;
+        }
+        let _ = state.playback.command(
+            moli_animation::AnimationCommand::AttachTimeline(active),
+            runtime.animation_time(),
+        );
+        state.execution_owner
+    };
+    if let Some(owner) = changed {
+        runtime
+            .animation_transition_state()
+            .document_mut(owner.owner())
+            .activate(animation);
+        runtime.queue_animation_timeline_tick_for_owner(owner);
+    }
+}
+
 fn advance_active_animations(
     runtime: &PageScriptHost,
     owner: WindowDocumentOwner,
     now: Instant,
 ) -> Vec<(DomHandle, CssLifecycleEvent)> {
+    let active = runtime
+        .animation_transition_state()
+        .document(owner)
+        .map(|document| {
+            document
+                .engine
+                .active_instances()
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for animation in active {
+        refresh_animation_timeline(runtime, &animation);
+    }
     let batch = runtime
         .animation_transition_state()
         .document_mut(owner)
@@ -1171,6 +1217,7 @@ fn scan_element_transitions(
             ));
         }
         instance.target = Some(handle);
+        instance.timeline_document = runtime.dom_host().owner_document_handle(handle);
         instance.css_owner = Some(handle);
         instance.playback.delay = delay;
         instance.playback.duration = duration;
@@ -1194,11 +1241,6 @@ fn scan_element_transitions(
             reversing_adjusted_start: adjusted,
             shortening_factor: factor,
         });
-        events.push(CssLifecycleEvent::Transition(
-            "transitionrun",
-            property,
-            delay.elapsed_at(Duration::ZERO).min(duration).as_secs_f64(),
-        ));
     }
     runtime
         .animation_transition_state()

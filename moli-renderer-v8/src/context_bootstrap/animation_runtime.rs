@@ -572,7 +572,6 @@ pub(super) fn animation_cancel_callback<'s>(
             "Cannot cancel this animation",
         );
     }
-    native::cancel_finished_promise(scope, args.this());
     rv.set_undefined();
 }
 
@@ -878,6 +877,9 @@ fn set_animation_timeline_value<'s>(
     {
         let mut state = instance.borrow_mut();
         let now = native::animation_time(scope);
+        state.timeline_document = v8::Local::<v8::Object>::try_from(value)
+            .ok()
+            .and_then(|timeline| native::timeline_document(scope, timeline));
         let _ = state.playback.command(
             moli_animation::AnimationCommand::AttachTimeline(attached),
             now,
@@ -1098,7 +1100,12 @@ fn animation_current_time_setter<'s>(
         return;
     };
     if args.get(0).is_null_or_undefined() {
-        if !instance.borrow().playback.is_idle() {
+        if instance
+            .borrow()
+            .playback
+            .current_seconds(native::animation_time(scope))
+            .is_some()
+        {
             throw_type_error(scope, "Cannot make a resolved current time unresolved");
         }
         return;

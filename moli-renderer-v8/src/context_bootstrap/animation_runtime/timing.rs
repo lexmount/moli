@@ -133,6 +133,9 @@ pub(super) fn parse_timing<'s>(
     };
     {
         let mut state = animation.borrow_mut();
+        state
+            .playback
+            .preserve_current_time_on_timing_change(super::native::animation_time(scope));
         state.playback.has_effect = true;
         if let Some(v) = options.delay {
             state.timing_overrides.delay = true;

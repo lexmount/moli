@@ -16,11 +16,23 @@ pub enum AnimationPhase {
     After,
 }
 
+// CSS event history is distinct from the effect's three sampling phases.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CssPhase {
+    Idle,
+    Pending,
+    Before,
+    Active,
+    After,
+}
+
 /// Stable playback and effect state, independent of DOM, JS wrappers and timers.
 #[derive(Debug)]
 pub struct AnimationState {
     id: AnimationId,
     phase: AnimationPhase,
+    css_phase: CssPhase,
+    phase_elapsed: f64,
     clock: AnimationClock,
     // A finished hold can be outside the effect's range after an explicit seek.
     // Keep it separately from pausing and the advancing timeline mapping.
@@ -120,6 +132,8 @@ impl AnimationState {
         Self {
             id: AnimationId(id),
             phase: AnimationPhase::Before,
+            css_phase: CssPhase::Idle,
+            phase_elapsed: 0.0,
             clock: AnimationClock::new(now, false),
             finished_hold: None,
             delay: CssTime::default(),
@@ -214,7 +228,11 @@ impl AnimationState {
             if self.pending_play && self.ready_generation != generation {
                 ReadyPromiseUpdate::Pending
             } else if was_pending && !self.pending_play {
-                ReadyPromiseUpdate::Resolve
+                if command == AnimationCommand::Cancel {
+                    ReadyPromiseUpdate::Reject
+                } else {
+                    ReadyPromiseUpdate::Resolve
+                }
             } else {
                 ReadyPromiseUpdate::Unchanged
             },
@@ -223,7 +241,7 @@ impl AnimationState {
     fn apply_command(&mut self, command: AnimationCommand, now: Instant) -> bool {
         match command {
             AnimationCommand::Play => return self.play(now),
-            AnimationCommand::Pause => self.pause(now),
+            AnimationCommand::Pause => return self.pause(now),
             AnimationCommand::Cancel => self.cancel(now),
             AnimationCommand::Finish => return self.finish(now),
             AnimationCommand::Seek(local) => {
@@ -258,22 +276,21 @@ impl AnimationState {
                 if self.timeline_attached != attached && self.clock.has_start_time() {
                     self.finished_hold = None;
                 }
+                if self.timeline_attached && !attached {
+                    self.phase_elapsed = self.active_elapsed(now).as_secs_f64();
+                }
                 self.timeline_attached = attached;
             }
             AnimationCommand::SetStartTime { origin, seconds } => {
-                let previous = self.current_seconds(now);
+                let previous = if seconds.is_some() && !self.timeline_attached {
+                    None
+                } else {
+                    self.current_seconds(now)
+                };
                 self.pending_play = false;
                 self.finished_hold = None;
-                if let Some(start) = seconds {
-                    let local = (now.saturating_duration_since(origin).as_secs_f64() - start)
-                        * self.clock.rate;
-                    self.clock.seek(now, local);
-                    self.clock.update_play_state(now, false);
-                    self.idle = false;
-                } else {
-                    self.clock.hold(now, previous);
-                    self.idle = previous.is_none();
-                }
+                self.clock.set_start_time(now, origin, seconds, previous);
+                self.idle = seconds.is_none() && previous.is_none();
             }
         }
         true
@@ -307,6 +324,9 @@ impl AnimationState {
     fn is_finished_at(&self, local: f64) -> bool {
         (self.clock.rate > 0.0 && compare_time(local, self.end_time()).is_ge())
             || (self.clock.rate < 0.0 && compare_time(local, 0.0).is_le())
+    }
+    pub fn preserve_current_time_on_timing_change(&mut self, now: Instant) {
+        self.finished_hold = self.current_seconds(now);
     }
     fn update_finished_hold(&mut self) {
         if self
@@ -351,20 +371,20 @@ impl AnimationState {
             events.push(AnimationEvent::Playback(
                 self.notification(PlaybackNotificationKind::Cancel),
             ));
-            if self.phase != AnimationPhase::After {
-                events.push(AnimationEvent::Phase {
-                    kind: PhaseEvent::Cancel,
-                    elapsed: self.active_elapsed(now).as_secs_f64(),
-                });
-            }
         }
-        if self.idle {
-            return events;
-        }
-        let next = if self.current_seconds(now).is_some() {
-            self.current_phase(now)
+        let next = if self.idle {
+            CssPhase::Idle
+        } else if self.pending_play && matches!(self.css_phase, CssPhase::Idle | CssPhase::Pending)
+        {
+            CssPhase::Pending
+        } else if self.current_seconds(now).is_none() {
+            CssPhase::Idle
         } else {
-            self.phase
+            match self.current_phase(now) {
+                AnimationPhase::Before => CssPhase::Before,
+                AnimationPhase::Active => CssPhase::Active,
+                AnimationPhase::After => CssPhase::After,
+            }
         };
         let (before, after) = self.phase_boundaries();
         let interval_elapsed = |boundary: f64| {
@@ -374,12 +394,17 @@ impl AnimationState {
         };
         let start = interval_elapsed(before);
         let end = interval_elapsed(after);
-        let mut emit = |kind, elapsed| events.push(AnimationEvent::Phase { kind, elapsed });
-        use AnimationPhase::{Active, After, Before};
-        if mode == AdvanceMode::Tick {
-            match (self.phase, next) {
-                (Before, Active) => emit(PhaseEvent::Start, start),
-                (Before, After) => {
+        use CssPhase::{Active, After, Before, Idle, Pending};
+        // CSS phases include unresolved and pending playback. Ordinary reads
+        // never commit this history; commands in one task coalesce at a tick.
+        if mode == AdvanceMode::Tick || self.idle {
+            if self.css_phase == Idle && next != Idle {
+                events.push(AnimationEvent::Run { elapsed: start });
+            }
+            let mut emit = |kind, elapsed| events.push(AnimationEvent::Phase { kind, elapsed });
+            match (self.css_phase, next) {
+                (Idle | Pending | Before, Active) => emit(PhaseEvent::Start, start),
+                (Idle | Pending | Before, After) => {
                     emit(PhaseEvent::Start, start);
                     emit(PhaseEvent::End, end);
                 }
@@ -390,8 +415,24 @@ impl AnimationState {
                     emit(PhaseEvent::Start, end);
                     emit(PhaseEvent::End, start);
                 }
+                (Pending | Before | Active, Idle) => emit(
+                    PhaseEvent::Cancel,
+                    if self.idle {
+                        self.active_elapsed(now).as_secs_f64()
+                    } else {
+                        self.phase_elapsed
+                    },
+                ),
                 _ => {}
             }
+            self.css_phase = next;
+            if next != Idle && next != Pending {
+                self.phase = self.current_phase(now);
+                self.phase_elapsed = self.active_elapsed(now).as_secs_f64();
+            }
+        }
+        if self.idle {
+            return events;
         }
         let finished = self.play_state(now) == "finished";
         if finished != self.finish_notified {
@@ -407,9 +448,6 @@ impl AnimationState {
             events.push(AnimationEvent::Playback(notification));
         }
         self.finish_notified = finished;
-        if mode == AdvanceMode::Tick {
-            self.phase = next;
-        }
         events
     }
     /// Document retirement discards pending work without dispatching into a dead owner.
@@ -417,6 +455,7 @@ impl AnimationState {
         self.cancel(now);
         self.timeline_attached = false;
         self.pending_cancel = false;
+        self.css_phase = CssPhase::Idle;
     }
     /// Copy effect configuration without copying identity, playback or host ownership.
     pub fn copy_effect_from(&mut self, effect: &Self) {
@@ -510,28 +549,35 @@ impl AnimationState {
             "running"
         }
     }
-    pub fn pause(&mut self, now: Instant) {
-        let local = self.current_seconds(now).unwrap_or(0.0);
+    pub fn pause(&mut self, now: Instant) -> bool {
+        let local = self.current_seconds(now).unwrap_or_else(|| {
+            if self.clock.rate < 0.0 {
+                self.end_time()
+            } else {
+                0.0
+            }
+        });
+        if !local.is_finite() {
+            return false;
+        }
         self.clock.seek(now, local);
         self.finished_hold = None;
         self.clock.update_play_state(now, true);
         self.idle = false;
         self.pending_play = false;
+        true
     }
     pub fn play(&mut self, now: Instant) -> bool {
-        if self.play_state(now) == "running" && !self.pending_play {
-            return true;
-        }
         let local = self.current_seconds(now);
-        if local.is_none()
+        let rewind = local.is_none()
             || local.is_some_and(|time| {
                 if self.clock.rate < 0.0 {
-                    time <= 0.0
+                    time <= 0.0 || time > self.end_time()
                 } else {
-                    time >= self.end_time()
+                    time < 0.0 || time >= self.end_time()
                 }
-            })
-        {
+            });
+        if rewind {
             let local = if self.clock.rate < 0.0 {
                 self.end_time()
             } else {
@@ -541,11 +587,10 @@ impl AnimationState {
                 return false;
             }
             self.cycle = self.cycle.wrapping_add(1);
-            self.phase = AnimationPhase::Before;
             self.clock.seek(now, local);
             self.finished_hold = None;
         }
-        if self.pending_play {
+        if self.pending_play || (!rewind && self.play_state(now) == "running") {
             return true;
         }
         self.idle = false;
@@ -577,7 +622,7 @@ impl AnimationState {
     }
     pub fn finish(&mut self, now: Instant) -> bool {
         let end = self.end_time();
-        if !end.is_finite() || self.clock.rate == 0.0 {
+        if (self.clock.rate > 0.0 && !end.is_finite()) || self.clock.rate == 0.0 {
             return false;
         }
         self.idle = false;
@@ -613,10 +658,26 @@ impl AnimationState {
         self.is_current(now) || self.is_in_effect(now)
     }
     pub fn progress(&self, now: Instant) -> Option<EffectProgress> {
+        self.progress_for_sample(now, false)
+    }
+    /// commitStyles includes the exact effect endpoints, but not times beyond
+    /// them. This is deliberately separate from display fill semantics.
+    pub fn progress_for_sample(
+        &self,
+        now: Instant,
+        include_endpoint: bool,
+    ) -> Option<EffectProgress> {
         if !self.has_effect || self.current_seconds(now).is_none() {
             return None;
         }
-        let phase = self.current_phase(now);
+        let mut phase = self.current_phase(now);
+        let local = self.current_seconds(now)?;
+        let (before, after) = self.phase_boundaries();
+        if include_endpoint
+            && (compare_time(local, before).is_eq() || compare_time(local, after).is_eq())
+        {
+            phase = AnimationPhase::Active;
+        }
         if phase == AnimationPhase::Before
             && !matches!(self.fill, FillMode::Backwards | FillMode::Both)
         {
@@ -630,7 +691,11 @@ impl AnimationState {
         let elapsed = self.active_elapsed(now).as_secs_f64();
         let iterations = self.iteration_start
             + if self.duration.is_zero() {
-                self.iterations
+                if phase == AnimationPhase::Before {
+                    0.0
+                } else {
+                    self.iterations
+                }
             } else {
                 elapsed / self.duration.as_secs_f64()
             };
@@ -639,12 +704,17 @@ impl AnimationState {
         } else {
             self.iteration_start
         };
-        let (index, mut progress) =
-            if phase == AnimationPhase::After && iterations > 0.0 && iterations.fract() == 0.0 {
-                (iterations - 1.0, 1.0)
-            } else {
-                (iterations.floor(), iterations.fract())
-            };
+        let (index, mut progress) = if phase != AnimationPhase::Before
+            && self
+                .active_duration()
+                .is_some_and(|active| compare_time(elapsed, active.as_secs_f64()).is_eq())
+            && iterations > 0.0
+            && iterations.fract() == 0.0
+        {
+            (iterations - 1.0, 1.0)
+        } else {
+            (iterations.floor(), iterations.fract())
+        };
         let reverse = match self.direction.as_str() {
             "reverse" => true,
             "alternate" => index % 2.0 >= 1.0,
@@ -656,7 +726,8 @@ impl AnimationState {
         }
         Some(EffectProgress {
             fraction: progress,
-            before: phase == AnimationPhase::Before,
+            before: (phase == AnimationPhase::Before && !reverse)
+                || (phase == AnimationPhase::After && reverse),
         })
     }
     /// Select a keyframe interval using the easing-adjusted progress from the caller.
@@ -825,6 +896,7 @@ pub enum ReadyPromiseUpdate {
     Unchanged,
     Pending,
     Resolve,
+    Reject,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -850,6 +922,7 @@ pub enum PhaseEvent {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnimationEvent {
+    Run { elapsed: f64 },
     Phase { kind: PhaseEvent, elapsed: f64 },
     Playback(PlaybackNotification),
 }
