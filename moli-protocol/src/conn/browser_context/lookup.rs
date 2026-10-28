@@ -152,8 +152,8 @@ fn page_frame_record(
         Some(context.id.clone()),
     );
     if let Some(info) = context.devtools_target_info(page.target_id()) {
+        record.original_opener = info.original_opener_id().map(str::to_owned);
         record.url = info.url;
-        record.original_opener = info.opener_id.map(|id| id.as_str().to_owned());
     }
     record.loader_id = page
         .runtime_slot
@@ -191,11 +191,20 @@ mod tests {
 
         let frames = conn.frame_index_snapshot();
         let popup = frames.get("TID-popup").unwrap();
-        assert_eq!(popup.original_opener.as_deref(), Some("TID-opener"));
+        assert_eq!(popup.original_opener.as_deref(), Some("FRAME-opener"));
         assert_eq!(popup.parent, None);
         assert_eq!(
             conn.browsing_context_owner("TID-popup").as_ref(),
             Some(popup)
+        );
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .forget_target_opener_references_for_target("TID-opener");
+        let after_close = conn.frame_index_snapshot();
+        assert_eq!(
+            after_close.get("TID-popup").unwrap().original_opener,
+            popup.original_opener
         );
     }
 

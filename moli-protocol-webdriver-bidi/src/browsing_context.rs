@@ -22,7 +22,7 @@ fn bidi_browsing_context_info_from_target_info(
     Some(bidi_browsing_context_info_from_parts(
         target_id.as_str(),
         &info.url,
-        info.opener_id.as_ref().map(DevToolsTargetId::as_str),
+        info.original_opener_id(),
         info.browser_context_id
             .as_ref()
             .map(DevToolsBrowserContextId::as_str),
@@ -46,8 +46,7 @@ pub(crate) fn bidi_browsing_context_infos_from_frame_tree_result(
         result
             .target_info
             .as_ref()
-            .and_then(|info| info.opener_id.as_ref())
-            .map(DevToolsTargetId::as_str),
+            .and_then(DevToolsTargetInfo::original_opener_id),
         result
             .target_info
             .as_ref()
@@ -74,7 +73,10 @@ pub(crate) fn bidi_browsing_context_info_from_cdp_target_info(
             .get("url")
             .and_then(Value::as_str)
             .unwrap_or_default(),
-        target_info.get("openerId").and_then(Value::as_str),
+        target_info
+            .get("openerFrameId")
+            .and_then(Value::as_str)
+            .or_else(|| target_info.get("openerId").and_then(Value::as_str)),
         target_info.get("browserContextId").and_then(Value::as_str),
         None,
         children,
@@ -194,4 +196,53 @@ pub(crate) fn bidi_browsing_context_info_from_parts(
         payload.insert("parent".to_owned(), parent);
     }
     payload
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moli_protocol::automation::DevToolsFrameId;
+
+    #[test]
+    fn context_info_paths_prefer_opener_frame_and_retain_it_after_target_closes() {
+        for (opener, opener_frame, expected) in [
+            (Some("page"), Some("child"), json!("child")),
+            (None, Some("child"), json!("child")),
+            (Some("page"), None, json!("page")),
+            (None, None, Value::Null),
+        ] {
+            let info = DevToolsTargetInfo {
+                target_id: Some(DevToolsTargetId::from("popup")),
+                kind: DevToolsTargetKind::Page,
+                title: String::new(),
+                url: "about:blank".into(),
+                attached: false,
+                opener_id: opener.map(DevToolsTargetId::from),
+                opener_frame_id: opener_frame.map(DevToolsFrameId::from),
+                can_access_opener: false,
+                browser_context_id: None,
+                moli_popup_id: None,
+            };
+            let frame_tree = DevToolsGetFrameTreeResult {
+                frame_tree: json!({"frame": {"id": "popup", "url": "about:blank"}}),
+                target_info: Some(info.clone()),
+                max_depth: None,
+            };
+            let from_wire = bidi_browsing_context_info_from_cdp_target_info(
+                &json!({
+                    "targetId": "popup", "type": "page", "url": "about:blank",
+                    "openerId": opener, "openerFrameId": opener_frame
+                }),
+                json!([]),
+            )
+            .unwrap();
+            for context in [
+                bidi_browsing_context_info(info).unwrap(),
+                bidi_browsing_context_infos_from_frame_tree_result(&frame_tree).remove(0),
+                from_wire,
+            ] {
+                assert_eq!(context["originalOpener"], expected);
+            }
+        }
+    }
 }

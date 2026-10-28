@@ -1636,6 +1636,14 @@ pub struct DevToolsTargetInfo {
 }
 
 impl DevToolsTargetInfo {
+    /// The initiating Frame survives in attribution even after its Page closes.
+    pub fn original_opener_id(&self) -> Option<&str> {
+        self.opener_frame_id
+            .as_ref()
+            .map(DevToolsFrameId::as_str)
+            .or_else(|| self.opener_id.as_ref().map(DevToolsTargetId::as_str))
+    }
+
     pub(crate) fn into_cdp_value(self) -> Value {
         let mut payload = json!({
             "type": self.kind.as_cdp_type(),

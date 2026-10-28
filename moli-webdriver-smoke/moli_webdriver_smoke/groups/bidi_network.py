@@ -158,6 +158,18 @@ async def run_bidi_network_group(
             if not continue_on_failure:
                 raise
             record_failure(results, "bidi-network", name, error)
+    for name, from_iframe, close_opener, replay in (
+        ("bidi_iframe_popup_opener_live", True, False, False),
+        ("bidi_iframe_popup_opener_replay", True, False, True),
+        ("bidi_closed_page_popup_opener_replay", False, True, True),
+        ("bidi_closed_iframe_popup_opener_replay", True, True, True),
+    ):
+        try:
+            await _run_popup_opener_attribution(target, fixture, results, name, from_iframe, close_opener, replay)
+        except Exception as error:
+            if not continue_on_failure:
+                raise
+            record_failure(results, "bidi-network", name, error)
     for operation in ("navigation", "nested_detach", "document_navigation", "transient"):
         name = f"bidi_frame_identity_{operation}"
         try:
@@ -403,6 +415,48 @@ async def _run_existing_popup_opener_replay(
         record(results, name, {
             "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
             "openedBeforeSubscription": True, "popupOpenerRetained": True,
+        })
+
+
+async def _run_popup_opener_attribution(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str,
+    from_iframe: bool, close_opener: bool, replay: bool,
+) -> None:
+    async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/frame") as (bidi, capabilities):
+        root = (await bidi.command("script.getRealms", {"type": "window"}))["realms"][0]["context"]
+        opener = root
+        if from_iframe:
+            await bidi.load_frame(root, f"{fixture}/webdriver/frame?opener={name}")
+            tree = (await bidi.command("browsingContext.getTree", {"root": root}))["contexts"][0]
+            opener = tree["children"][0]["context"]
+        if not replay:
+            await bidi.command("session.subscribe", {"events": ["browsingContext.contextCreated"]})
+        opened = await bidi.command("script.evaluate", {
+            "expression": "window.open('about:blank', '_blank'); true",
+            "target": {"context": opener}, "awaitPromise": True, "userActivation": True,
+        })
+        assert_equal(opened["type"], "success", f"{name}: popup creation")
+        contexts = (await bidi.command("browsingContext.getTree", {}))["contexts"]
+        assert_equal(len(contexts), 2, f"{name}: opener and popup exist")
+        popup = next(context["context"] for context in contexts if context["context"] != root)
+        url = f"{fixture}/webdriver/frame?popup={name}"
+        await bidi.command("browsingContext.navigate", {"context": popup, "url": url, "wait": "complete"})
+        if close_opener:
+            await bidi.command("browsingContext.close", {"context": root})
+            await bidi.command("browsingContext.getTree", {"root": opener}, error="no such frame")
+        if replay:
+            await bidi.command("session.subscribe", {"events": ["browsingContext.contextCreated"]})
+        created = await _wait_context_event(bidi, "browsingContext.contextCreated", popup)
+        assert_equal(created["params"]["originalOpener"], opener, f"{name}: popup retains the initiating frame")
+        assert_equal(created["params"]["parent"], None, f"{name}: popup has no parent")
+        tree = (await bidi.command("browsingContext.getTree", {"root": popup}))["contexts"][0]
+        assert_equal(tree["originalOpener"], opener, f"{name}: getTree retains the initiating frame")
+        assert_equal(tree["url"], url, f"{name}: popup remains live")
+        assert_equal(sum(event.get("method") == "browsingContext.contextCreated" and event.get("params", {}).get("context") == popup for event in bidi.events), 1, f"{name}: popup published once")
+        record(results, name, {
+            "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
+            "openerIsIframe": from_iframe, "openerClosed": close_opener, "eventIsReplay": replay,
+            "originalOpenerRetained": True,
         })
 
 

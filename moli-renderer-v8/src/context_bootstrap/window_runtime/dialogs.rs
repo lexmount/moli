@@ -315,7 +315,7 @@ pub(crate) fn window_open_callback<'s>(
         window_features: parsed_features.enabled_feature_strings(),
         user_gesture: host.protocol_user_gesture_activation(),
     };
-    let source_scope = host.entered_owner_dispatch_scope(scope);
+    let source_scope = entered_window_dispatch_scope(scope, host);
     let Some((_, root_document, source)) =
         host.renderer_window_document_source_for_dispatch_scope(source_scope)
     else {
@@ -489,14 +489,14 @@ fn window_receiver_child_handle<'s>(
         .and_then(|value| child_window_handle_from_marker_data(scope, value))
 }
 
-pub(in crate::context_bootstrap) fn entered_window_api_base_url(
+fn entered_window_dispatch_scope(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
-) -> Url {
+) -> OwnerDispatchScope {
     // The HTML entry settings object follows the context that entered the
     // script or microtask, not the borrowed Window method's native realm.
     let ambient_scope = host.entered_owner_dispatch_scope(scope);
-    let entry_scope = match ambient_scope {
+    match ambient_scope {
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => ambient_scope,
         crate::native_bridge::OwnerDispatchScope::Top
         | crate::native_bridge::OwnerDispatchScope::Child(_) => {
@@ -505,7 +505,14 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
                 .map(|identity| identity.dispatch_scope())
                 .unwrap_or(ambient_scope)
         }
-    };
+    }
+}
+
+pub(in crate::context_bootstrap) fn entered_window_api_base_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &crate::native_bridge::JsContextHost,
+) -> Url {
+    let entry_scope = entered_window_dispatch_scope(scope, host);
     match entry_scope {
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             if let Some(url) = host.child_browsing_context_base_url(handle) {
