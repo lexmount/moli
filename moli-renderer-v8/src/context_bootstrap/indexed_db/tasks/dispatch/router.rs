@@ -62,6 +62,9 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
         IndexedDbTaskKind::TransactionAbort => flush_transaction_abort_task(scope, task),
+        IndexedDbTaskKind::TransactionOperationError => {
+            flush_transaction_operation_error_task(scope, task)
+        }
         IndexedDbTaskKind::TransactionCancel => {
             if let Some(transaction) = indexed_db_object_task_target(scope, task) {
                 crate::context_bootstrap::indexed_db::finish_canceled_transaction(

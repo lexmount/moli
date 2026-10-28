@@ -39,3 +39,24 @@ fn create_transaction_task<'s>(
     register_indexed_db_object_task(scope, task, typed_kind, transaction);
     task
 }
+
+pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: IndexedDbError,
+) {
+    // Queue in the transaction's relevant realm even when createIndex was
+    // borrowed from another same-origin Window.
+    let context = transaction
+        .get_creation_context(scope)
+        .expect("IndexedDB transaction has a creation context");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let task = v8::Object::new(scope);
+    crate::context_bootstrap::indexed_db::register_indexed_db_transaction_error_task(
+        scope,
+        task,
+        transaction,
+        error,
+    );
+    enqueue_indexed_db_task(scope, task);
+}

@@ -416,3 +416,25 @@ async fn indexed_db_explicit_commit_keeps_requests_inactive_and_preserves_outcom
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_unique_index_builds_abort_in_order_and_deduplicate_multi_entry_keys()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-index-build.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nindexBuildProbe('index-build-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: indexBuildChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 189 } else { 756 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
