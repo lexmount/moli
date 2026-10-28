@@ -1,7 +1,7 @@
 pub(crate) use moli_webapi::abort_signal_values as abort_signal;
 pub(crate) mod abort_signal_events;
 mod animation_runtime;
-pub(crate) use animation_runtime::notify_animation_playback;
+pub(crate) use animation_runtime::{dispatch_animation_playback, publish_animation_playback};
 mod assets;
 mod bar_prop;
 pub(crate) mod bridge_descriptor;

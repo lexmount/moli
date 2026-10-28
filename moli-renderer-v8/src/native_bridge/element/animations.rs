@@ -881,21 +881,15 @@ pub(crate) fn promote_animation_instance_finish(runtime: &JsContextHost, instanc
     let mut document = runtime
         .animation_transition_state()
         .document_mut(owner.owner());
-    if let Some((_, pending)) = document.pending_events.iter_mut().find(|(_, event)| {
-        matches!(event, CssLifecycleEvent::Playback(playback)
+    if let Some((_, CssLifecycleEvent::Playback(playback))) =
+        document.pending_events.iter_mut().find(|(_, event)| {
+            matches!(event, CssLifecycleEvent::Playback(playback)
             if playback.notification.kind == moli_animation::PlaybackNotificationKind::Finish
                 && std::rc::Rc::ptr_eq(&playback.animation, instance)
                 && instance.borrow().playback.accepts(playback.notification))
-    }) {
-        let notification = instance
-            .borrow()
-            .playback
-            .notification(moli_animation::PlaybackNotificationKind::Finish);
-        *pending =
-            CssLifecycleEvent::playback(instance.clone(), notification, runtime.animation_time());
-        if let CssLifecycleEvent::Playback(playback) = pending {
-            playback.queued = true;
-        }
+        })
+    {
+        playback.queue(runtime.animation_time());
     }
 }
 
@@ -1460,8 +1454,7 @@ fn dispatch_lifecycle_events(
             return false;
         }
         if let CssLifecycleEvent::Playback(playback) = event {
-            playback.queued |=
-                crate::context_bootstrap::notify_animation_playback(scope, playback, true);
+            crate::context_bootstrap::publish_animation_playback(scope, playback);
             published = true;
         }
     }
@@ -1482,9 +1475,7 @@ fn dispatch_lifecycle_events(
             continue;
         }
         if let CssLifecycleEvent::Playback(playback) = &event {
-            if playback.queued {
-                crate::context_bootstrap::notify_animation_playback(scope, playback, false);
-            }
+            crate::context_bootstrap::dispatch_animation_playback(scope, playback);
             continue;
         }
         let target =

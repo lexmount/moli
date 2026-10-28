@@ -40,6 +40,13 @@ _ANIMATION_INPUT_SCRIPT = r"""async mode => {
     box.style.cssText='animation:fade 1s linear both paused';
     box.getAnimations()[0].currentTime=500;return +getComputedStyle(box).opacity;
   }
+  if(mode.startsWith('finish-')){
+    const a=box.animate({opacity:[0,1]},{duration:1000,fill:'both'});await a.ready;
+    const done=new Promise(resolve=>a.onfinish=resolve);
+    if(mode==='finish-explicit')a.finish();else a.currentTime=1000;
+    a.currentTime=2000;
+    const e=await done;return[e.currentTime,Number.isFinite(e.timelineTime),e.target===a];
+  }
   throw new Error(mode);
 }"""
 
@@ -55,7 +62,9 @@ _ANIMATION_INPUT_EXPECTED = {'logical-missing': [20, 60, 100],
  'name-quoted-none': [[['none', 2000], ['plain', 3000]], 0.25],
  'easing-initial': 0.802403,
  'easing-unset': 0.802403,
- 'easing-inherit': 0.802403}
+ 'easing-inherit': 0.802403,
+ 'finish-seek': [2000, True, True],
+ 'finish-explicit': [1000, True, True]}
 
 
 async def run_animation_input_contracts(page: Page) -> dict[str, Any]:

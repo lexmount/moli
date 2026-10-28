@@ -316,20 +316,29 @@ pub(crate) enum CssLifecycleEvent {
 pub(crate) struct PlaybackEvent {
     pub(crate) animation: Animation,
     pub(crate) notification: PlaybackNotification,
-    pub(crate) queued: bool,
-    // Playback events describe the enqueue-time state, independently of later
-    // commands, promise settlement or timeline replacement.
+    state: PlaybackEventState,
+}
+
+enum PlaybackEventState {
+    PendingNotification,
+    Queued(PlaybackEventSnapshot),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PlaybackEventSnapshot {
     pub(crate) current_time: Option<f64>,
     pub(crate) timeline_time: Option<f64>,
 }
-impl CssLifecycleEvent {
-    pub(crate) fn playback(
-        animation: Animation,
-        notification: PlaybackNotification,
-        now: Instant,
-    ) -> Self {
+
+impl PlaybackEvent {
+    /// A normal finish notification captures its payload when it is published.
+    /// Explicit finish/cancel queue immediately and retain that immutable payload.
+    pub(crate) fn queue(&mut self, now: Instant) {
+        if matches!(self.state, PlaybackEventState::Queued(_)) {
+            return;
+        }
         let (current_time, timeline_time) = {
-            let state = animation.borrow();
+            let state = self.animation.borrow();
             (
                 state
                     .playback
@@ -347,12 +356,34 @@ impl CssLifecycleEvent {
                     }),
             )
         };
-        Self::Playback(PlaybackEvent {
-            animation,
-            queued: notification.event_is_queued(),
-            notification,
+        self.state = PlaybackEventState::Queued(PlaybackEventSnapshot {
             current_time,
             timeline_time,
-        })
+        });
+    }
+
+    pub(crate) fn snapshot(&self) -> Option<PlaybackEventSnapshot> {
+        match self.state {
+            PlaybackEventState::PendingNotification => None,
+            PlaybackEventState::Queued(snapshot) => Some(snapshot),
+        }
+    }
+}
+
+impl CssLifecycleEvent {
+    pub(crate) fn playback(
+        animation: Animation,
+        notification: PlaybackNotification,
+        now: Instant,
+    ) -> Self {
+        let mut playback = PlaybackEvent {
+            animation,
+            notification,
+            state: PlaybackEventState::PendingNotification,
+        };
+        if notification.event_is_queued() {
+            playback.queue(now);
+        }
+        Self::Playback(playback)
     }
 }

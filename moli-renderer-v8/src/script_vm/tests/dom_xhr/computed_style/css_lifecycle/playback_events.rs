@@ -196,3 +196,48 @@ async fn early_child_css_finish_uses_its_documents_native_timeline() {
         })().then(v=>result=JSON.stringify(v),e=>result=String(e));
     "#, "[0,true,true,true]").await;
 }
+
+#[tokio::test]
+async fn normal_finish_captures_at_publication_while_explicit_finish_keeps_its_snapshot() {
+    for (commands, expected) in [
+        ("a.currentTime=1000;a.currentTime=2000", 2000),
+        ("a.finish();a.currentTime=2000", 1000),
+        ("a.currentTime=1000;a.finish();a.currentTime=2000", 1000),
+        (
+            "a.currentTime=1000;a.currentTime=2000;a.currentTime=1500",
+            1500,
+        ),
+    ] {
+        assert_async_sample("<!doctype html><div id=box></div>", &format!(r#"
+            globalThis.result=null;
+            (async()=>{{
+                const a=document.getElementById('box').animate({{opacity:[0,1]}},{{duration:1000,fill:'both'}});
+                await a.ready;
+                const finished=new Promise(resolve=>a.onfinish=resolve);
+                {commands};
+                const e=await finished;
+                return[e.currentTime,Number.isFinite(e.timelineTime),e.target===a,e.isTrusted];
+            }})().then(value=>result=JSON.stringify(value),error=>result=String(error));
+        "#), &format!("[{expected},true,true,true]")).await;
+    }
+}
+
+#[tokio::test]
+async fn an_unpublished_finish_is_aborted_when_seek_leaves_the_finished_state() {
+    assert_async_sample(
+        "<!doctype html><div id=box></div>",
+        r#"
+        globalThis.result=null;
+        (async()=>{
+            const box=document.getElementById('box');
+            const a=box.animate({opacity:[0,1]},{duration:1000,fill:'both'});await a.ready;
+            let count=0;a.onfinish=()=>++count;
+            a.currentTime=1000;a.currentTime=2000;a.currentTime=500;a.pause();a.currentTime=500;await a.ready;
+            await box.animate([],{duration:1}).finished;
+            return[count,a.playState,a.currentTime];
+        })().then(value=>result=JSON.stringify(value),error=>result=String(error));
+    "#,
+        r#"[0,"paused",500]"#,
+    )
+    .await;
+}

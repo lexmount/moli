@@ -9,7 +9,7 @@ mod element_registry;
 mod native;
 mod timing;
 use crate::{animation_bindings, animation_model::Animation};
-pub(crate) use native::notify_animation_playback;
+pub(crate) use native::{dispatch_animation_playback, publish_animation_playback};
 
 const ANIMATION_ID_SLOT: &str = "__moliAnimationId";
 const ANIMATION_READY_SLOT: &str = "__moliAnimationReady";

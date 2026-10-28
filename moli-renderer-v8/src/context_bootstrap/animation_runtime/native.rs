@@ -328,31 +328,39 @@ pub(super) fn promise_execution_is_current<'s>(
         .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))
 }
 
-pub(crate) fn notify_animation_playback<'s>(
+pub(crate) fn publish_animation_playback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    playback: &crate::animation_model::PlaybackEvent,
-    publish: bool,
-) -> bool {
-    let instance = &playback.animation;
+    playback: &mut crate::animation_model::PlaybackEvent,
+) {
     let notification = playback.notification;
-    let event_realm = scope.get_current_context();
     let kind = notification.kind.as_str();
+    let now = animation_time(scope);
     let current = {
-        let state = instance.borrow();
+        let state = playback.animation.borrow();
         state.playback.accepts(notification)
-            && (kind != "finish" || state.playback.play_state(animation_time(scope)) == "finished")
+            && (kind != "finish" || state.playback.play_state(now) == "finished")
     };
-    let queued = publish && current && kind == "finish";
-    if queued {
-        let generation = instance.borrow().playback.finished_generation();
-        instance.borrow_mut().published_finished_generation = Some(generation);
+    if current && kind == "finish" {
+        playback.queue(now);
+        let generation = playback.animation.borrow().playback.finished_generation();
+        playback
+            .animation
+            .borrow_mut()
+            .published_finished_generation = Some(generation);
     }
+    let instance = &playback.animation;
     let Some(common) = CommonRuntimeState::from_scope(scope) else {
-        return queued;
+        return;
     };
-    let wrappers = common.animations.wrappers(scope, instance);
-    for object in wrappers {
-        let can_publish_promises = promise_execution_is_current(scope, object);
+    for object in common.animations.wrappers(scope, instance) {
+        // Native registration and event queueing do not depend on the promise
+        // realm's execution eligibility.
+        if current && !instance.borrow().playback.is_relevant(now) {
+            element_registry::unregister(scope, object);
+        }
+        if !promise_execution_is_current(scope, object) {
+            continue;
+        }
         let Some(realm) = object.get_creation_context(scope) else {
             continue;
         };
@@ -360,63 +368,53 @@ pub(crate) fn notify_animation_playback<'s>(
             continue;
         }
         let scope = &mut v8::ContextScope::new(scope, realm);
-        if publish {
-            // Dropping an effect's native registration does not execute JS and
-            // must also happen when its promise realm has retired.
-            if current
-                && !instance
-                    .borrow()
-                    .playback
-                    .is_relevant(animation_time(scope))
-            {
-                element_registry::unregister(scope, object);
-            }
-            // Promise reactions remain owned by the wrapper's execution realm.
-            // DOM event callbacks have their own relevant-realm checks in the
-            // shared dispatcher and can belong to a still-live parent page.
-            if !can_publish_promises {
-                continue;
-            }
-            sync_finished_promise(scope, object, instance);
-            if !current {
-                continue;
-            }
-            if kind == "release" {
-                continue;
-            }
-            if kind == "ready" {
-                apply_promise_update(scope, object, notification.promise_update().unwrap());
-                continue;
-            }
-            if kind == "reset" {
-                continue;
-            }
-            if kind == "finish" {
-                settle_finished_promise(scope, object);
-            } else {
-                apply_promise_update(scope, object, notification.promise_update().unwrap());
-            }
+        sync_finished_promise(scope, object, instance);
+        if !current || matches!(kind, "release" | "reset") {
             continue;
         }
-        if !matches!(kind, "finish" | "cancel") {
+        if kind == "finish" {
+            settle_finished_promise(scope, object);
+        } else {
+            apply_promise_update(scope, object, notification.promise_update().unwrap());
+        }
+    }
+}
+
+pub(crate) fn dispatch_animation_playback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    playback: &crate::animation_model::PlaybackEvent,
+) {
+    let Some(snapshot) = playback.snapshot() else {
+        return;
+    };
+    let kind = playback.notification.kind.as_str();
+    if !matches!(kind, "finish" | "cancel") {
+        return;
+    }
+    let Some(common) = CommonRuntimeState::from_scope(scope) else {
+        return;
+    };
+    for object in common.animations.wrappers(scope, &playback.animation) {
+        let Some(realm) = object.get_creation_context(scope) else {
+            continue;
+        };
+        if CommonRuntimeState::from_context(realm).is_none() {
             continue;
         }
-        // The rendering task's Document has already passed its owner check.
-        // Create the event in that live realm, not in a retired creator realm.
-        let scope = &mut v8::ContextScope::new(scope, event_realm);
+        // The rendering task's live Document owns the event. Listener realm
+        // eligibility is checked by the shared EventTarget dispatcher.
         if let Ok(event) = crate::host::create_animation_playback_event(
             scope,
             kind,
             object.into(),
-            playback.current_time,
-            playback.timeline_time,
+            snapshot.current_time,
+            snapshot.timeline_time,
         ) {
             crate::context_bootstrap::dispatch_simple_event_target_event(
                 scope, object, kind, event,
             );
         }
     }
-    queued
 }
 
 // A queued finish event belongs to its original batch, but its promise
