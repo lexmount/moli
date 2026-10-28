@@ -126,6 +126,14 @@ pub struct PropertySample {
     pub easing: Option<String>,
 }
 
+/// The sampling caller explicitly selects endpoint semantics. This never
+/// changes playback, pending tasks, or committed event history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SamplingMode {
+    Presentation,
+    CommitStyles,
+}
+
 /// Playback progress before applying the host's parsed timing function.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectProgress {
@@ -732,22 +740,18 @@ impl AnimationState {
         self.is_current(now) || self.is_in_effect(now)
     }
     pub fn progress(&self, now: Instant) -> Option<EffectProgress> {
-        self.progress_for_sample(now, false)
+        self.progress_for_sample(now, SamplingMode::Presentation)
     }
     /// commitStyles includes the exact effect endpoints, but not times beyond
     /// them. This is deliberately separate from display fill semantics.
-    pub fn progress_for_sample(
-        &self,
-        now: Instant,
-        include_endpoint: bool,
-    ) -> Option<EffectProgress> {
+    pub fn progress_for_sample(&self, now: Instant, mode: SamplingMode) -> Option<EffectProgress> {
         if !self.has_effect || self.current_seconds(now).is_none() {
             return None;
         }
         let mut phase = self.current_phase(now);
         let local = self.current_seconds(now)?;
         let (before, after) = self.phase_boundaries();
-        if include_endpoint
+        if mode == SamplingMode::CommitStyles
             && (compare_time(local, before).is_eq() || compare_time(local, after).is_eq())
         {
             phase = AnimationPhase::Active;

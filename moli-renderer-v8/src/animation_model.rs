@@ -8,6 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod keyframes;
+pub(crate) use keyframes::{KeyframeDeclarations, KeyframeTrackBuilder};
+
 pub(crate) type Animation = Rc<RefCell<AnimationInstance>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,15 +174,15 @@ impl AnimationInstance {
         self.playback.frames = frames;
     }
     pub(crate) fn sample_interval(&self, property: &str, now: Instant) -> Option<PropertySample> {
-        self.sample_interval_for(property, now, false)
+        self.sample_interval_for(property, now, moli_animation::SamplingMode::Presentation)
     }
     pub(crate) fn sample_interval_for(
         &self,
         property: &str,
         now: Instant,
-        include_endpoint: bool,
+        mode: moli_animation::SamplingMode,
     ) -> Option<PropertySample> {
-        let progress = self.playback.progress_for_sample(now, include_endpoint)?;
+        let progress = self.playback.progress_for_sample(now, mode)?;
         let fraction = self.easing.sample(progress.fraction, progress.before);
         let mut sample = self.playback.sample_interval(property, fraction)?;
         if let Some(css) = sample.easing.take()
@@ -221,38 +224,6 @@ impl AnimationInstance {
         }
         self.css_paused = Some(next.paused);
     }
-}
-
-/// Normalize one authored keyframe before constructing property tracks. Equal
-/// offsets can belong to distinct frames and must retain their ordering.
-pub(crate) fn normalize_keyframe_properties(
-    mut properties: Vec<(String, String)>,
-) -> Vec<(String, String)> {
-    use std::cmp::Reverse;
-    use style::properties::PropertyId;
-    // More specific shorthands follow broader ones; explicit longhands always
-    // follow shorthand expansion. CSS names break ties independently of JS order.
-    properties.sort_by_cached_key(|(name, _)| {
-        let count = PropertyId::parse_enabled_for_all_content(name)
-            .ok()
-            .and_then(|id| id.as_shorthand().ok())
-            .map_or(0, |id| id.longhands().count());
-        (Reverse(count), name.clone())
-    });
-    let mut block = moli_css_parse::CssDeclarationBlock::default();
-    for (name, value) in properties {
-        block.set_property(&name, &value, false);
-    }
-    block
-        .into_inner()
-        .declaration_importance_iter()
-        .filter(|(declaration, _)| declaration.id().is_animatable())
-        .map(|(declaration, _)| {
-            let mut value = style_traits::CssString::new();
-            let _ = declaration.to_css(&mut value);
-            (declaration.id().name().into_owned(), value)
-        })
-        .collect()
 }
 
 impl moli_animation::PlaybackState for AnimationInstance {

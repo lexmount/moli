@@ -1,6 +1,6 @@
 use moli_animation::{
     AdvanceMode, AnimationCommand as Command, AnimationEvent, AnimationState, CssTime, FillMode,
-    PhaseEvent, ReadyPromiseUpdate,
+    PhaseEvent, ReadyPromiseUpdate, SamplingMode,
 };
 use std::time::{Duration, Instant};
 
@@ -103,15 +103,24 @@ fn effect_endpoints_are_included_only_for_commit_sampling() {
     ] {
         let _ = state.command(Command::Seek(time), now).unwrap();
         assert_eq!(state.progress(now).is_some(), display);
-        assert_eq!(state.progress_for_sample(now, true).is_some(), commit);
+        assert_eq!(
+            state
+                .progress_for_sample(now, SamplingMode::CommitStyles)
+                .is_some(),
+            commit
+        );
     }
     let _ = state.command(Command::Seek(1.0), now).unwrap();
-    let end = state.progress_for_sample(now, true).unwrap();
+    let end = state
+        .progress_for_sample(now, SamplingMode::CommitStyles)
+        .unwrap();
     assert_eq!(end.fraction, 1.0);
     assert!(!end.before);
     let _ = state.command(Command::SetRate(-1.0), now).unwrap();
     let _ = state.command(Command::Seek(0.0), now).unwrap();
-    let start = state.progress_for_sample(now, true).unwrap();
+    let start = state
+        .progress_for_sample(now, SamplingMode::CommitStyles)
+        .unwrap();
     assert_eq!(start.fraction, 0.0);
     assert!(!start.before);
 }

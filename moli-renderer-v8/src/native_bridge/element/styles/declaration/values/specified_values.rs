@@ -60,7 +60,7 @@ pub(crate) fn css_animation_effect_keyframes(
                     }
                     // CSS declaration order has already been resolved by the
                     // CSS parser. Expand each remaining declaration in place.
-                    for (property, value) in crate::animation_model::normalize_keyframe_properties(
+                    for (property, value) in crate::animation_model::KeyframeDeclarations::from_css(
                         vec![(entry.name.clone(), entry.value.clone())],
                     ) {
                         let index = frames

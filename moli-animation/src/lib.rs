@@ -45,7 +45,7 @@ pub use playback::{
     AdvanceMode, AnimationCommand, AnimationEvent, AnimationId, AnimationPhase, AnimationSample,
     AnimationState, CommandOutcome, EffectProgress, FinishedPromiseUpdate, InvalidPlaybackState,
     KeyframeValue, PhaseEvent, PlaybackNotification, PlaybackNotificationKind, PropertyKeyframes,
-    PropertySample, ReadyPromiseUpdate,
+    PropertySample, ReadyPromiseUpdate, SamplingMode,
 };
 pub use timing::{CssTime, FillMode, active_duration, duration};
 pub use transition::{ReversalTiming, reverse_transition_timing};

@@ -1,4 +1,4 @@
-use moli_animation::{AnimationPhase, CssTime, FillMode};
+use moli_animation::{AnimationPhase, CssTime, FillMode, SamplingMode};
 use std::time::{Duration, Instant};
 
 use crate::animation_model::{
@@ -301,7 +301,7 @@ pub(crate) fn observe_animation_style(runtime: &PageScriptHost, style: &Computed
         document.begin_style_sample(now)
     };
     let rendered = style.css_lifecycle_is_rendered();
-    let before_samples = sample_without_transitions(runtime, handle, now);
+    let before_samples = capture_transition_animation_snapshot(runtime, handle, now);
     let events = scan_element_animations(runtime, style, rendered, handle, now, changed_at, owner)
         .into_iter()
         .chain(scan_element_transitions(
@@ -418,7 +418,7 @@ pub(crate) fn sample_animation_properties_through(
         handle,
         &effects[..end],
         runtime.animation_time(),
-        true,
+        SamplingMode::CommitStyles,
     );
     if samples.is_empty() {
         return Vec::new();
@@ -511,16 +511,24 @@ pub(crate) fn sample_animation_values(
     sample_effect_values(runtime, handle, &effects_for_element(runtime, handle), now)
 }
 
-fn sample_without_transitions(
+// Captured before CSS animation reconciliation. Transition comparison projects
+// this same old configuration on both canonical style baselines.
+struct TransitionAnimationSnapshot {
+    values: Vec<crate::animation_model::EffectSample>,
+}
+
+fn capture_transition_animation_snapshot(
     runtime: &PageScriptHost,
     handle: DomHandle,
     now: Instant,
-) -> Vec<crate::animation_model::EffectSample> {
+) -> TransitionAnimationSnapshot {
     let effects = effects_for_element(runtime, handle)
         .into_iter()
         .filter(|effect| effect.borrow().kind != AnimationKind::CssTransition)
         .collect::<Vec<_>>();
-    sample_effect_values(runtime, handle, &effects, now)
+    TransitionAnimationSnapshot {
+        values: sample_effect_values(runtime, handle, &effects, now),
+    }
 }
 
 fn sample_effect_values(
@@ -529,14 +537,14 @@ fn sample_effect_values(
     effects: &[Animation],
     now: Instant,
 ) -> Vec<crate::animation_model::EffectSample> {
-    sample_effect_values_for(runtime, handle, effects, now, false)
+    sample_effect_values_for(runtime, handle, effects, now, SamplingMode::Presentation)
 }
 fn sample_effect_values_for(
     runtime: &JsContextHost,
     handle: DomHandle,
     effects: &[Animation],
     now: Instant,
-    include_endpoint: bool,
+    mode: SamplingMode,
 ) -> Vec<crate::animation_model::EffectSample> {
     // Stable per-property composition is independent of dependency ordering.
     let mut values = Vec::new();
@@ -545,8 +553,7 @@ fn sample_effect_values_for(
         let effect = effect.borrow();
         for frame in &effect.playback.frames {
             if property_can_animate(runtime, handle, &frame.property)
-                && let Some(value) =
-                    effect.sample_interval_for(&frame.property, now, include_endpoint)
+                && let Some(value) = effect.sample_interval_for(&frame.property, now, mode)
             {
                 values.push(crate::animation_model::EffectSample {
                     value,
@@ -636,7 +643,7 @@ pub(crate) fn dispatch_animation_transition_scan(
         }
         let style = ComputedStyleRead::new(runtime, handle);
         let rendered = style.css_lifecycle_is_rendered();
-        let before_samples = sample_without_transitions(runtime, handle, now);
+        let before_samples = capture_transition_animation_snapshot(runtime, handle, now);
         events.extend(
             scan_element_animations(runtime, &style, rendered, handle, now, changed_at, owner)
                 .into_iter()
@@ -1063,7 +1070,7 @@ fn scan_element_transitions(
     handle: DomHandle,
     now: Instant,
     owner: WindowDocumentOwner,
-    before_samples: &[crate::animation_model::EffectSample],
+    before_samples: &TransitionAnimationSnapshot,
 ) -> Vec<CssLifecycleEvent> {
     if !rendered {
         let mut document = runtime.animation_transition_state().document_mut(owner);
@@ -1103,10 +1110,11 @@ fn scan_element_transitions(
     // Keep the canonical baselines for declaration invalidation, not as the
     // visual endpoints of an effect covered by CSS/WAAPI animation.
     let before_style = before_style.map(|before| {
-        style.project_animation_samples_from(&before.computed_values(), before_samples)
+        style.project_animation_samples_from(&before.computed_values(), &before_samples.values)
     });
-    let current_style = current_style
-        .map(|base| style.project_animation_samples_from(&base.computed_values(), before_samples));
+    let current_style = current_style.map(|base| {
+        style.project_animation_samples_from(&base.computed_values(), &before_samples.values)
+    });
     // Finish style reads before borrowing state; even a lazy fallback may make
     // another ordinary style observation and establish its initial baseline.
     let declarations = transition_declarations(style, &durations, &delays);

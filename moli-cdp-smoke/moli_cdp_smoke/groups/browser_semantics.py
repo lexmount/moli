@@ -11,6 +11,10 @@ from ..config import is_moli_browser
 from ..helpers import attach_cdp_event_collector
 from ..progress import await_with_progress
 from ..state import SmokeState
+from .animation_contracts import (
+    run_animation_command_contracts,
+    run_animation_projection_contracts,
+)
 
 
 SemanticScenario = Callable[[SmokeState], Awaitable[dict[str, Any]]]
@@ -234,6 +238,20 @@ def _semantic_scenarios() -> tuple[
             "View Transitions and Chromium behavior",
             ["Runtime.evaluate document.startViewTransition"],
             _view_transition_script_lifecycle,
+        ),
+        (
+            "cdp_contract_animation_pending_commands",
+            "Play/pause switches preserve pending ready identity; seek, startTime, playbackRate, finish, cancellation and timeline changes settle only the accepted operation.",
+            "Web Animations playback algorithms and Chromium behavior",
+            ["Runtime.evaluate Animation playback and Promise identities"],
+            _animation_pending_commands,
+        ),
+        (
+            "cdp_contract_animation_sampling_contexts",
+            "Property order preserves longhand precedence and dependencies; commitStyles respects effect cutoff and endpoints; transition admission and pseudo inheritance use their own style contexts.",
+            "Web Animations effect stacks, CSS Transitions and Chromium behavior",
+            ["Runtime.evaluate getComputedStyle/commitStyles/getAnimations"],
+            _animation_sampling_contexts,
         ),
     )
 
@@ -1577,6 +1595,18 @@ async def _computed_style_map_updates(state: SmokeState) -> dict[str, Any]:
             "computedStyleMap value constructors",
         )
         return observed
+
+
+async def _animation_pending_commands(state: SmokeState) -> dict[str, Any]:
+    async with _isolated_page(state) as (_context, page, _cdp):
+        await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
+        return await run_animation_command_contracts(page)
+
+
+async def _animation_sampling_contexts(state: SmokeState) -> dict[str, Any]:
+    async with _isolated_page(state) as (_context, page, _cdp):
+        await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
+        return await run_animation_projection_contracts(page)
 
 
 async def _view_transition_script_lifecycle(state: SmokeState) -> dict[str, Any]:

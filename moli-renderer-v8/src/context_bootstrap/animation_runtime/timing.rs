@@ -1,9 +1,12 @@
 use super::*;
 use crate::{
-    animation_model::{Animation, AnimationInstance, AnimationKind, Easing},
+    animation_model::{
+        Animation, AnimationInstance, AnimationKind, Easing, KeyframeDeclarations,
+        KeyframeTrackBuilder,
+    },
     webidl,
 };
-use moli_animation::{CssTime, FillMode, KeyframeValue, PropertyKeyframes, duration};
+use moli_animation::{CssTime, FillMode, PropertyKeyframes, duration};
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "OptionalEffectTiming")]
@@ -195,30 +198,7 @@ pub(super) fn keyframes<'s>(
             return None;
         }
     };
-    let mut result: Vec<PropertyKeyframes> = Vec::new();
-    fn add(
-        result: &mut Vec<PropertyKeyframes>,
-        property: String,
-        offset: f64,
-        value: String,
-        easing: Option<String>,
-    ) {
-        let index = result
-            .iter()
-            .position(|p| p.property == property)
-            .unwrap_or_else(|| {
-                result.push(PropertyKeyframes {
-                    property,
-                    values: Vec::new(),
-                });
-                result.len() - 1
-            });
-        result[index].values.push(KeyframeValue {
-            offset,
-            value: Some(value),
-            easing,
-        });
-    }
+    let mut result = KeyframeTrackBuilder::default();
     if let Ok(array) = v8::Local::<v8::Array>::try_from(object) {
         let count = array.length();
         let mut inputs = Vec::with_capacity(count as usize);
@@ -289,11 +269,11 @@ pub(super) fn keyframes<'s>(
             }
         };
         for ((_, easing, properties), offset) in inputs.into_iter().zip(offsets) {
-            for (property, value) in
-                crate::animation_model::normalize_keyframe_properties(properties)
-            {
-                add(&mut result, property, offset, value, easing.clone());
-            }
+            result.push_frame(
+                offset,
+                easing,
+                KeyframeDeclarations::from_script(properties),
+            );
         }
     } else {
         fn list<'s>(
@@ -341,6 +321,7 @@ pub(super) fn keyframes<'s>(
                 offsets.push(Some(value));
             }
         }
+        let mut raw_values = Vec::new();
         let names = object.get_own_property_names(scope, Default::default())?;
         for i in 0..names.length() {
             let key = names.get_index(scope, i)?;
@@ -357,8 +338,7 @@ pub(super) fn keyframes<'s>(
                         .get_index(scope, j)?
                         .to_string(scope)?
                         .to_rust_string_lossy(scope);
-                    add(
-                        &mut result,
+                    raw_values.push((
                         property.clone(),
                         if count <= 1 {
                             1.0
@@ -366,22 +346,19 @@ pub(super) fn keyframes<'s>(
                             f64::from(j) / f64::from(count - 1)
                         },
                         text,
-                        None,
-                    );
+                    ));
                 }
             } else {
-                add(
-                    &mut result,
+                raw_values.push((
                     property,
                     1.0,
                     values.to_string(scope)?.to_rust_string_lossy(scope),
-                    None,
-                );
+                ));
             }
         }
-        let mut merged = result
+        let mut merged = raw_values
             .iter()
-            .flat_map(|p| p.values.iter().map(|v| v.offset))
+            .map(|(_, offset, _)| *offset)
             .collect::<Vec<_>>();
         merged.sort_by(f64::total_cmp);
         merged.dedup();
@@ -403,31 +380,20 @@ pub(super) fn keyframes<'s>(
             return None;
         };
         let mut frames = vec![Vec::new(); merged.len()];
-        for track in std::mem::take(&mut result) {
-            for frame in track.values {
-                let index = merged
-                    .binary_search_by(|offset| offset.total_cmp(&frame.offset))
-                    .ok()?;
-                if let Some(value) = frame.value {
-                    frames[index].push((track.property.clone(), value));
-                }
-            }
+        for (property, offset, value) in raw_values {
+            let index = merged.binary_search_by(|v| v.total_cmp(&offset)).ok()?;
+            frames[index].push((property, value));
         }
         for (index, (properties, offset)) in frames.into_iter().zip(resolved).enumerate() {
             let easing = (!easings.is_empty())
                 .then(|| easings[index % easings.len()].clone())
                 .flatten();
-            for (property, value) in
-                crate::animation_model::normalize_keyframe_properties(properties)
-            {
-                add(&mut result, property, offset, value, easing.clone());
-            }
+            result.push_frame(
+                offset,
+                easing,
+                KeyframeDeclarations::from_script(properties),
+            );
         }
     }
-    for property in &mut result {
-        property
-            .values
-            .sort_by(|a, b| a.offset.total_cmp(&b.offset));
-    }
-    Some(result)
+    Some(result.finish())
 }
