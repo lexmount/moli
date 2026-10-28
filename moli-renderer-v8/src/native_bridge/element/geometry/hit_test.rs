@@ -7,7 +7,8 @@ use moli_layout::{
 use moli_layout::LayoutScrollbarHit;
 
 use super::provider::{
-    observable_geometry_batch, observable_hit_test_all, provider_contract_error,
+    observable_geometry_batch, observable_geometry_query, observable_hit_test_all,
+    provider_contract_error,
 };
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
@@ -26,6 +27,74 @@ pub(crate) struct InputHit {
 pub(crate) struct InputSurfaceHit {
     pub(crate) input: Option<InputHit>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+}
+
+/// Resolves the receiving frame independently of the current hit. Capture and
+/// drag sources can receive input while the pointer is in a different frame.
+/// Like hit testing, this consumes the retained composite layout snapshot.
+pub(crate) fn input_root_to_target_frame(
+    runtime: &JsContextHost,
+    target: DomHandle,
+) -> Result<LayoutTransform2D, LayoutError> {
+    let host = runtime.dom_host();
+    let mut document = host
+        .owner_document_handle(target)
+        .unwrap_or(host.document_handle());
+    let mut root_to_frame = LayoutTransform2D::IDENTITY;
+    for _ in 0..CHILD_FRAME_DEPTH_LIMIT {
+        if document == host.document_handle() {
+            return Ok(root_to_frame);
+        }
+        let Some(frame) = runtime.child_browsing_context_host_for_document_handle(document) else {
+            // Detached documents have no active frame coordinate space.
+            return Ok(root_to_frame);
+        };
+        let parent = host
+            .owner_document_handle(frame)
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        let parent_to_child = if runtime.layout_policy().uses_real_layout() {
+            runtime.ensure_initial_layout()?;
+            runtime
+                .with_latest_layout_tree_for_document(parent, |tree| {
+                    let id = tree.source_output(frame)?.principal_box?;
+                    let geometry = tree.box_geometry(id)?;
+                    let viewport_to_local = tree
+                        .coordinate_space(geometry.coordinate_space)?
+                        .local_to_viewport
+                        .inverse()?;
+                    Some(
+                        LayoutTransform2D::translation(
+                            -geometry.content_box.x,
+                            -geometry.content_box.y,
+                        )
+                        .concatenate(viewport_to_local),
+                    )
+                })
+                .flatten()
+                .ok_or(LayoutError::NoLayoutSnapshot)?
+        } else {
+            let LayoutQueryAnswer::BoxModel(Some(model)) = observable_geometry_query(
+                runtime,
+                parent,
+                &LayoutQuery::BoxModel { source: frame },
+            )?
+            else {
+                return Err(LayoutError::NoLayoutSnapshot);
+            };
+            let origin = model.content.points[0];
+            LayoutTransform2D::translation(-origin.x, -origin.y)
+        };
+        root_to_frame = root_to_frame.concatenate(parent_to_child);
+        document = parent;
+    }
+    if document == host.document_handle() {
+        Ok(root_to_frame)
+    } else {
+        Err(LayoutError::source_contract(
+            "input target frame",
+            "frame nesting limit exceeded",
+        ))
+    }
 }
 
 #[derive(Clone, Copy)]

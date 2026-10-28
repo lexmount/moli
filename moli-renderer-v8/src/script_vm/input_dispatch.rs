@@ -33,8 +33,9 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test, is_text_control,
-    observable_input_hit_test, perform_auxiliary_link_default_action, perform_drop_default_action,
+    contenteditable_editing_host, dispatch_public_event, input_root_to_target_frame,
+    input_surface_hit_test, is_text_control, observable_input_hit_test,
+    perform_auxiliary_link_default_action, perform_drop_default_action,
     perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
     replace_contenteditable_selection, replace_text_control_selection,
@@ -52,6 +53,29 @@ use crate::util::{
     node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
     utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
 };
+
+/// Keep the input position in root coordinates until the receiver is known.
+#[derive(Clone, Copy)]
+struct RootInputPosition {
+    x: f64,
+    y: f64,
+}
+
+impl RootInputPosition {
+    fn in_frame(self, transform: moli_layout::LayoutTransform2D) -> InputEventCoordinates {
+        let [a, b, c, d, e, f] = transform.coefficients;
+        InputEventCoordinates::from_root(self.x, self.y)
+            .with_client(a * self.x + c * self.y + e, b * self.x + d * self.y + f)
+    }
+
+    fn for_target(
+        self,
+        runtime: &crate::native_bridge::JsContextHost,
+        target: DomHandle,
+    ) -> Result<InputEventCoordinates> {
+        Ok(self.in_frame(input_root_to_target_frame(runtime, target)?))
+    }
+}
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -597,12 +621,12 @@ fn dispatch_pointer_capture_events(
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     pointer_id: i32,
     events: &[PointerCaptureDispatchEvent],
-    coordinates: InputEventCoordinates,
+    position: RootInputPosition,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
     modifiers: u8,
-) {
+) -> Result<()> {
     for capture_event in events {
         if capture_event.event_name == "gotpointercapture"
             && !unsafe { &*runtime_ptr }.pointer_capture_target_is_connected(capture_event.target)
@@ -614,7 +638,7 @@ fn dispatch_pointer_capture_events(
         if let Some(event) = construct_pointer_event_with_modifiers(
             scope,
             capture_event.event_name,
-            coordinates,
+            position.for_target(unsafe { &*runtime_ptr }, capture_event.target)?,
             button,
             buttons,
             pointer,
@@ -629,7 +653,7 @@ fn dispatch_pointer_capture_events(
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     "lostpointercapture",
-                    coordinates,
+                    position.for_target(unsafe { &*runtime_ptr }, lost_target)?,
                     button,
                     buttons,
                     pointer,
@@ -640,18 +664,19 @@ fn dispatch_pointer_capture_events(
             }
         }
     }
+    Ok(())
 }
 
 fn release_pointer_capture_after_pointer_end(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     pointer_id: i32,
-    coordinates: InputEventCoordinates,
+    position: RootInputPosition,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
     modifiers: u8,
-) {
+) -> Result<()> {
     let release_capture_events = {
         let runtime = unsafe { &mut *runtime_ptr };
         runtime.release_pending_pointer_capture_target(pointer_id);
@@ -664,12 +689,12 @@ fn release_pointer_capture_after_pointer_end(
         runtime_ptr,
         pointer_id,
         &release_capture_events,
-        coordinates,
+        position,
         button,
         buttons,
         pointer,
         modifiers,
-    );
+    )
 }
 
 fn dispatch_drag_pointer_suppression_boundaries(
@@ -727,21 +752,20 @@ fn dispatch_touch_pointer_boundary_events(
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     previous: Option<DomHandle>,
     current: Option<DomHandle>,
-    x: f64,
-    y: f64,
+    position: RootInputPosition,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
-) {
+) -> Result<()> {
     if previous == current {
-        return;
+        return Ok(());
     }
     if let Some(previous_handle) = previous {
         let related_target = related_target_value(scope, current);
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerout",
-            InputEventCoordinates::from_root(x, y),
+            position.for_target(unsafe { &*runtime_ptr }, previous_handle)?,
             button,
             buttons,
             pointer,
@@ -753,7 +777,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerleave",
-            InputEventCoordinates::from_root(x, y),
+            position.for_target(unsafe { &*runtime_ptr }, previous_handle)?,
             button,
             buttons,
             pointer,
@@ -767,7 +791,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerover",
-            InputEventCoordinates::from_root(x, y),
+            position.for_target(unsafe { &*runtime_ptr }, current_handle)?,
             button,
             buttons,
             pointer,
@@ -779,7 +803,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerenter",
-            InputEventCoordinates::from_root(x, y),
+            position.for_target(unsafe { &*runtime_ptr }, current_handle)?,
             button,
             buttons,
             pointer,
@@ -788,6 +812,7 @@ fn dispatch_touch_pointer_boundary_events(
             let _ = dispatch_public_event(scope, runtime_ptr, current_handle, event);
         }
     }
+    Ok(())
 }
 
 impl ScriptVm {
@@ -1007,38 +1032,6 @@ impl ScriptVm {
         )?)
     }
 
-    fn mouse_input_root_to_frame(
-        &self,
-        target: DomHandle,
-        hit: crate::native_bridge::element::InputSurfaceHit,
-    ) -> Result<moli_layout::LayoutTransform2D> {
-        let runtime = self._context_host.borrow();
-        let dom = runtime.dom_host();
-        let document = dom
-            .owner_document_handle(target)
-            .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;
-        if let Some(hit) = hit
-            .input
-            .filter(|hit| dom.owner_document_handle(hit.handle) == Some(document))
-        {
-            return Ok(hit.root_to_frame);
-        }
-        // Capture keeps its own frame even when the physical hit moves out of
-        // that frame. Read the same frozen content box and inverse transform
-        // used by hit testing, without requiring the point to hit the iframe.
-        if let Some(transform) = root_to_document_frame(&runtime, document) {
-            return Ok(transform);
-        }
-        if self
-            .hovered_mouse_handle
-            .and_then(|handle| dom.owner_document_handle(handle))
-            == Some(document)
-        {
-            return Ok(self.hovered_mouse_root_to_frame);
-        }
-        Err(moli_layout::LayoutError::NoLayoutSnapshot.into())
-    }
-
     fn prepare_mouse_input_dispatch(
         &mut self,
         event_name: &str,
@@ -1187,6 +1180,7 @@ impl ScriptVm {
         }
 
         let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
+        let position = RootInputPosition { x, y };
         if let Some(control) = surface_hit.control {
             if event_name == "mouseup" && button == 0 {
                 self.finish_active_drag(DragFinishReason::Rejected, modifiers)?;
@@ -1220,32 +1214,18 @@ impl ScriptVm {
                 context_host.process_pending_pointer_capture(MOUSE_POINTER_ID);
         }
         if !pending_pointer_capture_events.is_empty() {
-            let capture_events = pending_pointer_capture_events
-                .iter()
-                .map(|event| {
-                    let transform = self.mouse_input_root_to_frame(event.target, surface_hit)?;
-                    let client = transform.map_point(root_point);
-                    Ok((
-                        event,
-                        InputEventCoordinates::from_root(x, y)
-                            .with_client(f64::from(client.x), f64::from(client.y)),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
             self.with_default_context_scope(|scope, runtime_ptr| {
-                for (event, coordinates) in &capture_events {
-                    dispatch_pointer_capture_events(
-                        scope,
-                        runtime_ptr,
-                        MOUSE_POINTER_ID,
-                        std::slice::from_ref(*event),
-                        *coordinates,
-                        button,
-                        buttons,
-                        &pointer,
-                        modifiers,
-                    );
-                }
+                dispatch_pointer_capture_events(
+                    scope,
+                    runtime_ptr,
+                    MOUSE_POINTER_ID,
+                    &pending_pointer_capture_events,
+                    position,
+                    button,
+                    buttons,
+                    &pointer,
+                    modifiers,
+                )?;
                 Ok(())
             })?;
         }
@@ -1300,11 +1280,13 @@ impl ScriptVm {
                 .borrow_mut()
                 .set_mouse_event_target(handle);
         }
-        let root_to_frame = self.mouse_input_root_to_frame(handle, surface_hit)?;
-        let client_point = root_to_frame.map_point(root_point);
-        let client_x = f64::from(client_point.x);
-        let client_y = f64::from(client_point.y);
-        let coordinates = InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
+        let root_to_frame = match hit.filter(|hit| hit.handle == handle) {
+            Some(hit) => hit.root_to_frame,
+            None => input_root_to_target_frame(&self._context_host.borrow(), handle)?,
+        };
+        let coordinates = position.in_frame(root_to_frame);
+        let client_x = coordinates.client_x;
+        let client_y = coordinates.client_y;
         let hover_transition = if tracks_mouse_hover_for_event(event_name) {
             let previous = self.hovered_mouse_handle;
             if previous != Some(handle) {
@@ -1399,11 +1381,7 @@ impl ScriptVm {
             let mut pointer_dispatch_handle = handle;
             if let Some((Some(previous_handle), previous_root_to_frame)) = pointer_hover_transition
             {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
-                    f64::from(previous_client_point.x),
-                    f64::from(previous_client_point.y),
-                );
+                let previous_coordinates = position.in_frame(previous_root_to_frame);
                 let related_target = related_target_value(scope, Some(handle));
                 if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                     scope,
@@ -1492,12 +1470,12 @@ impl ScriptVm {
                     runtime_ptr,
                     MOUSE_POINTER_ID,
                     &post_raw_update_capture_events,
-                    coordinates,
+                    position,
                     button,
                     buttons,
                     &pointer,
                     modifiers,
-                );
+                )?;
                 if !post_raw_update_capture_events.is_empty() {
                     pointer_dispatch_handle = unsafe { &*runtime_ptr }
                         .active_pointer_capture_target(MOUSE_POINTER_ID)
@@ -1507,11 +1485,7 @@ impl ScriptVm {
                 }
             }
             if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
-                    f64::from(previous_client_point.x),
-                    f64::from(previous_client_point.y),
-                );
+                let previous_coordinates = position.in_frame(previous_root_to_frame);
                 let related_target = related_target_value(scope, Some(handle));
                 if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                     scope,
@@ -1574,7 +1548,7 @@ impl ScriptVm {
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     pointer_event_name,
-                    coordinates,
+                    position.for_target(unsafe { &*runtime_ptr }, pointer_dispatch_handle)?,
                     button,
                     buttons,
                     &pointer,
@@ -1598,6 +1572,8 @@ impl ScriptVm {
             if !suppress_current_mouse_event
                 && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
             {
+                let coordinates =
+                    position.for_target(unsafe { &*runtime_ptr }, mouse_dispatch_handle)?;
                 let event = if event_name == "wheel" {
                     construct_wheel_event(
                         scope,
@@ -1655,12 +1631,12 @@ impl ScriptVm {
                     scope,
                     runtime_ptr,
                     MOUSE_POINTER_ID,
-                    coordinates,
+                    position,
                     button,
                     buttons,
                     &pointer,
                     modifiers,
-                );
+                )?;
                 captured
             } else {
                 None
@@ -1734,10 +1710,12 @@ impl ScriptVm {
                         pressure: 0.0,
                         ..pointer.clone()
                     };
+                    let cancel_coordinates =
+                        position.for_target(unsafe { &*runtime_ptr }, cancel_target)?;
                     if let Some(event) = construct_pointer_event_with_modifiers(
                         scope,
                         "pointercancel",
-                        coordinates,
+                        cancel_coordinates,
                         -1,
                         0,
                         &cancel_pointer,
@@ -1749,17 +1727,17 @@ impl ScriptVm {
                         scope,
                         runtime_ptr,
                         MOUSE_POINTER_ID,
-                        coordinates,
+                        position,
                         -1,
                         0,
                         &cancel_pointer,
                         modifiers,
-                    );
+                    )?;
                     dispatch_drag_pointer_suppression_boundaries(
                         scope,
                         runtime_ptr,
                         cancel_target,
-                        coordinates,
+                        cancel_coordinates,
                         &cancel_pointer,
                         modifiers,
                     );
@@ -1825,6 +1803,8 @@ impl ScriptVm {
             };
             match follow_up {
                 Some(MouseReleaseFollowUp::ActivateViaClick(click_target)) => {
+                    let coordinates =
+                        position.for_target(unsafe { &*runtime_ptr }, click_target)?;
                     if event_name == "mouseup" {
                         suppress_compat_mouse_events = false;
                     }
@@ -1857,6 +1837,7 @@ impl ScriptVm {
                     name: follow_up_event_name,
                     target,
                 }) => {
+                    let coordinates = position.for_target(unsafe { &*runtime_ptr }, target)?;
                     if event_name == "mouseup" {
                         suppress_compat_mouse_events = false;
                     }
@@ -2066,6 +2047,7 @@ impl ScriptVm {
         event_name: &str,
         activate: bool,
     ) -> Result<RendererInputDispatchOutcome> {
+        let position = RootInputPosition { x, y };
         let hit_handle = observable_input_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
@@ -2114,12 +2096,12 @@ impl ScriptVm {
                     runtime_ptr,
                     TOUCH_POINTER_ID,
                     &pending_pointer_capture_events,
-                    InputEventCoordinates::from_root(x, y),
+                    position,
                     button,
                     buttons,
                     &pointer,
                     0,
-                );
+                )?;
                 Ok(())
             })?;
         }
@@ -2163,19 +2145,18 @@ impl ScriptVm {
                     runtime_ptr,
                     previous,
                     current,
-                    x,
-                    y,
+                    position,
                     button,
                     buttons,
                     &pointer,
-                );
+                )?;
             }
             if let Some(pointer_event_name) = pointer_event_name
                 && let Some(pointer_handle) = pointer_handle
                 && let Some(event) = construct_pointer_event(
                     scope,
                     pointer_event_name,
-                    InputEventCoordinates::from_root(x, y),
+                    position.for_target(unsafe { &*runtime_ptr }, pointer_handle)?,
                     button,
                     buttons,
                     &pointer,
@@ -2188,19 +2169,20 @@ impl ScriptVm {
                     scope,
                     runtime_ptr,
                     TOUCH_POINTER_ID,
-                    InputEventCoordinates::from_root(x, y),
+                    position,
                     button,
                     buttons,
                     &pointer,
                     0,
-                );
+                )?;
             }
             let runtime = unsafe { &mut *runtime_ptr };
+            let coordinates = position.for_target(runtime, handle)?;
             if let Some(target) =
                 runtime
                     .native_bridge_mut()
                     .wrap_handle(scope, runtime_ptr, handle)
-                && let Some(event) = construct_touch_event(scope, event_name, x, y, target)
+                && let Some(event) = construct_touch_event(scope, event_name, coordinates, target)
             {
                 let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
             }
@@ -2210,20 +2192,18 @@ impl ScriptVm {
                     runtime_ptr,
                     finish_pointer_handle,
                     None,
-                    x,
-                    y,
+                    position,
                     button,
                     buttons,
                     &pointer,
-                );
+                )?;
             }
             if activate {
                 return Ok(activate_handle_via_click(
                     scope,
                     runtime_ptr,
                     handle,
-                    x,
-                    y,
+                    position.for_target(unsafe { &*runtime_ptr }, handle)?,
                     0,
                     0,
                 ));
@@ -2388,6 +2368,10 @@ impl ScriptVm {
             .collect::<Vec<_>>();
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             for changed in &changed_pointer_points {
+                let position = RootInputPosition {
+                    x: changed.point.x,
+                    y: changed.point.y,
+                };
                 let pointer = touch_pointer_properties(event_name, changed.pointer_id);
                 if !changed.pending_capture_events.is_empty() {
                     dispatch_pointer_capture_events(
@@ -2395,12 +2379,12 @@ impl ScriptVm {
                         runtime_ptr,
                         changed.pointer_id,
                         &changed.pending_capture_events,
-                        InputEventCoordinates::from_root(changed.point.x, changed.point.y),
+                        position,
                         button,
                         buttons,
                         &pointer,
                         0,
-                    );
+                    )?;
                 }
                 if let Some((previous, current)) = changed.pointer_transition {
                     dispatch_touch_pointer_boundary_events(
@@ -2408,18 +2392,17 @@ impl ScriptVm {
                         runtime_ptr,
                         previous,
                         Some(current),
-                        changed.point.x,
-                        changed.point.y,
+                        position,
                         button,
                         buttons,
                         &pointer,
-                    );
+                    )?;
                 }
                 if let Some(pointer_event_name) = pointer_event_name
                     && let Some(event) = construct_pointer_event(
                         scope,
                         pointer_event_name,
-                        InputEventCoordinates::from_root(changed.point.x, changed.point.y),
+                        position.for_target(unsafe { &*runtime_ptr }, changed.pointer_handle)?,
                         button,
                         buttons,
                         &pointer,
@@ -2433,23 +2416,22 @@ impl ScriptVm {
                         scope,
                         runtime_ptr,
                         changed.pointer_id,
-                        InputEventCoordinates::from_root(changed.point.x, changed.point.y),
+                        position,
                         button,
                         buttons,
                         &pointer,
                         0,
-                    );
+                    )?;
                     dispatch_touch_pointer_boundary_events(
                         scope,
                         runtime_ptr,
                         Some(finish_pointer_handle),
                         None,
-                        changed.point.x,
-                        changed.point.y,
+                        position,
                         button,
                         buttons,
                         &pointer,
-                    );
+                    )?;
                 }
             }
             let runtime = unsafe { &mut *runtime_ptr };
@@ -2464,8 +2446,11 @@ impl ScriptVm {
                 };
                 active_event_points.push(TouchEventPoint {
                     identifier: *id,
-                    x: point.x,
-                    y: point.y,
+                    coordinates: RootInputPosition {
+                        x: point.x,
+                        y: point.y,
+                    }
+                    .for_target(runtime, point.target)?,
                     target,
                     is_target_touch: point.target == event_target,
                 });
@@ -2482,8 +2467,11 @@ impl ScriptVm {
                 };
                 changed_event_points.push(TouchEventPoint {
                     identifier: point.id,
-                    x: point.x,
-                    y: point.y,
+                    coordinates: RootInputPosition {
+                        x: point.x,
+                        y: point.y,
+                    }
+                    .for_target(runtime, *target_handle)?,
                     target,
                     is_target_touch: *target_handle == event_target,
                 });
