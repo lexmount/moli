@@ -42,41 +42,25 @@ pub(super) fn object_store_write_callback<'s>(
     let Some(store_name) = indexed_db_object_store_name(scope, store) else {
         return;
     };
-    let handle = if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
+    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
+        && transaction_handle_from_value(scope, transaction.into()).is_none()
     {
-        let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-            throw_inactive(scope);
-            return;
-        };
-        Some(handle)
-    } else {
-        None
-    };
+        throw_inactive(scope);
+        return;
+    }
     let Some((request, _)) = create_store_request(scope, store) else {
         throw_inactive(scope);
         return;
     };
-    if let Some(handle) = handle {
-        execute_object_store_write_request(
-            scope,
-            store,
-            request,
-            handle,
-            &store_name,
-            &prepared,
-            add_only,
-        );
-    } else {
-        enqueue_transaction_operation(
-            scope,
-            transaction,
-            store,
-            request,
-            &store_name,
-            IndexedDbTransactionOperation::ObjectStoreWrite { prepared, add_only },
-        );
-    }
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        store,
+        request,
+        &store_name,
+        IndexedDbTransactionOperation::ObjectStoreWrite { prepared, add_only },
+    );
     rv.set(request.into());
 }
 

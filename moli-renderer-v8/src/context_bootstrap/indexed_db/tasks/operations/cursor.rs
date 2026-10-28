@@ -8,18 +8,14 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_cursor_open_operation<'s>
     store_name: &str,
     operation: IndexedDbCursorOpenOperation,
 ) {
-    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-        enqueue_transaction_operation(
-            scope,
-            transaction,
-            source,
-            request,
-            store_name,
-            IndexedDbTransactionOperation::OpenCursor(operation),
-        );
-        return;
-    };
-    execute_cursor_open_operation(scope, source, request, handle, store_name, &operation);
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        source,
+        request,
+        store_name,
+        IndexedDbTransactionOperation::OpenCursor(operation),
+    );
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn execute_cursor_open_operation<'s>(

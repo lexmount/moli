@@ -55,6 +55,9 @@ pub(super) enum IndexedDbTransactionOperation {
         query: Option<IdbKeyRangeQuery>,
     },
     OpenCursor(IndexedDbCursorOpenOperation),
+    CursorDelete {
+        key: super::Key,
+    },
     ObjectStoreWrite {
         prepared: PreparedObjectStoreWrite,
         add_only: bool,

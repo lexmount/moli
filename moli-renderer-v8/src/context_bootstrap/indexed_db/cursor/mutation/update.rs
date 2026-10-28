@@ -48,14 +48,16 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
     let Some(request) = target.create_request(scope, cursor) else {
         return;
     };
-    execute_object_store_write_request(
+    schedule_transaction_operation(
         scope,
+        target.transaction,
         target.store,
         request,
-        target.handle,
         &target.store_name,
-        &prepared,
-        false,
+        IndexedDbTransactionOperation::ObjectStoreWrite {
+            prepared,
+            add_only: false,
+        },
     );
     // Updating storage does not replace the cursor's existing value snapshot.
     rv.set(request.into());

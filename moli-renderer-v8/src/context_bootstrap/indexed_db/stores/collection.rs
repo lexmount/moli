@@ -1,7 +1,6 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    IndexedDbValue, Key, execute_index_get_all_request, execute_object_store_get_all_request,
-    indexed_db_index_is_deleted, object_store_active_transaction,
+    IndexedDbValue, Key, indexed_db_index_is_deleted, object_store_active_transaction,
 };
 use moli_indexeddb::{GetAllOptionsCandidate, should_parse_get_all_options};
 
@@ -158,22 +157,12 @@ pub(super) fn collection_callback<'s>(
     let Some(request) = create_operation_request(scope, source, transaction) else {
         return;
     };
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-    {
-        let operation = if is_index {
-            IndexedDbTransactionOperation::IndexGetAll(collection)
-        } else {
-            IndexedDbTransactionOperation::ObjectStoreGetAll(collection)
-        };
-        enqueue_transaction_operation(scope, transaction, source, request, &store_name, operation);
-    } else if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
-        if is_index {
-            execute_index_get_all_request(scope, source, request, handle, &store_name, &collection);
-        } else {
-            execute_object_store_get_all_request(scope, request, handle, &store_name, &collection);
-        }
-    }
+    let operation = if is_index {
+        IndexedDbTransactionOperation::IndexGetAll(collection)
+    } else {
+        IndexedDbTransactionOperation::ObjectStoreGetAll(collection)
+    };
+    schedule_transaction_operation(scope, transaction, source, request, &store_name, operation);
     rv.set(request.into());
 }
 

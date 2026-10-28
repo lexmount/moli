@@ -12,14 +12,15 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_delete_callback<'s>(
     let Some(request) = target.create_request(scope, cursor) else {
         return;
     };
-    match with_indexed_db_manager(scope, |manager| {
-        manager.delete(target.handle, &target.store_name, &target.primary_key)
-    }) {
-        Ok(()) => store_request_success(scope, request, v8::undefined(scope).into()),
-        Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
-        }
-    }
+    schedule_transaction_operation(
+        scope,
+        target.transaction,
+        target.store,
+        request,
+        &target.store_name,
+        IndexedDbTransactionOperation::CursorDelete {
+            key: target.primary_key,
+        },
+    );
     rv.set(request.into());
 }

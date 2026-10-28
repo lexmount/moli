@@ -140,7 +140,6 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_source_is_index<'s>(
 pub(in crate::context_bootstrap::indexed_db) struct CursorMutation<'s> {
     pub(super) transaction: v8::Local<'s, v8::Object>,
     pub(super) store: v8::Local<'s, v8::Object>,
-    pub(super) handle: TransactionHandle,
     pub(super) store_name: String,
     pub(super) primary_key: Key,
 }
@@ -173,12 +172,11 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_cursor_mutation<'s>(
     cursor: v8::Local<'s, v8::Object>,
 ) -> Option<CursorMutation<'s>> {
     let (store, transaction, primary_key) = cursor_mutation_state(scope, cursor)?;
-    let handle = transaction_handle_from_value(scope, transaction.into())?;
+    transaction_handle_from_value(scope, transaction.into())?;
     let store_name = indexed_db_object_store_name(scope, store)?;
     Some(CursorMutation {
         transaction,
         store,
-        handle,
         store_name,
         primary_key,
     })

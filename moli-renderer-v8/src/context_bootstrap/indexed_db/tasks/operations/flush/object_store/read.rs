@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn try_dispatch_object_store_read_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    operation: &operation::QueuedTransactionOperation<'s>,
+    operation: &operation::TransactionOperation<'s>,
 ) -> bool {
     match &operation.kind {
         IndexedDbTransactionOperation::ObjectStoreGet { query } => {
