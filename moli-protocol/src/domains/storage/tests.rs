@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+mod indexeddb_cancellation;
 use std::{
     path::PathBuf,
     sync::{

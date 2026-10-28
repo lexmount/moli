@@ -19,10 +19,10 @@ use super::{
     dispatch_idb_named_event, dispatch_version_change_event, dom_exception_value,
     enforce_object_store_unique_constraints, enqueue_version_change_to_open_connections,
     flush_databases_settle_task, has_open_database_connections_for_key, index_cursor_snapshot,
-    indexed_db_blocked_task_payload, indexed_db_index_info, indexed_db_open_task_payload,
-    indexed_db_request_dispatch_task_request, indexed_db_request_transaction_object,
-    indexed_db_runtime_array, indexed_db_runtime_array_contains_object,
-    indexed_db_transaction_task_transaction, indexed_db_typed_execution_owner,
+    indexed_db_blocked_task_payload, indexed_db_index_info, indexed_db_object_task_target,
+    indexed_db_open_task_payload, indexed_db_request_dispatch_task_request,
+    indexed_db_request_transaction_object, indexed_db_runtime_array,
+    indexed_db_runtime_array_contains_object, indexed_db_typed_execution_owner,
     indexed_db_typed_owner_scope, indexed_db_typed_task_execution_context,
     indexed_db_typed_task_execution_owner, indexed_db_typed_task_id, indexed_db_typed_task_kind,
     indexed_db_typed_task_owner_scope, indexed_db_typed_task_storage_scope, key_in_range,
@@ -45,9 +45,9 @@ use moli_indexeddb::OpenDisposition;
 
 use super::{
     IndexedDbTaskKind, register_indexed_db_blocked_delete_task,
-    register_indexed_db_blocked_open_task, register_indexed_db_open_task,
-    register_indexed_db_request_dispatch_task, register_indexed_db_task,
-    register_indexed_db_transaction_task, release_indexed_db_request_dispatch_refs,
+    register_indexed_db_blocked_open_task, register_indexed_db_object_task,
+    register_indexed_db_open_task, register_indexed_db_request_dispatch_task,
+    register_indexed_db_task, release_indexed_db_request_dispatch_refs,
     release_indexed_db_transaction_dispatch_refs, unregister_indexed_db_task,
 };
 

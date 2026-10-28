@@ -1,8 +1,8 @@
 //! Admission of regular transactions across connections and event loops.
 //!
-//! A transaction waits for every older, unfinished transaction whose scope
-//! overlaps and whose mode conflicts, including transactions still waiting to
-//! start. The accepting realm owns a lease until backend commit or rollback.
+//! The accepting event loop owns an admission until it starts. Once started,
+//! the backend retains admission until commit or rollback, even if the caller
+//! drops its lease. Forced closure cancels both phases and wakes their owners.
 
 use parking_lot::Mutex;
 use std::{
@@ -12,8 +12,17 @@ use std::{
 
 use crate::{DatabaseHandle, TransactionMode};
 
-/// Schedules the accepting event loop after admission becomes possible.
+/// Schedules the accepting event loop after readiness or cancellation changes.
 pub type TransactionRequestWake = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransactionRequestStatus {
+    Pending,
+    Ready,
+    Started,
+    Canceled,
+    Finished,
+}
 
 #[derive(Default)]
 pub struct TransactionRequestQueues {
@@ -38,11 +47,15 @@ impl TransactionScope {
     }
 }
 
+struct RequestState {
+    scope: TransactionScope,
+    status: Mutex<TransactionRequestStatus>,
+}
+
 struct QueuedRequest {
     id: u64,
     database: DatabaseHandle,
-    scope: Arc<TransactionScope>,
-    ready: bool,
+    request: Arc<RequestState>,
     wake: TransactionRequestWake,
 }
 
@@ -52,11 +65,21 @@ pub struct TransactionRequestHandle {
     key: (String, String),
     id: u64,
     database: DatabaseHandle,
-    scope: Arc<TransactionScope>,
+    request: Arc<RequestState>,
 }
 
-/// Drop only after committing or aborting the backend transaction. The lease
-/// never retains the storage partition or any JS object.
+impl std::fmt::Debug for TransactionRequestHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransactionRequestHandle")
+            .field("id", &self.id)
+            .field("database", &self.database)
+            .field("status", &self.status())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Dropping an unstarted lease withdraws admission. A started admission belongs
+/// to its backend transaction and is released only after commit or rollback.
 pub struct TransactionRequestLease(TransactionRequestHandle);
 
 impl TransactionRequestLease {
@@ -67,8 +90,18 @@ impl TransactionRequestLease {
 
 impl Drop for TransactionRequestLease {
     fn drop(&mut self) {
-        self.0.finish();
+        self.0.release(Release::LeaseDropped);
     }
+}
+
+enum Release {
+    LeaseDropped,
+    BackendFinished,
+}
+
+enum CancellationNotification {
+    NotifyOwner,
+    OwnerRetired,
 }
 
 impl TransactionRequestQueues {
@@ -80,7 +113,7 @@ impl TransactionRequestQueues {
         mode: TransactionMode,
         wake: TransactionRequestWake,
     ) -> TransactionRequestLease {
-        let scope = Arc::new(TransactionScope { stores, mode });
+        let scope = TransactionScope { stores, mode };
         let mut state = self.state.lock();
         state.next_id = state
             .next_id
@@ -88,22 +121,30 @@ impl TransactionRequestQueues {
             .expect("IDB transaction id overflow");
         let id = state.next_id;
         let queue = state.queues.entry(key.clone()).or_default();
-        let ready = !queue.iter().any(|older| scope.conflicts_with(&older.scope));
+        let ready = !queue
+            .iter()
+            .any(|older| scope.conflicts_with(&older.request.scope));
+        let request = Arc::new(RequestState {
+            scope,
+            status: Mutex::new(if ready {
+                TransactionRequestStatus::Ready
+            } else {
+                TransactionRequestStatus::Pending
+            }),
+        });
         queue.push_back(QueuedRequest {
             id,
             database,
-            scope: scope.clone(),
-            ready,
+            request: request.clone(),
             wake,
         });
-        // Initial readiness is returned to the caller. A wake here could run
-        // before the accepting realm has attached its transaction wrapper.
+        // The caller must attach its wrapper before initial readiness is used.
         TransactionRequestLease(TransactionRequestHandle {
             queues: Arc::downgrade(self),
             key,
             id,
             database,
-            scope,
+            request,
         })
     }
 
@@ -115,15 +156,48 @@ impl TransactionRequestQueues {
             .is_some_and(|queue| !queue.is_empty())
     }
 
-    /// Called after rolling back the connection's backend transactions. Wakes
-    /// may inspect this coordinator, but must not reenter the storage manager.
+    pub(crate) fn has_connection_requests(&self, database: DatabaseHandle) -> bool {
+        self.state
+            .lock()
+            .queues
+            .values()
+            .any(|queue| queue.iter().any(|entry| entry.database == database))
+    }
+
+    /// Roll back backend work before calling this method. Cancellation remains
+    /// observable through surviving handles after entries leave the queue.
+    /// Callbacks run outside the queue lock and must not reenter the manager.
     pub fn cancel_connection(&self, database: DatabaseHandle) {
+        self.cancel_connections(
+            &BTreeSet::from([database]),
+            CancellationNotification::NotifyOwner,
+        );
+    }
+
+    pub(crate) fn retire_connections(&self, databases: &BTreeSet<DatabaseHandle>) {
+        self.cancel_connections(databases, CancellationNotification::OwnerRetired);
+    }
+
+    fn cancel_connections(
+        &self,
+        databases: &BTreeSet<DatabaseHandle>,
+        notification: CancellationNotification,
+    ) {
         let wakes = {
             let mut state = self.state.lock();
             let mut wakes = Vec::new();
             state.queues.retain(|_, queue| {
                 let before = queue.len();
-                queue.retain(|entry| entry.database != database);
+                queue.retain(|entry| {
+                    if !databases.contains(&entry.database) {
+                        return true;
+                    }
+                    *entry.request.status.lock() = TransactionRequestStatus::Canceled;
+                    if matches!(notification, CancellationNotification::NotifyOwner) {
+                        wakes.push(entry.wake.clone());
+                    }
+                    false
+                });
                 if before != queue.len() {
                     wake_newly_ready(queue, &mut wakes);
                 }
@@ -139,28 +213,33 @@ impl TransactionRequestQueues {
 
 fn wake_newly_ready(queue: &mut VecDeque<QueuedRequest>, wakes: &mut Vec<TransactionRequestWake>) {
     for index in 0..queue.len() {
-        if !queue[index].ready
-            && !queue
-                .iter()
-                .take(index)
-                .any(|older| queue[index].scope.conflicts_with(&older.scope))
+        let mut status = queue[index].request.status.lock();
+        if *status == TransactionRequestStatus::Pending
+            && !queue.iter().take(index).any(|older| {
+                queue[index]
+                    .request
+                    .scope
+                    .conflicts_with(&older.request.scope)
+            })
         {
-            queue[index].ready = true;
+            *status = TransactionRequestStatus::Ready;
             wakes.push(queue[index].wake.clone());
         }
     }
 }
 
 impl TransactionRequestHandle {
+    pub fn status(&self) -> TransactionRequestStatus {
+        let status = *self.request.status.lock();
+        if status != TransactionRequestStatus::Finished && self.queues.strong_count() == 0 {
+            TransactionRequestStatus::Canceled
+        } else {
+            status
+        }
+    }
+
     pub fn is_ready(&self) -> bool {
-        self.queues.upgrade().is_some_and(|queues| {
-            queues
-                .state
-                .lock()
-                .queues
-                .get(&self.key)
-                .is_some_and(|queue| queue.iter().any(|entry| entry.id == self.id && entry.ready))
-        })
+        self.status() == TransactionRequestStatus::Ready
     }
 
     pub fn belongs_to(&self, queues: &Arc<TransactionRequestQueues>) -> bool {
@@ -170,16 +249,38 @@ impl TransactionRequestHandle {
     pub fn database(&self) -> DatabaseHandle {
         self.database
     }
-
     pub fn store_names(&self) -> Vec<String> {
-        self.scope.stores.iter().cloned().collect()
+        self.request.scope.stores.iter().cloned().collect()
     }
-
     pub fn mode(&self) -> TransactionMode {
-        self.scope.mode
+        self.request.scope.mode
     }
 
-    fn finish(&self) {
+    pub(crate) fn claim_start(&self) -> bool {
+        let Some(queues) = self.queues.upgrade() else {
+            return false;
+        };
+        let state = queues.state.lock();
+        let Some(entry) = state
+            .queues
+            .get(&self.key)
+            .and_then(|queue| queue.iter().find(|entry| entry.id == self.id))
+        else {
+            return false;
+        };
+        let mut status = entry.request.status.lock();
+        if *status != TransactionRequestStatus::Ready {
+            return false;
+        }
+        *status = TransactionRequestStatus::Started;
+        true
+    }
+
+    pub(crate) fn finish(&self) {
+        self.release(Release::BackendFinished);
+    }
+
+    fn release(&self, release: Release) {
         let Some(queues) = self.queues.upgrade() else {
             return;
         };
@@ -191,6 +292,15 @@ impl TransactionRequestHandle {
             let Some(index) = queue.iter().position(|entry| entry.id == self.id) else {
                 return;
             };
+            {
+                let mut status = queue[index].request.status.lock();
+                if matches!(release, Release::LeaseDropped)
+                    && *status == TransactionRequestStatus::Started
+                {
+                    return;
+                }
+                *status = TransactionRequestStatus::Finished;
+            }
             queue.remove(index);
             let mut wakes = Vec::new();
             wake_newly_ready(queue, &mut wakes);

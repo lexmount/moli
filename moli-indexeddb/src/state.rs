@@ -40,11 +40,13 @@ pub(crate) struct DatabaseHandleState {
     pub(crate) origin: String,
     pub(crate) name: String,
     pub(crate) closed: bool,
+    pub(crate) lifecycle: crate::connection_lifecycle::DatabaseConnectionLifecycle,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransactionState {
     pub(crate) database: DatabaseHandle,
+    pub(crate) admission: Option<crate::TransactionRequestHandle>,
     pub(crate) origin: String,
     pub(crate) db_name: String,
     pub(crate) mode: TransactionMode,

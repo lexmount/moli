@@ -5,9 +5,12 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
     scope: &mut v8::PinScope<'s, '_>,
     task: v8::Local<'s, v8::Object>,
 ) {
-    let Some(transaction) = indexed_db_transaction_task_transaction(scope, task) else {
+    let Some(transaction) = indexed_db_object_task_target(scope, task) else {
         return;
     };
+    if crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction) {
+        return;
+    }
     set_indexed_db_slot_value(
         scope,
         transaction,
@@ -48,6 +51,11 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
             finish_committed_transaction(scope, transaction);
         }
         Err(error) => {
+            // Forced closure can win the manager lock after the entry check.
+            if crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction)
+            {
+                return;
+            }
             let error_value = request_error_object(scope, &error);
             finish_transaction_abort(scope, transaction, error_value);
         }

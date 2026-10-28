@@ -48,6 +48,7 @@ impl IndexedDbManager {
     }
 
     pub fn open(&mut self, options: OpenOptions) -> Result<OpenResult, IndexedDbError> {
+        self.reap_closed_database_connections();
         let origin = options.origin;
         let db_name = options.name;
         self.ensure_origin_loaded(&origin)?;
@@ -125,11 +126,12 @@ impl IndexedDbManager {
     }
 
     pub fn delete_database(&mut self, origin: &str, name: &str) -> Result<(), IndexedDbError> {
+        self.reap_closed_database_connections();
         self.ensure_origin_loaded(origin)?;
         if self
             .databases
             .values()
-            .any(|db| !db.closed && db.origin == origin && db.name == name)
+            .any(|db| db.origin == origin && db.name == name)
             || self
                 .transactions
                 .values()
@@ -290,15 +292,35 @@ impl IndexedDbManager {
         Ok(())
     }
 
-    /// Abort backend work before releasing admission during owner teardown.
+    /// Force closure of a live connection and notify its accepting event loop.
     pub fn force_close_database(&mut self, handle: DatabaseHandle) -> Result<(), IndexedDbError> {
         self.transactions
             .retain(|_, transaction| transaction.database != handle);
-        self.databases.remove(&handle).ok_or_else(|| {
+        let mut database = self.databases.remove(&handle).ok_or_else(|| {
             IndexedDbError::InvalidState(format!("database handle {handle:?} is invalid"))
         })?;
+        let wake = database.lifecycle.mark_forced_closed();
         self.transaction_requests.cancel_connection(handle);
+        if let Some(wake) = wake {
+            wake();
+        }
         Ok(())
+    }
+
+    /// Retire an event loop's connections as a batch. Its callbacks can no
+    /// longer run; only surviving connections are woken after rollback.
+    pub fn retire_database_connections(
+        &mut self,
+        handles: impl IntoIterator<Item = DatabaseHandle>,
+    ) -> usize {
+        let retired = handles
+            .into_iter()
+            .filter(|handle| self.databases.remove(handle).is_some())
+            .collect::<BTreeSet<_>>();
+        self.transactions
+            .retain(|_, transaction| !retired.contains(&transaction.database));
+        self.transaction_requests.retire_connections(&retired);
+        retired.len()
     }
 
     fn finish_pending_database_close(&mut self, handle: DatabaseHandle) {
@@ -310,9 +332,33 @@ impl IndexedDbManager {
                 .transactions
                 .values()
                 .any(|transaction| transaction.database == handle)
+            && !self.transaction_requests.has_connection_requests(handle)
         {
             self.databases.remove(&handle);
-            self.transaction_requests.cancel_connection(handle);
+        }
+    }
+
+    fn reap_closed_database_connections(&mut self) {
+        let closing = self
+            .databases
+            .iter()
+            .filter_map(|(handle, database)| database.closed.then_some(*handle))
+            .collect::<Vec<_>>();
+        for handle in closing {
+            self.finish_pending_database_close(handle);
+        }
+    }
+
+    /// Observe forced closure without retaining the manager or exposing JS.
+    /// Wakes must not reenter this manager. A stale handle is already closed.
+    pub fn observe_database_close(
+        &mut self,
+        handle: DatabaseHandle,
+        wake: crate::TransactionRequestWake,
+    ) -> crate::DatabaseCloseSignal {
+        match self.databases.get_mut(&handle) {
+            Some(database) => database.lifecycle.observe(wake),
+            None => crate::DatabaseCloseSignal::already_closed(wake),
         }
     }
 
@@ -424,15 +470,46 @@ impl IndexedDbManager {
         &mut self,
         request: &crate::TransactionRequestHandle,
     ) -> Result<TransactionHandle, IndexedDbError> {
-        if !request.belongs_to(&self.transaction_requests) || !request.is_ready() {
+        if !request.belongs_to(&self.transaction_requests) || !request.claim_start() {
             return Err(IndexedDbError::InvalidState(
-                "transaction is not ready to start".to_owned(),
+                "transaction cannot be started again or is not ready".to_owned(),
             ));
         }
-        self.begin_transaction(request.database(), &request.store_names(), request.mode())
+        match self.begin_accepted_transaction(
+            request.database(),
+            &request.store_names(),
+            request.mode(),
+        ) {
+            Ok(transaction) => {
+                self.transactions
+                    .get_mut(&transaction)
+                    .expect("new transaction")
+                    .admission = Some(request.clone());
+                Ok(transaction)
+            }
+            Err(error) => {
+                request.finish();
+                self.finish_pending_database_close(request.database());
+                Err(error)
+            }
+        }
     }
 
     pub fn begin_transaction(
+        &mut self,
+        database: DatabaseHandle,
+        store_names: &[String],
+        mode: TransactionMode,
+    ) -> Result<TransactionHandle, IndexedDbError> {
+        if self.database_state(database)?.closed {
+            return Err(IndexedDbError::InvalidState(
+                "database handle is closed".to_owned(),
+            ));
+        }
+        self.begin_accepted_transaction(database, store_names, mode)
+    }
+
+    fn begin_accepted_transaction(
         &mut self,
         database: DatabaseHandle,
         store_names: &[String],
@@ -445,11 +522,6 @@ impl IndexedDbManager {
         }
 
         let db = self.database_state(database)?.clone();
-        if db.closed {
-            return Err(IndexedDbError::InvalidState(
-                "database handle is closed".to_owned(),
-            ));
-        }
         let current = self.database_data(&db.origin, &db.name)?.clone();
         let store_set = store_names.iter().cloned().collect::<BTreeSet<_>>();
         self.ensure_store_names_exist(&current, &store_set)?;
@@ -471,6 +543,7 @@ impl IndexedDbManager {
             handle,
             TransactionState {
                 database,
+                admission: None,
                 origin: db.origin,
                 db_name: db.name,
                 mode,
@@ -874,30 +947,33 @@ impl IndexedDbManager {
             .transactions
             .remove(&transaction)
             .expect("validated active transaction");
-        // A reader's snapshot can predate commits to other stores. Publishing
-        // that snapshot would revert their records, metadata and key generators.
-        if mode == TransactionMode::ReadOnly {
-            self.finish_pending_database_close(database);
-            return Ok(());
-        }
-        let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
-            IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
-        })?;
-        if mode == TransactionMode::VersionChange {
-            origin_state.databases.insert(db_name, tx.working_copy);
-        } else {
-            let current = origin_state.databases.get_mut(&db_name).ok_or_else(|| {
-                IndexedDbError::NotFound(format!(
-                    "database `{db_name}` was not found during commit"
-                ))
+        let admission = tx.admission;
+        let result = (|| {
+            if mode == TransactionMode::ReadOnly {
+                return Ok(());
+            }
+            let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
+                IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
             })?;
-            for (name, store) in tx.working_copy.stores {
-                if tx.stores.contains(&name) {
-                    current.stores.insert(name, store);
+            if mode == TransactionMode::VersionChange {
+                origin_state.databases.insert(db_name, tx.working_copy);
+            } else {
+                let current = origin_state.databases.get_mut(&db_name).ok_or_else(|| {
+                    IndexedDbError::NotFound(format!(
+                        "database `{db_name}` was not found during commit"
+                    ))
+                })?;
+                for (name, store) in tx.working_copy.stores {
+                    if tx.stores.contains(&name) {
+                        current.stores.insert(name, store);
+                    }
                 }
             }
+            self.persist_origin(&origin)
+        })();
+        if let Some(admission) = admission {
+            admission.finish();
         }
-        let result = self.persist_origin(&origin);
         self.finish_pending_database_close(database);
         result
     }
@@ -917,7 +993,13 @@ impl IndexedDbManager {
             .saturating_add(self.committed_origin_usage_except_database(&tx.origin, &tx.db_name))
             .saturating_add(self.transaction_commit_usage(tx)?);
         if requested > quota.quota {
-            self.transactions.remove(&transaction);
+            let tx = self
+                .transactions
+                .remove(&transaction)
+                .expect("validated active transaction");
+            if let Some(admission) = tx.admission {
+                admission.finish();
+            }
             self.finish_pending_database_close(database);
             return Err(IndexedDbError::QuotaExceeded {
                 quota: quota.quota,
@@ -949,11 +1031,15 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<(), IndexedDbError> {
-        let tx = self.active_transaction_mut(transaction)?;
-        tx.state = TransactionLifecycle::Aborted;
-        let database = tx.database;
-        self.transactions.remove(&transaction);
-        self.finish_pending_database_close(database);
+        self.active_transaction_mut(transaction)?.state = TransactionLifecycle::Aborted;
+        let tx = self
+            .transactions
+            .remove(&transaction)
+            .expect("validated active transaction");
+        if let Some(admission) = tx.admission {
+            admission.finish();
+        }
+        self.finish_pending_database_close(tx.database);
         Ok(())
     }
 
@@ -966,6 +1052,7 @@ impl IndexedDbManager {
                 origin,
                 name,
                 closed: false,
+                lifecycle: Default::default(),
             },
         );
         handle
@@ -984,6 +1071,7 @@ impl IndexedDbManager {
             handle,
             TransactionState {
                 database,
+                admission: None,
                 origin: origin.to_owned(),
                 db_name: db_name.to_owned(),
                 mode: TransactionMode::VersionChange,

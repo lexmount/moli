@@ -8,9 +8,12 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
     scope: &mut v8::PinScope<'s, '_>,
     task: v8::Local<'s, v8::Object>,
 ) {
-    let Some(transaction) = indexed_db_transaction_task_transaction(scope, task) else {
+    let Some(transaction) = indexed_db_object_task_target(scope, task) else {
         return;
     };
+    if crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction) {
+        return;
+    }
     set_indexed_db_slot_value(
         scope,
         transaction,

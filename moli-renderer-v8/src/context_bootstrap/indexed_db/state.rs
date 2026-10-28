@@ -26,10 +26,7 @@ impl WeakIndexedDbManager {
             return 0;
         };
         let mut manager = manager.lock();
-        handles
-            .into_iter()
-            .filter(|handle| manager.force_close_database(*handle).is_ok())
-            .count()
+        manager.retire_database_connections(handles)
     }
 }
 

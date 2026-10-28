@@ -5,6 +5,7 @@ pub(super) fn request_aborted_error<'s>(
     request: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let transaction = indexed_db_request_transaction_object(scope, request)?;
+    crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction);
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
         .unwrap_or(false)
     {

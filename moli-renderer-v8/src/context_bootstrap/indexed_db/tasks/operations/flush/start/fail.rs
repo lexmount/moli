@@ -6,6 +6,11 @@ pub(super) fn fail_regular_transaction_start<'s>(
     transaction: v8::Local<'s, v8::Object>,
     error: &IndexedDbError,
 ) {
+    // Clear may cancel admission while this task is waiting for the manager
+    // lock. Preserve that cancellation instead of exposing its stale handle.
+    if crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction) {
+        return;
+    }
     let error = request_error_object(scope, error);
     crate::context_bootstrap::indexed_db::finish_transaction_abort(scope, transaction, error);
 }

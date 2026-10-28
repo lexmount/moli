@@ -4,6 +4,8 @@
 //! It does not expose JS objects or DOM events. The renderer is expected to
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
+mod connection_lifecycle;
+pub use connection_lifecycle::DatabaseCloseSignal;
 mod cursor;
 mod name;
 pub use name::IndexedDbName;
@@ -19,7 +21,7 @@ mod transaction;
 mod transaction_queue;
 pub use transaction_queue::{
     TransactionRequestHandle, TransactionRequestLease, TransactionRequestQueues,
-    TransactionRequestWake,
+    TransactionRequestStatus, TransactionRequestWake,
 };
 mod types;
 mod usage;

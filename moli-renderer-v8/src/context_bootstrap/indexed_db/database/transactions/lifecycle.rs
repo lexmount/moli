@@ -2,6 +2,29 @@ use super::*;
 use crate::context_bootstrap::indexed_db::restore_indexed_db_upgrade_metadata;
 use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
+pub(in crate::context_bootstrap::indexed_db) fn finish_canceled_transaction<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> bool {
+    use crate::context_bootstrap::indexed_db::indexed_db_transaction_start_request;
+    if !indexed_db_transaction_start_request(scope, transaction).is_some_and(|request| {
+        request.status() == moli_indexeddb::TransactionRequestStatus::Canceled
+    }) {
+        return false;
+    }
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+        .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "The database connection was forcibly closed.",
+            "AbortError",
+        );
+        finish_transaction_abort(scope, transaction, error);
+    }
+    true
+}
+
 pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,

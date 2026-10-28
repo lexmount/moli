@@ -16,18 +16,29 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_ready_transaction_starts
         };
         if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
-            || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-                .unwrap_or(false)
         {
             continue;
         }
-        if crate::context_bootstrap::indexed_db::indexed_db_transaction_start_request(
-            scope,
-            transaction,
-        )
-        .is_some_and(|request| request.is_ready())
-        {
-            enqueue_transaction_start_task(scope, transaction);
+        let Some(request) =
+            crate::context_bootstrap::indexed_db::indexed_db_transaction_start_request(
+                scope,
+                transaction,
+            )
+        else {
+            continue;
+        };
+        match request.status() {
+            moli_indexeddb::TransactionRequestStatus::Canceled => {
+                super::enqueue_transaction_cancel_task(scope, transaction);
+            }
+            moli_indexeddb::TransactionRequestStatus::Ready => {
+                enqueue_transaction_start_task(scope, transaction);
+            }
+            _ => {}
         }
+    }
+    for database in crate::context_bootstrap::indexed_db::indexed_db_forced_closed_databases(scope)
+    {
+        crate::context_bootstrap::indexed_db::finish_indexed_db_database_close(scope, database);
     }
 }

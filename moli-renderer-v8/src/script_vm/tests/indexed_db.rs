@@ -2795,6 +2795,76 @@ navigator.storage.estimate().then((estimate) => {
 }
 
 #[test]
+fn indexed_db_storage_clear_aborts_started_and_pending_requests_before_close() {
+    let page_url = "https://indexeddb-clear-lifecycle.test/";
+    let manager = crate::new_indexed_db_manager(None).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm(page_url);
+    page.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    page.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
+    page.eval(
+        r#"
+globalThis.dbReady = false;
+const opening = indexedDB.open("clear-lifecycle", 1);
+opening.onupgradeneeded = () => {
+  opening.result.createObjectStore("a");
+  opening.result.createObjectStore("b");
+};
+opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("String(dbReady)")
+            .unwrap(),
+        "true"
+    );
+    page.eval(r#"
+globalThis.trace = [];
+globalThis.requests = [];
+globalThis.result = "pending";
+for (const store of ["a", "b", "a"]) {
+  const tx = db.transaction(store, "readwrite");
+  const request = tx.objectStore(store).put("uncommitted", 1);
+  requests.push(request);
+  request.onsuccess = () => trace.push("unexpected-success");
+  request.onerror = event => { event.preventDefault(); trace.push("request:" + request.error.name); };
+  tx.oncomplete = () => trace.push("unexpected-complete");
+  tx.onabort = () => trace.push("abort:" + tx.error.name);
+}
+db.onclose = () => {
+  trace.push("close");
+  let rejected;
+  try { db.transaction("a"); } catch (error) { rejected = error.name; }
+  result = JSON.stringify({
+    errors: trace.filter(x => x === "request:AbortError").length,
+    aborts: trace.filter(x => x === "abort:AbortError").length,
+    unexpected: trace.filter(x => x.startsWith("unexpected")).length,
+    closeLast: trace.at(-1) === "close" && trace.length === 7,
+    done: requests.every(request => request.readyState === "done"), rejected
+  });
+};
+"#).unwrap();
+    assert_eq!(
+        page.eval("String(requests.every(request => request.readyState === 'pending'))")
+            .unwrap(),
+        "true"
+    );
+    let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+        &Url::parse(page_url).unwrap(),
+        None,
+    )
+    .serialized_storage_key();
+    manager.lock().clear_origin(&storage_key).unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("String(result)")
+            .unwrap(),
+        r#"{"errors":3,"aborts":3,"unexpected":0,"closeLast":true,"done":true,"rejected":"InvalidStateError"}"#
+    );
+}
+
+#[test]
 fn indexed_db_commit_quota_race_aborts_and_releases_the_next_writer() {
     let page_url = "https://indexeddb-commit-quota-race.test/";
     let manager = crate::new_indexed_db_manager(None).expect("private IndexedDB manager");

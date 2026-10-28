@@ -132,16 +132,15 @@ fn create_regular_transaction<'s>(
             .expect("IDB database owner");
     let wake =
         crate::context_bootstrap::indexed_db::indexed_db_transaction_start_wake(scope, owner);
-    let request = with_indexed_db_manager(scope, |manager| {
-        manager.queue_transaction_start(handle, store_names, mode, wake)
+    let (request, transaction_handle) = with_indexed_db_manager(scope, |manager| {
+        let request = manager.queue_transaction_start(handle, store_names, mode, wake)?;
+        let transaction_handle = if request.handle().is_ready() {
+            Some(manager.start_queued_transaction(request.handle())?)
+        } else {
+            None
+        };
+        Ok((request, transaction_handle))
     })?;
-    let transaction_handle = if request.handle().is_ready() {
-        Some(with_indexed_db_manager(scope, |manager| {
-            manager.start_queued_transaction(request.handle())
-        })?)
-    } else {
-        None
-    };
     let Some(transaction) =
         create_transaction_object(scope, database, transaction_handle, mode, store_names)
     else {
@@ -160,10 +159,10 @@ fn create_regular_transaction<'s>(
     Ok(Some(transaction))
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_database_close_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+pub(in crate::context_bootstrap::indexed_db) fn idb_database_close_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let database = args.this();
     let Some(context) = database.get_creation_context(scope) else {
@@ -174,9 +173,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_close_callback(
     rv.set_undefined();
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn close_indexed_db_database_connection(
-    scope: &mut v8::PinScope<'_, '_>,
-    database: v8::Local<'_, v8::Object>,
+pub(in crate::context_bootstrap::indexed_db) fn close_indexed_db_database_connection<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
 ) {
     set_indexed_db_slot_value(
         scope,
@@ -187,10 +186,14 @@ pub(in crate::context_bootstrap::indexed_db) fn close_indexed_db_database_connec
     finish_indexed_db_database_close(scope, database);
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn finish_indexed_db_database_close(
-    scope: &mut v8::PinScope<'_, '_>,
-    database: v8::Local<'_, v8::Object>,
+pub(in crate::context_bootstrap::indexed_db) fn finish_indexed_db_database_close<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
 ) {
+    if crate::context_bootstrap::indexed_db::indexed_db_database_is_forced_closed(scope, database) {
+        crate::context_bootstrap::indexed_db::enqueue_database_forced_close_task(scope, database);
+        return;
+    }
     if !object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false)
         || crate::context_bootstrap::indexed_db::indexed_db_database_has_unfinished_transactions(
             scope, database,
