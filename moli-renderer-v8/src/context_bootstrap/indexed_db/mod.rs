@@ -43,6 +43,40 @@ pub(crate) fn create_sql_database_for_test<'s>(
     };
     create_database_object(scope, storage_scope, owner, handle, &info, Some(client))
 }
+#[cfg(test)]
+pub(crate) fn create_sql_upgrade_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
+    handle: TransactionHandle,
+    version: u64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let client = indexed_db_database_sql_client(scope, database)?;
+    let metadata = client.committed()?;
+    let names = metadata.stores.keys().cloned().collect::<Vec<_>>();
+    let transaction = create_transaction_object(
+        scope,
+        database,
+        Some(handle),
+        TransactionMode::VersionChange,
+        &names,
+    )?;
+    typed_state::sql::configure_sql_transaction(scope, transaction, client, handle).ok()?;
+    typed_state::sql::ensure_sql_transaction_rollback(scope, transaction).ok()?;
+    set_indexed_db_slot_value(
+        scope,
+        database,
+        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
+        transaction.into(),
+    );
+    save_indexed_db_upgrade_metadata(scope, database, metadata.version);
+    database.set(
+        scope,
+        v8str(scope, "version").into(),
+        v8::Number::new(scope, version as f64).into(),
+    )?;
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
+    Some(transaction)
+}
 mod types;
 
 use self::backend::*;

@@ -161,8 +161,12 @@ impl IndexedDbPendingTransactionOperation {
     pub(super) fn request<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-    ) -> v8::Local<'s, v8::Object> {
-        v8::Local::new(scope, &self.request)
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let target = v8::Local::new(scope, &self.request);
+        // Internal schema work uses its transaction as the completion target;
+        // it has no Web request or request error event to dispatch on abort.
+        super::indexed_db_typed_wrapper_is(scope, target, super::IndexedDbWrapperKind::Request)
+            .then_some(target)
     }
 
     pub(super) fn into_locals<'s>(

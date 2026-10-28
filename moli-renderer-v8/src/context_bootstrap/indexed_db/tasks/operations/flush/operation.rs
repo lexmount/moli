@@ -82,14 +82,16 @@ fn pump_operations<'s>(
     }
 }
 
-pub(super) fn finish_transaction_operation<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
     if scope.is_execution_terminating() {
         return;
     }
-    let Some(transaction) = indexed_db_request_transaction_object(scope, request) else {
+    let Some(transaction) =
+        crate::context_bootstrap::indexed_db::typed_state::sql::source_transaction(scope, request)
+    else {
         return;
     };
     crate::context_bootstrap::indexed_db::complete_indexed_db_transaction_operation(
@@ -97,6 +99,29 @@ pub(super) fn finish_transaction_operation<'s>(
         transaction,
     );
     pump_transaction_operations(scope, transaction);
+}
+
+/// Internal schema/backfill work shares the request queue and its in-flight
+/// barrier, without allocating a dummy IDBRequest or incrementing event count.
+pub(in crate::context_bootstrap::indexed_db) fn schedule_internal_transaction_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    kind: IndexedDbTransactionOperation,
+) -> Result<(), IndexedDbError> {
+    let owner = indexed_db_typed_owner_scope(scope, transaction).ok_or_else(|| {
+        IndexedDbError::InvalidState("Internal IndexedDB work lost its owner".into())
+    })?;
+    let operation = IndexedDbPendingTransactionOperation::new(
+        scope,
+        owner,
+        transaction,
+        transaction,
+        String::new(),
+        kind,
+    );
+    push_indexed_db_transaction_operation(scope, transaction, operation)?;
+    pump_operations(scope, transaction, true);
+    Ok(())
 }
 
 fn dispatch_operation<'s>(scope: &mut v8::PinScope<'s, '_>, operation: TransactionOperation<'s>) {

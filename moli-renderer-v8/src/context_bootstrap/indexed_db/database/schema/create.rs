@@ -1,6 +1,10 @@
 use super::common::version_change_transaction;
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    schedule_schema_operation, typed_state::sql::indexed_db_request_sql_client,
+};
 use crate::webidl;
+use moli_indexeddb::sqlite::service::Command;
 use moli_indexeddb::{ObjectStoreOptionsValidationError, validate_object_store_options};
 
 #[derive(webidl::WebIdlArgs)]
@@ -55,16 +59,40 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
         auto_increment,
         index_names: Vec::new(),
     };
-    match with_indexed_db_manager(scope, |manager| {
-        manager.create_object_store(
-            handle,
-            &name,
-            ObjectStoreOptions {
-                key_path,
-                auto_increment,
-            },
-        )
-    }) {
+    let result = if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
+        if object_store_info_from_database_metadata(scope, database, &name).is_some() {
+            Err(moli_indexeddb::IndexedDbError::Constraint(
+                "The object store already exists".into(),
+            ))
+        } else {
+            schedule_schema_operation(
+                scope,
+                transaction,
+                client,
+                Command::CreateStore {
+                    transaction: handle,
+                    name,
+                    options: ObjectStoreOptions {
+                        key_path,
+                        auto_increment,
+                    },
+                },
+                None,
+            )
+        }
+    } else {
+        with_indexed_db_manager(scope, |manager| {
+            manager.create_object_store(
+                handle,
+                &name,
+                ObjectStoreOptions {
+                    key_path,
+                    auto_increment,
+                },
+            )
+        })
+    };
+    match result {
         Ok(()) => {
             let _ = set_database_store_metadata(scope, database, &info, &[]);
             sync_transaction_object_store_names_from_database(scope, transaction, database);

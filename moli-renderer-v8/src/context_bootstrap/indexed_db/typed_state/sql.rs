@@ -97,7 +97,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_rollback_is_arme
         .is_some_and(|state| state.sql_rollback.is_some())
 }
 
-fn source_transaction<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn source_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {

@@ -12,8 +12,45 @@ struct SqlBackend {
 }
 
 impl SqlBackend {
+    fn upgrade(&self, vm: &mut ScriptVm) {
+        let handle = self.client.allocate_transaction_handle().unwrap();
+        let version = self.client.committed().unwrap().version + 1;
+        self.execute(Command::Begin {
+            transaction: handle,
+            mode: TransactionMode::VersionChange,
+            stores: BTreeSet::new(),
+            version: Some(version),
+            admission: None,
+        });
+        vm.with_default_context_scope(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let database = v8::Local::<v8::Object>::try_from(
+                global
+                    .get(scope, crate::util::v8str(scope, "db").into())
+                    .unwrap(),
+            )
+            .unwrap();
+            let transaction = crate::context_bootstrap::create_sql_upgrade_for_test(
+                scope, database, handle, version,
+            )
+            .unwrap();
+            assert_eq!(
+                global.set(
+                    scope,
+                    crate::util::v8str(scope, "upgrade").into(),
+                    transaction.into()
+                ),
+                Some(true)
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
     fn new() -> Self {
-        let mut config = ServiceConfig::default();
+        Self::with_config(ServiceConfig::default())
+    }
+
+    fn with_config(mut config: ServiceConfig) -> Self {
         config.executor.workers = 1;
         let service = Service::new(config).unwrap();
         let (sender, receiver) = mpsc::channel();
@@ -423,4 +460,246 @@ async fn idb_sqlite_lifecycle_listener_exception_aborts_only_automatic_commit() 
             }
         );
     }
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_creates_deletes_and_mirrors_before_native_completion() {
+    let (mut vm, loader, backend) = fixture();
+    backend.upgrade(&mut vm);
+    assert_eq!(vm.eval(r#"
+        globalThis.events = [];
+        const created = db.createObjectStore('new', {keyPath:'id', autoIncrement:true});
+        created.createIndex('id','id');
+        created.createIndex('tags','tags',{multiEntry:true});
+        created.put({tags:['a','a','b']});
+        created.index('tags').count().onsuccess = event => events.push('count:' + event.target.result);
+        const old = upgrade.objectStore('records');
+        old.deleteIndex('unique');
+        try { old.index('unique'); } catch(error) { events.push(error.name); }
+        db.createObjectStore('temporary');
+        db.deleteObjectStore('temporary');
+        try { db.deleteObjectStore('absent'); } catch(error) { events.push(error.name); }
+        try { db.createObjectStore('new'); } catch(error) { events.push(error.name); }
+        upgrade.oncomplete = () => events.push('complete');
+        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
+        [created instanceof IDBObjectStore, Array.from(created.indexNames), Array.from(db.objectStoreNames), Array.from(old.indexNames)].join('|')
+    "#).unwrap(), "true|id,tags|new,records|");
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"["NotFoundError","NotFoundError","ConstraintError","count:2","complete"]"#
+    );
+    let metadata = backend.client.committed().unwrap();
+    assert_eq!(metadata.version, 2);
+    assert!(metadata.stores["records"].indexes.is_empty());
+    assert_eq!(metadata.stores["new"].indexes.len(), 2);
+    assert!(!metadata.stores.contains_key("temporary"));
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_backfills_existing_and_prior_queued_values_in_order() {
+    let (mut vm, loader, backend) = fixture();
+    vm.eval("const seed = db.transaction('records','readwrite').objectStore('records'); seed.put({group:'a',tags:['a','a','b']}); seed.put({group:'b',tags:['a','c']})").unwrap();
+    backend.drain(&mut vm, &loader).await;
+    backend.upgrade(&mut vm);
+    vm.eval(
+        r#"
+        globalThis.events = [];
+        const store = upgrade.objectStore('records');
+        store.put({group:'before',tags:['a','d']});
+        const index = store.createIndex('tags','tags',{multiEntry:true});
+        events.push(index instanceof IDBIndex);
+        store.put({group:'after',tags:['a','e']});
+        index.getAllKeys('a').onsuccess = event => events.push(event.target.result.join(','));
+        upgrade.commit();
+        upgrade.oncomplete = () => events.push('complete');
+        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
+        'queued'
+    "#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[true,"1,2,3,4","complete"]"#
+    );
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_unique_backfill_failure_is_async_and_restores_everything() {
+    let (mut vm, loader, backend) = fixture();
+    vm.eval("const seed = db.transaction('records','readwrite').objectStore('records'); seed.put({group:'a',slug:'same'}); seed.put({group:'b',slug:'same'})").unwrap();
+    backend.drain(&mut vm, &loader).await;
+    let committed = backend.client.committed().unwrap();
+    backend.upgrade(&mut vm);
+    vm.eval(r#"
+        globalThis.events = [];
+        globalThis.changedStore = db.createObjectStore('new');
+        const store = upgrade.objectStore('records');
+        globalThis.changedIndex = store.createIndex('slug','slug',{unique:true});
+        events.push(changedIndex instanceof IDBIndex);
+        store.put({group:'later',slug:'later'}).onerror = event => { event.preventDefault(); events.push(event.target.error.name); };
+        upgrade.oncomplete = () => events.push('bad-complete');
+        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
+        'queued'
+    "#).unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[true,"AbortError","abort:ConstraintError"]"#
+    );
+    assert_eq!(backend.client.committed().as_ref(), Some(&committed));
+    assert_eq!(vm.eval("[db.version, Array.from(db.objectStoreNames), Array.from(changedIndex.objectStore.indexNames)].join('|')").unwrap(), "1|records|unique");
+    vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').count().onsuccess = event => savedCount = event.target.result").unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(vm.eval("String(savedCount)").unwrap(), "2");
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_unique_index_does_not_retroactively_reject_prior_puts() {
+    let (mut vm, loader, backend) = fixture();
+    backend.upgrade(&mut vm);
+    vm.eval(
+        r#"
+        globalThis.events = [];
+        const store = upgrade.objectStore('records');
+        store.put({group:'a',slug:'same'}).onsuccess = event => events.push(event.target.result);
+        store.put({group:'b',slug:'same'}).onsuccess = event => events.push(event.target.result);
+        events.push(store.createIndex('slug','slug',{unique:true}) instanceof IDBIndex);
+        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
+        upgrade.oncomplete = () => events.push('bad-complete');
+        'queued'
+    "#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[true,1,2,"abort:ConstraintError"]"#
+    );
+    vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').count().onsuccess = event => savedCount = event.target.result").unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(vm.eval("String(savedCount)").unwrap(), "0");
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_backfill_recycles_budget_instead_of_accumulating_records() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://idb-sql-schema-budget.test/",
+        &loader,
+    );
+    let mut config = ServiceConfig::default();
+    config.executor.data.bytes = 48 * 1024;
+    let backend = SqlBackend::with_config(config);
+    backend.bind(&mut vm);
+    for index in 0..20 {
+        vm.eval(&format!("db.transaction('records','readwrite').objectStore('records').put({{group:'g{index}',payload:'x'.repeat(16384)}})")).unwrap();
+        backend.drain(&mut vm, &loader).await;
+    }
+    backend.upgrade(&mut vm);
+    vm.eval(
+        r#"
+        globalThis.events = [];
+        upgrade.objectStore('records').createIndex('by_group','group');
+        upgrade.oncomplete = () => events.push('complete');
+        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
+        'queued'
+    "#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"["complete"]"#
+    );
+    vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').index('by_group').count().onsuccess = event => savedCount = event.target.result").unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(vm.eval("String(savedCount)").unwrap(), "20");
+    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_row() {
+    let (mut vm, loader, backend) = fixture();
+    let handle = backend.client.allocate_transaction_handle().unwrap();
+    let admission = backend
+        .client
+        .queue_transaction_start(
+            DatabaseHandle::from_raw((1u64 << 53) + 1),
+            &["records".into()],
+            TransactionMode::ReadWrite,
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+    backend.execute(Command::Begin {
+        transaction: handle,
+        mode: TransactionMode::ReadWrite,
+        stores: BTreeSet::from(["records".into()]),
+        version: None,
+        admission: Some(admission.handle().clone()),
+    });
+    backend.execute(Command::Write {
+        transaction: handle,
+        store: "records".into(),
+        key: Some(1.into()),
+        value: vec![0xff].into(),
+        indexes: vec![moli_indexeddb::sqlite::IndexKeys {
+            name: "unique".into(),
+            keys: vec!["g".into()],
+        }],
+        add_only: false,
+        quota: None,
+    });
+    backend.execute(Command::Commit {
+        transaction: handle,
+    });
+    let committed = backend.client.committed().unwrap();
+    backend.upgrade(&mut vm);
+    vm.eval(r#"
+        globalThis.events = [];
+        events.push(upgrade.objectStore('records').createIndex('broken','field') instanceof IDBIndex);
+        upgrade.oncomplete = () => events.push('bad-complete');
+        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
+        'queued'
+    "#).unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[true,"abort:UnknownError"]"#
+    );
+    assert_eq!(backend.client.committed().as_ref(), Some(&committed));
+}
+
+#[tokio::test]
+async fn idb_sqlite_schema_inactive_upgrade_cannot_queue_late_schema_changes() {
+    let (mut vm, loader, backend) = fixture();
+    backend.upgrade(&mut vm);
+    vm.eval("globalThis.upgradeStore = upgrade.objectStore('records'); upgradeStore.createIndex('created','group'); globalThis.events = []; upgrade.oncomplete = () => events.push('complete')").unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"
+        const errors = [];
+        for(const change of [
+            () => db.createObjectStore('late'),
+            () => db.deleteObjectStore('records'),
+            () => upgradeStore.createIndex('late','group'),
+            () => upgradeStore.deleteIndex('created')
+        ]) {
+            try { change(); errors.push('accepted'); } catch(error) { errors.push(error.name); }
+        }
+        JSON.stringify(errors)
+    "#
+        )
+        .unwrap(),
+        r#"["TransactionInactiveError","TransactionInactiveError","TransactionInactiveError","TransactionInactiveError"]"#
+    );
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"["complete"]"#
+    );
+    let metadata = backend.client.committed().unwrap();
+    assert!(!metadata.stores.contains_key("late"));
+    assert!(metadata.stores["records"].indexes.contains_key("created"));
 }
