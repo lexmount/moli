@@ -693,6 +693,8 @@ impl JsContextHost {
                 backend_node_id,
             );
         }
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.dom_agent_state.mark_children_requested(
             inspector_session_id,
             Some(document_id),
@@ -804,5 +806,7 @@ impl JsContextHost {
         );
         self.dom_debugger_state.remove_session(&session_key);
         self.dom_agent_state.remove_session(inspector_session_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
     }
 }

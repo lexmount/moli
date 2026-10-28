@@ -91,6 +91,8 @@ impl JsContextHost {
         );
         self.dom_agent_state
             .reset_for_document_replacement(transition.current_owner().document_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.style_engine
             .clear_for_document_replacement(document_handle);
         self.reset_document_layout_state();
@@ -702,6 +704,8 @@ impl JsContextHost {
         }
         self.dom_agent_state
             .reset_for_document_replacement(transition.current_owner().document_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.replace_main_document_resource_loader(transition);
         let rebound_meta_refresh = {
             let runtime: &mut DocumentRuntime = self;

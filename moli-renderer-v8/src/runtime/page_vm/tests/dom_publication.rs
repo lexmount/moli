@@ -2,6 +2,148 @@ use super::*;
 use crate::{RendererDomMutationEvent, RendererDomSearchResultsResolution};
 use moli_page_types::DocumentNodeSnapshot;
 
+fn mutation_interest_fixture(observer: bool) -> PageVm {
+    let mut page = test_page_vm();
+    page.vm_mut()
+        .eval(
+            "document.body.innerHTML = '<main id=probe>before</main>'; \
+             globalThis.round = 0; \
+             globalThis.mutateProbe = () => { \
+               const probe = document.getElementById('probe'); \
+               const value = String(++globalThis.round); \
+               probe.setAttribute('data-round', value); \
+               probe.firstChild.data = value; \
+               probe.appendChild(document.createElement('i')); \
+               return globalThis.observer ? observer.takeRecords().length : 0; \
+             };",
+        )
+        .unwrap();
+    if observer {
+        page.vm_mut()
+            .eval(
+                "globalThis.observer = new MutationObserver(() => {}); \
+                 observer.observe(document.getElementById('probe'), \
+                   {attributes:true, characterData:true, childList:true, subtree:true});",
+            )
+            .unwrap();
+    }
+    page
+}
+
+fn mutate_probe_and_count_facts(page: &mut PageVm, observer: bool) -> [usize; 3] {
+    let records = page.vm_mut().eval("mutateProbe()").unwrap();
+    assert_eq!(records, if observer { "3" } else { "0" });
+    let mut counts = [0; 3];
+    for fact in page
+        .vm_mut()
+        .document_runtime
+        .take_pending_devtools_dom_mutations()
+    {
+        counts[match fact {
+            crate::document_runtime::DevToolsDomMutationFact::Attribute { .. } => 0,
+            crate::document_runtime::DevToolsDomMutationFact::CharacterData { .. } => 1,
+            crate::document_runtime::DevToolsDomMutationFact::ChildList(_) => 2,
+        }] += 1;
+    }
+    counts
+}
+
+fn allocate_internal_probe_snapshot(page: &mut PageVm) -> u32 {
+    let probe = page.vm().element_handle_by_id_for_test("probe").unwrap();
+    let object = page
+        .resolve_runtime_object_for_live_handle(Some("internal"), probe, None, None)
+        .unwrap()
+        .unwrap();
+    let snapshot = page
+        .document_node_snapshot_for_object_id(
+            Some("internal"),
+            object.as_protocol_value()["objectId"].as_str().unwrap(),
+            1,
+            false,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.snapshot.frontend_node_id.is_some_and(|id| id != 0));
+    let backend = snapshot.snapshot.backend_node_id.unwrap();
+    assert!(!page.document_node_is_published(Some("internal"), backend));
+    backend
+}
+
+#[test]
+fn internal_snapshots_do_not_collect_inspector_mutation_facts() {
+    let mut observed = Vec::new();
+    for bidi in [false, true] {
+        for observer in [false, true] {
+            let mut page = mutation_interest_fixture(observer);
+            let backend = allocate_internal_probe_snapshot(&mut page);
+            if bidi {
+                page.register_document_bidi_node_binding(
+                    Some("internal"),
+                    "bidi-node".to_owned(),
+                    backend,
+                );
+            }
+            observed.push((
+                bidi,
+                observer,
+                mutate_probe_and_count_facts(&mut page, observer),
+            ));
+        }
+    }
+    assert!(
+        observed.iter().all(|(_, _, counts)| *counts == [0; 3]),
+        "unpublished automation bindings captured Inspector facts: {observed:?}"
+    );
+}
+
+#[test]
+fn mutation_recording_follows_publication_disable_detach_and_document_open() {
+    let mut page = mutation_interest_fixture(false);
+    allocate_internal_probe_snapshot(&mut page);
+    for session in ["cdp-a", "cdp-b"] {
+        page.document_node_snapshot_for_document(Some(session), -1, false)
+            .unwrap();
+        assert_eq!(mutate_probe_and_count_facts(&mut page, false), [1; 3]);
+    }
+    page.vm_mut()
+        .detach_runtime_inspector_session(Some("cdp-b"));
+    assert_eq!(
+        mutate_probe_and_count_facts(&mut page, false),
+        [1; 3],
+        "detaching one session must preserve the other's mutation stream"
+    );
+    page.discard_document_frontend_bindings(Some("cdp-a"));
+    assert_eq!(
+        mutate_probe_and_count_facts(&mut page, false),
+        [0; 3],
+        "an internal binding must not keep capture enabled after DOM.disable"
+    );
+    page.document_node_snapshot_for_document(Some("cdp-a"), -1, false)
+        .unwrap();
+    page.vm_mut().eval(
+        "document.open(); document.write('<html><body><main id=probe>new</main></body></html>'); document.close()",
+    ).unwrap();
+    page.vm_mut()
+        .document_runtime
+        .take_pending_devtools_dom_mutations();
+    assert_eq!(
+        mutate_probe_and_count_facts(&mut page, false),
+        [0; 3],
+        "a replacement Document must wait for a fresh publication"
+    );
+    page.document_node_snapshot_for_document(Some("cdp-a"), -1, false)
+        .unwrap();
+    assert_eq!(mutate_probe_and_count_facts(&mut page, false), [1; 3]);
+    page.vm_mut()
+        .detach_runtime_inspector_session(Some("cdp-a"));
+    assert_eq!(
+        mutate_probe_and_count_facts(&mut page, false),
+        [0; 3],
+        "detaching the last published session must stop capture"
+    );
+}
+
 fn inspector_descendants(snapshot: &DocumentNodeSnapshot) -> Vec<&DocumentNodeSnapshot> {
     let mut pending = vec![snapshot];
     let mut nodes = Vec::new();

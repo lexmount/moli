@@ -172,12 +172,9 @@ impl PageVm {
         }
     }
 
-    pub(super) fn sync_devtools_dom_mutation_recording_interest(&mut self) {
-        let enabled = self.dom_agent_state.has_frontend_bindings();
-        self.vm()
-            .document_runtime
-            .dom_host()
-            .set_devtools_mutation_records_enabled(enabled);
+    pub(super) fn sync_devtools_dom_mutation_recording_interest(&self) {
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.vm().document_runtime.dom_host());
     }
 
     /// Records a snapshot committed to a DOM tree response or notification.
@@ -259,6 +256,7 @@ impl PageVm {
                     .map(|child| (child, next_depth, true)),
             );
         }
+        self.sync_devtools_dom_mutation_recording_interest();
     }
 
     pub(crate) fn document_node_children_requested(
@@ -305,7 +303,7 @@ impl PageVm {
             return;
         }
 
-        let sessions = self.dom_agent_state.session_keys();
+        let sessions = self.dom_agent_state.published_session_keys();
         let batches = sessions
             .into_iter()
             .filter_map(|session_id| {

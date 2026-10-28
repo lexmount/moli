@@ -4962,13 +4962,11 @@ impl PageVm {
         backend_node_id: u32,
     ) -> u32 {
         let document_id = self.current_dom_agent_document_id();
-        let frontend_node_id = self.dom_agent_state.frontend_node_id_for_backend_node_id(
+        self.dom_agent_state.frontend_node_id_for_backend_node_id(
             inspector_session_id,
             document_id,
             backend_node_id,
-        );
-        self.sync_devtools_dom_mutation_recording_interest();
-        frontend_node_id
+        )
     }
 
     pub(super) fn document_frontend_node_id_for_backend_node_id_in_whitespace_projection(

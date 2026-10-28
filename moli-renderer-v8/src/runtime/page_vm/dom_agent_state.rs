@@ -10,6 +10,7 @@ use super::backend_node_registry::{
 };
 use super::frontend_node_bindings::RendererFrontendNodeBindings;
 use crate::document_runtime::DomHandle;
+use crate::dom::native::DomHost;
 use crate::frame_owner_model::DocumentId;
 use moli_page_types::DocumentNodeInspectorIdentity;
 
@@ -144,21 +145,26 @@ impl RendererDomAgentState {
         }
     }
 
-    pub(crate) fn has_frontend_bindings(&self) -> bool {
-        self.inner
+    /// Internal handle allocation is not a DOM subscription. Recompute after
+    /// publication, binding retirement, session detach, or Document replacement.
+    pub(crate) fn sync_mutation_recording_interest(&self, dom_host: &DomHost) {
+        let enabled = self
+            .inner
             .borrow()
             .sessions
             .values()
-            .any(RendererDomAgentSessionState::has_frontend_bindings)
+            .any(RendererDomAgentSessionState::has_published_nodes);
+        dom_host.set_devtools_mutation_records_enabled(enabled);
     }
 
-    pub(crate) fn session_keys(&self) -> Vec<Option<String>> {
+    pub(crate) fn published_session_keys(&self) -> Vec<Option<String>> {
         let mut keys = self
             .inner
             .borrow()
             .sessions
-            .keys()
-            .cloned()
+            .iter()
+            .filter(|(_, state)| state.has_published_nodes())
+            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         keys.sort();
         keys
@@ -547,8 +553,8 @@ impl RendererDomAgentSessionState {
         }
     }
 
-    fn has_frontend_bindings(&self) -> bool {
-        !self.frontend_node_bindings.is_empty()
+    fn has_published_nodes(&self) -> bool {
+        !self.published_nodes.is_empty()
     }
 
     fn mark_children_requested(&mut self, backend_node_id: u32, child_count: usize) {

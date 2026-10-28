@@ -60,10 +60,6 @@ impl RendererFrontendNodeBindings {
         self.frontend_to_backend.remove(&frontend_node_id);
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.backend_to_frontend.is_empty()
-    }
-
     fn allocate_id(&mut self) -> u32 {
         let frontend_node_id = self.next_id;
         self.next_id = self
