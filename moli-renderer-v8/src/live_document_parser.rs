@@ -1,3 +1,4 @@
+use crate::parser::ParserCustomElementRegistryAssociation;
 use crate::{
     DocumentOwnedBlockingStylesheetDiscoveryInput,
     dom::native::{DomHost, NativeNodeId},
@@ -9,6 +10,7 @@ use crate::{
         PreparedScript, XmlDocumentStream,
     },
 };
+
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -85,7 +87,7 @@ pub(crate) struct LiveDocumentParserDiscoverySignals {
 }
 
 pub(crate) struct DocumentParserFinishSignals {
-    pub(crate) parser_created_null_registry_elements: Vec<NativeNodeId>,
+    pub(crate) parser_created_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
     pub(crate) discovery_signals: LiveDocumentParserDiscoverySignals,
 }
 
@@ -738,8 +740,10 @@ impl DocumentParserDriver {
     }
 
     #[cfg(test)]
-    fn take_null_custom_element_registry_elements(stream: &DocumentStream) -> Vec<NativeNodeId> {
-        stream.take_parser_stream_null_custom_element_registry_elements()
+    fn take_custom_element_registry_associations(
+        stream: &DocumentStream,
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
+        stream.take_parser_stream_custom_element_registry_associations()
     }
 
     fn finish(
@@ -1124,18 +1128,21 @@ impl DocumentParserSession {
     }
 
     #[cfg(test)]
-    pub(crate) fn advance_step_and_take_null_custom_element_registry_elements(
+    pub(crate) fn advance_step_and_take_custom_element_registry_associations(
         &mut self,
         parser_step: &str,
         owner: &mut impl LiveDocumentParserOwner,
-    ) -> (LiveDocumentParserStepOutcome, Vec<NativeNodeId>) {
+    ) -> (
+        LiveDocumentParserStepOutcome,
+        Vec<ParserCustomElementRegistryAssociation>,
+    ) {
         let _pump_guard = self.control.begin_pump();
-        let (advance, null_custom_element_registry_elements) = match self.backend() {
+        let (advance, custom_element_registry_associations) = match self.backend() {
             ExecutableDocumentParserBackend::Html(_) => self.with_reentrant_stream_step(|stream| {
                 let advance = DocumentParserDriver::advance_step(stream, parser_step, owner);
-                let null_custom_element_registry_elements =
-                    DocumentParserDriver::take_null_custom_element_registry_elements(stream);
-                (advance, null_custom_element_registry_elements)
+                let custom_element_registry_associations =
+                    DocumentParserDriver::take_custom_element_registry_associations(stream);
+                (advance, custom_element_registry_associations)
             }),
             ExecutableDocumentParserBackend::Xml(_) => {
                 panic!("XML document parsers do not support HTML insertion input")
@@ -1145,7 +1152,7 @@ impl DocumentParserSession {
         self.discovery_signals
             .borrow_mut()
             .extend(discovery_signals);
-        (outcome, null_custom_element_registry_elements)
+        (outcome, custom_element_registry_associations)
     }
 
     pub(crate) fn take_discovery_signals(&mut self) -> LiveDocumentParserDiscoverySignals {
@@ -1166,16 +1173,16 @@ impl DocumentParserSession {
         }
     }
 
-    pub(crate) fn take_parser_stream_null_custom_element_registry_elements(
+    pub(crate) fn take_parser_stream_custom_element_registry_associations(
         &mut self,
-    ) -> Vec<NativeNodeId> {
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
         match self.backend() {
             ExecutableDocumentParserBackend::Html(stream) => stream
                 .borrow_mut()
-                .take_parser_stream_null_custom_element_registry_elements(),
+                .take_parser_stream_custom_element_registry_associations(),
             ExecutableDocumentParserBackend::Xml(stream) => stream
                 .borrow_mut()
-                .take_parser_stream_null_custom_element_registry_elements(),
+                .take_parser_stream_custom_element_registry_associations(),
         }
     }
 
@@ -1256,13 +1263,13 @@ fn finish_live_document_parser(
     owner: &mut impl LiveDocumentParserOwner,
 ) -> DocumentParserFinishSignals {
     let crate::parser::ParserFinishDiscoverySignals {
-        parser_created_null_registry_elements,
+        parser_created_registry_associations,
         discovered_preload_link_candidates,
         discovered_parser_meta_csp_candidates,
         discovered_blocking_stylesheet_inputs,
     } = stream.finish_with_runtime_dom_consumer(owner);
     DocumentParserFinishSignals {
-        parser_created_null_registry_elements,
+        parser_created_registry_associations,
         discovery_signals: LiveDocumentParserDiscoverySignals {
             preload_link_candidates: discovered_preload_link_candidates,
             parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
@@ -1277,13 +1284,13 @@ fn finish_live_xml_document_parser(
     owner: &mut impl LiveDocumentParserOwner,
 ) -> DocumentParserFinishSignals {
     let crate::parser::ParserFinishDiscoverySignals {
-        parser_created_null_registry_elements,
+        parser_created_registry_associations,
         discovered_preload_link_candidates,
         discovered_parser_meta_csp_candidates,
         discovered_blocking_stylesheet_inputs,
     } = stream.finish_with_runtime_dom_consumer(owner);
     DocumentParserFinishSignals {
-        parser_created_null_registry_elements,
+        parser_created_registry_associations,
         discovery_signals: LiveDocumentParserDiscoverySignals {
             preload_link_candidates: discovered_preload_link_candidates,
             parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,

@@ -4735,12 +4735,12 @@ impl PageVm {
         )?;
         page_vm.install_stored_runtime_isolated_worlds_on_named_owner_lane()?;
         page_vm.install_stored_runtime_bindings_on_named_owner_lane()?;
-        let null_custom_element_registry_elements =
-            parser_session.take_parser_stream_null_custom_element_registry_elements();
+        let custom_element_registry_associations =
+            parser_session.take_parser_stream_custom_element_registry_associations();
         page_vm
             .vm_mut()
-            .apply_parser_created_null_registry_associations_in_default_context(
-                &null_custom_element_registry_elements,
+            .apply_parser_created_registry_associations_in_default_context(
+                &custom_element_registry_associations,
             )?;
         before_document_start(&mut page_vm)?;
         // Run document-start scripts directly on the runtime's live document.

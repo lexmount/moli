@@ -1655,3 +1655,19 @@ fn global_registry_options_reject_other_document_targets() {
         "NotSupportedError|NotSupportedError|NotSupportedError|NotSupportedError|NotSupportedError|true"
     );
 }
+
+#[test]
+fn parsed_shadow_roots_keep_owner_document_registries_in_scoped_contexts() {
+    let mut vm = new_storage_test_vm("https://parser-registry-associations.test/");
+    let result = vm
+        .eval(include_str!("parser_registry_associations.js"))
+        .expect("parser-created registry associations should remain observable");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("registry facts JSON");
+    let rows = result["rows"].as_array().expect("registry rows");
+    assert_eq!(rows.len(), 12);
+    for row in rows {
+        for fact in ["before", "nullElement", "contextRegistry", "retained"] {
+            assert_eq!(row[fact], true, "{fact}: {row}");
+        }
+    }
+}

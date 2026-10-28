@@ -91,9 +91,18 @@ pub struct ParserPumpOutcome {
     pub discovered_blocking_stylesheet_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
 }
 
+/// Registry initialization discovered by this parser since its last handoff.
+/// Keeping the exact node and policy avoids rediscovering unrelated roots from
+/// a snapshot of every ShadowRoot retained by the document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParserCustomElementRegistryAssociation {
+    Null(NativeNodeId),
+    DocumentDefault(NativeNodeId),
+}
+
 #[derive(Debug, Default)]
 pub struct ParserFinishDiscoverySignals {
-    pub parser_created_null_registry_elements: Vec<NativeNodeId>,
+    pub parser_created_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
     pub discovered_preload_link_candidates: Vec<NativeNodeId>,
     pub discovered_parser_meta_csp_candidates: Vec<NativeNodeId>,
     pub discovered_blocking_stylesheet_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
@@ -1156,9 +1165,11 @@ impl DocumentStream {
         self.inner.snapshot_parser_stream_dom_host()
     }
 
-    pub fn take_parser_stream_null_custom_element_registry_elements(&self) -> Vec<NativeNodeId> {
+    pub fn take_parser_stream_custom_element_registry_associations(
+        &self,
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
         self.inner
-            .take_parser_stream_null_custom_element_registry_elements()
+            .take_parser_stream_custom_element_registry_associations()
     }
 
     pub fn take_parser_stream_dom_host(&self) -> DomHost {
@@ -1681,12 +1692,12 @@ impl DocumentSink {
         self.target.borrow().snapshot_parser_stream_dom_host()
     }
 
-    pub(super) fn take_parser_stream_null_custom_element_registry_elements(
+    pub(super) fn take_parser_stream_custom_element_registry_associations(
         &self,
-    ) -> Vec<NativeNodeId> {
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
         self.target
             .borrow_mut()
-            .take_parser_stream_null_custom_element_registry_elements()
+            .take_parser_stream_custom_element_registry_associations()
     }
 
     pub(super) fn take_parser_stream_dom_host(&self) -> DomHost {
@@ -2080,6 +2091,47 @@ mod tests {
 
     const HTML_NS: &str = "http://www.w3.org/1999/xhtml";
     const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
+
+    #[test]
+    fn registry_associations_follow_new_parser_nodes_without_replaying_prior_roots() {
+        use super::ParserCustomElementRegistryAssociation::{DocumentDefault, Null};
+
+        let stream = HtmlParser::with_scripting_enabled(true)
+            .start_document(Url::parse("https://example.test/parser-registries").unwrap());
+        stream.feed("<!doctype html><body><section><template shadowrootmode=open>default</template></section>");
+        let host = stream.snapshot_parser_stream_dom_host();
+        let section = host.elements_by_tag_name(host.document_handle(), "section", false)[0];
+        let default_root = host.shadow_root_handle(section).unwrap();
+        assert_eq!(
+            stream.take_parser_stream_custom_element_registry_associations(),
+            vec![DocumentDefault(default_root)],
+        );
+        assert!(
+            stream
+                .take_parser_stream_custom_element_registry_associations()
+                .is_empty()
+        );
+
+        stream.feed("<article><template shadowrootmode=closed shadowrootcustomelementregistry>null</template></article><span customelementregistry></span>");
+        let host = stream.snapshot_parser_stream_dom_host();
+        let article = host.elements_by_tag_name(host.document_handle(), "article", false)[0];
+        let null_root = host.shadow_root_handle(article).unwrap();
+        let null_element = host.elements_by_tag_name(host.document_handle(), "span", false)[0];
+        assert_eq!(
+            stream.take_parser_stream_custom_element_registry_associations(),
+            vec![Null(null_root), Null(null_element)],
+        );
+
+        stream.feed("<div><template>inert contents</template></div>");
+        assert!(
+            stream
+                .take_parser_stream_custom_element_registry_associations()
+                .is_empty()
+        );
+        let host = stream.finish_dom_host();
+        assert_eq!(host.shadow_root_handle(section), Some(default_root));
+        assert_eq!(host.shadow_root_handle(article), Some(null_root));
+    }
 
     #[test]
     fn text_document_stream_preserves_literal_markup_and_leading_newline() {

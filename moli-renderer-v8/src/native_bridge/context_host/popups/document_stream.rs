@@ -438,9 +438,9 @@ impl JsContextHost {
                         if !self.popup_document_stream_is_current(task) {
                             return;
                         }
-                        custom_elements::apply_parser_created_null_registry_associations(
+                        custom_elements::apply_parser_created_registry_associations(
                             self,
-                            &signals.parser_created_null_registry_elements,
+                            &signals.parser_created_registry_associations,
                         );
                         self.finish_popup_document_stream(scope, task, activity);
                     }

@@ -143,7 +143,7 @@ pub(crate) use registry_roots::{
 };
 mod registry_retarget;
 pub(crate) use registry_retarget::{
-    apply_parser_created_null_registry_associations, apply_registry_association_retargets,
+    apply_parser_created_registry_associations, apply_registry_association_retargets,
     registry_association_retargets_before_removal,
 };
 mod subtree_upgrade;

@@ -202,6 +202,13 @@ pub(in crate::native_bridge) fn detached_attach_shadow_method_callback<'s>(
         .is_some_and(|(runtime_ptr, host_handle)| {
             custom_elements::preserves_custom_element_identity(runtime_ptr, host_handle)
         });
+    let existing_root = context_host_ptr_from_global_bridge(scope)
+        .zip(detached_native_handle(scope, host))
+        .and_then(|(runtime_ptr, handle)| {
+            unsafe { &*runtime_ptr }
+                .dom_host()
+                .shadow_root_handle(handle)
+        });
     let shadow_root_mode = shadow_init.mode().to_owned();
     let Some(root) = build_detached_shadow_root_object_with_init(
         scope,
@@ -214,6 +221,7 @@ pub(in crate::native_bridge) fn detached_attach_shadow_method_callback<'s>(
     };
     if let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
         && let Some(root_handle) = detached_native_handle(scope, root)
+        && existing_root != Some(root_handle)
     {
         let root_registry_association = registry_association.or_else(|| {
             let owner_document = detached_owner_document_object(scope, host)?;
