@@ -646,6 +646,24 @@ impl CdpConnection {
         handled
     }
 
+    /// Initializes a target's Page event source without activating it or
+    /// creating a CDP attachment. BiDi keeps this projection for its context
+    /// tree and lifecycle events until the connection releases the observer.
+    pub fn set_page_event_listener_enabled_for_target(
+        &mut self,
+        target_id: &str,
+        enabled: bool,
+    ) -> bool {
+        let Some(route) = self.target_session_route_for_target_id(target_id) else {
+            return false;
+        };
+        let owner = CommandOwnerScope::for_route(route);
+        self.with_target_devtools_session_state_for_owner_mut(&owner, |state| {
+            state.page_session_state.browsing_context_events_enabled = enabled;
+        })
+        .is_some()
+    }
+
     fn sync_javascript_dialog_handler_enabled_for_browser_context(&self, browser_context_id: &str) {
         let Some(browser_context) = self.browser_context_by_id(browser_context_id) else {
             return;

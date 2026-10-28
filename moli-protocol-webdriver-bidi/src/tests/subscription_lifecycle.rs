@@ -1,6 +1,88 @@
 use super::*;
 
 #[test]
+fn page_event_sources_track_context_lifetime_independently_of_network_subscriptions() {
+    let mut state = super::super::BidiConnectionState::new();
+    let mut registry = super::super::BidiSessionRegistry::new();
+    state.handle_message_with_session_registry(
+        json!({"id": 1, "method": "session.new", "params": {}}),
+        &mut registry,
+    );
+    record_bidi_context_tree(
+        &mut state,
+        &[("TID-front", "default"), ("TID-back", "default")],
+    );
+    let params = json!({"events": ["network.responseCompleted"], "contexts": ["TID-back"]});
+    let plan = state.subscribe_hook_plan_for_params(&params).unwrap();
+    assert_eq!(
+        plan.page_contexts(),
+        Some(["TID-back".to_owned(), "TID-front".to_owned()].as_slice())
+    );
+    for context in plan.page_contexts().unwrap() {
+        state.record_bidi_page_event_source_opened(context);
+    }
+    assert_eq!(
+        state
+            .subscribe_hook_plan_for_params(&params)
+            .unwrap()
+            .page_contexts(),
+        None
+    );
+    let subscription = state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": params}),
+        &mut registry,
+    );
+    let unsubscribe = state.handle_message_with_session_registry(
+        json!({"id": 3, "method": "session.unsubscribe", "params": {
+            "subscriptions": [subscription.response["result"]["subscription"]]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(unsubscribe.response["type"], "success");
+    let plan = state.record_bidi_command_response(
+        Some("session.unsubscribe"),
+        None,
+        &unsubscribe.response,
+    );
+    assert_eq!(
+        plan.page_disabled_contexts(),
+        None,
+        "frame topology outlives individual subscriptions"
+    );
+
+    let created = state.record_bidi_command_response(
+        Some("browsingContext.create"),
+        Some(&json!({})),
+        &json!({"type": "success", "result": {"context": "TID-new"}}),
+    );
+    assert_eq!(
+        created.page_contexts(),
+        Some(["TID-new".to_owned()].as_slice())
+    );
+    state.record_bidi_page_event_source_opened("TID-new");
+    let release = state.release_event_source_hook_plan();
+    assert_eq!(
+        release.page_disabled_contexts(),
+        Some(
+            [
+                "TID-back".to_owned(),
+                "TID-front".to_owned(),
+                "TID-new".to_owned(),
+            ]
+            .as_slice()
+        )
+    );
+    state.record_bidi_page_event_source_closed("TID-back");
+    assert!(
+        !state
+            .release_event_source_hook_plan()
+            .page_disabled_contexts()
+            .unwrap()
+            .contains(&"TID-back".to_owned())
+    );
+}
+
+#[test]
 fn user_context_script_realm_subscription_plans_matching_runtime_listener_hooks() {
     let mut state = super::super::BidiConnectionState::new();
     let mut registry = super::super::BidiSessionRegistry::new();

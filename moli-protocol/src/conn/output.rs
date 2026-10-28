@@ -981,11 +981,17 @@ impl ProtocolDeliveryEnvelope {
     pub(crate) fn bind_to_root_document_route(
         mut self,
         conn: &CdpConnection,
-        root_document: moli_core::RendererDocumentLifecycleIdentity,
+        source: &super::TargetRootDocumentProtocolAttachmentIdentity,
     ) -> Option<Self> {
-        let binding = conn.target_root_document_protocol_attachment_identity_for_session(
-            self.protocol_session_id(),
-            root_document,
+        let event_owner = self
+            .protocol_session_id()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| {
+                CommandOwnerScope::for_page_residence(source.attachment().page_owner())
+            });
+        let binding = conn.target_root_document_protocol_attachment_identity_for_owner(
+            &event_owner,
+            source.root_document(),
         )?;
         self.route.bind_root_document(binding);
         Some(self)

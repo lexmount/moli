@@ -42,8 +42,22 @@ fn bind_renderer_document_for_test(
     frame_id: &str,
     identity: RendererDocumentLifecycleIdentity,
 ) {
+    bind_renderer_document_for_owner_for_test(
+        conn,
+        &CommandOwnerScope::for_session(session_id),
+        frame_id,
+        identity,
+    );
+}
+
+fn bind_renderer_document_for_owner_for_test(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    frame_id: &str,
+    identity: RendererDocumentLifecycleIdentity,
+) {
     let runtime_slot = conn
-        .runtime_session_owner_slot_mut(Some(session_id))
+        .runtime_session_owner_slot_mut_for_owner(owner)
         .expect("test target should expose a runtime owner slot");
     if runtime_slot.page_attachment_id().is_none() {
         runtime_slot.set_page_attachment_id_for_test(identity.document.page_id.as_u64());
@@ -61,7 +75,7 @@ fn bind_renderer_document_for_test(
         terminated: None,
     };
     let (binding, initial_events) = conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session(session_id),
+        owner,
         RendererPageCreationArtifacts {
             active_document: identity.document,
             active_epoch: identity.epoch,
@@ -109,8 +123,8 @@ fn root_document_attachment_for_test(
     session_id: &str,
     source_document: RendererDocumentLifecycleIdentity,
 ) -> crate::conn::TargetRootDocumentProtocolAttachmentIdentity {
-    conn.target_root_document_protocol_attachment_identity_for_session(
-        Some(session_id),
+    conn.target_root_document_protocol_attachment_identity_for_owner(
+        &CommandOwnerScope::for_session(session_id),
         source_document,
     )
     .expect("test target should expose the exact root Document attachment")
@@ -1603,6 +1617,177 @@ async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lifecycle() {
+    use crate::automation::{
+        AutomationContext, DevToolsAddNetworkDataCollectorCommand, DevToolsNetworkDataCollectorId,
+        DevToolsNetworkDataType, DevToolsTargetId, FrontendProtocol,
+    };
+    use moli_page_types::DevToolsSessionKey;
+
+    for (network_enabled, lifecycle_enabled) in [(true, true), (true, false), (false, true)] {
+        let mut conn = CdpConnection::default();
+        let mut foreground = BrowserContext::new("BID-foreground".into());
+        foreground.set_active_target_id("TID-foreground");
+        foreground
+            .active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+        foreground.active_page_target_mut().devtools_sessions[DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_lifecycle_events = !lifecycle_enabled;
+        conn.install_browser_context_fixture_for_test(foreground);
+
+        let mut background = BrowserContext::new("BID-background".into());
+        background.set_active_target_id("TID-background");
+        let target = background.active_page_target_mut();
+        target.devtools_sessions[DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_domain_enabled = true;
+        target.devtools_sessions[DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_lifecycle_events = lifecycle_enabled;
+        if network_enabled {
+            target.runtime_slot.enable_primary_network_events();
+        }
+        conn.push_inactive_browser_context_fixture_for_test(background);
+        let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-background".into(),
+            target_id: "TID-background".into(),
+            session_key: DevToolsSessionKey::Primary,
+        });
+        assert_eq!(owner.session_id(), None);
+        let source_document = renderer_document_identity_for_test(1, 1);
+        bind_renderer_document_for_owner_for_test(
+            &mut conn,
+            &owner,
+            "TID-background",
+            source_document,
+        );
+
+        for label in ["foreground", "background"] {
+            conn.network_data_collectors
+                .add_collector(DevToolsAddNetworkDataCollectorCommand {
+                    context: AutomationContext {
+                        protocol: FrontendProtocol::WebDriverBidi,
+                        session_id: None,
+                        target_id: None,
+                        browser_context_id: None,
+                    },
+                    collector_id: DevToolsNetworkDataCollectorId::from(format!(
+                        "collector-{label}"
+                    )),
+                    data_types: vec![DevToolsNetworkDataType::Response],
+                    max_encoded_data_size: 1000,
+                    target_ids: vec![DevToolsTargetId::from(format!("TID-{label}"))],
+                    browser_context_ids: Vec::new(),
+                })
+                .expect("valid context-scoped collector");
+        }
+        let network = ChildFrameDocumentNetworkSnapshot {
+            request_url: "https://example.test/child".into(),
+            request_method: "GET".into(),
+            request_headers: Vec::new(),
+            final_url: "https://example.test/child".into(),
+            status: 200,
+            response_headers: vec![("Content-Type".into(), b"text/html".to_vec())],
+            encoded_data_length: 10,
+            response_body: Some(SubresourceResponseBody::from_bytes(b"child body".to_vec())),
+            from_cache: false,
+        };
+        let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
+            12.5,
+            vec![super::PagePreparedChildFrameTreeEvent::Attached {
+                frame_id: "CHILD-background".into(),
+                parent_frame_id: "TID-background".into(),
+            }],
+            Vec::new(),
+            vec![ChildFrameDocumentNetworkActivitySnapshot {
+                frame_id: "RETIRED-CHILD-background".into(),
+                parent_frame_id: Some("TID-background".into()),
+                loader_id: "LID-historical-background".into(),
+                snapshot: network.clone(),
+            }],
+            vec![ChildFrameNavigationSnapshot {
+                frame_id: "CHILD-background".into(),
+                parent_frame_id: Some("TID-background".into()),
+                loader_id: Some("LID-background".into()),
+                name: None,
+                url: "https://example.test/child".into(),
+                document_open_replacement: false,
+                security_origin_inherited: false,
+                security_origin_opaque: false,
+                document_network: Some(network),
+            }],
+            "https://example.test".into(),
+            "Secure".into(),
+        );
+        let binding = conn
+            .target_root_document_protocol_attachment_identity_for_owner(&owner, source_document)
+            .expect("unattached background Page has a frozen root Document");
+        let activity = super::PagePreparedChildFrameActivity::from_document(binding, document);
+        let mut events = Vec::new();
+        super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+
+        assert!(
+            !events.is_empty(),
+            "background events must survive route binding"
+        );
+        assert!(events.iter().all(|event| {
+            event.protocol_session_id().is_none()
+                && event.navigation_gate_target_id() == Some("TID-background")
+                && event.route_is_current(&conn)
+        }));
+        let messages = protocol_messages_from_background_events(events.clone());
+        assert_eq!(
+            messages
+                .iter()
+                .any(|message| message["method"] == "Page.lifecycleEvent"),
+            lifecycle_enabled,
+            "lifecycle subscription must come from the background Page: {messages:?}",
+        );
+        for request_id in ["LID-background", "LID-historical-background"] {
+            assert_eq!(
+                messages.iter().any(|message| {
+                    message["method"] == "Network.loadingFinished"
+                        && message["params"]["requestId"] == request_id
+                }),
+                network_enabled,
+            );
+            let background_body = conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap()
+                .captured_response_body(request_id);
+            assert_eq!(background_body.is_some(), network_enabled);
+            assert!(
+                conn.runtime_session_owner_slot(None)
+                    .unwrap()
+                    .captured_response_body(request_id)
+                    .is_none()
+            );
+            let collected = conn
+                .network_data_collectors
+                .collected_body(request_id, DevToolsNetworkDataType::Response);
+            assert_eq!(collected.is_some(), network_enabled);
+            if let Some(collected) = collected {
+                assert!(collected.was_collected_by("collector-background"));
+                assert!(!collected.was_collected_by("collector-foreground"));
+                assert_eq!(collected.body_bytes_limited(1000).unwrap(), b"child body");
+            }
+        }
+        assert_eq!(conn.browser_context.as_ref().unwrap().id, "BID-foreground");
+        // Capturing the correct owner must not weaken the queued event's
+        // revocation when that Page replaces its root Document.
+        bind_renderer_document_for_owner_for_test(
+            &mut conn,
+            &owner,
+            "TID-background",
+            renderer_document_identity_for_test(2, 2),
+        );
+        assert!(events.iter().all(|event| !event.route_is_current(&conn)));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn child_frame_activity_emits_document_network_events_from_prepared_load() {
     let mut conn = CdpConnection::default();
     let mut bc = BrowserContext::new("BID-1".into());
@@ -1881,7 +2066,7 @@ async fn child_document_network_without_body_records_known_no_data() {
     crate::domains::network::emit_child_document_navigation_network_background_events(
         &mut conn,
         &mut background_events,
-        Some("SID-1"),
+        &CommandOwnerScope::for_session("SID-1"),
         "CHILD-FRAME-LEGACY",
         "LID-CHILD-LEGACY",
         "LID-CHILD-LEGACY",

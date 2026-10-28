@@ -2019,15 +2019,6 @@ impl CdpConnection {
     /// Binds renderer-produced child-frame activity to the Page attachment
     /// that captured it and to the exact root Document reported by the same
     /// renderer snapshot.
-    pub(crate) fn target_root_document_protocol_attachment_identity_for_session(
-        &self,
-        session_id: Option<&str>,
-        root_document: moli_core::RendererDocumentLifecycleIdentity,
-    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.target_root_document_protocol_attachment_identity_for_owner(&owner, root_document)
-    }
-
     pub(crate) fn target_root_document_protocol_attachment_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -2256,7 +2247,7 @@ impl CdpConnection {
                     .map(CommandOwnerScope::for_session)
                     .unwrap_or_else(|| owner.clone());
                 self.target_page_session_state_for_owner(&event_owner)
-                    .is_some_and(|state| state.page_domain_enabled)
+                    .is_some_and(|state| state.observes_page_events())
             })
             .collect()
     }

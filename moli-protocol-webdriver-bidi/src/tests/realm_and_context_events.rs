@@ -1469,6 +1469,22 @@ fn session_subscribe_filters_automation_browsing_context_lifecycle_events() {
         timestamp: 1.5,
     });
 
+    let mut marker_state = state.clone();
+    let markers = ["init", "DOMContentLoaded", "load", "load"].map(|name| {
+        AutomationEvent::PageLifecycle(moli_protocol::automation::PageLifecycleEvent {
+            target_id: DevToolsTargetId::from("FRAME-1"),
+            frame_id: DevToolsFrameId::from("FRAME-1"),
+            loader_id: DevToolsLoaderId::from("LOADER-1"),
+            name: name.to_owned(),
+            timestamp: 1.5,
+        })
+    });
+    let marker_events = marker_state.subscribed_bidi_events_from_automation_events(
+        [&other_frame_started, &frame_started, &frame_navigated]
+            .into_iter()
+            .chain(markers.iter()),
+    );
+
     let events = state.subscribed_bidi_events_from_automation_events([
         &other_frame_started,
         &frame_started,
@@ -1478,6 +1494,17 @@ fn session_subscribe_filters_automation_browsing_context_lifecycle_events() {
         &load,
     ]);
 
+    assert_eq!(
+        marker_events
+            .iter()
+            .map(|event| &event["method"])
+            .collect::<Vec<_>>(),
+        events
+            .iter()
+            .map(|event| &event["method"])
+            .collect::<Vec<_>>(),
+        "typed child lifecycle markers must publish the same lifecycle, including deduplication",
+    );
     assert_eq!(events.len(), 3);
     assert_eq!(
         events[0]["method"],
@@ -1488,7 +1515,7 @@ fn session_subscribe_filters_automation_browsing_context_lifecycle_events() {
         json!("browsingContext.domContentLoaded")
     );
     assert_eq!(events[2]["method"], json!("browsingContext.load"));
-    for event in &events {
+    for event in events.iter().chain(&marker_events) {
         assert_eq!(event["type"], json!("event"));
         assert_eq!(event["params"]["context"], json!("FRAME-1"));
         assert_eq!(event["params"]["navigation"], json!("navigation-LOADER-1"));

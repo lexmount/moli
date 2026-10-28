@@ -1275,6 +1275,20 @@ async fn try_append_bidi_event_source_hook_plan_events(
     plan: &BidiEventSourceHookPlan,
     events: &mut Vec<Value>,
 ) -> Result<(), DevToolsError> {
+    if let Some(contexts) = plan.page_contexts() {
+        for context in contexts {
+            if scheduler.set_page_event_listener_enabled_for_target(context, true) {
+                bidi.record_bidi_page_event_source_opened(context);
+            }
+        }
+    }
+    if let Some(contexts) = plan.page_disabled_contexts() {
+        for context in contexts {
+            if scheduler.set_page_event_listener_enabled_for_target(context, false) {
+                bidi.record_bidi_page_event_source_closed(context);
+            }
+        }
+    }
     if let Some(contexts) = plan.runtime_contexts() {
         if contexts.is_empty() {
             let runtime_enable_result =

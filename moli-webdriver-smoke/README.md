@@ -67,6 +67,14 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
+  Six cross-engine `bidi-network` scenarios keep the foreground tab active while
+  an unattached background Page inserts, navigates, or nests an iframe. They
+  cover shared and separate user contexts, require request/response and
+  DOMContentLoaded/load events to identify the loaded child context, and read
+  the exact response bytes through the background Page's collector. The
+  foreground collector must return `no such network data`. All six identical
+  scenarios passed against Chrome for Testing and ChromeDriver 156.0.8078.47 on
+  2026-10-28; all six fail on the main revision preceding the owner fix.
   Forty-three `bidi-storage` scenarios cover value, compound attribute, size,
   exact-path and expiry filters, non-ASCII string values, no matches, and
   empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`

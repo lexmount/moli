@@ -845,6 +845,23 @@ impl BidiConnectionState {
         )
     }
 
+    pub fn record_bidi_page_event_source_opened(&mut self, context: &str) {
+        self.event_source_ownership
+            .record_page_context_opened(context);
+    }
+
+    pub fn record_bidi_page_event_source_closed(&mut self, context: &str) {
+        self.event_source_ownership
+            .record_page_context_closed(context);
+    }
+
+    fn unopened_page_contexts(&self) -> BTreeSet<String> {
+        self.known_top_level_contexts()
+            .difference(&self.event_source_ownership.opened_page_contexts())
+            .cloned()
+            .collect()
+    }
+
     pub fn record_bidi_runtime_event_source_opened(&mut self, context: &str) {
         self.event_source_ownership
             .record_runtime_context_opened(context);
@@ -911,6 +928,11 @@ impl BidiConnectionState {
 
         let requested_scope = self.requested_event_source_hook_scope(&contexts, &user_contexts);
         let mut plan = BidiEventSourceHookPlan::default();
+        // Frame topology is needed even for Network-only subscriptions: a
+        // newly attached child must be mapped to its top-level context before
+        // filtering that child's events. Keep this source for the context's
+        // lifetime rather than tying it to one subscription.
+        plan.set_page_contexts(self.unopened_page_contexts());
         if events
             .iter()
             .any(|event| is_bidi_runtime_source_event_name(event))
@@ -1035,6 +1057,7 @@ impl BidiConnectionState {
 
     pub fn release_event_source_hook_plan(&self) -> BidiEventSourceHookPlan {
         let mut plan = BidiEventSourceHookPlan::default();
+        plan.set_page_disabled_contexts(self.event_source_ownership.opened_page_contexts());
         let runtime_contexts = self.event_source_ownership.opened_runtime_contexts();
         if !runtime_contexts.is_empty() {
             plan.set_runtime_disable_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
@@ -1444,6 +1467,7 @@ impl BidiConnectionState {
                     .unwrap_or(DEFAULT_BIDI_USER_CONTEXT);
                 self.record_bidi_context_mapping(context, Some(context), Some(user_context));
                 let mut plan = BidiEventSourceHookPlan::default();
+                plan.set_page_contexts(self.unopened_page_contexts());
                 let mut runtime_contexts = BTreeSet::new();
                 runtime_contexts.insert(context.to_owned());
                 plan.set_runtime_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
@@ -1474,7 +1498,9 @@ impl BidiConnectionState {
                         self.record_bidi_context_info(context);
                     }
                 }
-                BidiEventSourceHookPlan::default()
+                let mut plan = BidiEventSourceHookPlan::default();
+                plan.set_page_contexts(self.unopened_page_contexts());
+                plan
             }
             Some("browsingContext.close") => {
                 if let Some(context) = params
@@ -1558,6 +1584,7 @@ impl BidiConnectionState {
         }
 
         let mut plan = BidiEventSourceHookPlan::default();
+        plan.set_page_contexts(self.unopened_page_contexts());
         if !runtime_contexts.is_empty() {
             plan.set_runtime_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
             plan.record_runtime_context_ownership();

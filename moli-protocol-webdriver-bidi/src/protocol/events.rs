@@ -139,6 +139,18 @@ impl BidiBrowsingContextEventState {
                 Some(event.frame_id.as_str()),
                 event.loader_id.as_ref().map(|loader| loader.as_str()),
             ),
+            AutomationEvent::PageLifecycle(event) => {
+                let method = match event.name.as_str() {
+                    "DOMContentLoaded" => "browsingContext.domContentLoaded",
+                    "load" => "browsingContext.load",
+                    _ => return None,
+                };
+                self.lifecycle_event(
+                    method,
+                    Some(event.frame_id.as_str()),
+                    Some(event.loader_id.as_str()),
+                )
+            }
             AutomationEvent::SameDocumentNavigation(event) => {
                 match event.navigation_type.as_str() {
                     "fragment" => Some(browsing_context_navigation_event(

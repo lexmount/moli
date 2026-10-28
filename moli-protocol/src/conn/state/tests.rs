@@ -53,6 +53,24 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
 }
 
 #[test]
+fn browsing_context_observation_is_independent_of_cdp_page_subscription() {
+    let mut state = TargetPageSessionState {
+        browsing_context_events_enabled: true,
+        ..Default::default()
+    };
+    assert!(state.observes_page_events());
+    assert!(state.observes_page_lifecycle_events());
+    assert!(!state.page_domain_enabled);
+    assert_eq!(state.page_domain_subscription_generation(), None);
+
+    state.enable_page_domain(42);
+    state.browsing_context_events_enabled = false;
+    assert!(state.observes_page_events());
+    assert!(!state.observes_page_lifecycle_events());
+    assert_eq!(state.page_domain_subscription_generation(), Some(42));
+}
+
+#[test]
 fn page_target_host_owns_session_state_directly() {
     let mut target = PageTargetHost::empty("TID-state-test".to_owned());
     target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] = DevToolsSessionState {

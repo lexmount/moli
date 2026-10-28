@@ -72,7 +72,7 @@ pub(in crate::domains) async fn project_main_document_commit_async(
                 .unwrap_or_else(|| owner.clone());
             let lifecycle_enabled = conn
                 .target_page_session_state_for_owner(&event_owner)
-                .is_some_and(|state| state.page_lifecycle_events);
+                .is_some_and(|state| state.observes_page_lifecycle_events());
             super::emit_navigation_lifecycle_init_background_events(
                 &mut events,
                 session_id.as_deref(),

@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Iterable
 from .config import WebDriverTarget, clear_current_process_proxy_env, reserve_port
 from .fixture import FixtureServer
 from .groups.bidi import run_bidi_group
+from .groups.bidi_network import run_bidi_network_group
 from .groups.bidi_storage import run_bidi_storage_group
 from .groups.classic import run_classic_group
 from .groups.navigation_errors import run_navigation_errors_group
@@ -87,6 +88,11 @@ MOLI_GROUPS: tuple[SmokeGroup, ...] = (
         "bidi",
         "Raw WebDriver BiDi WebSocket session, browsingContext lifecycle, input actions, element origins, file uploads, network data, user contexts, emulation, explicit screenshot unsupported errors, and storage.",
         _run_bidi_group,
+    ),
+    SmokeGroup(
+        "bidi-network",
+        "Cross-engine background iframe Network/lifecycle events, response bodies, and collector isolation.",
+        run_bidi_network_group,
     ),
     SmokeGroup(
         "bidi-storage",

@@ -298,7 +298,7 @@ fn page_lifecycle_events_enabled_for_owner(
     owner: &CommandOwnerScope,
 ) -> bool {
     conn.target_page_session_state_for_owner(owner)
-        .is_some_and(|state| state.page_lifecycle_events)
+        .is_some_and(|state| state.observes_page_lifecycle_events())
 }
 
 pub(crate) fn emit_navigation_frame_stop_after_download_background_events(

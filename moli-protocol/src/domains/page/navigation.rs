@@ -2226,7 +2226,7 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
             .unwrap_or_else(|| owner.clone());
         let lifecycle_enabled = conn
             .target_page_session_state_for_owner(&event_owner)
-            .is_some_and(|state| state.page_lifecycle_events);
+            .is_some_and(|state| state.observes_page_lifecycle_events());
         emit_child_frame_document_opened_background_events(
             out,
             session_id.as_deref(),
@@ -2262,10 +2262,8 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     if !binding_is_current {
         return;
     }
-    let session_id = activity.binding().session_id().map(str::to_owned);
     let (binding, mut document) = activity.into_parts();
     let owner = CommandOwnerScope::for_page_attachment(binding.attachment());
-    let root_document = binding.root_document();
     let mut activity_events = Vec::new();
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let timing_started = timing_enabled.then(std::time::Instant::now);
@@ -2298,7 +2296,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
         network::emit_child_document_navigation_network_background_events(
             conn,
             &mut activity_events,
-            session_id.as_deref(),
+            &owner,
             &document_network.frame_id,
             &document_network.loader_id,
             &document_network.loader_id,
@@ -2315,7 +2313,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                     .unwrap_or_else(|| owner.clone());
                 let lifecycle_enabled = conn
                     .target_page_session_state_for_owner(&event_owner)
-                    .is_some_and(|state| state.page_lifecycle_events);
+                    .is_some_and(|state| state.observes_page_lifecycle_events());
                 emit_child_frame_document_open_completed_background_events(
                     &mut activity_events,
                     event_session_id.as_deref(),
@@ -2354,7 +2352,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
             network::emit_child_document_navigation_network_background_events(
                 conn,
                 &mut activity_events,
-                session_id.as_deref(),
+                &owner,
                 &document_network.frame_id,
                 &document_network.loader_id,
                 &document_network.loader_id,
@@ -2374,9 +2372,13 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                 &security_origin,
                 &secure_context_type,
             );
+            let event_owner = event_session_id
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
             let lifecycle_enabled = conn
-                .target_page_session_state_for_session(event_session_id.as_deref())
-                .is_some_and(|state| state.page_lifecycle_events);
+                .target_page_session_state_for_owner(&event_owner)
+                .is_some_and(|state| state.observes_page_lifecycle_events());
             emit_child_frame_lifecycle_terminal(
                 &mut activity_events,
                 event_session_id.as_deref(),
@@ -2390,7 +2392,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     out.extend(
         activity_events
             .into_iter()
-            .filter_map(|event| event.bind_to_root_document_route(conn, root_document)),
+            .filter_map(|event| event.bind_to_root_document_route(conn, &binding)),
     );
     if let Some(started) = timing_started {
         tracing::info!(

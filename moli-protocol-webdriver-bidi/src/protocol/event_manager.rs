@@ -6,6 +6,8 @@ use super::types::{BidiSubscription, bidi_event_subscribed_channels, bidi_messag
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BidiEventSourceHookPlan {
+    page_contexts: Option<Vec<String>>,
+    page_disabled_contexts: Option<Vec<String>>,
     runtime_contexts: Option<Vec<String>>,
     runtime_disabled_contexts: Option<Vec<String>>,
     record_runtime_context_ownership: bool,
@@ -20,6 +22,26 @@ pub struct BidiEventSourceHookPlan {
 }
 
 impl BidiEventSourceHookPlan {
+    pub fn page_contexts(&self) -> Option<&[String]> {
+        self.page_contexts.as_deref()
+    }
+
+    pub fn page_disabled_contexts(&self) -> Option<&[String]> {
+        self.page_disabled_contexts.as_deref()
+    }
+
+    pub(super) fn set_page_contexts(&mut self, contexts: BTreeSet<String>) {
+        if !contexts.is_empty() {
+            self.page_contexts = Some(contexts.into_iter().collect());
+        }
+    }
+
+    pub(super) fn set_page_disabled_contexts(&mut self, contexts: BTreeSet<String>) {
+        if !contexts.is_empty() {
+            self.page_disabled_contexts = Some(contexts.into_iter().collect());
+        }
+    }
+
     pub fn runtime_contexts(&self) -> Option<&[String]> {
         self.runtime_contexts.as_deref()
     }
@@ -111,6 +133,7 @@ impl BidiEventSourceHookPlan {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct BidiEventSourceOwnership {
+    page_contexts: BTreeSet<String>,
     runtime_global: bool,
     runtime_contexts: BTreeSet<String>,
     network_contexts: BTreeSet<String>,
@@ -119,6 +142,18 @@ pub(super) struct BidiEventSourceOwnership {
 }
 
 impl BidiEventSourceOwnership {
+    pub(super) fn opened_page_contexts(&self) -> BTreeSet<String> {
+        self.page_contexts.clone()
+    }
+
+    pub(super) fn record_page_context_opened(&mut self, context: &str) {
+        self.page_contexts.insert(context.to_owned());
+    }
+
+    pub(super) fn record_page_context_closed(&mut self, context: &str) {
+        self.page_contexts.remove(context);
+    }
+
     pub(super) fn runtime_global_opened(&self) -> bool {
         self.runtime_global
     }
@@ -184,6 +219,7 @@ impl BidiEventSourceOwnership {
     }
 
     pub(super) fn forget_context(&mut self, context: &str) {
+        self.page_contexts.remove(context);
         self.runtime_contexts.remove(context);
         self.network_contexts.remove(context);
         self.file_dialog_opened_contexts.remove(context);

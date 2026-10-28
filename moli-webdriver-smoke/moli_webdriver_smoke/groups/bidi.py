@@ -134,7 +134,7 @@ async def _bootstrap_bidi_context(
     navigate = messages[-1]
     assert_equal(navigate["type"], "success", "BiDi browsingContext.navigate type")
     assert_equal(navigate["result"]["url"], page_url, "BiDi navigate URL")
-    lifecycle = await _collect_lifecycle_events(websocket, messages)
+    lifecycle = await _collect_lifecycle_events(websocket, messages, context)
     assert_equal(
         [event["method"] for event in lifecycle],
         ["browsingContext.domContentLoaded"],
@@ -1332,12 +1332,16 @@ async def _recv_until_bidi_event(
             return message
 
 
-async def _collect_lifecycle_events(websocket: Any, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _collect_lifecycle_events(websocket: Any, messages: list[dict[str, Any]], context: str) -> list[dict[str, Any]]:
+    # A parent-context subscription includes its descendants in Chrome. The
+    # basic fixture has an iframe; check the requested document's lifecycle
+    # independently of that child's DOMContentLoaded event.
     lifecycle = [
         message
         for message in messages
         if message.get("type") == "event"
         and message.get("method") == "browsingContext.domContentLoaded"
+        and message.get("params", {}).get("context") == context
     ]
     deadline = asyncio.get_running_loop().time() + 5
     while [event["method"] for event in lifecycle] != ["browsingContext.domContentLoaded"]:
@@ -1348,6 +1352,10 @@ async def _collect_lifecycle_events(websocket: Any, messages: list[dict[str, Any
             message = await asyncio.wait_for(_recv(websocket), timeout=remaining)
         except TimeoutError:
             return lifecycle
-        if message.get("type") == "event" and message.get("method") == "browsingContext.domContentLoaded":
+        if (
+            message.get("type") == "event"
+            and message.get("method") == "browsingContext.domContentLoaded"
+            and message.get("params", {}).get("context") == context
+        ):
             lifecycle.append(message)
     return lifecycle

@@ -431,6 +431,9 @@ impl PageScreencastSessionState {
 pub(crate) struct TargetPageSessionState {
     pub(crate) input_events_ignored: bool,
     pub(crate) page_domain_enabled: bool,
+    /// Context-tree/lifecycle observation is independent of CDP Page.enable,
+    /// which also changes renderer dialog handling and subscription authority.
+    pub(crate) browsing_context_events_enabled: bool,
     pub(crate) page_domain_subscription_generation: u64,
     pub(crate) page_lifecycle_events: bool,
     pub(crate) audits: TargetAuditsSessionState,
@@ -449,6 +452,7 @@ impl Default for TargetPageSessionState {
         Self {
             input_events_ignored: false,
             page_domain_enabled: false,
+            browsing_context_events_enabled: false,
             page_domain_subscription_generation: 0,
             page_lifecycle_events: false,
             audits: TargetAuditsSessionState::default(),
@@ -465,6 +469,14 @@ impl Default for TargetPageSessionState {
 }
 
 impl TargetPageSessionState {
+    pub(crate) fn observes_page_events(&self) -> bool {
+        self.page_domain_enabled || self.browsing_context_events_enabled
+    }
+
+    pub(crate) fn observes_page_lifecycle_events(&self) -> bool {
+        self.page_lifecycle_events || self.browsing_context_events_enabled
+    }
+
     pub(crate) fn enable_page_domain(&mut self, subscription_generation: u64) {
         if !self.page_domain_enabled {
             self.page_domain_enabled = true;
@@ -494,6 +506,7 @@ impl PartialEq for TargetPageSessionState {
     fn eq(&self, other: &Self) -> bool {
         self.input_events_ignored == other.input_events_ignored
             && self.page_domain_enabled == other.page_domain_enabled
+            && self.browsing_context_events_enabled == other.browsing_context_events_enabled
             && self.page_lifecycle_events == other.page_lifecycle_events
             && self.audits == other.audits
             && self.log_enabled == other.log_enabled

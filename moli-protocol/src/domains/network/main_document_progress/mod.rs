@@ -18,7 +18,7 @@ use url::Url;
 
 use crate::automation::DevToolsRequestFailure;
 use crate::conn::{
-    BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
+    BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection, CommandOwnerScope,
     CommittedNavigationPage, CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation,
     NavigationDispatchState, NavigationLoadOutcome, NavigationRequestBlocked, NoContentNavigation,
     ResponseCommitReady, TargetRuntimeSlot,
@@ -1440,7 +1440,7 @@ pub(crate) fn emit_fetch_navigation_initial_request_for_pause_background_events(
 pub(crate) fn emit_child_document_navigation_network_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     frame_id: &str,
     loader_id: &str,
     request_id: &str,
@@ -1453,7 +1453,7 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     let Ok(final_url) = Url::parse(&network.final_url) else {
         return;
     };
-    let session_ids = conn.network_event_session_ids_for_session_owner(session_id);
+    let session_ids = conn.network_event_session_ids_for_owner(owner);
     if session_ids.is_empty() {
         return;
     }
@@ -1493,7 +1493,7 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     });
     record_child_document_response_body(
         conn,
-        session_id,
+        owner,
         request_id,
         &session_ids,
         network.response_body.as_ref(),
@@ -1506,18 +1506,15 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
 
 fn record_child_document_response_body(
     conn: &mut CdpConnection,
-    owner_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     request_id: &str,
     session_ids: &[Option<String>],
     response_body: Option<&moli_core::page::SubresourceResponseBody>,
 ) {
     let data_type = crate::automation::DevToolsNetworkDataType::Response;
     let encoded_data_length = response_body.map_or(0, |body| body.len());
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        owner_session_id,
-        data_type,
-        encoded_data_length,
-    );
+    let collector_ids =
+        conn.network_data_collector_ids_for_owner_body(owner, data_type, encoded_data_length);
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
     let captured_body =
         response_body.map(crate::conn::CapturedBody::from_subresource_response_body);
@@ -1530,7 +1527,7 @@ fn record_child_document_response_body(
             collection_was_gated,
         );
     }
-    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut(owner_session_id) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     if let Some(captured_body) = captured_body {

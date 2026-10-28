@@ -1044,6 +1044,15 @@ impl CdpScheduler {
             .await
     }
 
+    pub(crate) fn set_page_event_listener_enabled_for_target(
+        &mut self,
+        target_id: &str,
+        enabled: bool,
+    ) -> bool {
+        self.conn
+            .set_page_event_listener_enabled_for_target(target_id, enabled)
+    }
+
     pub(crate) fn enable_network_listener_for_target(&mut self, target_id: &str) -> bool {
         self.conn.enable_network_listener_for_target(target_id)
     }
