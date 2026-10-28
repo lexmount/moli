@@ -32,6 +32,12 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
       inline.createIndex('by-label', 'label', {unique: true});
       inline.createIndex('by-id', 'id', {unique: true});
     }
+    if (scenario === 'multientry') {
+      const multi = open.result.createObjectStore('multi');
+      multi.createIndex('by-tag', 'tags', {multiEntry: true});
+      multi.createIndex('unique-tags', 'tags', {multiEntry: true, unique: true});
+      open.result.createObjectStore('nonunique').createIndex('by-tag', 'tags', {multiEntry: true});
+    }
   };
   const db = await result(open);
   try {
@@ -233,6 +239,53 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
         assert((await inline).id === keys[3], 'generated inline key was not available to the unique index');
         await readDone;
       }
+    } else if (scenario === 'multientry') {
+      const tx = db.transaction(['multi', 'nonunique'], 'readwrite'), done = complete(tx);
+      const multi = tx.objectStore('multi'), nonunique = tx.objectStore('nonunique');
+      const tags = [
+        -0, 0, 'x', 'x', new realm.Date(0), new realm.Date(0),
+        new realm.Uint8Array([1, 2]), new realm.Uint8Array([1, 2]),
+        [1, 'a'], [1, 'a'], [[1, 'a']], [[1, 'a']],
+        null, {}, undefined, NaN, [undefined]
+      ];
+      const first = result(multi.put({tags}, 1));
+      const nonuniqueWrites = [
+        result(nonunique.put({tags: ['shared', 'shared']}, 1)),
+        result(nonunique.put({tags: ['shared', 'shared']}, 2))
+      ];
+      const duplicate = multi.put({tags: ['x', 'x']}, 2);
+      const conflict = new Promise((resolve, reject) => {
+        duplicate.onsuccess = () => reject(new Error('unique index accepted another record'));
+        duplicate.onerror = event => {
+          event.preventDefault();
+          resolve(duplicate.error.name);
+        };
+      });
+      const last = result(multi.put({tags: ['later', 'later']}, 3));
+      assert(await first === 1, 'duplicates in one record rejected its write');
+      await Promise.all(nonuniqueWrites);
+      assert(await conflict === 'ConstraintError', 'different records did not conflict');
+      assert(await last === 3, 'preventDefault did not let the transaction continue');
+      await done;
+      const read = db.transaction(['multi', 'nonunique']), readDone = complete(read);
+      const store = read.objectStore('multi');
+      const counts = [];
+      for (const name of ['by-tag', 'unique-tags']) {
+        const index = store.index(name);
+        counts.push(result(index.count()).then(count => assert(count === 7, `${name}: duplicate entries counted`)));
+        for (const key of [0, 'x', new realm.Date(0), new realm.Uint8Array([1, 2]), [1, 'a'], [[1, 'a']]]) {
+          counts.push(result(index.count(key)).then(count => assert(count === 1, `${name}: equal keys were not deduplicated`)));
+        }
+        counts.push(result(index.getAllKeys()).then(keys => {
+          assert(keys.filter(key => key === 1).length === 6 && keys.filter(key => key === 3).length === 1,
+            `${name}: wrong primary-key collection ${keys}`);
+        }));
+      }
+      counts.push(result(read.objectStore('nonunique').index('by-tag').getAllKeys('shared')).then(keys => {
+        assert(JSON.stringify(keys) === '[1,2]', 'nonunique entries were deduplicated across records');
+      }));
+      await Promise.all(counts);
+      await readDone;
     } else if (scenario === 'native-state') {
       const first = db.transaction('plain', 'readwrite'), firstDone = complete(first);
       const queued = db.transaction('plain', 'readwrite'), queuedDone = complete(queued);
