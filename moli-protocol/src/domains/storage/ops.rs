@@ -11,7 +11,9 @@ use crate::conn::{
 };
 use crate::domains::actions::StorageAction;
 use crate::domains::command_output::CommandOutputPlan;
-use moli_cookie_jar::StoredCookieSetReport;
+use moli_cookie_jar::{
+    StoredCookiePartitionFilter, StoredCookiePartitionKey, StoredCookieSetReport,
+};
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 use serde_json::{Value, json};
 use url::Url;
@@ -661,7 +663,10 @@ fn start_devtools_set_cookies_result(
         .or(command.context.browser_context_id)
         .map(DevToolsBrowserContextId::into_string);
     let target_id = command.context.target_id.as_ref().map(|id| id.as_str());
-    let cookies = command.cookies.into_iter().map(Into::into).collect();
+    let cookies = match cookie_params_for_write_scope(command.cookies, &scope.partition_filter) {
+        Ok(cookies) => cookies,
+        Err(error) => return DevToolsSetCookiesTaskStep::Complete(Err(error)),
+    };
     let browser_context_id =
         match effective_storage_browser_context_id(conn, session_id, target_id, browser_context_id)
         {
@@ -704,6 +709,45 @@ fn start_devtools_set_cookies_result(
     }
 }
 
+fn cookie_params_for_write_scope(
+    cookies: Vec<DevToolsCookieParam>,
+    partition: &StoredCookiePartitionFilter,
+) -> Result<Vec<CdpCookieParam>, DevToolsError> {
+    cookies
+        .into_iter()
+        .map(|mut cookie| {
+            // CDP batches may supply a different key for each cookie. An explicit
+            // command scope supplies the write identity and response metadata.
+            cookie.partition_key = match partition {
+                StoredCookiePartitionFilter::All => return Ok(cookie.into()),
+                StoredCookiePartitionFilter::Unpartitioned => None,
+                StoredCookiePartitionFilter::Partition(StoredCookiePartitionKey::Site {
+                    top_level_site,
+                    has_cross_site_ancestor,
+                }) => Some(json!({
+                    "topLevelSite": top_level_site,
+                    "hasCrossSiteAncestor": has_cross_site_ancestor,
+                })),
+                StoredCookiePartitionFilter::Serialized {
+                    top_level_site: Some(site),
+                    has_cross_site_ancestor,
+                } => Some(json!({
+                    "topLevelSite": site,
+                    "hasCrossSiteAncestor": has_cross_site_ancestor.unwrap_or(false),
+                })),
+                _ => {
+                    return Err(DevToolsError::new(
+                        DevToolsErrorKind::InvalidArgument,
+                        "CookieWriteRequiresSitePartition",
+                    ));
+                }
+            };
+            cookie.partition_key_opaque = None;
+            Ok(cookie.into())
+        })
+        .collect()
+}
+
 fn effective_storage_browser_context_id(
     conn: &CdpConnection,
     session_id: Option<&str>,
@@ -718,7 +762,7 @@ fn effective_storage_browser_context_id(
     }
     if let Some(target_id) = target_id {
         return conn
-            .browser_context_id_for_target(target_id)
+            .browser_context_id_for_browsing_context(target_id)
             .map(str::to_owned)
             .ok_or((-31998, "NoSuchTarget"));
     }

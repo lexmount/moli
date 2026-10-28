@@ -2122,12 +2122,7 @@ fn storage_source_origin_is_validated_and_preserves_serialized_site_constraints(
             AutomationCommand::GetCookies(command) => command.scope,
             AutomationCommand::DeleteCookies(command) => command.scope,
             AutomationCommand::SetCookies(command) => {
-                assert_eq!(
-                    command.cookies[0].partition_key,
-                    Some(
-                        json!({"topLevelSite":"https://sub.example.test", "hasCrossSiteAncestor":true})
-                    )
-                );
+                assert_eq!(command.cookies[0].partition_key, None);
                 assert_eq!(
                     command.cookies[0].url.as_deref(),
                     Some("https://cookie.example/")

@@ -845,6 +845,8 @@ pub enum DevToolsCookieDeleteFilter {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetCookiesCommand {
     pub context: AutomationContext,
+    /// An explicit partition in this scope determines every cookie's write
+    /// identity. `All` retains per-cookie partition keys for CDP batches.
     pub scope: DevToolsCookieScope,
     pub cookies: Vec<DevToolsCookieParam>,
 }

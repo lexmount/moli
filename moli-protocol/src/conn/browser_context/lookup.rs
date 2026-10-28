@@ -81,6 +81,14 @@ impl CdpConnection {
             .map(|bc| bc.id.as_str())
     }
 
+    pub(crate) fn browser_context_id_for_browsing_context(&self, context_id: &str) -> Option<&str> {
+        self.browser_context_id_for_target(context_id).or_else(|| {
+            let route = self.target_session_route_for_child_frame_id(context_id)?;
+            self.browser_context_by_id(route.browser_context_id()?)
+                .map(|context| context.id.as_str())
+        })
+    }
+
     pub(crate) async fn apply_background_target_surface_overrides_async(
         &mut self,
         target_id: &str,
@@ -93,5 +101,77 @@ impl CdpConnection {
             .ok_or_else(|| anyhow::anyhow!("UnknownBrowserContextId"))?
             .apply_background_target_surface_overrides_async(target_id)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browsing_context_owner_lookup_resolves_attached_frames_without_selecting_their_page() {
+        let mut conn = CdpConnection::new();
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
+        active
+            .active_page_target_mut()
+            .owner_state
+            .insert_attached_child_frame_id("FRAME-active".into());
+        let background = BrowserContext::new_with_page_for_test("BID-background", "TID-background");
+        conn.browser_context = Some(active);
+        conn.inactive_browser_contexts.push(background);
+        let owner =
+            crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-background".into(),
+                target_id: "TID-background".into(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            });
+        let mut events = Vec::new();
+        crate::domains::page::emit_prepared_child_frame_tree_background_events(
+            &mut conn,
+            &mut events,
+            &owner,
+            vec![
+                crate::domains::page::PagePreparedChildFrameTreeEvent::Attached {
+                    frame_id: "FRAME-background".into(),
+                    parent_frame_id: "TID-background".into(),
+                },
+            ],
+        );
+
+        for (context, owner) in [
+            ("TID-active", "BID-active"),
+            ("FRAME-active", "BID-active"),
+            ("TID-background", "BID-background"),
+            ("FRAME-background", "BID-background"),
+        ] {
+            assert_eq!(
+                conn.browser_context_id_for_browsing_context(context),
+                Some(owner)
+            );
+        }
+        assert_eq!(
+            conn.browser_context_id_for_browsing_context("FRAME-missing"),
+            None
+        );
+        crate::domains::page::emit_prepared_child_frame_tree_background_events(
+            &mut conn,
+            &mut events,
+            &owner,
+            vec![
+                crate::domains::page::PagePreparedChildFrameTreeEvent::Detached {
+                    frame_id: "FRAME-background".into(),
+                },
+            ],
+        );
+        assert_eq!(
+            conn.browser_context_id_for_browsing_context("FRAME-background"),
+            None
+        );
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .map(|context| context.id.as_str()),
+            Some("BID-active")
+        );
     }
 }

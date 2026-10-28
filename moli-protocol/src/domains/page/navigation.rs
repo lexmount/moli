@@ -2161,10 +2161,10 @@ fn merge_child_frame_tree_attachments_into_events(
     }
 }
 
-fn emit_prepared_child_frame_document_open_prefix_for_session(
+fn emit_prepared_child_frame_document_open_prefix_for_owner(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     document: &mut PagePreparedChildFrameDocumentActivity,
 ) {
     let mut document_opened_events = std::mem::take(&mut document.document_opened_events);
@@ -2180,7 +2180,7 @@ fn emit_prepared_child_frame_document_open_prefix_for_session(
                 emit_renderer_command_child_frame_document_opened_background_events_with_security(
                     conn,
                     out,
-                    session_id,
+                    owner,
                     event,
                     document.timestamp,
                     &document.security_origin,
@@ -2188,13 +2188,13 @@ fn emit_prepared_child_frame_document_open_prefix_for_session(
                 );
             }
         }
-        emit_prepared_child_frame_tree_background_events(conn, out, session_id, vec![tree_event]);
+        emit_prepared_child_frame_tree_background_events(conn, out, owner, vec![tree_event]);
     }
     for event in document_opened_events {
         emit_renderer_command_child_frame_document_opened_background_events_with_security(
             conn,
             out,
-            session_id,
+            owner,
             event,
             document.timestamp,
             &document.security_origin,
@@ -2206,7 +2206,7 @@ fn emit_prepared_child_frame_document_open_prefix_for_session(
 fn emit_renderer_command_child_frame_document_opened_background_events_with_security(
     conn: &CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     event: ChildFrameDocumentOpenedSnapshot,
     timestamp: f64,
     parent_security_origin: &str,
@@ -2219,9 +2219,13 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
         parent_security_origin,
         parent_secure_context_type,
     );
-    for session_id in conn.subscribed_page_event_session_ids_for_session_owner(owner_session_id) {
+    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
+        let event_owner = session_id
+            .as_deref()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
         let lifecycle_enabled = conn
-            .target_page_session_state_for_session(session_id.as_deref())
+            .target_page_session_state_for_owner(&event_owner)
             .is_some_and(|state| state.page_lifecycle_events);
         emit_child_frame_document_opened_background_events(
             out,
@@ -2260,6 +2264,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     }
     let session_id = activity.binding().session_id().map(str::to_owned);
     let (binding, mut document) = activity.into_parts();
+    let owner = CommandOwnerScope::for_page_attachment(binding.attachment());
     let root_document = binding.root_document();
     let mut activity_events = Vec::new();
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
@@ -2268,12 +2273,11 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     let document_network_count = document.document_networks.len();
     let document_opened_count = document.document_opened_events.len();
     let frame_tree_event_count = document.child_frame_tree_events.len();
-    let page_event_session_ids =
-        conn.subscribed_page_event_session_ids_for_session_owner(session_id.as_deref());
-    emit_prepared_child_frame_document_open_prefix_for_session(
+    let page_event_session_ids = conn.subscribed_page_event_session_ids_for_owner(&owner);
+    emit_prepared_child_frame_document_open_prefix_for_owner(
         conn,
         &mut activity_events,
-        session_id.as_deref(),
+        &owner,
         &mut document,
     );
     if !conn.target_root_document_protocol_attachment_identity_is_current(&binding) {
@@ -2305,8 +2309,12 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     for load in document.loads {
         if load.document_open_replacement {
             for event_session_id in &page_event_session_ids {
+                let event_owner = event_session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
                 let lifecycle_enabled = conn
-                    .target_page_session_state_for_session(event_session_id.as_deref())
+                    .target_page_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.page_lifecycle_events);
                 emit_child_frame_document_open_completed_background_events(
                     &mut activity_events,
@@ -2397,7 +2405,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
 pub(crate) fn emit_prepared_child_frame_tree_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     events: Vec<PagePreparedChildFrameTreeEvent>,
 ) {
     for event in events {
@@ -2407,14 +2415,12 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                 parent_frame_id,
             } => {
                 let is_new_attachment = conn
-                    .with_target_owner_state_for_session_mut(owner_session_id, |owner_state| {
+                    .with_target_owner_state_for_owner_mut(owner, |owner_state| {
                         owner_state.insert_attached_child_frame_id(frame_id.clone())
                     })
                     .unwrap_or(false);
                 if is_new_attachment {
-                    for session_id in
-                        conn.subscribed_page_event_session_ids_for_session_owner(owner_session_id)
-                    {
+                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
                         out.push(BackgroundProtocolEvent::page_frame_attached(
                             session_id.as_deref(),
                             frame_id.clone(),
@@ -2425,14 +2431,12 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
             }
             PagePreparedChildFrameTreeEvent::Detached { frame_id } => {
                 let was_attached = conn
-                    .with_target_owner_state_for_session_mut(owner_session_id, |owner_state| {
+                    .with_target_owner_state_for_owner_mut(owner, |owner_state| {
                         owner_state.remove_attached_child_frame_id(&frame_id)
                     })
                     .unwrap_or(false);
                 if was_attached {
-                    for session_id in
-                        conn.subscribed_page_event_session_ids_for_session_owner(owner_session_id)
-                    {
+                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
                         out.push(BackgroundProtocolEvent::page_frame_detached(
                             session_id.as_deref(),
                             frame_id.clone(),

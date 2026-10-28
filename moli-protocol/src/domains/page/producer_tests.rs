@@ -2185,7 +2185,7 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
     super::emit_prepared_child_frame_tree_background_events(
         &mut conn,
         &mut emitted,
-        Some("SID-1"),
+        &crate::conn::CommandOwnerScope::for_session("SID-1"),
         vec![super::PagePreparedChildFrameTreeEvent::Attached {
             frame_id: child_frame_id.clone(),
             parent_frame_id: "TID-1".to_owned(),
@@ -2201,7 +2201,7 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
     super::emit_prepared_child_frame_tree_background_events(
         &mut conn,
         &mut emitted,
-        Some("SID-1"),
+        &crate::conn::CommandOwnerScope::for_session("SID-1"),
         vec![
             super::PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: child_frame_id.clone(),

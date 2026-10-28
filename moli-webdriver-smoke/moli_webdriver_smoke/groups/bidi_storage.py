@@ -143,6 +143,9 @@ def _bidi_storage_scenarios() -> tuple[tuple[str, BidiScenario], ...]:
         (_check_cookie_numeric_filter, "numeric_filter", ("expiry_max", "size_max", "integer_notation")),
         (_check_cookie_expiry_limit, "expiry", ("lifetime_limit",)),
         (_check_storage_key_subdomain, "storage_key", ("subdomain",)),
+        (_check_child_context_owner, "context_owner", (
+            "same_origin", "cross_origin", "nested", "multiple_owners", "detached", "replaced_document",
+        )),
     )
     return scenarios + tuple(
         (
@@ -522,3 +525,107 @@ async def _check_storage_key_subdomain(env: CookieFixture, *, kind: str) -> dict
     await env.command("storage.deleteCookies", {"partition": canonical})
     assert_equal(await env.cookies(), env.before, "BiDi registrable-site deletion removes only its cookie")
     return {"sourceOrigin": expanded["sourceOrigin"], "storedSite": "https://example.com"}
+
+
+async def _check_child_context_owner(env: CookieFixture, *, kind: str) -> dict[str, Any]:
+    other_site = env.fixture.replace("127.0.0.1", "localhost", 1)
+    origin = other_site if kind == "same_origin" else env.fixture
+    route = "nested-frames" if kind == "nested" else "frame"
+    url = f"{origin}/webdriver/{route}?storage-owner={kind}"
+    result = await env.command("script.evaluate", {
+        "target": {"context": env.context}, "awaitPromise": True,
+        "expression": (
+            "new Promise((resolve, reject) => {const frame = document.createElement('iframe');"
+            "frame.id = 'cookie-owner-frame'; frame.onload = () => resolve('loaded');"
+            "frame.onerror = () => reject(new Error('owner frame failed'));"
+            f"frame.src = {json.dumps(url)}; document.body.appendChild(frame);}})"
+        ),
+    })
+    assert_equal(result["result"], {"type": "string", "value": "loaded"}, "BiDi owner iframe loaded")
+
+    def descendants(node: dict[str, Any]) -> list[dict[str, Any]]:
+        return [descendant for child in node.get("children") or [] for descendant in (child, *descendants(child))]
+
+    async def tree(context: str) -> dict[str, Any]:
+        return (await env.command("browsingContext.getTree", {"root": context}))["contexts"][0]
+
+    root = await tree(env.context)
+    child = next(frame for frame in root["children"] if frame["url"] == url)
+    if kind == "nested":
+        child = child["children"][0]["children"][0]
+    child_id = child["context"]
+    assert_equal(await env.cookies(), env.before, "BiDi iframe creation preserves every cookie")
+
+    async def verify(context: str, owner: str, parent: str, before: list[dict[str, Any]]) -> None:
+        partition = {"type": "context", "context": context}
+        async def cookies() -> list[dict[str, Any]]:
+            response = await env.command("storage.getCookies", {"partition": {"type": "context", "context": parent}})
+            return sorted(response["cookies"], key=lambda cookie: json.dumps(cookie, sort_keys=True))
+        selected = await env.command("storage.getCookies", {"partition": partition})
+        assert_equal(selected["partitionKey"], {"userContext": owner}, "BiDi child context resolves its own user context")
+        assert_equal(sorted(selected["cookies"], key=lambda cookie: json.dumps(cookie, sort_keys=True)), before, "BiDi child sees its parent's complete cookie store")
+        written = await env.command("storage.setCookie", {
+            "partition": partition,
+            "cookie": {"name": "bidiFrameWrite", "value": {"type": "string", "value": "child"}, "domain": "127.0.0.1", "path": "/", "secure": True, "sameSite": "none"},
+        })
+        assert_equal(written["partitionKey"], selected["partitionKey"], "BiDi child write owner")
+        after = await cookies()
+        assert_equal(len(after), len(before) + 1, "BiDi child write reaches parent store")
+        assert_equal([cookie for cookie in after if cookie["name"] != "bidiFrameWrite"], before, "BiDi child write preserves existing partitions")
+        deleted = await env.command("storage.deleteCookies", {"partition": partition, "filter": {"name": "bidiFrameWrite"}})
+        assert_equal(deleted["partitionKey"], selected["partitionKey"], "BiDi child delete owner")
+        assert_equal(await cookies(), before, "BiDi child delete preserves every unselected identity")
+
+    count = 0
+    if kind == "multiple_owners":
+        owner_b = (await env.command("browser.createUserContext", {}))["userContext"]
+        scenario_error: Exception | None = None
+        try:
+            parent_b = (await env.command("browsingContext.create", {"type": "tab", "userContext": owner_b}))["context"]
+            await env.command("browsingContext.navigate", {"context": parent_b, "url": f"{other_site}/webdriver/nested-frames", "wait": "complete"})
+            children_b = descendants(await tree(parent_b))
+            assert_true(bool(children_b), "BiDi second owner has real child contexts")
+            ids_a = {frame["context"] for frame in descendants(root)}
+            ids_b = {frame["context"] for frame in children_b}
+            assert_true(ids_a.isdisjoint(ids_b), "BiDi child context ids are unique across owners")
+            await env.command("storage.setCookie", {
+                "partition": {"type": "context", "context": parent_b},
+                "cookie": {"name": "bidiDeleteSmoke", "value": {"type": "string", "value": "other-owner"}, "domain": "127.0.0.1", "path": "/", "secure": True, "sameSite": "none"},
+            })
+            before_b = (await env.command("storage.getCookies", {"partition": {"type": "context", "context": parent_b}}))["cookies"]
+            before_b = sorted(before_b, key=lambda cookie: json.dumps(cookie, sort_keys=True))
+            for frame in children_b:
+                await verify(child_id, env.user_context, env.context, env.before)
+                await verify(frame["context"], owner_b, parent_b, before_b)
+                assert_equal(await env.cookies(), env.before, "BiDi another owner's child leaves this store unchanged")
+                count += 2
+        except Exception as error:
+            scenario_error = error
+        finally:
+            try:
+                await env.command("browser.removeUserContext", {"userContext": owner_b})
+            except Exception as error:
+                if scenario_error is None:
+                    scenario_error = error
+                else:
+                    scenario_error.add_note(f"Secondary user context cleanup failed: {error}")
+        if scenario_error is not None:
+            raise scenario_error
+    else:
+        await verify(child_id, env.user_context, env.context, env.before)
+        count = 1
+
+    if kind in ("detached", "replaced_document"):
+        if kind == "detached":
+            await env.command("script.evaluate", {"target": {"context": env.context}, "awaitPromise": False, "expression": "document.getElementById('cookie-owner-frame').remove()"})
+        else:
+            await env.command("browsingContext.navigate", {"context": env.context, "url": f"{other_site}/webdriver/nested-frames", "wait": "complete"})
+        for method in ("storage.getCookies", "storage.setCookie", "storage.deleteCookies"):
+            params: dict[str, Any] = {"partition": {"type": "context", "context": child_id}}
+            if method == "storage.setCookie":
+                params["cookie"] = {"name": "bidiDeleteSmoke", "value": {"type": "string", "value": "must-not-write"}, "domain": "127.0.0.1"}
+            await env.command(method, params, expected_error="no such frame")
+            assert_equal(await env.cookies(), env.before, "BiDi stale child context preserves every stored cookie")
+        remaining_ids = {frame["context"] for frame in descendants(await tree(env.context))}
+        assert_true(child_id not in remaining_ids, "BiDi removed context is not reused by a replacement document")
+    return {"contextsChecked": count, "staleCommandsChecked": 3 if kind in ("detached", "replaced_document") else 0}

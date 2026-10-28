@@ -67,7 +67,7 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
-  Thirty-seven `bidi-storage` scenarios cover value, compound attribute, size,
+  Forty-three `bidi-storage` scenarios cover value, compound attribute, size,
   exact-path and expiry filters, non-ASCII string values, no matches, and
   empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
   and two CHIPS cookies via real HTTP `Set-Cookie` responses (including a cross-site
@@ -89,7 +89,11 @@ non-yielding WebDriver timeout behavior.
   creates a cookie at `https://example.com`, while querying or deleting with the
   original subdomain matches nothing. This behavior is checked against Chrome
   rather than inferred from the storage-key helper's canonicalization rules.
-  The identical thirty-seven scenarios passed against Chrome for Testing and ChromeDriver
+  Context-owner cases pass real same-origin, cross-origin and nested iframe IDs
+  from `browsingContext.getTree` to get/set/delete. They verify unique child IDs
+  and storage isolation across simultaneous user contexts, and reject removed
+  frames and IDs retired by document replacement without changing cookies.
+  The identical forty-three scenarios passed against Chrome for Testing and ChromeDriver
   156.0.8078.47 on 2026-10-28. The returned partition key is checked for consistency
   between `getCookies` and `deleteCookies`; its supported fields can vary by engine
   under the [WebDriver BiDi storage contract](https://www.w3.org/TR/webdriver-bidi/#module-storage).

@@ -1,6 +1,78 @@
 use super::*;
 
 #[tokio::test]
+async fn scoped_cookie_write_uses_one_partition_identity_for_storage_and_response() {
+    use crate::automation::{DevToolsCookieScope, StoredCookiePartitionFilter};
+
+    let mut conn = CdpConnection::new();
+    conn.browser_context = Some(BrowserContext::new("BID-scoped-write".into()));
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
+        session_id: None,
+        target_id: None,
+        browser_context_id: None,
+    };
+    let scope = DevToolsCookieScope {
+        browser_context_id: Some(DevToolsBrowserContextId::from("BID-scoped-write")),
+        partition_filter: StoredCookiePartitionFilter::Serialized {
+            top_level_site: Some("https://site-a.test".into()),
+            has_cross_site_ancestor: Some(true),
+        },
+    };
+    let cookie = DevToolsCookieParam {
+        name: "scoped".into(),
+        value: "one".into(),
+        url: Some("https://example.com/".into()),
+        domain: None,
+        path: Some("/".into()),
+        secure: Some(true),
+        http_only: false,
+        same_site: Some("None".into()),
+        priority: None,
+        source_scheme: None,
+        source_port: None,
+        expires: None,
+        partition_key: Some(
+            json!({"topLevelSite":"https://site-b.test", "hasCrossSiteAncestor":false}),
+        ),
+        partition_key_opaque: Some(true),
+    };
+    let (result, _) = conn
+        .execute_automation_command(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
+            context: context.clone(),
+            scope: scope.clone(),
+            cookies: vec![cookie],
+        }))
+        .await
+        .into_parts();
+    let AutomationResult::SetCookies(result) = result.expect("scoped write") else {
+        panic!("set cookies");
+    };
+    assert!(result.success);
+    assert_eq!(result.scope, scope);
+    let (result, _) = conn
+        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
+            context,
+            scope: DevToolsCookieScope {
+                partition_filter: StoredCookiePartitionFilter::All,
+                ..scope
+            },
+            urls: None,
+            filter: None,
+        }))
+        .await
+        .into_parts();
+    let AutomationResult::GetCookies(result) = result.expect("stored cookies") else {
+        panic!("get cookies");
+    };
+    assert_eq!(result.cookies.len(), 1);
+    assert_eq!(
+        result.cookies[0]["partitionKey"],
+        json!({"topLevelSite":"https://site-a.test", "hasCrossSiteAncestor":true})
+    );
+}
+
+#[tokio::test]
 async fn automation_command_executes_storage_cookie_commands_for_webdriver_context() {
     let mut conn = CdpConnection::new();
     let context = AutomationContext {

@@ -391,7 +391,6 @@ impl JsContextHost {
             force_child_default_context_preflight_failure: false,
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: Rc::new(RefCell::new(None)),
-            next_child_browsing_context_id: 1,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),

@@ -22,16 +22,10 @@ struct BidiStoragePartition {
 
 impl BidiStoragePartition {
     fn command_context(&self, context: &BidiDevToolsCommandContext) -> AutomationContext {
-        let mut command_context = context.command_context_with_browser_context_id(
+        context.command_context_with_browser_context_id(
             self.target_id.clone(),
             self.scope.browser_context_id.clone(),
-        );
-        if self.target_id.is_some() {
-            // A context descriptor selects its own owner, independently of the
-            // session's default user context. Resolve and validate that target.
-            command_context.browser_context_id = None;
-        }
-        command_context
+        )
     }
 }
 
@@ -90,15 +84,8 @@ pub(crate) fn bidi_set_cookie_command(
         priority: None,
         source_scheme: None,
         source_port: None,
-        partition_key: match &partition.scope.partition_filter {
-            StoredCookiePartitionFilter::Serialized {
-                top_level_site: Some(site),
-                has_cross_site_ancestor,
-            } => Some(json!({
-                "topLevelSite": site, "hasCrossSiteAncestor": has_cross_site_ancestor.unwrap_or(false),
-            })),
-            _ => None,
-        },
+        // The shared write boundary derives the partition from scope.
+        partition_key: None,
         partition_key_opaque: None,
         expires: optional_object_uint(cookie, "expiry")?.map(|expiry| expiry as f64),
     };

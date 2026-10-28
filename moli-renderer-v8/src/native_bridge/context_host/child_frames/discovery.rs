@@ -1,6 +1,11 @@
 use super::*;
 use crate::dom::native::Node;
 use crate::native_bridge::element::parse_url_with_document_query_encoding;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Frame ids are exposed to CDP and BiDi, where they address frames across
+// Pages and user contexts. Do not reuse them when a document is replaced.
+static NEXT_CHILD_BROWSING_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChildFrameOwnerElementKind {
@@ -282,8 +287,7 @@ impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn next_child_browsing_context_frame_id(
         &mut self,
     ) -> String {
-        let next_id = self.next_child_browsing_context_id;
-        self.next_child_browsing_context_id += 1;
+        let next_id = NEXT_CHILD_BROWSING_CONTEXT_ID.fetch_add(1, Ordering::Relaxed);
         format!("child-browsing-context-{next_id}")
     }
 }
