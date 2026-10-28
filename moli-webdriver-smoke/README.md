@@ -67,7 +67,7 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
-  Thirty `bidi-storage` scenarios cover value, compound attribute, size,
+  Thirty-seven `bidi-storage` scenarios cover value, compound attribute, size,
   exact-path and expiry filters, non-ASCII string values, no matches, and
   empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
   and two CHIPS cookies via real HTTP `Set-Cookie` responses (including a cross-site
@@ -80,7 +80,16 @@ non-yielding WebDriver timeout behavior.
   malformed origins, invalid flags, missing user contexts and missing browsing
   contexts. Invalid commands must preserve every stored cookie. Writes target
   the supplied cookie domain even when the active document is on another site.
-  The identical thirty scenarios passed against Chrome for Testing and ChromeDriver
+  Numeric cases enforce the `js-uint` range (0 through 2^53-1), reject invalid
+  expiry/size values without changing any cookies, accept integer-valued JSON
+  numbers such as `21.0`, and preserve valid unmatched filters at the upper bound.
+  A maximum-safe expiry write remains persistent with Chrome's 400-day cap.
+  Subdomain cases retain Chrome's distinction between the descriptor's normalized
+  origin and the cookie's canonical site: writing with `https://shop.example.com`
+  creates a cookie at `https://example.com`, while querying or deleting with the
+  original subdomain matches nothing. This behavior is checked against Chrome
+  rather than inferred from the storage-key helper's canonicalization rules.
+  The identical thirty-seven scenarios passed against Chrome for Testing and ChromeDriver
   156.0.8078.47 on 2026-10-28. The returned partition key is checked for consistency
   between `getCookies` and `deleteCookies`; its supported fields can vary by engine
   under the [WebDriver BiDi storage contract](https://www.w3.org/TR/webdriver-bidi/#module-storage).

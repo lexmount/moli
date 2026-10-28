@@ -17,6 +17,7 @@ async def run_emulation_storage_group(browser: Any, fixture: str, results: list[
     await run_geolocation_override_smoke(browser, fixture, results)
     await run_locale_timezone_runtime_surface_smoke(browser, fixture, results)
     await run_storage_and_cookie_isolation_smoke(browser, fixture, results)
+    await run_cookie_expiry_limit_smoke(browser, fixture, results)
     await run_indexeddb_baseline_smoke(browser, fixture, results)
     await run_browser_context_profile_smoke(browser, fixture, results)
 
@@ -534,6 +535,35 @@ async def run_storage_and_cookie_isolation_smoke(browser: Any, fixture: str, res
     finally:
         await context_a.close()
         await context_b.close()
+
+
+async def run_cookie_expiry_limit_smoke(browser: Any, fixture: str, results: list[dict[str, Any]]) -> None:
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        cdp = await new_cdp_session(context, page)
+        try:
+            start = time.time()
+            near_expiry = int(start) + 3600
+            for name, expiry in (("near", near_expiry), ("safeMax", 2**53 - 1), ("farFuture", 1e100)):
+                response = await cdp.send("Network.setCookie", {
+                    "name": name, "value": "persistent", "url": fixture, "expires": expiry,
+                })
+                assert_equal(response["success"], True, f"CDP {name} cookie write")
+            cookies = (await cdp.send("Network.getCookies", {"urls": [fixture]}))["cookies"]
+            finish = time.time()
+            assert_equal(sorted(cookie["name"] for cookie in cookies), ["farFuture", "near", "safeMax"], "CDP expiry fixture")
+            for cookie in cookies:
+                assert_equal(cookie["session"], False, "CDP supplied future expiry remains persistent")
+                if cookie["name"] == "near":
+                    assert_equal(cookie["expires"], near_expiry, "CDP short expiry is unchanged")
+                elif not start + 400 * 86400 <= cookie["expires"] <= finish + 400 * 86400:
+                    raise SmokeError(f"CDP {cookie['name']} expiry was not capped at 400 days: {cookie}")
+            record(results, "cookie_expiry_persistence_and_lifetime_limit", {"maximumLifetimeDays": 400})
+        finally:
+            await cdp.detach()
+    finally:
+        await context.close()
 
 
 async def run_indexeddb_baseline_smoke(browser: Any, fixture: str, results: list[dict[str, Any]]) -> None:

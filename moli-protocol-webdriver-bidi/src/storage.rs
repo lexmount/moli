@@ -206,6 +206,10 @@ fn bidi_storage_partition(
                             "sourceOrigin must be a valid absolute URL",
                         )
                     })?;
+                    // Chrome's BiDi storage descriptor retains the hostname,
+                    // including subdomains, and compares it to the serialized
+                    // cookie site. Canonicalizing to eTLD+1 here would broaden
+                    // get/delete beyond Chrome's selection.
                     Ok(format!(
                         "{}://{}",
                         url.scheme(),
@@ -257,7 +261,15 @@ fn bidi_cookie_filter(value: Option<&Value>) -> Result<Option<DevToolsCookieFilt
         same_site,
         size: optional_object_uint(filter, "size")?,
         expires: optional_object_uint(filter, "expiry")?
-            .and_then(|value| i64::try_from(value).ok()),
+            .map(|value| {
+                i64::try_from(value).map_err(|_| {
+                    BidiError::new(
+                        BidiErrorCode::InvalidArgument,
+                        "expiry must fit in a signed 64-bit timestamp",
+                    )
+                })
+            })
+            .transpose()?,
     }))
 }
 

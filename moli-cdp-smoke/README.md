@@ -282,6 +282,12 @@ returns `InvalidParams` on initial admission, while its active override
 Moli additionally locks down the latter state-preservation case in a focused
 Rust protocol test.
 
+The `emulation-storage` cookie expiry case was calibrated against Chrome for
+Testing 156.0.8078.47 on 2026-10-28. It sets short-lived, maximum-safe-integer,
+and far-future expiries over raw CDP, then checks that every cookie remains
+persistent, short expiries stay unchanged, and large expiries are capped at
+400 days rather than losing their expiry during timestamp conversion.
+
 The default `locale-timezone-inputs` group adds input-boundary regressions for
 PR #369. It was calibrated on 2026-09-10 against `/usr/bin/chromium`
 145.0.7632.116 using the group unchanged: four timezone overrides cover Unicode

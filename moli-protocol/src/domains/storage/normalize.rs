@@ -259,10 +259,18 @@ fn offset_datetime_from_cdp_timestamp(value: f64) -> Option<time::OffsetDateTime
     }
 
     let seconds = value.trunc() as i64;
+    // Chromium caps persistent cookies at 400 days. Clamp before converting
+    // the timestamp so large, valid protocol values cannot silently become
+    // session cookies when they exceed OffsetDateTime's supported range.
+    let latest_expiry = time::OffsetDateTime::now_utc() + time::Duration::days(400);
+    if seconds > latest_expiry.unix_timestamp() {
+        return Some(latest_expiry);
+    }
     let nanos = ((value.fract()) * 1_000_000_000.0).round() as i64;
     time::OffsetDateTime::from_unix_timestamp(seconds)
         .ok()
         .and_then(|dt| dt.checked_add(time::Duration::nanoseconds(nanos)))
+        .map(|dt| dt.min(latest_expiry))
 }
 
 #[cfg(test)]
@@ -273,6 +281,35 @@ mod tests {
         CdpCookieSameSite, CdpCookieSourceScheme, stored_cookie_same_site_from_cdp,
         stored_cookie_source_scheme_from_cdp,
     };
+
+    #[test]
+    fn cdp_cookie_expiry_preserves_persistence_and_caps_the_lifetime() {
+        use super::offset_datetime_from_cdp_timestamp;
+        use time::{Duration, OffsetDateTime};
+
+        let start = OffsetDateTime::now_utc();
+        let near_expiry = start.unix_timestamp() + Duration::days(1).whole_seconds();
+        assert_eq!(
+            offset_datetime_from_cdp_timestamp(near_expiry as f64)
+                .expect("near expiry")
+                .unix_timestamp(),
+            near_expiry
+        );
+        for timestamp in [9_007_199_254_740_991.0, f64::MAX] {
+            let expiry = offset_datetime_from_cdp_timestamp(timestamp).expect("persistent expiry");
+            assert!(expiry >= start + Duration::days(400));
+            assert!(expiry <= OffsetDateTime::now_utc() + Duration::days(400));
+        }
+        assert_eq!(
+            offset_datetime_from_cdp_timestamp(0.0)
+                .expect("expired persistent cookie")
+                .unix_timestamp(),
+            0
+        );
+        for timestamp in [-1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(offset_datetime_from_cdp_timestamp(timestamp), None);
+        }
+    }
 
     #[test]
     fn cdp_cookie_same_site_tokens_are_derived_and_case_sensitive() {

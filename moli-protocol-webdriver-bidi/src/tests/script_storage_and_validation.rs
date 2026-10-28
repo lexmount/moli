@@ -1805,6 +1805,78 @@ fn rejects_chromium_wpt_invalid_preload_target_params() {
 }
 
 #[test]
+fn storage_cookie_numeric_fields_reject_values_outside_js_uint() {
+    for value in [
+        Value::Null,
+        json!(true),
+        json!(-1),
+        json!(0.5),
+        json!(9_007_199_254_740_992_u64),
+        json!(9_223_372_036_854_775_808_u64),
+        json!(u64::MAX),
+    ] {
+        for field in ["expiry", "size"] {
+            for method in ["storage.getCookies", "storage.deleteCookies"] {
+                assert_bidi_adapter_invalid(method, json!({"filter": {field: value}}));
+            }
+        }
+        assert_bidi_adapter_invalid(
+            "storage.setCookie",
+            json!({"cookie": {
+                "name": "sid", "value": {"type": "string", "value": "keep"},
+                "domain": "example.test", "expiry": value,
+            }}),
+        );
+    }
+}
+
+#[test]
+fn storage_cookie_numeric_fields_preserve_valid_js_uint_values() {
+    use moli_protocol::automation::AutomationCommand;
+
+    let context = super::super::BidiDevToolsCommandContext::new("bidi-cookie-numeric");
+    for (value, expected) in [
+        (json!(0), 0),
+        (json!(-0.0), 0),
+        (json!(1.0), 1),
+        (json!(9_007_199_254_740_991_u64), 9_007_199_254_740_991),
+    ] {
+        for method in [
+            "storage.getCookies",
+            "storage.deleteCookies",
+            "storage.setCookie",
+        ] {
+            let command = super::super::parse_bidi_command(json!({
+                "id": 304, "method": method, "params": {
+                    "filter": {"size": value, "expiry": value},
+                    "cookie": {"name": "sid", "value": {"type": "string", "value": "keep"}, "domain": "example.test", "expiry": value},
+                },
+            })).expect("numeric storage command");
+            let shared = super::super::automation_command_from_bidi_command(&command, &context)
+                .expect("valid js-uint");
+            let filter = match shared {
+                AutomationCommand::GetCookies(command) => command.filter.expect("cookie filter"),
+                AutomationCommand::DeleteCookies(command) => {
+                    let moli_protocol::automation::DevToolsCookieDeleteFilter::Properties(filter) =
+                        command.filter
+                    else {
+                        panic!("BiDi property filter");
+                    };
+                    filter
+                }
+                AutomationCommand::SetCookies(command) => {
+                    assert_eq!(command.cookies[0].expires, Some(expected as f64));
+                    continue;
+                }
+                _ => panic!("storage command"),
+            };
+            assert_eq!(filter.size, Some(expected as u64));
+            assert_eq!(filter.expires, Some(expected));
+        }
+    }
+}
+
+#[test]
 fn rejects_chromium_wpt_invalid_storage_cookie_params() {
     // Mirrors the adapter-level invalid.py cases from Chromium's vendored
     // WPT WebDriver BiDi storage get/set/delete cookie suites.

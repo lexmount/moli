@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -138,6 +139,10 @@ def _bidi_storage_scenarios() -> tuple[tuple[str, BidiScenario], ...]:
             "site", "file", "ancestor_without_origin", "opaque",
         )),
         (_check_cookie_attribute, "delete", ("expiry", "unicode_value")),
+        (_check_cookie_numeric_invalid, "numeric_invalid", ("expiry", "size")),
+        (_check_cookie_numeric_filter, "numeric_filter", ("expiry_max", "size_max", "integer_notation")),
+        (_check_cookie_expiry_limit, "expiry", ("lifetime_limit",)),
+        (_check_storage_key_subdomain, "storage_key", ("subdomain",)),
     )
     return scenarios + tuple(
         (
@@ -432,3 +437,88 @@ async def _check_cookie_attribute(env: CookieFixture, *, kind: str) -> dict[str,
     expected = [cookie for cookie in before if cookie["value"]["value"] != target]
     assert_equal(await env.cookies(), expected, f"BiDi {kind} preserves all unselected identities")
     return {"selectedValue": target}
+
+
+async def _check_cookie_numeric_invalid(env: CookieFixture, *, kind: str) -> dict[str, Any]:
+    methods = ("storage.getCookies", "storage.deleteCookies")
+    if kind == "expiry":
+        methods += ("storage.setCookie",)
+    invalid_values = (None, True, -1, 0.5, 2**53, 2**63, 2**64 - 1)
+    for value in invalid_values:
+        for method in methods:
+            params: dict[str, Any] = {"partition": env.partition}
+            if method == "storage.setCookie":
+                params["cookie"] = {
+                    "name": "bidiDeleteSmoke", "value": {"type": "string", "value": "must-not-write"},
+                    "domain": "127.0.0.1", "path": "/", "secure": True, "sameSite": "none", "expiry": value,
+                }
+            else:
+                params["filter"] = {kind: value}
+            await env.command(method, params, expected_error="invalid argument")
+            assert_equal(await env.cookies(), env.before, f"BiDi {method} invalid {kind}={value!r} preserves every cookie")
+    return {"error": "invalid argument", "commandsChecked": len(methods) * len(invalid_values)}
+
+
+async def _check_cookie_numeric_filter(env: CookieFixture, *, kind: str) -> dict[str, Any]:
+    values: tuple[str, ...] = ()
+    if kind == "integer_notation":
+        # JSON 21.0 and 21 describe the same JavaScript integer. Use a size
+        # that actually matches two partitioned cookies, rather than only
+        # verifying acceptance of a filter which selects nothing.
+        cookie_filter = {"size": float(len("bidiDeleteSmoke") + len("part-a"))}
+        values = ("part-a", "part-b")
+    else:
+        cookie_filter = {kind.removesuffix("_max"): 2**53 - 1}
+    params = {"partition": env.partition, "filter": cookie_filter}
+    selected = await env.command("storage.getCookies", params)
+    assert_equal(sorted(cookie["value"]["value"] for cookie in selected["cookies"]), sorted(values), f"BiDi {kind} numeric filter")
+    await env.command("storage.deleteCookies", params)
+    expected = [cookie for cookie in env.before if cookie["value"]["value"] not in values]
+    assert_equal(await env.cookies(), expected, f"BiDi {kind} preserves every unselected cookie")
+    return {"selectedValues": list(values)}
+
+
+async def _check_cookie_expiry_limit(env: CookieFixture, *, kind: str) -> dict[str, Any]:
+    lifetime = 400 * 24 * 60 * 60
+    start = time.time()
+    await env.command("storage.setCookie", {
+        "partition": env.partition,
+        "cookie": {
+            "name": "bidiExpiryLimit", "value": {"type": "string", "value": "persistent"},
+            "domain": "127.0.0.1", "path": "/", "secure": True, "sameSite": "none", "expiry": 2**53 - 1,
+        },
+    })
+    after = await env.cookies()
+    finish = time.time()
+    created = [cookie for cookie in after if cookie["name"] == "bidiExpiryLimit"]
+    assert_equal(len(created), 1, "BiDi maximum safe expiry creates one cookie")
+    # BiDi reports integer seconds; Chrome rounds the CDP fractional expiry.
+    # Use the enclosing integer interval so rounding across a second remains
+    # valid. The raw CDP smoke checks the original, unrounded time interval.
+    minimum, maximum = math.floor(start + lifetime), math.ceil(finish + lifetime)
+    assert_true(minimum <= created[0].get("expiry", -1) <= maximum, f"BiDi maximum safe expiry remains persistent and is capped at 400 days: {created[0]!r}, bounds=({minimum}, {maximum})")
+    assert_equal([cookie for cookie in after if cookie["name"] != "bidiExpiryLimit"], env.before, "BiDi maximum safe expiry preserves existing cookies")
+    return {"maximumLifetimeDays": 400}
+
+
+async def _check_storage_key_subdomain(env: CookieFixture, *, kind: str) -> dict[str, Any]:
+    cookie = {
+        "name": "bidiSubdomain", "value": {"type": "string", "value": "partitioned"},
+        "domain": "127.0.0.1", "path": "/", "secure": True, "sameSite": "none",
+    }
+    subdomain = env.storage_key(sourceOrigin="https://shop.example.com:8443/path?query=yes")
+    canonical = env.storage_key(sourceOrigin="https://example.com")
+    written = await env.command("storage.setCookie", {"partition": subdomain, "cookie": cookie})
+    expanded = {"userContext": env.user_context, "sourceOrigin": "https://shop.example.com"}
+    assert_equal(written["partitionKey"], expanded, "BiDi set echoes normalized origin with subdomain intact")
+    before = await env.cookies()
+    assert_equal(len(before), len(env.before) + 1, "BiDi subdomain fixture creates one partitioned cookie")
+    for descriptor, values in ((subdomain, []), (canonical, ["partitioned"])):
+        selected = await env.command("storage.getCookies", {"partition": descriptor})
+        assert_equal([cookie["value"]["value"] for cookie in selected["cookies"]], values, "BiDi sourceOrigin matches the stored serialized site exactly")
+    deleted = await env.command("storage.deleteCookies", {"partition": subdomain})
+    assert_equal(deleted["partitionKey"], expanded, "BiDi subdomain delete keeps the original origin")
+    assert_equal(await env.cookies(), before, "BiDi subdomain deletion must not broaden to the registrable site")
+    await env.command("storage.deleteCookies", {"partition": canonical})
+    assert_equal(await env.cookies(), env.before, "BiDi registrable-site deletion removes only its cookie")
+    return {"sourceOrigin": expanded["sourceOrigin"], "storedSite": "https://example.com"}

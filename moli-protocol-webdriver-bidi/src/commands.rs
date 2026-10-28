@@ -3098,12 +3098,18 @@ pub(crate) fn optional_object_uint(
     let Some(value) = params.get(field) else {
         return Ok(None);
     };
-    value.as_u64().map(Some).ok_or_else(|| {
-        BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("{field} must be a uint"),
-        )
-    })
+    // BiDi js-uint is a JavaScript safe integer, not the full Rust u64
+    // range. Integer-valued JSON numbers such as 1.0 are valid as well.
+    value
+        .as_f64()
+        .filter(|value| (0.0..=MAX_SAFE_INTEGER as f64).contains(value) && value.fract() == 0.0)
+        .map(|value| Some(value as u64))
+        .ok_or_else(|| {
+            BidiError::new(
+                BidiErrorCode::InvalidArgument,
+                format!("{field} must be an integer between 0 and {MAX_SAFE_INTEGER}"),
+            )
+        })
 }
 
 pub(crate) fn required_network_bytes_value(
