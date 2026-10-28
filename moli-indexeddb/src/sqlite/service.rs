@@ -15,9 +15,9 @@ use std::{
 };
 
 use moli_sqlite::{
-    ConnectionOptions, Executor, ExecutorConfig, ExecutorError, ExecutorHandle, OpenMode, TaskKind,
-    TaskPermit,
+    ConnectionOptions, Executor, ExecutorConfig, ExecutorError, ExecutorHandle, OpenMode,
 };
+pub use moli_sqlite::{TaskKind, TaskPermit};
 use parking_lot::{Mutex, RwLock};
 
 use super::*;

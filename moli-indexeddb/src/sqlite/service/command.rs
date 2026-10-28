@@ -216,62 +216,17 @@ fn path_bytes(path: &crate::KeyPath) -> usize {
 }
 
 fn key_bytes(key: &Key) -> usize {
-    key_bytes_at_depth(key, 0)
+    key.heap_bytes()
 }
-
-fn key_bytes_at_depth(key: &Key, depth: usize) -> usize {
-    if depth > crate::MAX_KEY_DEPTH {
-        return usize::MAX;
-    }
-    match key {
-        Key::String(value) => value.capacity().saturating_mul(2),
-        Key::Binary(value) => value.capacity(),
-        Key::Array(keys) => keys_bytes_at_depth(keys, depth + 1),
-        _ => 0,
-    }
-}
-
 fn keys_bytes(keys: &Vec<Key>) -> usize {
-    keys_bytes_at_depth(keys, 0)
-}
-
-fn keys_bytes_at_depth(keys: &Vec<Key>, depth: usize) -> usize {
     keys.capacity()
         .saturating_mul(std::mem::size_of::<Key>())
-        .saturating_add(keys.iter().fold(0_usize, |size, key| {
-            size.saturating_add(key_bytes_at_depth(key, depth))
-        }))
+        .saturating_add(
+            keys.iter()
+                .fold(0usize, |n, key| n.saturating_add(key.heap_bytes())),
+        )
 }
 
 fn value_bytes(value: &IndexedDbValue) -> usize {
-    let mut size = value.wire_bytes.capacity().saturating_add(
-        value
-            .external_objects
-            .capacity()
-            .saturating_mul(std::mem::size_of::<crate::IndexedDbExternalObject>()),
-    );
-    for object in value.external_objects() {
-        let extra = match object {
-            crate::IndexedDbExternalObject::Blob { bytes, mime_type } => {
-                bytes.capacity().saturating_add(mime_type.capacity())
-            }
-            crate::IndexedDbExternalObject::File {
-                bytes,
-                mime_type,
-                name,
-                ..
-            } => bytes
-                .capacity()
-                .saturating_add(mime_type.capacity())
-                .saturating_add(name.capacity()),
-            crate::IndexedDbExternalObject::FileSystemHandle { path, .. } => path
-                .capacity()
-                .saturating_mul(std::mem::size_of::<String>())
-                .saturating_add(path.iter().fold(0_usize, |size, component| {
-                    size.saturating_add(component.capacity())
-                })),
-        };
-        size = size.saturating_add(extra);
-    }
-    size
+    value.heap_bytes()
 }

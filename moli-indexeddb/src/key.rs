@@ -62,6 +62,28 @@ impl Key {
         KeyNumber::new(value).map(Self::Number)
     }
 
+    /// Heap retained by this key, excluding its own enum header.
+    pub fn heap_bytes(&self) -> usize {
+        self.heap_bytes_at_depth(0)
+    }
+
+    fn heap_bytes_at_depth(&self, depth: usize) -> usize {
+        if depth > MAX_KEY_DEPTH {
+            return usize::MAX;
+        }
+        match self {
+            Self::String(value) => value.capacity().saturating_mul(2),
+            Self::Binary(value) => value.capacity(),
+            Self::Array(keys) => keys
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Key>())
+                .saturating_add(keys.iter().fold(0usize, |n, key| {
+                    n.saturating_add(key.heap_bytes_at_depth(depth + 1))
+                })),
+            _ => 0,
+        }
+    }
+
     /// Reject nesting that would exceed the supported native key depth.
     pub fn validate_depth(&self) -> Result<(), &'static str> {
         if !matches!(self, Self::Array(_)) {
