@@ -183,10 +183,13 @@ pub(super) fn complete_pending_dom_command_result(
             };
             match page.finish_document_child_node_snapshot_events(completion) {
                 Ok(Some(_)) => Ok(AutomationResult::Empty),
-                Ok(None) => Err(DevToolsError::from(PendingDomCommandStartError {
-                    code: -32000,
-                    message: missing_node_message.to_owned(),
-                })),
+                Ok(None) => match missing_node_message {
+                    Some(message) => Err(DevToolsError::from(PendingDomCommandStartError {
+                        code: -32000,
+                        message: message.to_owned(),
+                    })),
+                    None => Ok(AutomationResult::Empty),
+                },
                 Err(error) => Err(DevToolsError::new(
                     DevToolsErrorKind::Internal,
                     format!("Could not capture child node snapshots: {error}"),
@@ -294,6 +297,7 @@ pub(super) fn complete_pending_dom_command_result(
                     include_whitespace,
                     &cache_object_id,
                     0,
+                    false,
                     false,
                 ) {
                     Ok(pending) => {
@@ -561,10 +565,13 @@ pub(super) fn get_frame_owner_result_from_node_reference(
 }
 
 pub(super) fn get_frame_owner_result_value(result: &DevToolsGetFrameOwnerResult) -> Value {
-    json!({
-        "nodeId": result.node_id,
+    let mut value = json!({
         "backendNodeId": result.backend_node_id,
-    })
+    });
+    if result.node_id != 0 {
+        value["nodeId"] = json!(result.node_id);
+    }
+    value
 }
 
 pub(super) fn live_node_not_element_error() -> PendingDomCommandStartError {
@@ -1139,13 +1146,17 @@ pub(super) fn complete_set_child_nodes_snapshot_for_backend_node(
     completion: CompletedPageCommand,
     after: PendingSetChildNodesAfter,
     top_frame_id: Option<String>,
-    missing_node_message: &'static str,
+    missing_node_message: Option<&'static str>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let snapshot_events = match page.finish_document_child_node_snapshot_events(completion) {
         Ok(Some(events)) => events,
         Ok(None) => {
-            out.push_error(-32000, missing_node_message);
+            if let Some(message) = missing_node_message {
+                out.push_error(-32000, message);
+            } else {
+                complete_set_child_nodes_after(after, out);
+            }
             return DomCommandTaskStep::Complete;
         }
         Err(error) => {
@@ -1156,19 +1167,18 @@ pub(super) fn complete_set_child_nodes_snapshot_for_backend_node(
             return DomCommandTaskStep::Complete;
         }
     };
-    let Some(event) = snapshot_events.events.into_iter().next() else {
-        complete_set_child_nodes_after(after, out);
-        return DomCommandTaskStep::Complete;
-    };
-    complete_set_child_nodes_from_snapshots(
-        session_id,
-        after,
-        event.parent_frontend_node_id,
-        event.snapshots,
-        snapshot_events.top_snapshot_node_id,
-        top_frame_id,
-        out,
-    )
+    for event in snapshot_events.events {
+        push_set_child_nodes_event_from_snapshots(
+            session_id,
+            event.parent_frontend_node_id,
+            &event.snapshots,
+            snapshot_events.top_snapshot_node_id,
+            top_frame_id.as_deref(),
+            out,
+        );
+    }
+    complete_set_child_nodes_after(after, out);
+    DomCommandTaskStep::Complete
 }
 
 pub(super) fn complete_query_selector_set_child_nodes_live(
@@ -1208,27 +1218,6 @@ pub(super) fn complete_query_selector_set_child_nodes_live(
             out,
         );
     }
-    complete_set_child_nodes_after(after, out);
-    DomCommandTaskStep::Complete
-}
-
-pub(super) fn complete_set_child_nodes_from_snapshots(
-    session_id: Option<&str>,
-    after: PendingSetChildNodesAfter,
-    parent_frontend_node_id: u32,
-    snapshots: Vec<DocumentNodeSnapshot>,
-    top_snapshot_node_id: DocumentSnapshotNodeId,
-    top_frame_id: Option<String>,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    push_set_child_nodes_event_from_snapshots(
-        session_id,
-        parent_frontend_node_id,
-        &snapshots,
-        top_snapshot_node_id,
-        top_frame_id.as_deref(),
-        out,
-    );
     complete_set_child_nodes_after(after, out);
     DomCommandTaskStep::Complete
 }
@@ -1343,24 +1332,31 @@ pub(super) fn top_snapshot_node_id_for_live_object_snapshot(
 }
 
 pub(super) fn complete_request_node_object_reference(
-    _session_id: Option<&str>,
+    session_id: Option<&str>,
     page: &mut Page,
     completion: CompletedPageCommand,
+    top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_document_node_snapshot_for_object_id(completion) {
-        Ok(Some(object_snapshot)) => {
-            let Some(frontend_node_id) =
-                super::frontend_node_id_for_snapshot(&object_snapshot.snapshot)
-            else {
-                out.push_error(-32000, "Could not find node with given id");
-                return DomCommandTaskStep::Complete;
-            };
+    match page.finish_request_document_node_for_object_id(completion) {
+        Ok((Some(frontend_node_id), snapshot_events)) => {
+            if let Some(snapshot_events) = snapshot_events {
+                for event in snapshot_events.events {
+                    push_set_child_nodes_event_from_snapshots(
+                        session_id,
+                        event.parent_frontend_node_id,
+                        &event.snapshots,
+                        snapshot_events.top_snapshot_node_id,
+                        top_frame_id.as_deref(),
+                        out,
+                    );
+                }
+            }
             out.push_result(json!({
                 "nodeId": frontend_node_id
             }));
         }
-        Ok(None) => out.push_error(-32000, "Could not find node with given id"),
+        Ok((None, _)) => out.push_error(-32000, "Could not find node with given id"),
         Err(error) => {
             out.push_error(-32000, format!("Could not request node object: {error}"));
         }

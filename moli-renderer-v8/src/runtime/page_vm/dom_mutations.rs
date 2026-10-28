@@ -1,15 +1,177 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::document_runtime::{DevToolsDomChildListMutationFact, DevToolsDomMutationFact};
 use crate::dom::native::NodeType;
 use crate::runtime::{
     RendererDocumentLifecycleIdentity, RendererDomMutationEvent, RendererDomMutationEventBatch,
 };
-use moli_page_types::{DevToolsSessionKey, DocumentNodeSnapshot};
+use moli_page_types::{
+    DevToolsSessionKey, DocumentNodeAssociatedSnapshot, DocumentNodeSnapshot,
+    MAX_DOM_OUTPUT_TREE_DEPTH,
+};
 
 use super::PageVm;
 
 impl PageVm {
+    /// Restore expanded children in subsequent notifications when a template
+    /// fragment or the wire depth limit prevents including them in this one.
+    pub(crate) fn append_document_child_snapshot_event(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        event: crate::runtime::RendererDocumentChildNodeSnapshotEvent,
+        depth: i32,
+        events: &mut Vec<crate::runtime::RendererDocumentChildNodeSnapshotEvent>,
+    ) {
+        let mut pending = VecDeque::from([event]);
+        while let Some(mut event) = pending.pop_front() {
+            for snapshot in &mut event.snapshots {
+                self.preserve_requested_document_children(inspector_session_id, snapshot);
+                let mut stack = vec![(&mut *snapshot, MAX_DOM_OUTPUT_TREE_DEPTH)];
+                while let Some((node, remaining_depth)) = stack.pop() {
+                    let next_depth = remaining_depth.saturating_sub(1);
+                    // Leave room for an associated root. Its own child list
+                    // can be restored after the enclosing snapshot is sent.
+                    if remaining_depth <= 1 {
+                        if let Some(children) = self
+                            .take_expanded_document_child_snapshot_event(inspector_session_id, node)
+                        {
+                            pending.push_back(children);
+                        }
+                    } else {
+                        stack.extend(
+                            node.children
+                                .iter_mut()
+                                .rev()
+                                .map(|child| (child, next_depth)),
+                        );
+                    }
+                    stack.extend(
+                        node.shadow_roots
+                            .iter_mut()
+                            .rev()
+                            .map(|child| (child, next_depth)),
+                    );
+                    stack.extend(
+                        node.pseudo_elements
+                            .iter_mut()
+                            .rev()
+                            .map(|child| (child, next_depth)),
+                    );
+                    match node.associated.as_deref_mut() {
+                        Some(DocumentNodeAssociatedSnapshot::TemplateContent(content)) => {
+                            if let Some(children) = self
+                                .take_expanded_document_child_snapshot_event(
+                                    inspector_session_id,
+                                    content,
+                                )
+                            {
+                                pending.push_back(children);
+                            }
+                        }
+                        Some(DocumentNodeAssociatedSnapshot::ContentDocument(document)) => {
+                            stack.push((document, next_depth))
+                        }
+                        None => {}
+                    }
+                }
+                self.mark_document_snapshot_published(inspector_session_id, snapshot, depth);
+            }
+            events.push(event);
+        }
+    }
+
+    fn take_expanded_document_child_snapshot_event(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        snapshot: &mut DocumentNodeSnapshot,
+    ) -> Option<crate::runtime::RendererDocumentChildNodeSnapshotEvent> {
+        if snapshot.children.is_empty() {
+            return None;
+        }
+        self.mark_document_node_children_requested(
+            inspector_session_id,
+            snapshot
+                .backend_node_id
+                .expect("child-list backend identity"),
+            snapshot.children.len(),
+        );
+        Some(crate::runtime::RendererDocumentChildNodeSnapshotEvent {
+            parent_frontend_node_id: snapshot.frontend_node_id.expect("bound child-list parent"),
+            snapshots: std::mem::take(&mut snapshot.children),
+        })
+    }
+
+    /// Publish requested Inspector paths through the same before-response
+    /// output journal as DOM mutation snapshots, for native and legacy commands.
+    pub(crate) fn queue_document_child_snapshot_events(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        snapshots: crate::runtime::RendererDocumentChildNodeSnapshotEvents,
+    ) {
+        if snapshots.events.is_empty() {
+            return;
+        }
+        let events = snapshots
+            .events
+            .into_iter()
+            .map(|event| RendererDomMutationEvent::SetChildNodes {
+                parent_node_id: event.parent_frontend_node_id,
+                nodes: event.snapshots,
+            })
+            .collect();
+        self.pending_dom_mutation_event_batches
+            .push(RendererDomMutationEventBatch::new(
+                self.devtools_agent_token(),
+                DevToolsSessionKey::from_wire_session_id(inspector_session_id),
+                events,
+            ));
+    }
+
+    /// setChildNodes replaces the client's node objects. Keep the children it
+    /// already expanded when a shallow snapshot refreshes an associated tree.
+    pub(crate) fn preserve_requested_document_children(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        snapshot: &mut DocumentNodeSnapshot,
+    ) {
+        let document_id = self.current_dom_agent_document_id();
+        let include_whitespace = self.document_dom_agent_includes_whitespace(inspector_session_id);
+        let mut stack = vec![snapshot];
+        while let Some(snapshot) = stack.pop() {
+            if snapshot.children.len() < snapshot.child_count
+                && let Some(backend_node_id) = snapshot.backend_node_id
+                && self.dom_agent_state.children_requested(
+                    inspector_session_id,
+                    document_id,
+                    backend_node_id,
+                )
+                && let Some(mut expanded) = self
+                    .document_node_snapshot_for_backend_node_id_in_inspector_session(
+                        inspector_session_id,
+                        backend_node_id,
+                        1,
+                        false,
+                    )
+                    .ok()
+                    .flatten()
+            {
+                self.assign_renderer_dom_agent_ids_to_snapshot(
+                    inspector_session_id,
+                    &mut expanded.snapshot,
+                    include_whitespace,
+                );
+                snapshot.children = expanded.snapshot.children;
+                snapshot.child_count = expanded.snapshot.child_count;
+            }
+            stack.extend(snapshot.children.iter_mut().rev());
+            stack.extend(snapshot.shadow_roots.iter_mut().rev());
+            stack.extend(snapshot.pseudo_elements.iter_mut().rev());
+            if let Some(associated) = snapshot.associated.as_deref_mut() {
+                stack.push(associated.node_mut());
+            }
+        }
+    }
+
     pub(super) fn sync_devtools_dom_mutation_recording_interest(&mut self) {
         let enabled = self.dom_agent_state.has_frontend_bindings();
         self.vm()
@@ -18,25 +180,37 @@ impl PageVm {
             .set_devtools_mutation_records_enabled(enabled);
     }
 
-    pub(crate) fn mark_document_snapshot_children_requested(
+    /// Records a snapshot committed to a DOM tree response or notification.
+    /// A describeNode response does not populate the client's DOM mirror.
+    pub(crate) fn mark_document_snapshot_published(
         &mut self,
         inspector_session_id: Option<&str>,
         snapshot: &DocumentNodeSnapshot,
         depth: i32,
     ) {
         let document_id = self.current_dom_agent_document_id();
-        let mut stack = vec![(snapshot, depth)];
-        while let Some((snapshot, remaining_depth)) = stack.pop() {
+        let mut stack = vec![(snapshot, depth, true)];
+        while let Some((snapshot, remaining_depth, expand)) = stack.pop() {
             let forced_single_text_child = remaining_depth == 0
                 && matches!(snapshot.children.as_slice(), [child] if child.node_type == NodeType::Text as u8);
             if let Some(backend_node_id) = snapshot.backend_node_id {
+                if snapshot.frontend_node_id.is_some_and(|id| id != 0) {
+                    self.dom_agent_state.mark_node_published(
+                        inspector_session_id,
+                        document_id,
+                        backend_node_id,
+                    );
+                }
                 self.dom_agent_state.cache_child_count(
                     inspector_session_id,
                     document_id,
                     backend_node_id,
                     snapshot.child_count,
                 );
-                if remaining_depth != 0 || forced_single_text_child {
+                if expand
+                    && snapshot.children.len() == snapshot.child_count
+                    && (remaining_depth != 0 || forced_single_text_child)
+                {
                     self.dom_agent_state.mark_children_requested(
                         inspector_session_id,
                         document_id,
@@ -45,10 +219,7 @@ impl PageVm {
                     );
                 }
             }
-            if remaining_depth == 0 {
-                if forced_single_text_child {
-                    stack.extend(snapshot.children.iter().rev().map(|child| (child, 0)));
-                }
+            if !expand {
                 continue;
             }
             let next_depth = if remaining_depth > 0 {
@@ -56,21 +227,50 @@ impl PageVm {
             } else {
                 remaining_depth
             };
+            if let Some(associated) = snapshot.associated.as_deref() {
+                stack.push((
+                    associated.node(),
+                    next_depth,
+                    matches!(
+                        associated,
+                        DocumentNodeAssociatedSnapshot::ContentDocument(_)
+                    ),
+                ));
+            }
+            stack.extend(
+                snapshot
+                    .pseudo_elements
+                    .iter()
+                    .rev()
+                    .map(|child| (child, next_depth, true)),
+            );
             stack.extend(
                 snapshot
                     .shadow_roots
                     .iter()
                     .rev()
-                    .map(|child| (child, next_depth)),
+                    .map(|child| (child, next_depth, true)),
             );
             stack.extend(
                 snapshot
                     .children
                     .iter()
                     .rev()
-                    .map(|child| (child, next_depth)),
+                    .map(|child| (child, next_depth, true)),
             );
         }
+    }
+
+    pub(crate) fn document_node_children_requested(
+        &self,
+        inspector_session_id: Option<&str>,
+        backend_node_id: u32,
+    ) -> bool {
+        self.dom_agent_state.children_requested(
+            inspector_session_id,
+            self.current_dom_agent_document_id(),
+            backend_node_id,
+        )
     }
 
     pub(crate) fn mark_document_node_children_requested(
@@ -195,7 +395,7 @@ impl PageVm {
                     name,
                     value,
                 } => {
-                    let Some(node_id) = self.existing_frontend_node_id_for_handle(
+                    let Some(node_id) = self.published_frontend_node_id_for_handle(
                         inspector_session_id,
                         document_id,
                         *target,
@@ -241,7 +441,7 @@ impl PageVm {
                 }
                 DevToolsDomMutationFact::ChildList(mutation) => {
                     if resynchronized_parents.contains(&mutation.target) {
-                        self.remove_finally_detached_bindings_for_resynchronized_parent(
+                        self.remove_finally_detached_bindings(
                             inspector_session_id,
                             document_id,
                             mutation,
@@ -287,7 +487,7 @@ impl PageVm {
             || !crate::runtime::page_dom::inspector_whitespace_text_value(value);
         if old_visible == new_visible {
             if new_visible
-                && let Some(node_id) = self.existing_frontend_node_id_for_handle(
+                && let Some(node_id) = self.published_frontend_node_id_for_handle(
                     inspector_session_id,
                     document_id,
                     target,
@@ -319,7 +519,7 @@ impl PageVm {
         };
         let Some(parent_node_id) = self
             .dom_agent_state
-            .frontend_node_id_for_existing_backend_node_id(
+            .published_frontend_node_id_for_backend_node_id(
                 inspector_session_id,
                 document_id,
                 parent_backend_node_id,
@@ -358,7 +558,7 @@ impl PageVm {
                 child_count,
             );
             if children_requested {
-                if let Some(node_id) = self.existing_frontend_node_id_for_handle(
+                if let Some(node_id) = self.published_frontend_node_id_for_handle(
                     inspector_session_id,
                     document_id,
                     target,
@@ -371,8 +571,6 @@ impl PageVm {
                     self.resynchronize_child_nodes_for_session(
                         inspector_session_id,
                         parent,
-                        parent_node_id,
-                        include_whitespace,
                         events,
                         "visible text node has no frontend binding",
                     );
@@ -420,7 +618,7 @@ impl PageVm {
         let previous_node_id = match previous_sibling_without_whitespace {
             None => 0,
             Some(previous_sibling) => {
-                let Some(previous_node_id) = self.existing_frontend_node_id_for_handle(
+                let Some(previous_node_id) = self.published_frontend_node_id_for_handle(
                     inspector_session_id,
                     document_id,
                     previous_sibling,
@@ -428,8 +626,6 @@ impl PageVm {
                     self.resynchronize_child_nodes_for_session(
                         inspector_session_id,
                         parent,
-                        parent_node_id,
-                        include_whitespace,
                         events,
                         "previous visible sibling has no frontend binding",
                     );
@@ -448,13 +644,12 @@ impl PageVm {
             self.resynchronize_child_nodes_for_session(
                 inspector_session_id,
                 parent,
-                parent_node_id,
-                include_whitespace,
                 events,
                 "visible text node has no frontend binding after insertion",
             );
             return;
         }
+        self.mark_document_snapshot_published(inspector_session_id, &snapshot, 0);
         events.push(RendererDomMutationEvent::ChildNodeInserted {
             parent_node_id,
             previous_node_id,
@@ -477,12 +672,22 @@ impl PageVm {
         };
         let Some(parent_node_id) = self
             .dom_agent_state
-            .frontend_node_id_for_existing_backend_node_id(
+            .published_frontend_node_id_for_backend_node_id(
                 inspector_session_id,
                 document_id,
                 parent_backend_node_id,
             )
         else {
+            if self
+                .dom_agent_state
+                .has_frontend_node_id_for_backend_node_id(
+                    inspector_session_id,
+                    document_id,
+                    parent_backend_node_id,
+                )
+            {
+                self.remove_finally_detached_bindings(inspector_session_id, document_id, mutation);
+            }
             return false;
         };
         let children_requested = self.dom_agent_state.children_requested(
@@ -550,7 +755,7 @@ impl PageVm {
             );
             if children_requested
                 && let Some(node_id) = removed_root.and_then(|handle| {
-                    self.existing_frontend_node_id_for_handle(
+                    self.published_frontend_node_id_for_handle(
                         inspector_session_id,
                         document_id,
                         handle,
@@ -589,7 +794,7 @@ impl PageVm {
             match previous_sibling {
                 None => 0,
                 Some(previous_sibling) => {
-                    let Some(previous_node_id) = self.existing_frontend_node_id_for_handle(
+                    let Some(previous_node_id) = self.published_frontend_node_id_for_handle(
                         inspector_session_id,
                         document_id,
                         previous_sibling,
@@ -597,8 +802,6 @@ impl PageVm {
                         return self.resynchronize_child_nodes_for_session(
                             inspector_session_id,
                             mutation.target,
-                            parent_node_id,
-                            include_whitespace,
                             events,
                             "previous sibling has no frontend binding",
                         );
@@ -633,12 +836,11 @@ impl PageVm {
                     return self.resynchronize_child_nodes_for_session(
                         inspector_session_id,
                         mutation.target,
-                        parent_node_id,
-                        include_whitespace,
                         events,
                         "inserted node has no frontend binding",
                     );
                 };
+                self.mark_document_snapshot_published(inspector_session_id, &snapshot, 0);
                 events.push(RendererDomMutationEvent::ChildNodeInserted {
                     parent_node_id,
                     previous_node_id,
@@ -655,7 +857,7 @@ impl PageVm {
         false
     }
 
-    fn remove_finally_detached_bindings_for_resynchronized_parent(
+    fn remove_finally_detached_bindings(
         &mut self,
         inspector_session_id: Option<&str>,
         document_id: Option<crate::frame_owner_model::DocumentId>,
@@ -692,91 +894,32 @@ impl PageVm {
         &mut self,
         inspector_session_id: Option<&str>,
         parent: crate::dom::native::NativeNodeId,
-        parent_node_id: u32,
-        include_whitespace: bool,
         events: &mut Vec<RendererDomMutationEvent>,
         reason: &'static str,
     ) -> bool {
-        let child_handles = {
-            let dom_host = self.vm().document_runtime.dom_host();
-            if dom_host.node(parent).is_none() {
-                tracing::warn!(
-                    ?parent,
-                    reason,
-                    "could not resynchronize DOM child bindings"
-                );
-                return false;
-            }
-            dom_host
-                .child_handles(parent)
-                .filter(|&handle| {
-                    include_whitespace
-                        || !crate::runtime::page_dom::inspector_whitespace_text_node(
-                            dom_host, handle,
-                        )
-                })
-                .collect::<Vec<_>>()
-        };
-        let mut nodes = Vec::with_capacity(child_handles.len());
-        for child in child_handles {
-            let Some(mut snapshot) =
-                crate::runtime::page_dom::live_inspector_document_node_snapshot(
-                    self.vm().document_runtime.dom_host(),
-                    child,
-                    0,
-                    Some(parent),
-                    false,
-                    include_whitespace,
-                )
-            else {
-                tracing::warn!(
-                    ?parent,
-                    ?child,
-                    reason,
-                    "could not snapshot DOM child for resynchronization"
-                );
-                return false;
-            };
-            self.assign_renderer_dom_agent_ids_to_snapshot(
-                inspector_session_id,
-                &mut snapshot,
-                include_whitespace,
-            );
-            if snapshot.frontend_node_id.is_none() {
-                tracing::warn!(
-                    ?parent,
-                    ?child,
-                    reason,
-                    "could not bind DOM child for resynchronization"
-                );
-                return false;
-            }
-            nodes.push(snapshot);
-        }
-        let document_id = self.current_dom_agent_document_id();
-        let Some(parent_backend_node_id) = self.renderer_backend_node_id_for_live_handle(parent)
-        else {
+        let Some(snapshots) = self.document_child_node_snapshot_events_for_live_handles(
+            inspector_session_id,
+            &[parent],
+            0,
+            false,
+        ) else {
             tracing::warn!(
                 ?parent,
                 reason,
-                "could not bind DOM parent for resynchronization"
+                "could not resynchronize Inspector child snapshots"
             );
             return false;
         };
-        self.dom_agent_state.cache_child_count(
-            inspector_session_id,
-            document_id,
-            parent_backend_node_id,
-            nodes.len(),
-        );
-        events.push(RendererDomMutationEvent::SetChildNodes {
-            parent_node_id,
-            nodes,
-        });
+        events.extend(snapshots.events.into_iter().map(|event| {
+            RendererDomMutationEvent::SetChildNodes {
+                parent_node_id: event.parent_frontend_node_id,
+                nodes: event.snapshots,
+            }
+        }));
         true
     }
 
-    fn existing_frontend_node_id_for_handle(
+    fn published_frontend_node_id_for_handle(
         &mut self,
         inspector_session_id: Option<&str>,
         document_id: Option<crate::frame_owner_model::DocumentId>,
@@ -784,7 +927,7 @@ impl PageVm {
     ) -> Option<u32> {
         let backend_node_id = self.renderer_backend_node_id_for_live_handle(handle)?;
         self.dom_agent_state
-            .frontend_node_id_for_existing_backend_node_id(
+            .published_frontend_node_id_for_backend_node_id(
                 inspector_session_id,
                 document_id,
                 backend_node_id,

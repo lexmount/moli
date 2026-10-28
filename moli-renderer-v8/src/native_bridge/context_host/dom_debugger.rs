@@ -660,6 +660,7 @@ impl JsContextHost {
             })
             .collect::<Vec<_>>();
         let mut payloads = Vec::with_capacity(children.len());
+        let mut published_backend_ids = Vec::with_capacity(children.len());
         for child in children.iter().copied() {
             let mut snapshot = live_inspector_document_node_snapshot(
                 self.dom_host(),
@@ -683,6 +684,14 @@ impl JsContextHost {
             payloads.push(moli_protocol_cdp::node_snapshot_to_cdp(
                 &snapshot, None, None,
             )?);
+            published_backend_ids.push(backend_node_id);
+        }
+        for backend_node_id in published_backend_ids {
+            self.dom_agent_state.mark_node_published(
+                inspector_session_id,
+                Some(document_id),
+                backend_node_id,
+            );
         }
         self.dom_agent_state.mark_children_requested(
             inspector_session_id,
@@ -710,7 +719,7 @@ impl JsContextHost {
             .backend_node_id_for_node(document_id, target);
         if let Some(frontend_node_id) = self
             .dom_agent_state
-            .frontend_node_id_for_existing_backend_node_id(
+            .published_frontend_node_id_for_backend_node_id(
                 inspector_session_id,
                 Some(document_id),
                 target_backend_node_id,
@@ -727,7 +736,7 @@ impl JsContextHost {
                 .backend_node_id_for_node(document_id, current);
             if let Some(frontend_node_id) = self
                 .dom_agent_state
-                .frontend_node_id_for_existing_backend_node_id(
+                .published_frontend_node_id_for_backend_node_id(
                     inspector_session_id,
                     Some(document_id),
                     backend_node_id,
@@ -754,7 +763,7 @@ impl JsContextHost {
                 .backend_node_id_for_node(document_id, parent);
             parent_frontend_node_id = self
                 .dom_agent_state
-                .frontend_node_id_for_existing_backend_node_id(
+                .published_frontend_node_id_for_backend_node_id(
                     inspector_session_id,
                     Some(document_id),
                     next_backend_node_id,

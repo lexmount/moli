@@ -996,6 +996,11 @@ async fn set_node_name_allows_xml_processing_instruction_target_like_chromium() 
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
     navigate_to_data_html_async(&mut ctx, 1, "<!doctype html><html><body></body></html>").await;
+    ctx.process_async(
+        json!({"id":90001,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}),
+    )
+    .await;
+    let _ = take_response_by_id(&mut ctx, 90001);
 
     ctx.process_async(json!({
         "id": 2,
@@ -3640,7 +3645,7 @@ async fn query_selector_all_low_root_node_id_misses_without_frontend_binding() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn request_child_nodes_low_node_id_misses_without_frontend_binding() {
+async fn request_child_nodes_ignores_low_node_id_without_frontend_binding() {
     let mut ctx = TestContext::new();
     let (node_id, mutation_completion) =
         append_live_node_without_refreshing_page_snapshot(&mut ctx).await;
@@ -3655,16 +3660,7 @@ async fn request_child_nodes_low_node_id_misses_without_frontend_binding() {
         panic!("DOM.requestChildNodes should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
-    assert_eq!(
-        messages,
-        vec![json!({
-            "id": 3,
-            "error": {
-                "code": -32000,
-                "message": "Could not find node with given id"
-            }
-        })]
-    );
+    assert_eq!(messages, vec![json!({"id": 3, "result": {}})]);
 
     let page = loaded_page_mut_for_test(&mut ctx);
     let _ = page
@@ -4029,6 +4025,11 @@ async fn request_node_resolves_runtime_object_id() {
         "<!doctype html><html><body><div id='box'>ok</div></body></html>",
     )
     .await;
+    ctx.process_async(
+        json!({"id":90001,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}),
+    )
+    .await;
+    let _ = take_response_by_id(&mut ctx, 90001);
 
     let execution_context_id =
         enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
@@ -4257,6 +4258,11 @@ async fn async_dispatch_request_node_resolves_runtime_object_id() {
         "<!doctype html><html><body><div id='box'>ok</div></body></html>",
     )
     .await;
+    ctx.process_async(
+        json!({"id":90001,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}),
+    )
+    .await;
+    let _ = take_response_by_id(&mut ctx, 90001);
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -4307,6 +4313,11 @@ async fn object_snapshot_producers_register_renderer_frontend_bindings() {
         "<!doctype html><html><body><section id='request-target' data-source='request'></section><article id='describe-target' data-source='describe'></article></body></html>",
     )
     .await;
+    ctx.process_async(
+        json!({"id":90001,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}),
+    )
+    .await;
+    let _ = take_response_by_id(&mut ctx, 90001);
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -4450,6 +4461,10 @@ async fn request_node_object_id_reads_live_document_after_document_open_replacem
         |message| message["method"] == json!("DOM.documentUpdated"),
     )
     .await;
+
+    ctx.process_async(json!({"id":90001,"method":"DOM.getDocument","params":{"depth":1}}))
+        .await;
+    let _ = take_response_by_id(&mut ctx, 90001);
 
     ctx.process_async(json!({
         "id": 13,
@@ -4762,7 +4777,9 @@ async fn query_selector_accepts_renderer_backend_shadow_root_reference() {
     );
 
     let context = AutomationContext {
-        protocol: FrontendProtocol::Cdp,
+        // Backend-root queries exercise the internal automation API,
+        // without publishing a CDP DOM tree.
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: None,
         target_id: Some(DevToolsTargetId::from("TID-1")),
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-A")),
@@ -4861,7 +4878,9 @@ async fn child_frame_query_selector_accepts_renderer_backend_shadow_root_referen
     let _ = take_response_by_id(&mut ctx, 5);
 
     let context = AutomationContext {
-        protocol: FrontendProtocol::Cdp,
+        // Backend-root queries exercise the internal automation API,
+        // without publishing a CDP DOM tree.
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: None,
         target_id: Some(DevToolsTargetId::from(child_frame_id.as_str())),
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-CHILD-SHADOW-QUERY")),
@@ -6158,6 +6177,12 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "<!doctype html><html><body><input value='main'><iframe srcdoc=\"<body><div id='child' style='left:3px;top:4px;width:9px;height:11px'>child-body</div></body>\"></iframe></body></html>",
     )
     .await;
+    ctx.process_async(
+        json!({"id":90001,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}),
+    )
+    .await;
+    let _ = take_response_by_id(&mut ctx, 90001);
+
     ctx.capture_fixture_layout(None).await;
     let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 2).await;
 

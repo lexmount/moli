@@ -1520,20 +1520,43 @@ async fn typed_child_capture_and_removal_use_scoped_node_references() {
         );
     }
     let missing = DevToolsDomNodeReference::FrontendNodeId(u32::MAX);
-    for command in [
-        AutomationCommand::RequestChildNodes(crate::automation::DevToolsRequestChildNodesCommand {
-            context: context.clone(),
-            reference: missing.clone(),
-            depth: 1,
-            pierce: false,
-        }),
+    for protocol in [
+        FrontendProtocol::Cdp,
+        FrontendProtocol::WebDriverClassic,
+        FrontendProtocol::WebDriverBidi,
+    ] {
+        let result = execute(
+            &mut ctx.conn,
+            AutomationCommand::RequestChildNodes(
+                crate::automation::DevToolsRequestChildNodesCommand {
+                    context: AutomationContext {
+                        protocol,
+                        ..context.clone()
+                    },
+                    reference: missing.clone(),
+                    depth: 1,
+                    pierce: false,
+                },
+            ),
+        )
+        .await;
+        if protocol == FrontendProtocol::Cdp {
+            assert!(matches!(result, Ok(AutomationResult::Empty)));
+            continue;
+        }
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
+        assert_eq!(error.message, "Could not find node with given id");
+    }
+    let error = execute(
+        &mut ctx.conn,
         AutomationCommand::RemoveNode(crate::automation::DevToolsRemoveNodeCommand {
             context,
             reference: missing,
         }),
-    ] {
-        let error = execute(&mut ctx.conn, command).await.unwrap_err();
-        assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
-        assert_eq!(error.message, "Could not find node with given id");
-    }
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
+    assert_eq!(error.message, "Could not find node with given id");
 }

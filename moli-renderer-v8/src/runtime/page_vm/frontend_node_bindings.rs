@@ -25,27 +25,6 @@ impl RendererFrontendNodeBindings {
         self.backend_to_frontend.clear();
     }
 
-    pub(super) fn register_explicit(&mut self, frontend_node_id: u32, backend_node_id: u32) {
-        if let Some(old_backend_node_id) = self
-            .frontend_to_backend
-            .insert(frontend_node_id, backend_node_id)
-            && old_backend_node_id != backend_node_id
-        {
-            self.backend_to_frontend.remove(&old_backend_node_id);
-        }
-        if let Some(old_frontend_node_id) = self
-            .backend_to_frontend
-            .insert(backend_node_id, frontend_node_id)
-            && old_frontend_node_id != frontend_node_id
-        {
-            self.frontend_to_backend.remove(&old_frontend_node_id);
-        }
-        self.next_id = self
-            .next_id
-            .max(frontend_node_id.saturating_add(1))
-            .max(FRONTEND_NODE_ID_START);
-    }
-
     pub(super) fn id_for_backend_node_id(&mut self, backend_node_id: u32) -> u32 {
         if let Some(frontend_node_id) = self.backend_to_frontend.get(&backend_node_id).copied() {
             return frontend_node_id;
@@ -86,16 +65,12 @@ impl RendererFrontendNodeBindings {
     }
 
     fn allocate_id(&mut self) -> u32 {
-        loop {
-            let frontend_node_id = self.next_id;
-            self.next_id = self
-                .next_id
-                .checked_add(1)
-                .expect("renderer frontend node id namespace exhausted");
-            if frontend_node_id != 0 && !self.frontend_to_backend.contains_key(&frontend_node_id) {
-                return frontend_node_id;
-            }
-        }
+        let frontend_node_id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("renderer frontend node id namespace exhausted");
+        frontend_node_id
     }
 }
 
@@ -119,22 +94,26 @@ mod tests {
     }
 
     #[test]
-    fn explicit_registration_advances_allocator_and_clears_conflicts() {
+    fn removing_a_binding_does_not_reuse_its_frontend_id() {
         let mut bindings = RendererFrontendNodeBindings::default();
         let first_backend_node_id = moli_page_types::RENDERER_BACKEND_NODE_ID_START;
         let second_backend_node_id = first_backend_node_id + 1;
-        let third_backend_node_id = first_backend_node_id + 2;
+        let first = bindings.id_for_backend_node_id(first_backend_node_id);
+        bindings.remove_backend_node_id(first_backend_node_id);
+        let second = bindings.id_for_backend_node_id(second_backend_node_id);
+        let rebound = bindings.id_for_backend_node_id(first_backend_node_id);
 
-        bindings.register_explicit(7, first_backend_node_id);
-
-        assert_eq!(bindings.id_for_backend_node_id(second_backend_node_id), 8);
-        bindings.register_explicit(7, third_backend_node_id);
-
+        assert_eq!(bindings.backend_node_id_for_frontend_node_id(first), None);
+        assert!(second > first);
+        assert!(rebound > second);
         assert_eq!(
-            bindings.backend_node_id_for_frontend_node_id(7),
-            Some(third_backend_node_id)
+            bindings.backend_node_id_for_frontend_node_id(second),
+            Some(second_backend_node_id)
         );
-        assert_eq!(bindings.id_for_backend_node_id(first_backend_node_id), 9);
+        assert_eq!(
+            bindings.backend_node_id_for_frontend_node_id(rebound),
+            Some(first_backend_node_id)
+        );
     }
 
     #[test]

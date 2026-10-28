@@ -121,6 +121,7 @@ mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod document_script_completion;
+mod dom_publication;
 mod element_toggle_event;
 mod fetch_xhr;
 mod file_entry_file_callback;

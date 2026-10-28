@@ -753,7 +753,7 @@ async fn inspector_depth_boundary_includes_an_only_text_child_like_chromium() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn request_child_nodes_rejects_zero_depth_and_invalid_node() {
+async fn request_child_nodes_rejects_zero_depth_and_ignores_unknown_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
     navigate_to_data_html_async(
@@ -781,5 +781,5 @@ async fn request_child_nodes_rejects_zero_depth_and_invalid_node() {
         "params": { "nodeId": 999, "depth": 1 }
     }))
     .await;
-    ctx.expect_error(3, -32000, "Could not find node with given id");
+    assert_eq!(ctx.take_all(), vec![json!({"id":3,"result":{}})]);
 }

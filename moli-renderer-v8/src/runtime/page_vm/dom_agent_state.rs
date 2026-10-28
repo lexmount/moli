@@ -231,6 +231,28 @@ impl RendererDomAgentState {
         })
     }
 
+    pub(crate) fn mark_node_published(
+        &self,
+        inspector_session_id: Option<&str>,
+        document_id: Option<DocumentId>,
+        backend_node_id: u32,
+    ) {
+        self.with_session_mut(inspector_session_id, document_id, |state| {
+            state.published_nodes.insert(backend_node_id);
+        });
+    }
+
+    pub(crate) fn node_is_published(
+        &self,
+        inspector_session_id: Option<&str>,
+        document_id: Option<DocumentId>,
+        backend_node_id: u32,
+    ) -> bool {
+        self.with_session_mut(inspector_session_id, document_id, |state| {
+            state.published_nodes.contains(&backend_node_id)
+        })
+    }
+
     pub(crate) fn frontend_node_id_for_existing_backend_node_id(
         &self,
         inspector_session_id: Option<&str>,
@@ -238,6 +260,20 @@ impl RendererDomAgentState {
         backend_node_id: u32,
     ) -> Option<u32> {
         self.with_session_mut(inspector_session_id, document_id, |state| {
+            state.frontend_node_id_for_existing_backend_node_id(backend_node_id)
+        })
+    }
+
+    pub(crate) fn published_frontend_node_id_for_backend_node_id(
+        &self,
+        inspector_session_id: Option<&str>,
+        document_id: Option<DocumentId>,
+        backend_node_id: u32,
+    ) -> Option<u32> {
+        self.with_session_mut(inspector_session_id, document_id, |state| {
+            if !state.published_nodes.contains(&backend_node_id) {
+                return None;
+            }
             state.frontend_node_id_for_existing_backend_node_id(backend_node_id)
         })
     }
@@ -380,10 +416,10 @@ impl RendererDomAgentState {
         &self,
         inspector_session_id: Option<&str>,
         document_id: Option<DocumentId>,
-        nodes: Vec<crate::RendererDomSearchResultNode>,
+        backend_node_ids: Vec<u32>,
     ) -> crate::RendererDomSearchRegistration {
         self.with_session_mut(inspector_session_id, document_id, |state| {
-            state.register_search_results(nodes)
+            state.register_search_results(backend_node_ids)
         })
     }
 
@@ -468,7 +504,12 @@ pub(super) struct RendererDomAgentSessionState {
     frontend_node_bindings: RendererFrontendNodeBindings,
     bidi_node_bindings: HashMap<String, u32>,
     bidi_node_shared_ids_by_backend_node_id: HashMap<u32, String>,
-    search_results: HashMap<String, Vec<crate::RendererDomSearchResultNode>>,
+    // Search matches do not allocate frontend IDs. Only reading a range can
+    // publish its nodes and expose their IDs to the client.
+    search_results: HashMap<String, Vec<u32>>,
+    // A binding may be allocated while preparing a snapshot. Only DOM tree
+    // responses/notifications make it a valid path anchor for the client.
+    published_nodes: HashSet<u32>,
     children_requested: HashSet<u32>,
     cached_child_counts: HashMap<u32, usize>,
     capture_node_stack_traces: bool,
@@ -491,6 +532,7 @@ impl RendererDomAgentSessionState {
         self.bidi_node_bindings.clear();
         self.bidi_node_shared_ids_by_backend_node_id.clear();
         self.search_results.clear();
+        self.published_nodes.clear();
         self.children_requested.clear();
         self.cached_child_counts.clear();
     }
@@ -535,17 +577,9 @@ impl RendererDomAgentSessionState {
     fn remove_frontend_binding_for_backend_node_id(&mut self, backend_node_id: u32) {
         self.frontend_node_bindings
             .remove_backend_node_id(backend_node_id);
+        self.published_nodes.remove(&backend_node_id);
         self.children_requested.remove(&backend_node_id);
         self.cached_child_counts.remove(&backend_node_id);
-    }
-
-    pub(super) fn register_frontend_node_binding(
-        &mut self,
-        frontend_node_id: u32,
-        backend_node_id: u32,
-    ) {
-        self.frontend_node_bindings
-            .register_explicit(frontend_node_id, backend_node_id);
     }
 
     pub(super) fn frontend_node_id_for_backend_node_id(&mut self, backend_node_id: u32) -> u32 {
@@ -598,19 +632,13 @@ impl RendererDomAgentSessionState {
 
     pub(super) fn register_search_results(
         &mut self,
-        nodes: Vec<crate::RendererDomSearchResultNode>,
+        backend_node_ids: Vec<u32>,
     ) -> crate::RendererDomSearchRegistration {
-        for node in &nodes {
-            // Zero is Chromium's placeholder for a search result hidden from
-            // this session, not a frontend node identity.
-            if node.frontend_node_id != 0 {
-                self.register_frontend_node_binding(node.frontend_node_id, node.backend_node_id);
-            }
-        }
         let search_id = self.next_search_id.to_string();
         self.next_search_id += 1;
-        let result_count = nodes.len() as u32;
-        self.search_results.insert(search_id.clone(), nodes);
+        let result_count = backend_node_ids.len() as u32;
+        self.search_results
+            .insert(search_id.clone(), backend_node_ids);
         crate::RendererDomSearchRegistration {
             search_id,
             result_count,
@@ -639,7 +667,15 @@ impl RendererDomAgentSessionState {
         if to_index > results.len() {
             return crate::RendererDomSearchResultsResolution::BadToIndex;
         }
-        crate::RendererDomSearchResultsResolution::Found(results[from_index..to_index].to_vec())
+        crate::RendererDomSearchResultsResolution::Found(
+            results[from_index..to_index]
+                .iter()
+                .map(|&backend_node_id| crate::RendererDomSearchResultNode {
+                    frontend_node_id: 0,
+                    backend_node_id,
+                })
+                .collect(),
+        )
     }
 }
 
@@ -877,10 +913,7 @@ mod tests {
         let search = state.register_search_results(
             Some("session-1"),
             Some(document_id(1)),
-            vec![crate::RendererDomSearchResultNode {
-                frontend_node_id: 9,
-                backend_node_id,
-            }],
+            vec![backend_node_id],
         );
 
         assert_eq!(
@@ -916,16 +949,13 @@ mod tests {
     }
 
     #[test]
-    fn search_zero_placeholder_does_not_create_a_frontend_binding() {
+    fn search_results_do_not_allocate_frontend_bindings() {
         let state = RendererDomAgentState::default();
         let backend_node_id = state.backend_node_id_for_node(document_id(1), dom_handle(7));
         let search = state.register_search_results(
             Some("session-1"),
             Some(document_id(1)),
-            vec![crate::RendererDomSearchResultNode {
-                frontend_node_id: 0,
-                backend_node_id,
-            }],
+            vec![backend_node_id],
         );
 
         assert!(matches!(
@@ -941,9 +971,13 @@ mod tests {
                     && nodes[0].frontend_node_id == 0
                     && nodes[0].backend_node_id == backend_node_id
         ));
-        assert_eq!(
-            state.frontend_node_binding(Some("session-1"), Some(document_id(1)), 0),
-            crate::RendererDomFrontendNodeBindingResolution::NotFound
+        assert!(!state.has_frontend_node_id_for_backend_node_id(
+            Some("session-1"),
+            Some(document_id(1)),
+            backend_node_id,
+        ));
+        assert!(
+            !state.node_is_published(Some("session-1"), Some(document_id(1)), backend_node_id,)
         );
     }
 

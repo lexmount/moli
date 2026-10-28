@@ -33,6 +33,7 @@ from .groups.core import run_core_group
 from .groups.dom_input import run_dom_input_group
 from .groups.dom_hit_test import run_dom_hit_test_group
 from .groups.dom_parser_mutations import run_dom_parser_mutations_group
+from .groups.dom_publication import run_dom_publication_group
 from .groups.dom_shadow_outer_html import run_dom_shadow_outer_html_group
 from .groups.dom_snapshot import run_dom_snapshot_group
 from .groups.dom_whitespace import run_dom_whitespace_group
@@ -173,6 +174,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "RL-shaped awaitPromise observe/fill/click navigation and error-Document contract.",
         "raw",
         run_agent_episode_group,
+    ),
+    SmokeGroup(
+        "dom-publication",
+        "Raw DOM mirror publication, search/request/describe order, associated and detached trees, mutations, and session isolation.",
+        "raw",
+        run_dom_publication_group,
     ),
     SmokeGroup(
         "dom-parser-mutations",

@@ -1344,9 +1344,8 @@ async fn get_node_for_location_uses_real_layout_hit_testing() {
         json!(expected_backend_node_id)
     );
     assert!(
-        response["result"]["nodeId"]
-            .as_u64()
-            .is_some_and(|id| id > 0)
+        response["result"].get("nodeId").is_none(),
+        "a hit before DOM.getDocument must expose backend identity only: {response}"
     );
 }
 

@@ -2855,14 +2855,14 @@ async fn get_document_depth_one_matches_registry_writer_shape() {
         "params": { "nodeId": 1, "depth": 1 }
     }))
     .await;
-    let document_children = ctx.take_first_matching("document child nodes", |message| {
-        message["method"] == json!("DOM.setChildNodes") && message["params"]["parentId"] == json!(1)
-    });
-    assert_eq!(document_children["method"], "DOM.setChildNodes");
-    assert_eq!(document_children["params"]["parentId"], json!(1));
-    let root_children = document_children["params"]["nodes"]
-        .as_array()
-        .expect("document children");
+    ctx.expect_result(29, json!({}), None);
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != json!("DOM.setChildNodes")),
+        "DOM.getDocument already published the document children"
+    );
+    let root_children = root["children"].as_array().expect("document children");
     assert_eq!(root_children.len(), 1);
     assert_eq!(root_children[0]["nodeId"], json!(2));
     let html_backend_node_id = root_children[0]["backendNodeId"]
@@ -2871,11 +2871,10 @@ async fn get_document_depth_one_matches_registry_writer_shape() {
         .expect("html backend node id");
     assert!(
         moli_core::page::is_renderer_backend_node_id(html_backend_node_id),
-        "DOM.requestChildNodes should assign renderer backend ids to live child payload: {document_children}"
+        "DOM.getDocument should assign renderer backend ids to live child payload: {root}"
     );
     assert_eq!(root_children[0]["nodeName"], json!("HTML"));
     assert_eq!(root_children[0]["childNodeCount"], json!(2));
-    ctx.expect_result(29, json!({}), None);
 
     ctx.process_async(json!({
         "id": 30,
@@ -3201,12 +3200,11 @@ async fn document_query_search_and_frame_owner_paths_use_explicit_dispatch() {
         "DOM.requestChildNodes without child frame owners should not use legacy fallback",
     )
     .await;
-    assert_eq!(request_child_nodes[0]["method"], json!("DOM.setChildNodes"));
     assert_eq!(
-        request_child_nodes[0]["params"]["parentId"],
-        json!(html_node_id)
+        request_child_nodes,
+        vec![json!({ "id": 6, "result": {} })],
+        "requesting already expanded children must not replace the subtree"
     );
-    assert_eq!(request_child_nodes[1], json!({ "id": 6, "result": {} }));
 
     let perform_search = complete_command_dispatch_without_legacy_fallback_for_test(
         &mut ctx,
@@ -3528,6 +3526,14 @@ async fn get_frame_owner_returns_iframe_node_for_child_frame() {
         .expect("child frame id")
         .to_owned();
 
+    ctx.process_async(json!({
+        "id": 90,
+        "method": "DOM.getDocument",
+        "params": { "depth": 1 }
+    }))
+    .await;
+    take_response_by_id(&mut ctx, 90);
+
     let owner_raw = json!({
         "id": 3,
         "method": "DOM.getFrameOwner",
@@ -3600,6 +3606,14 @@ async fn async_dispatch_get_document_and_get_frame_owner_surface_child_frame_met
         .as_str()
         .expect("child frame id")
         .to_owned();
+
+    ctx.process_async(json!({
+        "id": 90,
+        "method": "DOM.getDocument",
+        "params": { "depth": 1 }
+    }))
+    .await;
+    take_response_by_id(&mut ctx, 90);
 
     ctx.process_async(json!({
         "id": 3,
@@ -3914,6 +3928,8 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
         .as_str()
         .expect("attached session id")
         .to_owned();
+    ctx.process_async(json!({"id":4,"sessionId":attached_session_id,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}})).await;
+    let _ = take_response_by_id(&mut ctx, 4);
     let cdp_context = AutomationContext {
         protocol: FrontendProtocol::Cdp,
         session_id: Some(DevToolsSessionId::from(attached_session_id.as_str())),
@@ -4678,15 +4694,20 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected describe node result");
     };
+    assert_eq!(
+        result.node["nodeId"],
+        json!(0),
+        "an internal query allocates a handle without publishing a DOM tree"
+    );
     let shadow_roots = result.node["shadowRoots"]
         .as_array()
         .unwrap_or_else(|| panic!("child frame host should expose closed shadow root: {result:?}"));
     assert_eq!(shadow_roots.len(), 1);
     assert_eq!(shadow_roots[0]["shadowRootType"], json!("closed"));
-    let shadow_root_node_id = shadow_roots[0]["nodeId"]
+    let shadow_root_backend_id = shadow_roots[0]["backendNodeId"]
         .as_u64()
         .and_then(|id| u32::try_from(id).ok())
-        .expect("child-frame shadow root should have frontend node id");
+        .expect("child-frame shadow root should have backend node id");
     let inside = node_array_element_by_attribute(&shadow_roots[0]["children"], "id", "inside");
     assert!(
         inside.is_some(),
@@ -4698,8 +4719,8 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
         .execute_automation_command(AutomationCommand::DescribeNode(
             DevToolsDescribeNodeCommand {
                 context,
-                reference: Some(DevToolsDomNodeReference::FrontendNodeId(
-                    shadow_root_node_id,
+                reference: Some(DevToolsDomNodeReference::BackendNodeId(
+                    shadow_root_backend_id,
                 )),
                 depth: 0,
                 pierce: false,
@@ -4715,10 +4736,14 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
     assert_eq!(
         result.node["shadowRootType"],
         json!("closed"),
-        "expected shadow root frontend id to describe the shadow root node: {:?}",
+        "expected shadow root backend id to describe the shadow root node: {:?}",
         result.node
     );
-    assert_eq!(result.node["parentId"], json!(host_node_id));
+    assert_eq!(
+        result.node["parentId"],
+        json!(0),
+        "describeNode must not expose an unpublished parent binding"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4834,8 +4859,9 @@ async fn get_document_surfaces_child_frame_id_for_iframe_node() {
 
     assert_eq!(iframe["frameId"], json!(child_frame_id));
     assert!(
-        iframe.get("contentDocument").is_none(),
-        "contentDocument requires pierce=true: {iframe}"
+        iframe["contentDocument"]["nodeType"] == json!(9)
+            && iframe["contentDocument"].get("children").is_none(),
+        "without pierce the frame owner exposes only its shallow Document: {iframe}"
     );
     assert!(peer_div.get("frameId").is_none());
 }

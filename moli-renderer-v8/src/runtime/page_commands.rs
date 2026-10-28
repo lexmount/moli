@@ -647,14 +647,19 @@ impl PageVm {
                 search_id,
                 from_index,
                 to_index,
-            } => Ok(RendererPageReply::DocumentSearchResults(
-                self.document_search_results(
+            } => {
+                let (resolution, child_node_snapshot_events) = self
+                    .document_search_results_with_child_node_snapshot_events(
                     inspector_session_id.as_deref(),
                     &search_id,
                     from_index,
                     to_index,
-                ),
-            )),
+                );
+                Ok(RendererPageReply::DocumentSearchResults {
+                    resolution,
+                    child_node_snapshot_events,
+                })
+            }
             RendererPageCommand::DocumentDiscardSearchResults {
                 inspector_session_id,
                 search_id,
@@ -681,15 +686,15 @@ impl PageVm {
                     frontend_node_id,
                 ),
             )),
-            RendererPageCommand::DocumentFrontendNodeBinding {
-                inspector_session_id,
-                frontend_node_id,
-            } => Ok(RendererPageReply::DocumentFrontendNodeBinding(
-                self.document_frontend_node_binding(
-                    inspector_session_id.as_deref(),
-                    frontend_node_id,
-                ),
-            )),
+            RendererPageCommand::DocumentFrontendNodeBinding { reference } => {
+                let binding = self.backend_node_id_for_document_node_reference(reference);
+                Ok(RendererPageReply::DocumentFrontendNodeBinding(
+                    binding.map_or(
+                        crate::RendererDomFrontendNodeBindingResolution::NotFound,
+                        crate::RendererDomFrontendNodeBindingResolution::BackendNodeId,
+                    ),
+                ))
+            }
             RendererPageCommand::RegisterDocumentBidiNodeBinding {
                 inspector_session_id,
                 shared_id,
@@ -1326,6 +1331,7 @@ impl PageVm {
                 object_id,
                 depth,
                 pierce,
+                bind_frontend_nodes,
             } => {
                 self.configure_document_dom_agent_session(
                     inspector_session_id,
@@ -1337,8 +1343,21 @@ impl PageVm {
                         &object_id,
                         depth,
                         pierce,
+                        bind_frontend_nodes,
                     )?),
                 ))
+            }
+            RendererInspectorPageCommand::RequestDocumentNodeForObjectId {
+                include_whitespace,
+                object_id,
+            } => {
+                self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
+                let (node_id, child_node_snapshot_events) =
+                    self.request_document_node_for_object_id(inspector_session_id, &object_id)?;
+                Ok(RendererPageReply::DocumentNodeRequested {
+                    node_id,
+                    child_node_snapshot_events,
+                })
             }
             RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { object_id } => {
                 Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(

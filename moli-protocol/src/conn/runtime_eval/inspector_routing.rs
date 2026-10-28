@@ -800,12 +800,15 @@ impl CdpConnection {
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let pending = {
             let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
+            // LocateNodes and script node values need internal frontend handles.
+            // Allocating them does not publish a node in the CDP DOM mirror.
             page.start_document_node_snapshot_for_object_id_in_inspector_session(
                 inspector_session_id,
                 include_whitespace,
                 object_id,
                 depth,
                 pierce,
+                true,
             )
             .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?
         };

@@ -15,6 +15,7 @@ use crate::automation::{
     DevToolsGetAttributesResult, DevToolsGetOuterHtmlCommand, DevToolsGetOuterHtmlResult,
     DevToolsGetPropertyResult, DevToolsGetTextResult, DevToolsQuerySelectorResult,
     DevToolsResolveNodeCommand, DevToolsResolveNodeResult, DevToolsScrollIntoViewIfNeededCommand,
+    FrontendProtocol,
 };
 use crate::conn::{CdpConnection, CommandOwnerScope};
 use moli_core::page::{
@@ -52,30 +53,48 @@ pub(super) async fn execute_devtools_dom_command(
                 command.root,
                 &command.selector,
                 command.multiple,
+                command.context.protocol,
             )
             .await?;
             Ok(AutomationResult::QuerySelector(result))
         }
         AutomationCommand::GetAttributes(command) => {
-            let result = attributes_command(conn, owner, command.reference).await?;
+            let result =
+                attributes_command(conn, owner, command.reference, command.context.protocol)
+                    .await?;
             Ok(AutomationResult::GetAttributes(result))
         }
         AutomationCommand::GetText(command) => {
-            let result = text_command(conn, owner, command.reference).await?;
+            let result =
+                text_command(conn, owner, command.reference, command.context.protocol).await?;
             Ok(AutomationResult::GetText(result))
         }
         AutomationCommand::GetProperty(command) => {
-            let result = property_command(conn, owner, command.reference, &command.name).await?;
+            let result = property_command(
+                conn,
+                owner,
+                command.reference,
+                &command.name,
+                command.context.protocol,
+            )
+            .await?;
             Ok(AutomationResult::GetProperty(result))
         }
         AutomationCommand::GetOuterHtml(command) => {
             let DevToolsGetOuterHtmlCommand {
-                context: _,
+                context,
                 reference,
                 include_shadow_dom,
             } = command;
-            let outer_html =
-                outer_html_command(conn, owner, frame_id, reference, include_shadow_dom).await?;
+            let outer_html = outer_html_command(
+                conn,
+                owner,
+                frame_id,
+                reference,
+                include_shadow_dom,
+                context.protocol,
+            )
+            .await?;
             Ok(AutomationResult::GetOuterHtml(DevToolsGetOuterHtmlResult {
                 outer_html,
             }))
@@ -107,12 +126,14 @@ async fn query_selector_command(
     root: Option<DevToolsDomNodeReference>,
     selector: &str,
     multiple: bool,
+    protocol: FrontendProtocol,
 ) -> Result<DevToolsQuerySelectorResult, PendingDomCommandStartError> {
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let root = match root {
-        Some(reference) => reference.into_renderer_reference(renderer_inspector_session_id.clone()),
+        Some(reference) => reference
+            .into_renderer_reference_for_protocol(renderer_inspector_session_id.clone(), protocol),
         None => moli_core::page::RendererDomNodeReference::BackendNodeId(
             child_frame_document_root_node_reference(conn, owner, frame_id)
                 .await?
@@ -145,6 +166,7 @@ async fn resolve_frontend_node_reference(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
+    protocol: FrontendProtocol,
 ) -> Result<DevToolsDomNodeReference, PendingDomCommandStartError> {
     let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference else {
         return Ok(reference);
@@ -152,9 +174,15 @@ async fn resolve_frontend_node_reference(
     let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
+    let pending = if protocol == FrontendProtocol::Cdp {
+        page.start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    } else {
+        page.start_document_internal_frontend_node_binding(
+            renderer_inspector_session_id,
+            frontend_node_id,
+        )
+    }
+    .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
@@ -195,12 +223,15 @@ async fn attributes_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
+    protocol: FrontendProtocol,
 ) -> Result<DevToolsGetAttributesResult, PendingDomCommandStartError> {
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_node_attributes(reference.into_renderer_reference(session))
+        .start_document_node_attributes(
+            reference.into_renderer_reference_for_protocol(session, protocol),
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
@@ -215,12 +246,13 @@ async fn text_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
+    protocol: FrontendProtocol,
 ) -> Result<DevToolsGetTextResult, PendingDomCommandStartError> {
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_node_text(reference.into_renderer_reference(session))
+        .start_document_node_text(reference.into_renderer_reference_for_protocol(session, protocol))
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
@@ -236,12 +268,16 @@ async fn property_command(
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
     name: &str,
+    protocol: FrontendProtocol,
 ) -> Result<DevToolsGetPropertyResult, PendingDomCommandStartError> {
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_node_property(reference.into_renderer_reference(session), name)
+        .start_document_node_property(
+            reference.into_renderer_reference_for_protocol(session, protocol),
+            name,
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
@@ -258,6 +294,7 @@ async fn outer_html_command(
     frame_id: &str,
     reference: Option<DevToolsDomNodeReference>,
     include_shadow_dom: bool,
+    protocol: FrontendProtocol,
 ) -> Result<String, PendingDomCommandStartError> {
     let reference = match reference {
         Some(reference) => reference,
@@ -272,7 +309,7 @@ async fn outer_html_command(
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
         .start_outer_html_for_node(
-            reference.into_renderer_reference(session),
+            reference.into_renderer_reference_for_protocol(session, protocol),
             include_shadow_dom,
         )
         .map_err(PendingDomCommandStartError::renderer_error)?;
@@ -290,7 +327,9 @@ async fn resolve_node_command(
     owner: &CommandOwnerScope,
     command: DevToolsResolveNodeCommand,
 ) -> Result<DevToolsResolveNodeResult, PendingDomCommandStartError> {
-    let reference = resolve_frontend_node_reference(conn, owner, command.reference).await?;
+    let reference =
+        resolve_frontend_node_reference(conn, owner, command.reference, command.context.protocol)
+            .await?;
     let object_group = command.object_group;
     let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
     let remote_object = {
@@ -353,14 +392,15 @@ async fn describe_node_command(
     command: DevToolsDescribeNodeCommand,
 ) -> Result<DevToolsDescribeNodeResult, PendingDomCommandStartError> {
     let DevToolsDescribeNodeCommand {
-        context: _,
+        context,
         reference,
         depth,
         pierce,
     } = command;
     let snapshot = match reference {
         Some(reference) => {
-            node_snapshot_for_reference(conn, owner, reference, depth, pierce).await?
+            node_snapshot_for_reference(conn, owner, reference, depth, pierce, context.protocol)
+                .await?
         }
         None => child_frame_root_node_snapshot(conn, owner, frame_id, depth, pierce).await?,
     };
@@ -376,12 +416,14 @@ async fn node_snapshot_for_reference(
     reference: DevToolsDomNodeReference,
     depth: i32,
     pierce: bool,
+    protocol: FrontendProtocol,
 ) -> Result<moli_core::page::DocumentNodeSnapshot, PendingDomCommandStartError> {
     let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let reference = reference.into_renderer_reference(renderer_inspector_session_id.clone());
+    let reference = reference
+        .into_renderer_reference_for_protocol(renderer_inspector_session_id.clone(), protocol);
     let pending = page
         .start_document_node_snapshot_for_node_in_inspector_session(
             renderer_inspector_session_id,
@@ -439,7 +481,9 @@ async fn dom_geometry_command(
     owner: &CommandOwnerScope,
     command: DevToolsDomGeometryCommand,
 ) -> Result<DevToolsDomGeometryResult, PendingDomCommandStartError> {
-    let geometry = document_geometry_for_reference(conn, owner, command.reference).await?;
+    let geometry =
+        document_geometry_for_reference(conn, owner, command.reference, command.context.protocol)
+            .await?;
     devtools_dom_geometry_result_from_renderer(command.operation, geometry).map_err(|error| {
         PendingDomCommandStartError {
             code: -32000,
@@ -459,7 +503,7 @@ async fn scroll_into_view_if_needed_command(
     // The lightweight headless renderer currently treats scrollIntoViewIfNeeded
     // as a geometry-validating no-op. Match the top-level path for child-frame
     // elements: prove the referenced node has geometry, then complete.
-    match document_geometry_for_reference(conn, owner, reference).await? {
+    match document_geometry_for_reference(conn, owner, reference, command.context.protocol).await? {
         RendererDocumentNodeGeometry::FoundElement { .. } => Ok(()),
         RendererDocumentNodeGeometry::FoundNonElement { .. }
         | RendererDocumentNodeGeometry::NoLayoutObject
@@ -474,12 +518,15 @@ async fn document_geometry_for_reference(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
+    protocol: FrontendProtocol,
 ) -> Result<RendererDocumentNodeGeometry, PendingDomCommandStartError> {
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_geometry_for_node(reference.into_renderer_reference(session))
+        .start_document_geometry_for_node(
+            reference.into_renderer_reference_for_protocol(session, protocol),
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()

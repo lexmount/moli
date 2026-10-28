@@ -44,6 +44,7 @@ use command_start::*;
 mod pending_command;
 use pending_command::*;
 mod node_completion;
+pub(super) use node_completion::push_set_child_nodes_event_from_snapshots;
 use node_completion::*;
 mod protocol_dispatch;
 pub(crate) use node_completion::complete_pending_dom_command_output_plan;
@@ -225,7 +226,9 @@ pub(super) enum PendingDomCommandKind {
     GetAttributesLive,
     GetTextLive,
     GetPropertyLive,
-    RequestNodeObjectReference,
+    RequestNodeObjectReference {
+        top_frame_id: Option<String>,
+    },
     GetOuterHtmlDocument,
     GetOuterHtmlObjectReference,
     GetOuterHtmlNodeReference,
@@ -256,7 +259,7 @@ pub(super) enum PendingDomCommandKind {
     SetChildNodesSnapshotForBackendNode {
         after: PendingSetChildNodesAfter,
         top_frame_id: Option<String>,
-        missing_node_message: &'static str,
+        missing_node_message: Option<&'static str>,
     },
     QuerySelectorSetChildNodesLive {
         multiple: bool,

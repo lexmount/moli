@@ -923,6 +923,22 @@ pub enum DevToolsDomNodeReference {
 }
 
 impl DevToolsDomNodeReference {
+    pub(crate) fn into_renderer_reference_for_protocol(
+        self,
+        inspector_session_id: Option<String>,
+        protocol: FrontendProtocol,
+    ) -> moli_core::page::RendererDomNodeReference {
+        if protocol != FrontendProtocol::Cdp
+            && let Self::FrontendNodeId(frontend_node_id) = self
+        {
+            return moli_core::page::RendererDomNodeReference::InternalFrontendNodeBinding {
+                inspector_session_id,
+                frontend_node_id,
+            };
+        }
+        self.into_renderer_reference(inspector_session_id)
+    }
+
     pub(crate) fn into_renderer_reference(
         self,
         inspector_session_id: Option<String>,

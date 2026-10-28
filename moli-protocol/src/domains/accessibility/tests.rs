@@ -914,6 +914,11 @@ async fn child_frame_renderer_dom_node_ids_for_selector_async(
     selector: &str,
     base_id: u64,
 ) -> ChildFrameRendererDomNodeIds {
+    ctx.process_async(
+        json!({"id":base_id+3,"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}),
+    )
+    .await;
+    let _ = ctx.take_response_by_id(base_id + 3);
     ctx.process_async(json!({
         "id": base_id,
         "method": "Page.createIsolatedWorld",

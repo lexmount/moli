@@ -34,11 +34,10 @@ pub(crate) use resolve::{
 
 #[cfg(test)]
 use node_payload::{
-    backend_node_id_for_snapshot, node_snapshot_base_payload, node_snapshot_to_cdp_with_limit,
+    backend_node_id_for_snapshot, frontend_node_id_for_snapshot, node_snapshot_base_payload,
+    node_snapshot_to_cdp_with_limit,
 };
-use node_payload::{
-    collect_flattened_node_snapshot, frontend_node_id_for_snapshot, node_snapshot_to_cdp,
-};
+use node_payload::{collect_flattened_node_snapshot, node_snapshot_to_cdp};
 
 pub(crate) enum DomCommandDispatchStep {
     Pending(Box<PendingDomCommandDispatch>),

@@ -433,6 +433,15 @@ jobs:
           export MOLI_BIN="$PWD/target/ci-bin/moli-release-head/moli"
           uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
             --browser moli --strict-full-suite --repeat 2 --jobs 4 --output-dir target/smoke/cdp-ci
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: moli-cdp-smoke/chromedp/go.mod
+          cache-dependency-path: moli-cdp-smoke/chromedp/go.sum
+      - name: Run chromedp DOM search regression
+        working-directory: moli-cdp-smoke/chromedp
+        env:
+          MOLI_BIN: ${{ github.workspace }}/target/ci-bin/moli-release-head/moli
+        run: go test -mod=readonly -count=1 ./...
       - name: Require full Chromium smoke
         if: ${{ always() }}
         env:

@@ -281,8 +281,14 @@ pub(super) fn complete_pending_dom_command(
         PendingDomCommandKind::GetPropertyLive => {
             return complete_get_property_live(page, completion, out);
         }
-        PendingDomCommandKind::RequestNodeObjectReference => {
-            return complete_request_node_object_reference(session_id, page, completion, out);
+        PendingDomCommandKind::RequestNodeObjectReference { top_frame_id } => {
+            return complete_request_node_object_reference(
+                session_id,
+                page,
+                completion,
+                top_frame_id,
+                out,
+            );
         }
         PendingDomCommandKind::GetOuterHtmlDocument => {
             return complete_get_outer_html_document(page, completion, out);
@@ -380,6 +386,7 @@ pub(super) fn complete_pending_dom_command(
                     include_whitespace,
                     &cache_object_id,
                     0,
+                    false,
                     false,
                 ) {
                     Ok(pending) => {

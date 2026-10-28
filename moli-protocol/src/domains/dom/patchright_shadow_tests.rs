@@ -157,11 +157,13 @@ async fn describe_node_with_pierce_surfaces_closed_shadow_root_tree() {
 
     ctx.process_async(json!({"id": 4, "method": "DOM.describeNode", "params": { "nodeId": host_id, "depth": -1 }})).await;
     let without_pierce = take_response_by_id(&mut ctx, 4);
-    assert!(
-        without_pierce["result"]["node"]
-            .get("shadowRoots")
-            .is_none()
-    );
+    let shallow_shadow_roots = without_pierce["result"]["node"]["shadowRoots"]
+        .as_array()
+        .expect("shallow shadow roots without piercing");
+    assert_eq!(shallow_shadow_roots.len(), 1);
+    assert_eq!(shallow_shadow_roots[0]["shadowRootType"], json!("closed"));
+    assert_eq!(shallow_shadow_roots[0]["childNodeCount"], json!(1));
+    assert!(shallow_shadow_roots[0].get("children").is_none());
 
     ctx.process_async(json!({"id": 5, "method": "DOM.describeNode", "params": { "nodeId": host_id, "depth": -1, "pierce": true }})).await;
     let with_pierce = take_response_by_id(&mut ctx, 5);
@@ -170,6 +172,10 @@ async fn describe_node_with_pierce_surfaces_closed_shadow_root_tree() {
         .expect("shadow roots");
     assert_eq!(shadow_roots.len(), 1);
     assert_eq!(shadow_roots[0]["shadowRootType"], json!("closed"));
+    assert_eq!(
+        shadow_roots[0]["backendNodeId"],
+        shallow_shadow_roots[0]["backendNodeId"]
+    );
     assert_eq!(
         shadow_roots[0]["children"][0]["attributes"],
         json!(["data-inside", "yes"])

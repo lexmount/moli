@@ -31,7 +31,11 @@ pub(super) fn start_devtools_get_attributes_command(
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_node_attributes(command.reference.into_renderer_reference(session))
+        .start_document_node_attributes(
+            command
+                .reference
+                .into_renderer_reference_for_protocol(session, command.context.protocol),
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
@@ -55,15 +59,22 @@ pub(super) fn start_document_frontend_node_binding_command(
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
     frontend_node_id: u32,
+    require_published: bool,
     kind: PendingDomCommandKind,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
+    let pending = if require_published {
+        page.start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    } else {
+        page.start_document_internal_frontend_node_binding(
+            renderer_inspector_session_id,
+            frontend_node_id,
+        )
+    }
+    .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
@@ -82,7 +93,11 @@ pub(super) fn start_devtools_get_text_command(
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_node_text(command.reference.into_renderer_reference(session))
+        .start_document_node_text(
+            command
+                .reference
+                .into_renderer_reference_for_protocol(session, command.context.protocol),
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
@@ -103,7 +118,9 @@ pub(super) fn start_devtools_get_property_command(
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
         .start_document_node_property(
-            command.reference.into_renderer_reference(session),
+            command
+                .reference
+                .into_renderer_reference_for_protocol(session, command.context.protocol),
             &command.name,
         )
         .map_err(PendingDomCommandStartError::renderer_error)?;
@@ -541,7 +558,7 @@ pub(super) fn start_devtools_scroll_into_view_if_needed_command(
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
         .start_scroll_node_into_view_if_needed(
-            reference.into_renderer_reference(session),
+            reference.into_renderer_reference_for_protocol(session, command.context.protocol),
             command.rect,
         )
         .map_err(PendingDomCommandStartError::renderer_error)?;

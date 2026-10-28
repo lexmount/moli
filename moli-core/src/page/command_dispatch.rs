@@ -297,6 +297,7 @@ impl Page {
             RendererPageReply::OptionalExecutionContextId(_) => {
                 "an optional execution context reply"
             }
+            RendererPageReply::DocumentNodeRequested { .. } => "a requested document node reply",
             RendererPageReply::OptionalDocumentNodeObjectSnapshot(_) => {
                 "an optional document node object snapshot"
             }
@@ -336,7 +337,7 @@ impl Page {
             RendererPageReply::DocumentPerformSearch(_) => {
                 "a document perform search registration reply"
             }
-            RendererPageReply::DocumentSearchResults(_) => "a document search results reply",
+            RendererPageReply::DocumentSearchResults { .. } => "a document search results reply",
             RendererPageReply::DocumentSearchResultsDiscarded => {
                 "a document search results discarded reply"
             }

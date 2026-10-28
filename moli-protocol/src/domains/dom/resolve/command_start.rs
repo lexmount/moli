@@ -490,7 +490,11 @@ pub(super) fn start_devtools_remove_node_command(
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_remove_document_node(command.reference.into_renderer_reference(session))
+        .start_remove_document_node(
+            command
+                .reference
+                .into_renderer_reference_for_protocol(session, command.context.protocol),
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
@@ -535,7 +539,11 @@ pub(super) fn start_devtools_dom_geometry_command(
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_document_geometry_for_node(command.reference.into_renderer_reference(session))
+        .start_document_geometry_for_node(
+            command
+                .reference
+                .into_renderer_reference_for_protocol(session, command.context.protocol),
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let kind = PendingDomCommandKind::RendererNodeGeometry {
         operation: command.operation,
@@ -590,7 +598,10 @@ pub(super) fn start_devtools_describe_node_command(
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let reference = reference.into_renderer_reference(renderer_inspector_session_id.clone());
+    let reference = reference.into_renderer_reference_for_protocol(
+        renderer_inspector_session_id.clone(),
+        command.context.protocol,
+    );
     let pending = page
         .start_document_node_snapshot_for_node_in_inspector_session(
             renderer_inspector_session_id,
@@ -659,17 +670,19 @@ pub(super) fn start_devtools_request_child_nodes_command(
     } else {
         command.depth
     };
-    let missing_node_message = if matches!(
-        command.reference,
-        DevToolsDomNodeReference::FrontendNodeId(_)
-    ) {
-        "Could not find node with given id"
-    } else {
-        "InvalidNode"
+    let missing_node_message = match (&command.reference, command.context.protocol) {
+        (DevToolsDomNodeReference::FrontendNodeId(_), crate::automation::FrontendProtocol::Cdp) => {
+            None
+        }
+        (DevToolsDomNodeReference::FrontendNodeId(_), _) => {
+            Some("Could not find node with given id")
+        }
+        (DevToolsDomNodeReference::BackendNodeId(_), _) => Some("InvalidNode"),
     };
-    let reference = command
-        .reference
-        .into_renderer_reference(renderer_inspector_session_id.clone());
+    let reference = command.reference.into_renderer_reference_for_protocol(
+        renderer_inspector_session_id.clone(),
+        command.context.protocol,
+    );
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
@@ -786,7 +799,10 @@ fn start_query_selector_command(
 
     let publish_node_paths =
         publish_node_paths && matches!(reference, DevToolsDomNodeReference::FrontendNodeId(_));
-    let reference = reference.into_renderer_reference(renderer_inspector_session_id.clone());
+    let reference = reference.into_renderer_reference_for_protocol(
+        renderer_inspector_session_id.clone(),
+        command.context.protocol,
+    );
     let page =
         loaded_page_mut_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
             code: -32000,
@@ -1188,6 +1204,7 @@ pub(super) fn start_devtools_resolve_node_command(
             command_id,
             owner,
             frontend_node_id,
+            command.context.protocol == crate::automation::FrontendProtocol::Cdp,
             PendingDomCommandKind::ResolveFrontendNodeForResolveNode {
                 frontend_node_id,
                 requested_execution_context_id: command.execution_context_id,
@@ -1357,18 +1374,18 @@ pub(super) fn start_dom_object_reference_operation(
     match operation {
         PendingDomObjectReferenceOperation::RequestNode => {
             let pending = page
-                .start_document_node_snapshot_for_object_id_in_inspector_session(
+                .start_request_document_node_for_object_id(
                     renderer_inspector_session_id,
                     include_whitespace,
-                    &object_id,
-                    0,
-                    false,
+                    object_id,
                 )
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
                 owner_scope: owner.clone(),
-                kind: PendingDomCommandKind::RequestNodeObjectReference,
+                kind: PendingDomCommandKind::RequestNodeObjectReference {
+                    top_frame_id: top_frame_id_for_owner(conn, owner),
+                },
                 pending,
             }))
         }
@@ -1413,6 +1430,7 @@ pub(super) fn start_dom_object_reference_operation(
                     &object_id,
                     depth,
                     pierce,
+                    false,
                 )
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
@@ -1515,7 +1533,7 @@ pub(super) fn start_devtools_get_outer_html_command(
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
         .start_outer_html_for_node(
-            reference.into_renderer_reference(session),
+            reference.into_renderer_reference_for_protocol(session, command.context.protocol),
             include_shadow_dom,
         )
         .map_err(PendingDomCommandStartError::renderer_error)?;
