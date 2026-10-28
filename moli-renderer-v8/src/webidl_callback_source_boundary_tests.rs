@@ -220,7 +220,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "native_bridge/element/activation/default_action.rs",
-        3,
+        // Drag data now uses private native readers, without forwarding to
+        // an author-replaceable DataTransfer.getData method.
+        2,
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(

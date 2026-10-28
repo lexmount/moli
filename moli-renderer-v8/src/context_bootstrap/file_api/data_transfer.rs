@@ -8,17 +8,23 @@ use crate::webidl;
 use moli_file_api::data_transfer::{
     DataTransferItemSummary, child_entry_full_path, clear_data_removes_item,
     contains_string_item_type, data_transfer_types_from_items, drag_effect_allowed_from_mask,
-    drop_effect_allowed_by_effect_allowed, modifier_drop_effect, normalize_drag_data_type,
-    preferred_drop_effect_from_mask, valid_drop_effect, valid_effect_allowed,
+    normalize_drag_data_type, valid_drop_effect, valid_effect_allowed,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+
+pub(crate) use moli_file_api::data_transfer::DragDataStoreMode;
 
 const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
 const DATA_TRANSFER_TYPES_SLOT: &str = "__lmDataTransferTypes";
 const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
+const DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT: &str = "__lmDataTransferDropEffectInitialized";
 const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
-const DATA_TRANSFER_READ_ONLY_SLOT: &str = "__lmDataTransferReadOnly";
+const DATA_TRANSFER_STORE_SLOT: &str = "__lmDataTransferStore";
+const DATA_TRANSFER_STORE_ITEMS_SLOT: &str = "__lmDragDataStoreItems";
+const DATA_TRANSFER_MODE_SLOT: &str = "__lmDataTransferMode";
+const DATA_TRANSFER_ITEM_OWNER_SLOT: &str = "__lmDataTransferItemOwner";
+const DATA_TRANSFER_ITEM_RECORD_SLOT: &str = "__lmDataTransferItemRecord";
 const DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT: &str = "__lmDataTransferItemArray";
 const DATA_TRANSFER_ITEM_LIST_OWNER_SLOT: &str = "__lmDataTransferOwner";
 const DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT: &str = "__lmDataTransferItemListIndexedLength";
@@ -47,20 +53,36 @@ pub(super) const FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT: &str =
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::DataTransfer, require_prototype)]
 struct DataTransferObjectDeclaration<'s> {
-    #[webapi(slot = DATA_TRANSFER_READ_ONLY_SLOT, constructor_default = false)]
-    read_only: bool,
     #[webapi(slot = DATA_TRANSFER_FILES_SLOT)]
     files: v8::Local<'s, v8::Object>,
     #[webapi(slot = DATA_TRANSFER_ITEMS_SLOT)]
     items: v8::Local<'s, v8::Object>,
+    #[webapi(slot = DATA_TRANSFER_STORE_SLOT)]
+    store: v8::Local<'s, v8::Object>,
     // `undefined` means that no FrozenArray snapshot has been published for the current
     // item-list generation. The getter replaces it with the cached snapshot on first read.
     #[webapi(slot = DATA_TRANSFER_TYPES_SLOT, init = "undefined")]
     types: (),
     #[webapi(slot = DATA_TRANSFER_DROP_EFFECT_SLOT, constructor_default = "none")]
     drop_effect: &'static str,
+    #[webapi(slot = DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT, constructor_default = false)]
+    drop_effect_initialized: bool,
     #[webapi(slot = DATA_TRANSFER_EFFECT_ALLOWED_SLOT, constructor_default = "none")]
     effect_allowed: &'static str,
+    #[webapi(slot = DATA_TRANSFER_MODE_SLOT, constructor_default = 0.0)]
+    mode: f64,
+}
+
+/// Native drag-session data. Its private backing is never a JavaScript
+/// DataTransfer; event views have their own wrappers and access lifetime.
+pub(crate) struct NativeDragDataStore {
+    backing: v8::Global<v8::Object>,
+}
+
+impl NativeDragDataStore {
+    fn local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+        v8::Local::new(scope, &self.backing)
+    }
 }
 
 pub(crate) fn is_branded_data_transfer_object<'s>(
@@ -68,6 +90,56 @@ pub(crate) fn is_branded_data_transfer_object<'s>(
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::DataTransfer::is_instance(scope, object)
+}
+
+fn data_transfer_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> DragDataStoreMode {
+    match private_number_property(scope, object, DATA_TRANSFER_MODE_SLOT) {
+        Some(1.0) => DragDataStoreMode::ReadOnly,
+        Some(2.0) => DragDataStoreMode::Protected,
+        Some(3.0) => DragDataStoreMode::Disabled,
+        _ => DragDataStoreMode::ReadWrite,
+    }
+}
+
+fn set_data_transfer_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    mode: DragDataStoreMode,
+) {
+    let previous = data_transfer_mode(scope, object);
+    if previous == mode || previous == DragDataStoreMode::Disabled {
+        return;
+    }
+    let value = match mode {
+        DragDataStoreMode::ReadWrite => 0.0,
+        DragDataStoreMode::ReadOnly => 1.0,
+        DragDataStoreMode::Protected => 2.0,
+        DragDataStoreMode::Disabled => 3.0,
+    };
+    set_private_number(scope, object, DATA_TRANSFER_MODE_SLOT, value);
+    if previous.can_read_types() != mode.can_read_types() {
+        set_private_value(
+            scope,
+            object,
+            DATA_TRANSFER_TYPES_SLOT,
+            v8::undefined(scope).into(),
+        );
+    }
+    if let Some(items) = get_private_object(scope, object, DATA_TRANSFER_ITEMS_SLOT) {
+        refresh_data_transfer_item_views(scope, items);
+    }
+}
+
+fn item_data_transfer_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item: v8::Local<'s, v8::Object>,
+) -> DragDataStoreMode {
+    get_private_object(scope, item, DATA_TRANSFER_ITEM_OWNER_SLOT)
+        .map(|owner| data_transfer_mode(scope, owner))
+        .unwrap_or(DragDataStoreMode::ReadWrite)
 }
 
 #[derive(Default, WebApiObject)]
@@ -135,7 +207,7 @@ struct DataTransferItemListPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, scope_lifetime = 's, require_prototype)]
+#[webapi(plain, scope_lifetime = 's)]
 struct DataTransferFileItemObjectDeclaration<'s, 'item_type> {
     #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "file")]
     kind: &'static str,
@@ -148,7 +220,7 @@ struct DataTransferFileItemObjectDeclaration<'s, 'item_type> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
+#[webapi(plain)]
 struct DataTransferDirectoryItemObjectDeclaration<'s> {
     #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "file")]
     kind: &'static str,
@@ -159,7 +231,7 @@ struct DataTransferDirectoryItemObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
+#[webapi(plain)]
 struct DataTransferStringItemObjectDeclaration<'item_type, 'data> {
     #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "string")]
     kind: &'static str,
@@ -167,6 +239,15 @@ struct DataTransferStringItemObjectDeclaration<'item_type, 'data> {
     item_type: &'item_type str,
     #[webapi(slot = DATA_TRANSFER_ITEM_STRING_SLOT)]
     data: &'data str,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
+struct DataTransferItemViewDeclaration<'s> {
+    #[webapi(slot = DATA_TRANSFER_ITEM_OWNER_SLOT)]
+    owner: v8::Local<'s, v8::Object>,
+    #[webapi(slot = DATA_TRANSFER_ITEM_RECORD_SLOT)]
+    record: v8::Local<'s, v8::Object>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -348,24 +429,49 @@ pub(super) fn install_data_transfer_template_bindings<'s>(
     }
 }
 
-pub(crate) fn apply_drag_modifier_drop_effect<'s>(
+pub(crate) fn native_data_transfer_has_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     data_transfer: v8::Local<'s, v8::Object>,
-    modifiers: u8,
-) {
-    let Some(drop_effect) = modifier_drop_effect(modifiers) else {
-        return;
+    mime_type: &str,
+) -> bool {
+    data_transfer_mode(scope, data_transfer).can_read_types()
+        && DataTransferItemStore::for_owner(scope, data_transfer)
+            .is_some_and(|store| store.contains_string_type(scope, mime_type))
+}
+
+/// Counts file items without exposing their contents in protected mode.
+pub(crate) fn native_data_transfer_file_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> usize {
+    let Some(items) = get_private_object(scope, data_transfer, DATA_TRANSFER_ITEMS_SLOT)
+        .and_then(|list| item_list_array(scope, list))
+    else {
+        return 0;
     };
-    let effect_allowed = data_transfer_effect_allowed(scope, data_transfer);
-    if !drop_effect_allowed_by_effect_allowed(effect_allowed.as_deref(), drop_effect) {
-        return;
+    (0..items.length())
+        .filter(|index| {
+            let Some(value) = items.get_index(scope, *index) else {
+                return false;
+            };
+            let Ok(item) = v8::Local::<v8::Object>::try_from(value) else {
+                return false;
+            };
+            let record = item_record(scope, item);
+            item_kind(scope, item).as_deref() == Some("file")
+                && get_private_object(scope, record, DATA_TRANSFER_ITEM_FILE_SLOT).is_some()
+        })
+        .count()
+}
+
+pub(crate) fn native_set_drag_drop_effect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
+    effect: &str,
+) {
+    if valid_drop_effect(effect) {
+        set_private_string(scope, data_transfer, DATA_TRANSFER_DROP_EFFECT_SLOT, effect);
     }
-    set_private_string(
-        scope,
-        data_transfer,
-        DATA_TRANSFER_DROP_EFFECT_SLOT,
-        drop_effect,
-    );
 }
 
 fn private_string_property<'s>(
@@ -432,13 +538,6 @@ fn data_transfer_effect_allowed<'s>(
     private_string_property(scope, object, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
 }
 
-fn data_transfer_can_write<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    private_bool_property(scope, object, DATA_TRANSFER_READ_ONLY_SLOT) == Some(false)
-}
-
 fn item_list_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item_list: v8::Local<'s, v8::Object>,
@@ -453,9 +552,37 @@ fn item_list_owner<'s>(
     get_private_object(scope, item_list, DATA_TRANSFER_ITEM_LIST_OWNER_SLOT)
 }
 
-// Every write to the canonical item array runs inside DataTransferItemStore::mutate. The
-// outcome controls the single observer notification and, consequently, the cached `types`
-// identity required by Web IDL's CachedAttribute semantics.
+fn item_list_records<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item_list: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    let owner = item_list_owner(scope, item_list)?;
+    let store = get_private_object(scope, owner, DATA_TRANSFER_STORE_SLOT)?;
+    private_property_as_array(scope, store, DATA_TRANSFER_STORE_ITEMS_SLOT)
+}
+
+fn set_item_list_records<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item_list: v8::Local<'s, v8::Object>,
+    records: v8::Local<'s, v8::Array>,
+) {
+    if let Some(owner) = item_list_owner(scope, item_list)
+        && let Some(store) = get_private_object(scope, owner, DATA_TRANSFER_STORE_SLOT)
+    {
+        set_private_value(scope, store, DATA_TRANSFER_STORE_ITEMS_SLOT, records.into());
+    }
+}
+
+fn item_record<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    get_private_object(scope, item, DATA_TRANSFER_ITEM_RECORD_SLOT).unwrap_or(item)
+}
+
+// JavaScript writes to shared records run inside DataTransferItemStore::mutate;
+// its one observer refreshes only this view and its cached `types`. Native drag
+// commands update the store between event scopes, before creating a new view.
 enum DataTransferItemListMutation<T> {
     Unchanged(T),
     Changed(T),
@@ -478,11 +605,6 @@ impl<'s> DataTransferItemStore<'s> {
         Self { item_list }
     }
 
-    fn can_write(self, scope: &mut v8::PinScope<'s, '_>) -> bool {
-        item_list_owner(scope, self.item_list)
-            .is_some_and(|owner| data_transfer_can_write(scope, owner))
-    }
-
     fn mutate<'a, T>(
         self,
         scope: &mut v8::PinScope<'s, 'a>,
@@ -491,10 +613,11 @@ impl<'s> DataTransferItemStore<'s> {
             v8::Local<'s, v8::Array>,
         ) -> DataTransferItemListMutation<T>,
     ) -> Option<T> {
-        if !self.can_write(scope) {
+        let owner = item_list_owner(scope, self.item_list)?;
+        if !data_transfer_mode(scope, owner).can_write_data() {
             return None;
         }
-        let item_array = item_list_array(scope, self.item_list)?;
+        let item_array = item_list_records(scope, self.item_list)?;
         let (value, changed) = match mutation(scope, item_array) {
             DataTransferItemListMutation::Unchanged(value) => (value, false),
             DataTransferItemListMutation::Changed(value) => (value, true),
@@ -505,34 +628,8 @@ impl<'s> DataTransferItemStore<'s> {
         Some(value)
     }
 
-    fn append_drag_data(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        data: &RendererDragData,
-    ) -> Option<()> {
-        self.mutate(scope, |scope, item_array| {
-            let mut changed = false;
-            for item in &data.items {
-                let normalized_type = normalize_drag_data_type(&item.mime_type);
-                changed |=
-                    append_string_item(scope, item_array, &normalized_type, &item.data).is_some();
-            }
-            for file in &data.files {
-                changed |= append_file_item(scope, item_array, file).is_some();
-            }
-            for directory in &data.directories {
-                changed |= append_directory_item(scope, item_array, directory).is_some();
-            }
-            if changed {
-                DataTransferItemListMutation::Changed(())
-            } else {
-                DataTransferItemListMutation::Unchanged(())
-            }
-        })
-    }
-
     fn contains_string_type(self, scope: &mut v8::PinScope<'s, '_>, mime_type: &str) -> bool {
-        item_list_array(scope, self.item_list).is_some_and(|item_array| {
+        item_list_records(scope, self.item_list).is_some_and(|item_array| {
             contains_string_item_type(&item_summaries_from_array(scope, item_array), mime_type)
         })
     }
@@ -540,16 +637,18 @@ impl<'s> DataTransferItemStore<'s> {
     fn append(
         self,
         scope: &mut v8::PinScope<'s, '_>,
-        item: v8::Local<'s, v8::Object>,
+        record: v8::Local<'s, v8::Object>,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.mutate(scope, |scope, item_array| {
-            if append_item(scope, item_array, item).is_some() {
-                DataTransferItemListMutation::Changed(Some(item))
+            if append_item(scope, item_array, record).is_some() {
+                DataTransferItemListMutation::Changed(true)
             } else {
-                DataTransferItemListMutation::Unchanged(None)
+                DataTransferItemListMutation::Unchanged(false)
             }
-        })
-        .flatten()
+        })?
+        .then_some(())?;
+        let views = item_list_array(scope, self.item_list)?;
+        find_item_view(scope, views, record)
     }
 
     fn set_string_data(self, scope: &mut v8::PinScope<'s, '_>, mime_type: &str, data: &str) {
@@ -595,18 +694,13 @@ impl<'s> DataTransferItemStore<'s> {
                     removed_item = true;
                     continue;
                 }
-                let _ = next.set_index(scope, next_index, item.into());
+                define_index_data_property(scope, next.into(), next_index, item.into());
                 next_index += 1;
             }
             if !removed_item {
                 return DataTransferItemListMutation::Unchanged(());
             }
-            set_private_value(
-                scope,
-                self.item_list,
-                DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
-                next.into(),
-            );
+            set_item_list_records(scope, self.item_list, next);
             DataTransferItemListMutation::Changed(())
         });
     }
@@ -629,15 +723,10 @@ impl<'s> DataTransferItemStore<'s> {
                     }
                     continue;
                 }
-                let _ = next.set_index(scope, next_index, value);
+                define_index_data_property(scope, next.into(), next_index, value);
                 next_index += 1;
             }
-            set_private_value(
-                scope,
-                self.item_list,
-                DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
-                next.into(),
-            );
+            set_item_list_records(scope, self.item_list, next);
             DataTransferItemListMutation::Changed(())
         });
     }
@@ -655,12 +744,7 @@ impl<'s> DataTransferItemStore<'s> {
                     disable_data_transfer_item(scope, item);
                 }
             }
-            set_private_value(
-                scope,
-                self.item_list,
-                DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
-                v8::Array::new(scope, 0).into(),
-            );
+            set_item_list_records(scope, self.item_list, v8::Array::new(scope, 0));
             DataTransferItemListMutation::Changed(())
         });
     }
@@ -670,35 +754,55 @@ pub(super) fn item_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    private_string_property(scope, item, DATA_TRANSFER_ITEM_KIND_SLOT)
+    if !item_data_transfer_mode(scope, item).can_read_types() {
+        return None;
+    }
+    let record = item_record(scope, item);
+    private_string_property(scope, record, DATA_TRANSFER_ITEM_KIND_SLOT)
 }
 
 fn item_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    private_string_property(scope, item, DATA_TRANSFER_ITEM_TYPE_SLOT)
+    if !item_data_transfer_mode(scope, item).can_read_types() {
+        return None;
+    }
+    let record = item_record(scope, item);
+    private_string_property(scope, record, DATA_TRANSFER_ITEM_TYPE_SLOT)
 }
 
 pub(super) fn item_string_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    private_string_property(scope, item, DATA_TRANSFER_ITEM_STRING_SLOT)
+    if !item_data_transfer_mode(scope, item).can_read_data() {
+        return None;
+    }
+    let record = item_record(scope, item);
+    private_string_property(scope, record, DATA_TRANSFER_ITEM_STRING_SLOT)
 }
 
 fn item_file_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_object(scope, item, DATA_TRANSFER_ITEM_FILE_SLOT)
+    if !item_data_transfer_mode(scope, item).can_read_data() {
+        return None;
+    }
+    let record = item_record(scope, item);
+    get_private_object(scope, record, DATA_TRANSFER_ITEM_FILE_SLOT)
 }
 
 fn item_entry_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_object(scope, item, DATA_TRANSFER_ITEM_ENTRY_SLOT)
+    if !item_data_transfer_mode(scope, item).can_read_data() {
+        return None;
+    }
+    let record = item_record(scope, item);
+    get_private_object(scope, record, DATA_TRANSFER_ITEM_ENTRY_SLOT)
 }
 
 fn item_summary<'s>(
@@ -740,17 +844,56 @@ fn item_summaries_from_array<'s>(
     summaries
 }
 
+fn new_drag_data_store_backing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    effect_allowed: &str,
+) -> v8::Local<'s, v8::Object> {
+    let backing = crate::util::new_null_prototype_object(scope);
+    set_private_value(
+        scope,
+        backing,
+        DATA_TRANSFER_STORE_ITEMS_SLOT,
+        v8::Array::new(scope, 0).into(),
+    );
+    set_private_string(
+        scope,
+        backing,
+        DATA_TRANSFER_EFFECT_ALLOWED_SLOT,
+        effect_allowed,
+    );
+    backing
+}
+
 fn initialize_data_transfer_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
+    backing: v8::Local<'s, v8::Object>,
+    mode: DragDataStoreMode,
+    drop_effect: &str,
+) -> Option<()> {
     let items = build_data_transfer_item_list_object(scope, owner)?;
     let empty_files = build_file_list_object(scope, &[])?;
-
-    DataTransferObjectDeclaration::new(empty_files, items)
+    DataTransferObjectDeclaration::new(empty_files, items, backing)
         .initialize(scope, owner)
         .ok()?;
-    Some(items)
+    let effect_allowed = private_string_property(scope, backing, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
+        .unwrap_or_else(|| "none".to_owned());
+    set_private_string(
+        scope,
+        owner,
+        DATA_TRANSFER_EFFECT_ALLOWED_SLOT,
+        &effect_allowed,
+    );
+    native_set_drag_drop_effect(scope, owner, drop_effect);
+    let value = match mode {
+        DragDataStoreMode::ReadWrite => 0.0,
+        DragDataStoreMode::ReadOnly => 1.0,
+        DragDataStoreMode::Protected => 2.0,
+        DragDataStoreMode::Disabled => 3.0,
+    };
+    set_private_number(scope, owner, DATA_TRANSFER_MODE_SLOT, value);
+    refresh_data_transfer_item_views(scope, items);
+    Some(())
 }
 
 pub(in crate::context_bootstrap) fn data_transfer_constructor_callback<'s>(
@@ -765,87 +908,203 @@ pub(in crate::context_bootstrap) fn data_transfer_constructor_callback<'s>(
         );
         return;
     }
-
-    if initialize_data_transfer_object(scope, args.this()).is_none() {
-        rv.set(v8::undefined(scope).into());
+    let backing = new_drag_data_store_backing(scope, "none");
+    if initialize_data_transfer_object(
+        scope,
+        args.this(),
+        backing,
+        DragDataStoreMode::ReadWrite,
+        "none",
+    )
+    .is_none()
+    {
         return;
     }
     rv.set(args.this().into());
 }
 
-pub(crate) fn build_data_transfer_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: &RendererDragData,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = DataTransferShellDeclaration::default().bind(scope).ok()?;
-    let item_list = initialize_data_transfer_object(scope, object)?;
-
-    set_private_string(
-        scope,
-        object,
-        DATA_TRANSFER_EFFECT_ALLOWED_SLOT,
-        drag_effect_allowed_from_mask(data.drag_operations_mask),
-    );
-    set_private_string(
-        scope,
-        object,
-        DATA_TRANSFER_DROP_EFFECT_SLOT,
-        preferred_drop_effect_from_mask(data.drag_operations_mask),
-    );
-
-    DataTransferItemStore::new(item_list).append_drag_data(scope, data)?;
-    Some(object)
+pub(crate) fn create_native_drag_data_store(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<NativeDragDataStore> {
+    let backing = new_drag_data_store_backing(scope, "uninitialized");
+    Some(NativeDragDataStore {
+        backing: v8::Global::new(scope, backing),
+    })
 }
 
-/// Editing InputEvents keep their own readable data beyond the drag dispatch.
-/// Copy native item state, not page-visible getters or the mutable drag list.
+pub(crate) fn create_external_drag_data_store(
+    scope: &mut v8::PinScope<'_, '_>,
+    data: &RendererDragData,
+) -> Option<NativeDragDataStore> {
+    let store = create_native_drag_data_store(scope)?;
+    populate_native_drag_data_store(scope, &store, data)?;
+    update_drag_data_store_operations_mask(scope, &store, data.drag_operations_mask);
+    Some(store)
+}
+
+pub(crate) fn create_drag_data_transfer_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: &NativeDragDataStore,
+    mode: DragDataStoreMode,
+    drop_effect: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let owner = DataTransferShellDeclaration::default().bind(scope).ok()?;
+    let backing = store.local(scope);
+    initialize_data_transfer_object(scope, owner, backing, mode, drop_effect)?;
+    Some(owner)
+}
+
+pub(crate) fn finish_drag_data_transfer_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+) -> String {
+    let effect = native_data_transfer_drop_effect(scope, view);
+    set_data_transfer_mode(scope, view, DragDataStoreMode::Disabled);
+    effect
+}
+
+/// The source keeps readable item metadata after dragstart, without regaining
+/// access to payloads or allowing a finished view to become active again.
+pub(crate) fn protect_native_drag_source_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+) {
+    if data_transfer_mode(scope, view) == DragDataStoreMode::ReadWrite {
+        set_data_transfer_mode(scope, view, DragDataStoreMode::Protected);
+    }
+}
+
+/// Editing events retain readable data independently of the drag views' access
+/// lifetime and later mutations of their source item records.
 pub(crate) fn readonly_data_transfer_for_input<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if !data_transfer_mode(scope, source).can_read_data() {
+        return None;
+    }
     let source_list = get_private_object(scope, source, DATA_TRANSFER_ITEMS_SLOT)?;
     let source_items = item_list_array(scope, source_list)?;
-    let object = DataTransferShellDeclaration::default().bind(scope).ok()?;
-    let item_list = initialize_data_transfer_object(scope, object)?;
-    let effect = data_transfer_effect_allowed(scope, source)?;
-    set_private_string(scope, object, DATA_TRANSFER_EFFECT_ALLOWED_SLOT, &effect);
-    DataTransferItemStore::new(item_list).mutate(scope, |scope, items| {
-        for index in 0..source_items.length() {
-            let Some(item) = source_items
-                .get_index(scope, index)
-                .and_then(|item| v8::Local::<v8::Object>::try_from(item).ok())
-            else {
-                continue;
-            };
-            let mime_type = item_type(scope, item).unwrap_or_default();
-            let copy = if let Some(text) = item_string_value(scope, item) {
-                build_data_transfer_item_for_string(scope, &mime_type, &text)
-            } else if let Some(entry) = item_entry_object(scope, item) {
-                if let Some(file) = item_file_object(scope, item) {
-                    DataTransferFileItemObjectDeclaration::new(&mime_type, file, entry)
-                        .bind(scope)
-                        .ok()
-                } else {
-                    DataTransferDirectoryItemObjectDeclaration::new(entry)
-                        .bind(scope)
-                        .ok()
-                }
+    let effect = native_data_transfer_effect_allowed(scope, source);
+    let backing = new_drag_data_store_backing(scope, &effect);
+    let records = private_property_as_array(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT)?;
+    for index in 0..source_items.length() {
+        let Some(item) = source_items
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            continue;
+        };
+        let mime_type = item_type(scope, item).unwrap_or_default();
+        let copy = if let Some(text) = item_string_value(scope, item) {
+            build_data_transfer_item_for_string(scope, &mime_type, &text)
+        } else if let Some(entry) = item_entry_object(scope, item) {
+            let record = crate::util::new_null_prototype_object(scope);
+            if let Some(file) = item_file_object(scope, item) {
+                DataTransferFileItemObjectDeclaration::new(&mime_type, file, entry)
+                    .initialize(scope, record)
+                    .ok()?;
             } else {
-                None
-            };
-            if let Some(copy) = copy {
-                let _ = append_item(scope, items, copy);
+                DataTransferDirectoryItemObjectDeclaration::new(entry)
+                    .initialize(scope, record)
+                    .ok()?;
             }
+            Some(record)
+        } else {
+            None
+        };
+        if let Some(copy) = copy {
+            append_item(scope, records, copy)?;
         }
-        DataTransferItemListMutation::Changed(())
-    })?;
-    set_private_value(
+    }
+    let owner = DataTransferShellDeclaration::default().bind(scope).ok()?;
+    initialize_data_transfer_object(scope, owner, backing, DragDataStoreMode::ReadOnly, "none")?;
+    Some(owner)
+}
+
+fn append_drag_data_records<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    records: v8::Local<'s, v8::Array>,
+    data: &RendererDragData,
+) -> Option<()> {
+    for item in &data.items {
+        append_string_item(
+            scope,
+            records,
+            &normalize_drag_data_type(&item.mime_type),
+            &item.data,
+        )?;
+    }
+    for file in &data.files {
+        append_file_item(scope, records, file)?;
+    }
+    for directory in &data.directories {
+        append_directory_item(scope, records, directory)?;
+    }
+    Some(())
+}
+
+/// Native session writes happen between event scopes, never by reviving an old
+/// JavaScript DataTransfer view.
+pub(crate) fn populate_native_drag_data_store<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: &NativeDragDataStore,
+    data: &RendererDragData,
+) -> Option<()> {
+    let backing = store.local(scope);
+    let records = private_property_as_array(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT)?;
+    append_drag_data_records(scope, records, data)
+}
+
+pub(crate) fn replace_drag_data_store_contents<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: &NativeDragDataStore,
+    data: &RendererDragData,
+) -> Option<()> {
+    let backing = store.local(scope);
+    let next = v8::Array::new(scope, 0);
+    append_drag_data_records(scope, next, data)?;
+    // Existing source views retain their original item metadata. Target views
+    // have their own lifetime and cannot read these records after they finish.
+    set_private_value(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT, next.into());
+    update_drag_data_store_operations_mask(scope, store, data.drag_operations_mask);
+    Some(())
+}
+
+pub(crate) fn update_drag_data_store_operations_mask(
+    scope: &mut v8::PinScope<'_, '_>,
+    store: &NativeDragDataStore,
+    mask: i32,
+) {
+    let backing = store.local(scope);
+    set_private_string(
         scope,
-        object,
-        DATA_TRANSFER_READ_ONLY_SLOT,
-        v8::Boolean::new(scope, true).into(),
+        backing,
+        DATA_TRANSFER_EFFECT_ALLOWED_SLOT,
+        drag_effect_allowed_from_mask(mask),
     );
-    Some(object)
+}
+
+pub(crate) fn native_data_transfer_effect_allowed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+) -> String {
+    data_transfer_effect_allowed(scope, view).unwrap_or_else(|| "none".to_owned())
+}
+
+pub(crate) fn native_data_transfer_drop_effect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+) -> String {
+    private_string_property(scope, view, DATA_TRANSFER_DROP_EFFECT_SLOT)
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+pub(crate) fn native_data_transfer_drop_effect_is_initialized<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+) -> bool {
+    private_bool_property(scope, view, DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT).unwrap_or(false)
 }
 
 fn build_data_transfer_item_list_object<'s>(
@@ -872,9 +1131,11 @@ fn build_data_transfer_item_for_file<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let mime_type = blob::blob_mime_type_from_object(scope, file).unwrap_or_default();
     let entry = build_file_system_file_entry(scope, file)?;
+    let record = crate::util::new_null_prototype_object(scope);
     DataTransferFileItemObjectDeclaration::new(&mime_type, file, entry)
-        .bind(scope)
-        .ok()
+        .initialize(scope, record)
+        .ok()?;
+    Some(record)
 }
 
 fn build_data_transfer_item_for_directory<'s>(
@@ -882,9 +1143,11 @@ fn build_data_transfer_item_for_directory<'s>(
     directory: &RendererDraggedDirectory,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let entry = build_file_system_directory_entry(scope, directory, None)?;
+    let record = crate::util::new_null_prototype_object(scope);
     DataTransferDirectoryItemObjectDeclaration::new(entry)
-        .bind(scope)
-        .ok()
+        .initialize(scope, record)
+        .ok()?;
+    Some(record)
 }
 
 fn build_data_transfer_item_for_string<'s>(
@@ -892,9 +1155,11 @@ fn build_data_transfer_item_for_string<'s>(
     mime_type: &str,
     data: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let record = crate::util::new_null_prototype_object(scope);
     DataTransferStringItemObjectDeclaration::new(mime_type, data)
-        .bind(scope)
-        .ok()
+        .initialize(scope, record)
+        .ok()?;
+    Some(record)
 }
 
 fn build_file_system_object<'s>(
@@ -1001,7 +1266,19 @@ fn append_item<'s>(
     item: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let next_index = item_array.length();
-    (item_array.set_index(scope, next_index, item.into()) == Some(true)).then_some(item)
+    define_index_data_property(scope, item_array.into(), next_index, item.into()).then_some(item)
+}
+
+fn define_index_data_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    index: u32,
+    value: v8::Local<'s, v8::Value>,
+) -> bool {
+    let key = v8::Integer::new_from_unsigned(scope, index)
+        .to_string(scope)
+        .expect("native array index should stringify");
+    object.create_data_property(scope, key.into(), value) == Some(true)
 }
 
 fn append_string_item<'s>(
@@ -1048,7 +1325,42 @@ fn data_transfer_item_list_did_change<'s>(
         DATA_TRANSFER_TYPES_SLOT,
         v8::undefined(scope).into(),
     );
-    let Some(item_array) = item_list_array(scope, item_list) else {
+    refresh_data_transfer_item_views(scope, item_list);
+}
+
+fn find_item_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    views: v8::Local<'s, v8::Array>,
+    record: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    for index in 0..views.length() {
+        let Some(view) = views
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            continue;
+        };
+        if get_private_object(scope, view, DATA_TRANSFER_ITEM_RECORD_SLOT)
+            .is_some_and(|existing| existing.strict_equals(record.into()))
+        {
+            return Some(view);
+        }
+    }
+    None
+}
+
+fn refresh_data_transfer_item_views<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item_list: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = item_list_owner(scope, item_list) else {
+        return;
+    };
+    let mode = data_transfer_mode(scope, owner);
+    let Some(records) = item_list_records(scope, item_list) else {
+        return;
+    };
+    let Some(previous_views) = item_list_array(scope, item_list) else {
         return;
     };
     let previous_length = private_number_property(
@@ -1060,34 +1372,48 @@ fn data_transfer_item_list_did_change<'s>(
     for index in 0..previous_length {
         let _ = item_list.delete_index(scope, index);
     }
-
+    let mut views = Vec::new();
     let mut files = Vec::new();
-    for index in 0..item_array.length() {
-        let Some(value) = item_array.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(item) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let _ = item_list.set_index(scope, index, item.into());
-        if item_kind(scope, item).as_deref() == Some("file")
-            && let Some(file) = item_file_object(scope, item)
-        {
-            files.push(file);
+    if mode.can_read_types() {
+        for index in 0..records.length() {
+            let Some(record) = records
+                .get_index(scope, index)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            else {
+                continue;
+            };
+            let view = find_item_view(scope, previous_views, record).or_else(|| {
+                DataTransferItemViewDeclaration::new(owner, record)
+                    .bind(scope)
+                    .ok()
+            });
+            let Some(view) = view else {
+                continue;
+            };
+            define_index_data_property(scope, item_list, views.len() as u32, view.into());
+            views.push(view.into());
+            if item_kind(scope, view).as_deref() == Some("file")
+                && let Some(file) = item_file_object(scope, view)
+            {
+                files.push(file);
+            }
         }
     }
-
+    let view_array = v8::Array::new_with_elements(scope, &views);
+    set_private_value(
+        scope,
+        item_list,
+        DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
+        view_array.into(),
+    );
     set_private_number(
         scope,
         item_list,
         DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT,
-        item_array.length() as f64,
+        views.len() as f64,
     );
-
     if let Some(file_list) = get_private_object(scope, owner, DATA_TRANSFER_FILES_SLOT) {
         sync_file_list_contents(scope, file_list, &files);
-    } else if let Some(file_list) = build_file_list_object(scope, &files) {
-        set_private_value(scope, owner, DATA_TRANSFER_FILES_SLOT, file_list.into());
     }
 }
 
@@ -1103,7 +1429,11 @@ fn ensure_data_transfer_types_snapshot<'s>(
 
     let item_list = get_private_object(scope, owner, DATA_TRANSFER_ITEMS_SLOT)?;
     let item_array = item_list_array(scope, item_list)?;
-    let types = data_transfer_types_from_items(&item_summaries_from_array(scope, item_array));
+    let types = if data_transfer_mode(scope, owner).can_read_types() {
+        data_transfer_types_from_items(&item_summaries_from_array(scope, item_array))
+    } else {
+        Vec::new()
+    };
     let types_array = crate::util::serialize_v8_array(scope, types.as_slice())
         .unwrap_or_else(|| v8::Array::new(scope, 0));
     let _ = types_array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
@@ -1168,8 +1498,23 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    if valid_drop_effect(&value) {
-        set_private_string(scope, args.this(), DATA_TRANSFER_DROP_EFFECT_SLOT, &value);
+    set_script_drag_drop_effect(scope, args.this(), &value);
+}
+
+fn set_script_drag_drop_effect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+    value: &str,
+) {
+    if valid_drop_effect(value) {
+        set_private_string(scope, view, DATA_TRANSFER_DROP_EFFECT_SLOT, value);
+        let initialized = v8::Boolean::new(scope, true);
+        set_private_value(
+            scope,
+            view,
+            DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT,
+            initialized.into(),
+        );
     }
 }
 
@@ -1200,13 +1545,16 @@ fn data_transfer_effect_allowed_setter<'s>(
             return;
         }
     };
-    if valid_effect_allowed(&value) && data_transfer_can_write(scope, args.this()) {
+    if valid_effect_allowed(&value) && data_transfer_mode(scope, args.this()).can_write_data() {
         set_private_string(
             scope,
             args.this(),
             DATA_TRANSFER_EFFECT_ALLOWED_SLOT,
             &value,
         );
+        if let Some(store) = get_private_object(scope, args.this(), DATA_TRANSFER_STORE_SLOT) {
+            set_private_string(scope, store, DATA_TRANSFER_EFFECT_ALLOWED_SLOT, &value);
+        }
     }
 }
 
@@ -1215,7 +1563,7 @@ fn data_transfer_item_kind_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = private_string_property(scope, args.this(), DATA_TRANSFER_ITEM_KIND_SLOT)
+    let value = item_kind(scope, args.this())
         .and_then(|value| v8_string(scope, &value).map(Into::into))
         .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
@@ -1226,7 +1574,7 @@ fn data_transfer_item_type_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = private_string_property(scope, args.this(), DATA_TRANSFER_ITEM_TYPE_SLOT)
+    let value = item_type(scope, args.this())
         .and_then(|value| v8_string(scope, &value).map(Into::into))
         .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
@@ -1237,7 +1585,9 @@ fn data_transfer_item_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let length = item_list_array(scope, args.this())
+    let length = item_list_owner(scope, args.this())
+        .filter(|owner| data_transfer_mode(scope, *owner).can_read_types())
+        .and_then(|_| item_list_array(scope, args.this()))
         .map(|items| items.length())
         .unwrap_or(0);
     rv.set(v8::Number::new(scope, length as f64).into());
@@ -1296,6 +1646,63 @@ fn file_system_entry_name_getter<'s>(
     rv.set(value);
 }
 
+/// Reads an event view without consulting author-visible methods or properties.
+/// The view's read permissions still apply to these native default actions.
+pub(crate) fn native_data_transfer_get_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+    format: &str,
+) -> String {
+    if !data_transfer_mode(scope, view).can_read_data() {
+        return String::new();
+    }
+    let normalized_type = normalize_drag_data_type(format);
+    let Some(items) = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT)
+        .and_then(|list| item_list_array(scope, list))
+    else {
+        return String::new();
+    };
+    for index in 0..items.length() {
+        let Some(item) = items
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            continue;
+        };
+        if item_kind(scope, item).as_deref() == Some("string")
+            && item_type(scope, item).as_deref() == Some(normalized_type.as_str())
+        {
+            return item_string_value(scope, item).unwrap_or_default();
+        }
+    }
+    String::new()
+}
+
+pub(crate) fn native_data_transfer_files<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    view: v8::Local<'s, v8::Object>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    if !data_transfer_mode(scope, view).can_read_data() {
+        return Vec::new();
+    }
+    let Some(items) = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT)
+        .and_then(|list| item_list_array(scope, list))
+    else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for index in 0..items.length() {
+        if let Some(item) = items
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            && let Some(file) = item_file_object(scope, item)
+        {
+            files.push(file);
+        }
+    }
+    files
+}
+
 pub(crate) fn data_transfer_get_data_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1304,39 +1711,12 @@ pub(crate) fn data_transfer_get_data_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferGetDataArgs>(scope, &args) else {
         return;
     };
-    let normalized_type = normalize_drag_data_type(&parsed.format);
-    let Some(item_list) = get_private_object(scope, args.this(), DATA_TRANSFER_ITEMS_SLOT) else {
-        rv.set(v8str(scope, "").into());
-        return;
-    };
-    let Some(item_array) = item_list_array(scope, item_list) else {
-        rv.set(v8str(scope, "").into());
-        return;
-    };
-
-    for index in 0..item_array.length() {
-        let Some(value) = item_array.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(item) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        if item_kind(scope, item).as_deref() != Some("string") {
-            continue;
-        }
-        if item_type(scope, item).as_deref() != Some(normalized_type.as_str()) {
-            continue;
-        }
-        let value = item_string_value(scope, item).unwrap_or_default();
-        rv.set(
-            v8_string(scope, &value)
-                .unwrap_or_else(|| v8str(scope, ""))
-                .into(),
-        );
-        return;
-    }
-
-    rv.set(v8str(scope, "").into());
+    let value = native_data_transfer_get_data(scope, args.this(), &parsed.format);
+    rv.set(
+        v8_string(scope, &value)
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
 }
 
 pub(crate) fn data_transfer_set_data_callback<'s>(
@@ -1397,7 +1777,9 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
                 return;
             }
         };
-        if !store.can_write(scope) {
+        if !item_list_owner(scope, args.this())
+            .is_some_and(|owner| data_transfer_mode(scope, owner).can_write_data())
+        {
             rv.set(v8::null(scope).into());
             return;
         }
@@ -1412,7 +1794,9 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
         }
         build_data_transfer_item_for_string(scope, &mime_type, &data)
     } else {
-        if !store.can_write(scope) {
+        if !item_list_owner(scope, args.this())
+            .is_some_and(|owner| data_transfer_mode(scope, owner).can_write_data())
+        {
             rv.set(v8::null(scope).into());
             return;
         }
@@ -1442,6 +1826,12 @@ pub(crate) fn data_transfer_item_list_item_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferItemListItemArgs>(scope, &args) else {
         return;
     };
+    if !item_list_owner(scope, args.this())
+        .is_some_and(|owner| data_transfer_mode(scope, owner).can_read_types())
+    {
+        rv.set(v8::null(scope).into());
+        return;
+    }
     let Some(value) = args.this().get_index(scope, parsed.index) else {
         rv.set(v8::null(scope).into());
         return;
@@ -1461,12 +1851,13 @@ pub(crate) fn data_transfer_item_list_remove_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferItemListRemoveArgs>(scope, &args) else {
         return;
     };
-    let store = DataTransferItemStore::new(args.this());
-    if !store.can_write(scope) {
+    if !item_list_owner(scope, args.this())
+        .is_some_and(|owner| data_transfer_mode(scope, owner).can_write_data())
+    {
         throw_dom_exception(scope, "InvalidStateError", 11, "The list is not writable.");
         return;
     }
-    store.remove(scope, parsed.index);
+    DataTransferItemStore::new(args.this()).remove(scope, parsed.index);
 }
 
 pub(crate) fn data_transfer_item_list_clear_callback<'s>(
@@ -1529,4 +1920,204 @@ pub(crate) fn file_system_directory_entry_create_reader_callback<'s>(
         return;
     };
     rv.set(reader.into());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_transfer_scope(test: impl FnOnce(&mut v8::PinScope<'_, '_>)) {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let global = context.global(scope);
+        for name in [
+            "DataTransfer",
+            "DataTransferItemList",
+            "DataTransferItem",
+            "FileList",
+        ] {
+            let constructor = v8::Object::new(scope);
+            let prototype = v8::Object::new(scope);
+            assert_eq!(
+                constructor.create_data_property(
+                    scope,
+                    v8str(scope, "prototype").into(),
+                    prototype.into()
+                ),
+                Some(true)
+            );
+            assert_eq!(
+                global.create_data_property(scope, v8str(scope, name).into(), constructor.into()),
+                Some(true)
+            );
+        }
+        test(scope);
+    }
+
+    fn first_item<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        view: v8::Local<'s, v8::Object>,
+    ) -> v8::Local<'s, v8::Object> {
+        let list = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT).unwrap();
+        let array = item_list_array(scope, list).unwrap();
+        v8::Local::<v8::Object>::try_from(array.get_index(scope, 0).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn event_views_share_records_without_reviving_closed_view_permissions() {
+        with_transfer_scope(|scope| {
+            let store = create_native_drag_data_store(scope).unwrap();
+            let backing = store.local(scope);
+            assert!(!is_branded_data_transfer_object(scope, backing));
+            let source =
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::ReadWrite, "none")
+                    .unwrap();
+            DataTransferItemStore::for_owner(scope, source)
+                .unwrap()
+                .set_string_data(scope, "text/plain", "payload");
+            let source_item = first_item(scope, source);
+            assert_eq!(
+                item_string_value(scope, source_item).as_deref(),
+                Some("payload")
+            );
+            let file = crate::util::new_null_prototype_object(scope);
+            let entry = crate::util::new_null_prototype_object(scope);
+            let record = crate::util::new_null_prototype_object(scope);
+            DataTransferFileItemObjectDeclaration::new("application/octet-stream", file, entry)
+                .initialize(scope, record)
+                .unwrap();
+            let source_file_item = DataTransferItemStore::for_owner(scope, source)
+                .unwrap()
+                .append(scope, record)
+                .unwrap();
+            assert!(item_file_object(scope, source_file_item).is_some());
+            assert_eq!(native_data_transfer_files(scope, source).len(), 1);
+            protect_native_drag_source_view(scope, source);
+            assert_eq!(item_kind(scope, source_item).as_deref(), Some("string"));
+            assert_eq!(item_type(scope, source_item).as_deref(), Some("text/plain"));
+            assert_eq!(item_kind(scope, source_file_item).as_deref(), Some("file"));
+            assert_eq!(
+                item_type(scope, source_file_item).as_deref(),
+                Some("application/octet-stream")
+            );
+            assert_eq!(item_string_value(scope, source_item), None);
+            assert!(native_data_transfer_get_data(scope, source, "text/plain").is_empty());
+            assert!(item_file_object(scope, source_file_item).is_none());
+            assert!(item_entry_object(scope, source_file_item).is_none());
+            assert!(native_data_transfer_files(scope, source).is_empty());
+
+            let protected =
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "none")
+                    .unwrap();
+            let protected_item = first_item(scope, protected);
+            assert!(!source.strict_equals(protected.into()));
+            assert!(!source_item.strict_equals(protected_item.into()));
+            assert!(native_data_transfer_has_type(
+                scope,
+                protected,
+                "text/plain"
+            ));
+            assert_eq!(item_string_value(scope, protected_item), None);
+            finish_drag_data_transfer_view(scope, protected);
+
+            let drop =
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::ReadOnly, "copy")
+                    .unwrap();
+            let drop_item = first_item(scope, drop);
+            assert!(!drop_item.strict_equals(protected_item.into()));
+            assert_eq!(
+                item_string_value(scope, drop_item).as_deref(),
+                Some("payload")
+            );
+            DataTransferItemStore::for_owner(scope, drop)
+                .unwrap()
+                .set_string_data(scope, "text/plain", "forbidden");
+            assert_eq!(
+                item_string_value(scope, drop_item).as_deref(),
+                Some("payload")
+            );
+            assert_eq!(item_kind(scope, source_item).as_deref(), Some("string"));
+            assert_eq!(item_kind(scope, protected_item), None);
+            update_drag_data_store_operations_mask(scope, &store, 2);
+            assert_eq!(
+                private_string_property(scope, backing, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
+                    .as_deref(),
+                Some("link")
+            );
+            assert_eq!(
+                native_data_transfer_effect_allowed(scope, source),
+                "uninitialized"
+            );
+            assert_eq!(finish_drag_data_transfer_view(scope, drop), "copy");
+            assert_eq!(item_kind(scope, drop_item), None);
+
+            replace_drag_data_store_contents(
+                scope,
+                &store,
+                &RendererDragData {
+                    items: Vec::new(),
+                    files: Vec::new(),
+                    directories: Vec::new(),
+                    drag_operations_mask: 1,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                private_property_as_array(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT)
+                    .unwrap()
+                    .length(),
+                0
+            );
+            assert_eq!(item_kind(scope, source_item).as_deref(), Some("string"));
+            assert_eq!(item_type(scope, source_item).as_deref(), Some("text/plain"));
+            assert_eq!(item_kind(scope, source_file_item).as_deref(), Some("file"));
+            let source_types = ensure_data_transfer_types_snapshot(scope, source).unwrap();
+            let source_types = v8::Local::<v8::Array>::try_from(source_types).unwrap();
+            assert_eq!(source_types.length(), 2);
+            assert_eq!(item_kind(scope, protected_item), None);
+            assert_eq!(item_kind(scope, drop_item), None);
+            finish_drag_data_transfer_view(scope, source);
+            assert_eq!(item_kind(scope, source_item), None);
+            assert_eq!(item_kind(scope, source_file_item), None);
+            protect_native_drag_source_view(scope, source);
+            assert_eq!(
+                data_transfer_mode(scope, source),
+                DragDataStoreMode::Disabled
+            );
+            assert_eq!(item_kind(scope, source_item), None);
+        });
+    }
+
+    #[test]
+    fn drop_effect_initialization_belongs_to_the_event_view() {
+        with_transfer_scope(|scope| {
+            let store = create_native_drag_data_store(scope).unwrap();
+            let first =
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "none")
+                    .unwrap();
+            native_set_drag_drop_effect(scope, first, "copy");
+            assert!(!native_data_transfer_drop_effect_is_initialized(
+                scope, first
+            ));
+            set_script_drag_drop_effect(scope, first, "none");
+            assert!(native_data_transfer_drop_effect_is_initialized(
+                scope, first
+            ));
+            assert_eq!(finish_drag_data_transfer_view(scope, first), "none");
+            let next =
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "none")
+                    .unwrap();
+            assert!(!native_data_transfer_drop_effect_is_initialized(
+                scope, next
+            ));
+            set_script_drag_drop_effect(scope, next, "invalid");
+            assert!(!native_data_transfer_drop_effect_is_initialized(
+                scope, next
+            ));
+        });
+    }
 }

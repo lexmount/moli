@@ -310,7 +310,14 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
 pub(crate) use self::file_api::{
-    apply_drag_modifier_drop_effect, build_data_transfer_object, readonly_data_transfer_for_input,
+    DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
+    create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
+    native_data_transfer_drop_effect, native_data_transfer_drop_effect_is_initialized,
+    native_data_transfer_effect_allowed, native_data_transfer_file_count,
+    native_data_transfer_files, native_data_transfer_get_data, native_data_transfer_has_type,
+    populate_native_drag_data_store, protect_native_drag_source_view,
+    readonly_data_transfer_for_input, replace_drag_data_store_contents,
+    update_drag_data_store_operations_mask,
 };
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, file_list_files_from_object,

@@ -7,6 +7,7 @@
 <script>
 const dropzone = document.getElementById("dropzone");
 let dropped = null;
+let droppedRoot = null;
 let resolveDrop = null;
 
 const dropPromise = new Promise(function (resolve) {
@@ -32,13 +33,16 @@ dropzone.addEventListener("dragover", function (event) {
 dropzone.addEventListener("drop", function (event) {
   event.preventDefault();
   dropped = event.dataTransfer;
+  droppedRoot = dropped.items[0].webkitGetAsEntry();
   resolveDrop();
 });
 
 promise_test(async function () {
   await dropPromise;
 
-  const root = dropped.items[0].webkitGetAsEntry();
+  assert_equals(dropped.items.length, 0, "retained data store is disabled after drop");
+  assert_array_equals(Array.from(dropped.types), [], "disabled data store exposes no types");
+  const root = droppedRoot;
   assert_true(root instanceof FileSystemDirectoryEntry, "root dropped item is a directory entry");
   assert_equals(root.name, "batch", "root directory name");
 

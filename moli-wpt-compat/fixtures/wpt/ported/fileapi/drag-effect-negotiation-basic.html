@@ -34,6 +34,7 @@ const dropped = new Promise(function (resolve) {
   });
 
   target.addEventListener("dragover", function (event) {
+    event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     events.push(
       phase +
@@ -79,15 +80,15 @@ promise_test(async function () {
   assert_array_equals(
     events,
     [
-      "blocked-enter:copy:copy",
+      "blocked-enter:none:copy",
       "blocked-over:move:copy",
-      "blocked-drop:blocked-text:move:copy:hello world",
-      "allowed-enter:copy:copyMove",
+      "blocked-drop:blocked-text:none:copy:hello world",
+      "allowed-enter:none:copyMove",
       "allowed-over:move:copyMove",
-      "allowed-drop:allowed-text:move:copyMove:hello world",
+      "allowed-drop:allowed-text:none:copyMove:hello world",
       "allowed-input:hello allowed-text:18:18",
     ],
-    "text drop default action should run only when dropEffect is allowed by effectAllowed",
+    "independent drop views start with none, while the negotiated operation gates default insertion",
   );
 }, "Input.dispatchDragEvent gates text drop defaults on effect negotiation");
 </script>

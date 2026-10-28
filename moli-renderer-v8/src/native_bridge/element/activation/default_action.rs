@@ -42,104 +42,28 @@ use super::targets::{
     navigate_target_browsing_context,
 };
 
-fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
-    object
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as u32)
-        .unwrap_or(0)
+fn data_transfer_selected_files<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> Vec<SelectedFile> {
+    crate::context_bootstrap::native_data_transfer_files(scope, data_transfer)
+        .into_iter()
+        .filter_map(|file| crate::context_bootstrap::selected_file_from_object(scope, file))
+        .collect()
 }
 
-fn data_transfer_selected_files(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-) -> Option<Vec<SelectedFile>> {
-    let files = data_transfer.get(scope, v8str(scope, "files").into())?;
-    let files = v8::Local::<v8::Object>::try_from(files).ok()?;
-    let mut selected = Vec::with_capacity(array_like_length(scope, files) as usize);
-    for index in 0..array_like_length(scope, files) {
-        let Some(value) = files.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(file) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let Some(file) = crate::context_bootstrap::selected_file_from_object(scope, file) else {
-            continue;
-        };
-        selected.push(file);
-    }
-    Some(selected)
-}
-
-fn data_transfer_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-) -> Option<String> {
-    data_transfer_string(scope, data_transfer, "text")
-}
-
-fn data_transfer_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-) -> Option<String> {
-    data_transfer_string(scope, data_transfer, "text/html")
-}
-
-fn data_transfer_string(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-    mime_type: &str,
-) -> Option<String> {
-    let get_data = data_transfer.get(scope, v8str(scope, "getData").into())?;
-    let get_data = v8::Local::<v8::Function>::try_from(get_data).ok()?;
-    let text_type = v8_string(scope, mime_type)?;
-    let value = get_data.call(scope, data_transfer.into(), &[text_type.into()])?;
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn data_transfer_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-    property_name: &'static str,
-) -> Option<String> {
-    data_transfer
-        .get(scope, v8str(scope, property_name).into())?
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn drop_effect_allowed(effect_allowed: &str, drop_effect: &str) -> bool {
-    match drop_effect {
-        "none" => false,
-        "copy" => matches!(
-            effect_allowed,
-            "copy" | "copyLink" | "copyMove" | "all" | "uninitialized"
-        ),
-        "link" => matches!(
-            effect_allowed,
-            "link" | "copyLink" | "linkMove" | "all" | "uninitialized"
-        ),
-        "move" => matches!(
-            effect_allowed,
-            "move" | "copyMove" | "linkMove" | "all" | "uninitialized"
-        ),
-        _ => false,
-    }
-}
-
-fn data_transfer_allows_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
+fn data_transfer_allows_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
     let drop_effect =
-        data_transfer_string_property(scope, data_transfer, "dropEffect").unwrap_or_default();
-    let effect_allowed = data_transfer_string_property(scope, data_transfer, "effectAllowed")
-        .unwrap_or_else(|| "uninitialized".to_owned());
-    drop_effect_allowed(&effect_allowed, &drop_effect)
+        crate::context_bootstrap::native_data_transfer_drop_effect(scope, data_transfer);
+    let allowed =
+        crate::context_bootstrap::native_data_transfer_effect_allowed(scope, data_transfer);
+    moli_file_api::data_transfer::drop_effect_allowed_by_effect_allowed(
+        Some(&allowed),
+        &drop_effect,
+    )
 }
 
 fn event_default_prevented(
@@ -173,16 +97,14 @@ fn is_text_drop_target(element: &Element) -> bool {
     )
 }
 
-fn perform_file_input_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+fn perform_file_input_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
     allow_multiple: bool,
 ) -> bool {
-    let Some(mut files) = data_transfer_selected_files(scope, data_transfer) else {
-        return false;
-    };
+    let mut files = data_transfer_selected_files(scope, data_transfer);
     if files.is_empty() {
         return false;
     }
@@ -205,15 +127,14 @@ fn perform_file_input_drop_default_action(
     true
 }
 
-fn perform_text_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+fn perform_text_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(text) = data_transfer_text(scope, data_transfer) else {
-        return false;
-    };
+    let text =
+        crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/plain");
     if text.is_empty() {
         return false;
     }
@@ -641,12 +562,13 @@ fn perform_contenteditable_drop_default_action<'s>(
     handle: DomHandle,
     data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(text) = data_transfer_text(scope, data_transfer) else {
-        return false;
-    };
+    let text =
+        crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/plain");
     let plaintext_only = element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"));
-    let html = data_transfer_html(scope, data_transfer).filter(|html| !html.is_empty());
+    let html =
+        crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/html");
+    let html = (!html.is_empty()).then_some(html);
     if text.is_empty() && html.is_none() {
         return false;
     }
@@ -2266,6 +2188,40 @@ fn element_matches_fragment_target(element: &Element, fragment: &str) -> bool {
             && element
                 .attribute("name")
                 .is_some_and(|name| name == fragment))
+}
+
+/// Editable controls and file inputs can accept compatible native drag data
+/// without an author canceling dragover. Inspect only store metadata here:
+/// JavaScript still sees a protected store until the actual drop event.
+pub(crate) fn accepts_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> bool {
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_connected(handle) || is_disabled_form_control(runtime, handle) {
+        return false;
+    }
+    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    if element.is_html_input() && element.input_type() == InputType::File {
+        let count = crate::context_bootstrap::native_data_transfer_file_count(scope, data_transfer);
+        return count > 0 && (element.has_attribute("multiple") || count == 1);
+    }
+    let has_text =
+        crate::context_bootstrap::native_data_transfer_has_type(scope, data_transfer, "text/plain");
+    if element.is_html_input() || element.is_html_textarea() {
+        return is_text_drop_target(element) && has_text;
+    }
+    contenteditable_editing_host(runtime, handle).is_some()
+        && (has_text
+            || crate::context_bootstrap::native_data_transfer_has_type(
+                scope,
+                data_transfer,
+                "text/html",
+            ))
 }
 
 pub(crate) fn perform_drop_default_action<'s>(

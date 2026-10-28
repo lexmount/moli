@@ -1889,10 +1889,12 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
                 <script>
                   window.__dragPending = [];
                   document.getElementById('target').addEventListener('dragenter', event => {
+                    window.__dragPendingView = event.dataTransfer;
                     window.__dragPending.push([
                       event.type,
                       event instanceof DragEvent,
-                      event.dataTransfer.getData('text/plain')
+                      event.dataTransfer.getData('text/plain'),
+                      Array.from(event.dataTransfer.types).join(',')
                     ].join('|'));
                   });
                 </script>
@@ -1934,7 +1936,15 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
     assert_eq!(messages, vec![json!({ "id": 4107, "result": {} })]);
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__dragPending)").await,
-        r#"["dragenter|true|drag-pending"]"#
+        r#"["dragenter|true||text/plain"]"#
+    );
+    assert!(
+        evaluate_bool(
+            &mut ctx,
+            "window.__dragPendingView.getData('text/plain') === '' && window.__dragPendingView.types.length === 0 && window.__dragPendingView.items.length === 0",
+        )
+        .await,
+        "the completed protected event view cannot expose its payload or metadata"
     );
 }
 

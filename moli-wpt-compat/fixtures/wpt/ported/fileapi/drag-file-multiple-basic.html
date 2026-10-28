@@ -10,12 +10,15 @@ const events = [];
 let phase = "single";
 let multipleChangeResolve = null;
 let multipleDropFiles = null;
+let singleSelection = null;
+let droppedTransfer = null;
 
 const multipleChanged = new Promise(function (resolve) {
   multipleChangeResolve = resolve;
 });
 
 window.__enableMultipleFileDropPhase = function () {
+  singleSelection = Array.from(input.files).map(file => file.name);
   input.multiple = true;
   phase = "multiple";
 };
@@ -23,6 +26,7 @@ window.__enableMultipleFileDropPhase = function () {
 input.addEventListener("drop", function (event) {
   if (phase === "multiple") {
     multipleDropFiles = Array.from(event.dataTransfer.files);
+    droppedTransfer = event.dataTransfer;
   }
   events.push(
     phase +
@@ -62,17 +66,16 @@ input.addEventListener("change", function () {
 
 promise_test(async function () {
   await multipleChanged;
+  assert_array_equals(singleSelection, [], "single-file input rejects multiple files without changing selection");
   assert_array_equals(
     events,
     [
       "single-drop:2:first.txt,second.txt:0",
-      "single-input:1:first.txt:C:\\fakepath\\first.txt",
-      "single-change:1:first.txt",
-      "multiple-drop:2:alpha.txt,beta.txt:1",
+      "multiple-drop:2:alpha.txt,beta.txt:0",
       "multiple-input:2:alpha.txt,beta.txt:C:\\fakepath\\alpha.txt",
       "multiple-change:2:alpha.txt,beta.txt",
     ],
-    "single file input should truncate drops, while multiple input should keep all dropped files",
+    "single-file default editing rejects multiple files; multiple input retains both and dispatches input/change",
   );
   assert_equals(input.files.length, 2, "multiple input keeps both dropped files");
   assert_equals(input.files[0].name, "alpha.txt", "first multiple file");
@@ -87,6 +90,7 @@ promise_test(async function () {
   assert_equals(await input.files[1].text(), "beta", "second multiple file bytes");
   assert_equals(await multipleDropFiles[0].text(), "alpha", "drop DataTransfer first file bytes");
   assert_equals(await multipleDropFiles[1].text(), "beta", "drop DataTransfer second file bytes");
+  assert_equals(droppedTransfer.files.length, 0, "completed drop disables its DataTransfer while captured Files remain readable");
   assert_equals(input.value, "C:\\fakepath\\alpha.txt", "fakepath reflects first selected file");
 }, "Input.dispatchDragEvent respects file input multiple selection semantics");
 </script>

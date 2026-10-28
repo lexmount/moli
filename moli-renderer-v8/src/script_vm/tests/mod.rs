@@ -1,3 +1,4 @@
+mod baseline_drag_views;
 mod beforeinput_target_validation;
 
 mod child_document_web_fonts;

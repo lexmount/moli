@@ -1,4 +1,8 @@
 use anyhow::Result;
+use moli_file_api::data_transfer::{
+    drag_operations_mask_from_effect_allowed, drop_effect_allowed_by_effect_allowed,
+    modifier_drop_effect, preferred_drop_effect_from_mask,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -8,6 +12,7 @@ use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
 };
 use super::{ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, ScriptVm};
+use crate::context_bootstrap::DragDataStoreMode;
 use crate::document_runtime::DomHandle;
 use crate::dom::{
     forms::InputType,
@@ -47,6 +52,68 @@ fn related_target_value<'s>(
     handle: Option<DomHandle>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     node_wrapper_from_handle(scope, handle?).map(Into::into)
+}
+
+fn close_drag_data_transfer_source(
+    scope: &mut v8::PinScope<'_, '_>,
+    active: &mut Option<ActiveDragSession>,
+) {
+    if let Some(session) = active.take()
+        && let Some(source) = session.source_transfer
+    {
+        let source = v8::Local::new(scope, &source);
+        crate::context_bootstrap::finish_drag_data_transfer_view(scope, source);
+    }
+}
+
+fn accepted_drag_view_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    target: DomHandle,
+    transfer: v8::Local<'s, v8::Object>,
+    allows_default: bool,
+    modifiers: u8,
+) -> Option<String> {
+    let allowed = crate::context_bootstrap::native_data_transfer_effect_allowed(scope, transfer);
+    if allows_default {
+        return (crate::native_bridge::element::accepts_drop_default_action(
+            scope,
+            runtime_ptr,
+            target,
+            transfer,
+        ) && drop_effect_allowed_by_effect_allowed(Some(&allowed), "copy"))
+        .then(|| "copy".to_owned());
+    }
+    let operation = if crate::context_bootstrap::native_data_transfer_drop_effect_is_initialized(
+        scope, transfer,
+    ) {
+        crate::context_bootstrap::native_data_transfer_drop_effect(scope, transfer)
+    } else {
+        modifier_drop_effect(modifiers)
+            .filter(|effect| drop_effect_allowed_by_effect_allowed(Some(&allowed), effect))
+            .unwrap_or_else(|| {
+                preferred_drop_effect_from_mask(drag_operations_mask_from_effect_allowed(&allowed))
+            })
+            .to_owned()
+    };
+    drop_effect_allowed_by_effect_allowed(Some(&allowed), &operation).then_some(operation)
+}
+
+fn perform_drag_default_action_with_private_view(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    handle: DomHandle,
+    session: &ActiveDragSession,
+) {
+    if let Some(transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
+        scope,
+        &session.data_store,
+        DragDataStoreMode::ReadOnly,
+        &session.drop_effect,
+    ) {
+        let _ = perform_drop_default_action(scope, runtime_ptr, handle, transfer);
+        crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
+    }
 }
 
 fn tracks_mouse_hover_for_event(event_name: &str) -> bool {
@@ -556,14 +623,26 @@ impl ScriptVm {
     ) -> Result<RendererInputDispatchOutcome> {
         let PreparedMouseInputDispatch { button, buttons } = prepared;
 
+        if (event_name == "mousemove" && buttons & 1 == 0)
+            || (event_name == "mousedown" && button == 0)
+        {
+            self.clear_active_drag_data_transfer()?;
+        }
+
         if let Some(outcome) =
             self.dispatch_active_scrollbar_mouse_event(x, y, event_name, button, buttons)?
         {
+            if event_name == "mouseup" && button == 0 {
+                self.clear_active_drag_data_transfer()?;
+            }
             return Ok(outcome);
         }
 
         let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
         if let Some(control) = surface_hit.control {
+            if event_name == "mouseup" && button == 0 {
+                self.clear_active_drag_data_transfer()?;
+            }
             return match control {
                 moli_layout::LayoutControlSurfaceHit::Scrollbar(scrollbar) => {
                     self.dispatch_native_scrollbar_hit(scrollbar, event_name, button)
@@ -630,6 +709,9 @@ impl ScriptVm {
             })
             .flatten();
         let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
+            if event_name == "mouseup" && button == 0 {
+                self.clear_active_drag_data_transfer()?;
+            }
             return Ok(input_dispatch_outcome(false));
         };
         if pointer_event_name.is_some() {
@@ -680,431 +762,492 @@ impl ScriptVm {
             suppress_compat_mouse_events = false;
         }
 
-        let result = self.with_default_context_scope(|scope, runtime_ptr| {
-            let mut pointer_dispatch_handle = handle;
-            if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_client_x = f64::from(previous_client_point.x);
-                let previous_client_y = f64::from(previous_client_point.y);
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerout",
-                    previous_client_x,
-                    previous_client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+        let result =
+            self.with_default_context_scope(|scope, runtime_ptr| {
+                let mut pointer_dispatch_handle = handle;
+                if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
+                    let previous_client_point = previous_root_to_frame.map_point(root_point);
+                    let previous_client_x = f64::from(previous_client_point.x);
+                    let previous_client_y = f64::from(previous_client_point.y);
+                    let related_target = related_target_value(scope, Some(handle));
+                    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+                        scope,
+                        "pointerout",
+                        previous_client_x,
+                        previous_client_y,
+                        button,
+                        buttons,
+                        &pointer,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                    }
+                    let related_target = related_target_value(scope, Some(handle));
+                    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+                        scope,
+                        "pointerleave",
+                        previous_client_x,
+                        previous_client_y,
+                        button,
+                        buttons,
+                        &pointer,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                    }
                 }
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerleave",
-                    previous_client_x,
-                    previous_client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                if let Some((previous_handle, _)) = hover_transition {
+                    let related_target = related_target_value(scope, previous_handle);
+                    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+                        scope,
+                        "pointerover",
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        &pointer,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                    }
+                    let related_target = related_target_value(scope, previous_handle);
+                    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+                        scope,
+                        "pointerenter",
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        &pointer,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                    }
                 }
-            }
-            if let Some((previous_handle, _)) = hover_transition {
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerover",
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerenter",
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
-            }
-            if pointer_event_name == Some("pointermove")
-                && let Some(event) = construct_pointer_event_with_modifiers(
-                    scope,
-                    "pointerrawupdate",
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
-                )
-            {
-                let _ = dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
-                let post_raw_update_capture_events = {
-                    let runtime = unsafe { &mut *runtime_ptr };
-                    runtime.process_pending_pointer_capture(MOUSE_POINTER_ID)
-                };
-                dispatch_pointer_capture_events(
-                    scope,
-                    runtime_ptr,
-                    MOUSE_POINTER_ID,
-                    &post_raw_update_capture_events,
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
-                );
-                if !post_raw_update_capture_events.is_empty() {
-                    pointer_dispatch_handle = unsafe { &*runtime_ptr }
-                        .active_pointer_capture_target(MOUSE_POINTER_ID)
-                        .or(hit_handle)
-                        .unwrap_or(pointer_dispatch_handle);
-                    unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
-                }
-            }
-            if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_client_x = f64::from(previous_client_point.x);
-                let previous_client_y = f64::from(previous_client_point.y);
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
-                    scope,
-                    "mouseout",
-                    previous_client_x,
-                    previous_client_y,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
-                }
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
-                    scope,
-                    "mouseleave",
-                    previous_client_x,
-                    previous_client_y,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
-                }
-            }
-            if let Some((previous_handle, _)) = hover_transition {
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
-                    scope,
-                    "mouseover",
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
-                    scope,
-                    "mouseenter",
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
-            }
-            if let Some(pointer_event_name) = pointer_event_name_for_mouse_event(event_name)
-                && let Some(event) = construct_pointer_event_with_modifiers(
-                    scope,
-                    pointer_event_name,
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
-                )
-            {
-                let dispatched =
-                    dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
-                if event_name == "mousedown" && !dispatched.allows_default() {
-                    suppress_compat_mouse_events = true;
-                }
-            }
-            let mouse_dispatch_handle = if pointer_event_name.is_some() {
-                unsafe { &*runtime_ptr }.mouse_event_target()
-            } else {
-                Some(pointer_dispatch_handle)
-            };
-            let suppress_current_mouse_event =
-                suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
-            if !suppress_current_mouse_event
-                && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
-            {
-                let event = if event_name == "wheel" {
-                    construct_wheel_event(
-                        scope, event_name, client_x, client_y, delta_x, delta_y, button, buttons,
+                if pointer_event_name == Some("pointermove")
+                    && let Some(event) = construct_pointer_event_with_modifiers(
+                        scope,
+                        "pointerrawupdate",
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        &pointer,
                         modifiers,
                     )
-                } else {
-                    construct_mouse_event_with_modifiers(
-                        scope, event_name, client_x, client_y, button, buttons, modifiers,
-                    )
-                };
-                if let Some(event) = event {
-                    let dispatched =
-                        dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
-                    if event_name == "wheel" && dispatched.allows_default() {
-                        let _ = perform_wheel_scroll_default_action(
-                            scope,
-                            runtime_ptr,
-                            pointer_dispatch_handle,
-                            delta_x,
-                            delta_y,
-                        )?;
-                    }
-                    if event_name == "mousedown" && dispatched.allows_default() {
-                        // Chromium transfers mouse focus only after the
-                        // pointer/mouse down events have run and only when
-                        // their default action was not canceled. Focus the
-                        // actual hit target rather than a pointer-capture
-                        // target retained from an earlier event.
-                        perform_mouse_focus_default_action(
-                            scope,
-                            runtime_ptr,
-                            hit_handle.unwrap_or(handle),
-                        );
-                    }
-                }
-            }
-            let captured_click_target = if event_name == "mouseup" {
-                let captured =
-                    unsafe { &*runtime_ptr }.pointer_capture_target_for_click(MOUSE_POINTER_ID);
-                release_pointer_capture_after_pointer_end(
-                    scope,
-                    runtime_ptr,
-                    MOUSE_POINTER_ID,
-                    client_x,
-                    client_y,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
-                );
-                captured
-            } else {
-                None
-            };
-            if let Some(drag_start_handle) = drag_start_handle
-                && !suppress_current_mouse_event
-            {
-                // SAFETY: `with_default_context_scope` runs synchronously while `ScriptVm`
-                // remains exclusively borrowed, so this field pointer is valid for the
-                // duration of the callback.
-                let active_drag_session = unsafe { &mut *active_drag_session };
-                let empty_drag_data = RendererDragData {
-                    items: Vec::new(),
-                    files: Vec::new(),
-                    directories: Vec::new(),
-                    drag_operations_mask: 1,
-                };
-                if let Some(data_transfer) =
-                    crate::context_bootstrap::build_data_transfer_object(scope, &empty_drag_data)
-                    && let Some(event) = construct_drag_event(
+                {
+                    let _ =
+                        dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                    let post_raw_update_capture_events = {
+                        let runtime = unsafe { &mut *runtime_ptr };
+                        runtime.process_pending_pointer_capture(MOUSE_POINTER_ID)
+                    };
+                    dispatch_pointer_capture_events(
                         scope,
-                        "dragstart",
+                        runtime_ptr,
+                        MOUSE_POINTER_ID,
+                        &post_raw_update_capture_events,
                         client_x,
                         client_y,
-                        data_transfer.into(),
-                        0,
+                        button,
+                        buttons,
+                        &pointer,
+                        modifiers,
+                    );
+                    if !post_raw_update_capture_events.is_empty() {
+                        pointer_dispatch_handle = unsafe { &*runtime_ptr }
+                            .active_pointer_capture_target(MOUSE_POINTER_ID)
+                            .or(hit_handle)
+                            .unwrap_or(pointer_dispatch_handle);
+                        unsafe { &mut *runtime_ptr }
+                            .set_mouse_event_target(pointer_dispatch_handle);
+                    }
+                }
+                if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
+                    let previous_client_point = previous_root_to_frame.map_point(root_point);
+                    let previous_client_x = f64::from(previous_client_point.x);
+                    let previous_client_y = f64::from(previous_client_point.y);
+                    let related_target = related_target_value(scope, Some(handle));
+                    if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                        scope,
+                        "mouseout",
+                        previous_client_x,
+                        previous_client_y,
+                        button,
+                        buttons,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                    }
+                    let related_target = related_target_value(scope, Some(handle));
+                    if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                        scope,
+                        "mouseleave",
+                        previous_client_x,
+                        previous_client_y,
+                        button,
+                        buttons,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                    }
+                }
+                if let Some((previous_handle, _)) = hover_transition {
+                    let related_target = related_target_value(scope, previous_handle);
+                    if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                        scope,
+                        "mouseover",
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                    }
+                    let related_target = related_target_value(scope, previous_handle);
+                    if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                        scope,
+                        "mouseenter",
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        related_target,
+                        modifiers,
+                    ) {
+                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                    }
+                }
+                if let Some(pointer_event_name) = pointer_event_name_for_mouse_event(event_name)
+                    && let Some(event) = construct_pointer_event_with_modifiers(
+                        scope,
+                        pointer_event_name,
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        &pointer,
+                        modifiers,
                     )
                 {
-                    if dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
-                        .allows_default()
-                    {
-                        *active_drag_session = Some(ActiveDragSession {
-                            data_transfer: v8::Global::new(scope, data_transfer),
-                            drop_allowed: false,
-                        });
-                    } else {
-                        active_drag_session.take();
+                    let dispatched =
+                        dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                    if event_name == "mousedown" && !dispatched.allows_default() {
+                        suppress_compat_mouse_events = true;
                     }
                 }
-            }
-            if event_name == "mousemove" && buttons & 1 != 0 {
-                let active_drag_session = unsafe { &mut *active_drag_session };
-                if let Some(session) = active_drag_session.as_mut() {
-                    let data_transfer = v8::Local::new(scope, &session.data_transfer);
-                    if let Some(event) = construct_drag_event(
+                let mouse_dispatch_handle = if pointer_event_name.is_some() {
+                    unsafe { &*runtime_ptr }.mouse_event_target()
+                } else {
+                    Some(pointer_dispatch_handle)
+                };
+                let suppress_current_mouse_event =
+                    suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
+                if !suppress_current_mouse_event
+                    && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
+                {
+                    let event = if event_name == "wheel" {
+                        construct_wheel_event(
+                            scope, event_name, client_x, client_y, delta_x, delta_y, button,
+                            buttons, modifiers,
+                        )
+                    } else {
+                        construct_mouse_event_with_modifiers(
+                            scope, event_name, client_x, client_y, button, buttons, modifiers,
+                        )
+                    };
+                    if let Some(event) = event {
+                        let dispatched =
+                            dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
+                        if event_name == "wheel" && dispatched.allows_default() {
+                            let _ = perform_wheel_scroll_default_action(
+                                scope,
+                                runtime_ptr,
+                                pointer_dispatch_handle,
+                                delta_x,
+                                delta_y,
+                            )?;
+                        }
+                        if event_name == "mousedown" && dispatched.allows_default() {
+                            // Chromium transfers mouse focus only after the
+                            // pointer/mouse down events have run and only when
+                            // their default action was not canceled. Focus the
+                            // actual hit target rather than a pointer-capture
+                            // target retained from an earlier event.
+                            perform_mouse_focus_default_action(
+                                scope,
+                                runtime_ptr,
+                                hit_handle.unwrap_or(handle),
+                            );
+                        }
+                    }
+                }
+                let captured_click_target = if event_name == "mouseup" {
+                    let captured =
+                        unsafe { &*runtime_ptr }.pointer_capture_target_for_click(MOUSE_POINTER_ID);
+                    release_pointer_capture_after_pointer_end(
                         scope,
-                        "dragover",
+                        runtime_ptr,
+                        MOUSE_POINTER_ID,
                         client_x,
                         client_y,
-                        data_transfer.into(),
-                        0,
-                    ) {
-                        session.drop_allowed =
-                            !dispatch_public_event(scope, runtime_ptr, handle, event)
-                                .allows_default();
-                    } else {
-                        session.drop_allowed = false;
+                        button,
+                        buttons,
+                        &pointer,
+                        modifiers,
+                    );
+                    captured
+                } else {
+                    None
+                };
+                if let Some(drag_start_handle) = drag_start_handle
+                    && !suppress_current_mouse_event
+                {
+                    // SAFETY: `with_default_context_scope` runs synchronously while `ScriptVm`
+                    // remains exclusively borrowed, so this field pointer is valid for the
+                    // duration of the callback.
+                    let active_drag_session = unsafe { &mut *active_drag_session };
+                    let empty_drag_data = RendererDragData {
+                        items: Vec::new(),
+                        files: Vec::new(),
+                        directories: Vec::new(),
+                        drag_operations_mask: 1,
+                    };
+                    if let Some(data_store) =
+                        crate::context_bootstrap::create_native_drag_data_store(scope)
+                        && crate::context_bootstrap::populate_native_drag_data_store(
+                            scope,
+                            &data_store,
+                            &empty_drag_data,
+                        )
+                        .is_some()
+                        && let Some(data_transfer) =
+                            crate::context_bootstrap::create_drag_data_transfer_view(
+                                scope,
+                                &data_store,
+                                DragDataStoreMode::ReadWrite,
+                                "none",
+                            )
+                    {
+                        let allowed = construct_drag_event(
+                            scope,
+                            "dragstart",
+                            client_x,
+                            client_y,
+                            data_transfer.into(),
+                            modifiers,
+                        )
+                        .is_some_and(|event| {
+                            dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
+                                .allows_default()
+                        });
+                        if allowed {
+                            crate::context_bootstrap::protect_native_drag_source_view(
+                                scope,
+                                data_transfer,
+                            );
+                            *active_drag_session = Some(ActiveDragSession {
+                                data_store,
+                                source_transfer: Some(v8::Global::new(scope, data_transfer)),
+                                drop_effect: "none".to_owned(),
+                                drop_allowed: false,
+                            });
+                        } else {
+                            crate::context_bootstrap::finish_drag_data_transfer_view(
+                                scope,
+                                data_transfer,
+                            );
+                            close_drag_data_transfer_source(scope, active_drag_session);
+                        }
                     }
                 }
-            }
-            if event_name == "mouseup" && button == 0 {
-                let active_drag_session = unsafe { &mut *active_drag_session };
-                if let Some(session) = active_drag_session.as_mut() {
-                    if session.drop_allowed {
-                        let data_transfer = v8::Local::new(scope, &session.data_transfer);
+                if event_name == "mousemove" && buttons & 1 != 0 {
+                    let active_drag_session = unsafe { &mut *active_drag_session };
+                    if let Some(session) = active_drag_session.as_mut() {
+                        session.drop_allowed = false;
+                        session.drop_effect = "none".to_owned();
+                        if let Some(transfer) =
+                            crate::context_bootstrap::create_drag_data_transfer_view(
+                                scope,
+                                &session.data_store,
+                                DragDataStoreMode::Protected,
+                                "none",
+                            )
+                        {
+                            let operation = construct_drag_event(
+                                scope,
+                                "dragover",
+                                client_x,
+                                client_y,
+                                transfer.into(),
+                                modifiers,
+                            )
+                            .and_then(|event| {
+                                let allows_default =
+                                    dispatch_public_event(scope, runtime_ptr, handle, event)
+                                        .allows_default();
+                                accepted_drag_view_operation(
+                                    scope,
+                                    runtime_ptr,
+                                    handle,
+                                    transfer,
+                                    allows_default,
+                                    modifiers,
+                                )
+                            });
+                            crate::context_bootstrap::finish_drag_data_transfer_view(
+                                scope, transfer,
+                            );
+                            if let Some(operation) = operation {
+                                session.drop_allowed = true;
+                                session.drop_effect = operation;
+                            }
+                        }
+                    }
+                }
+                if event_name == "mouseup" && button == 0 {
+                    let active_drag_session = unsafe { &mut *active_drag_session };
+                    if let Some(session) = active_drag_session.as_mut()
+                        && session.drop_allowed
+                        && let Some(transfer) =
+                            crate::context_bootstrap::create_drag_data_transfer_view(
+                                scope,
+                                &session.data_store,
+                                DragDataStoreMode::ReadOnly,
+                                "none",
+                            )
+                    {
                         let allows_default = if let Some(event) = construct_drag_event(
                             scope,
                             "drop",
                             client_x,
                             client_y,
-                            data_transfer.into(),
-                            0,
+                            transfer.into(),
+                            modifiers,
                         ) {
                             dispatch_public_event(scope, runtime_ptr, handle, event)
                                 .allows_default()
                         } else {
                             false
                         };
+                        crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
                         if allows_default {
-                            let _ = perform_drop_default_action(
+                            perform_drag_default_action_with_private_view(
                                 scope,
                                 runtime_ptr,
                                 handle,
-                                data_transfer,
+                                session,
                             );
                         }
                     }
-                    active_drag_session.take();
+                    close_drag_data_transfer_source(scope, active_drag_session);
                 }
-            }
-            // Keep the host-owned press alive through the release listeners;
-            // synchronous DOM removals can invalidate it before click targeting.
-            let follow_up = if event_name == "mouseup" {
-                mouse_dispatch_handle.and_then(|target| {
-                    unsafe { &mut *runtime_ptr }.mouse_release_follow_up(
-                        target,
-                        button,
-                        captured_click_target,
-                    )
-                })
-            } else {
-                None
-            };
-            match follow_up {
-                Some(MouseReleaseFollowUp::ActivateViaClick(click_target)) => {
-                    if event_name == "mouseup" {
-                        suppress_compat_mouse_events = false;
-                    }
-                    let outcome = activate_handle_after_pointer_release(
-                        scope,
-                        runtime_ptr,
-                        click_target,
-                        client_x,
-                        client_y,
-                        button,
-                        buttons,
-                        click_count.max(1),
-                        modifiers,
-                    );
-                    if click_count >= 2
-                        && let Some(event) = construct_mouse_event_with_detail_and_modifiers(
+                // Keep the host-owned press alive through the release listeners;
+                // synchronous DOM removals can invalidate it before click targeting.
+                let follow_up = if event_name == "mouseup" {
+                    mouse_dispatch_handle.and_then(|target| {
+                        unsafe { &mut *runtime_ptr }.mouse_release_follow_up(
+                            target,
+                            button,
+                            captured_click_target,
+                        )
+                    })
+                } else {
+                    None
+                };
+                match follow_up {
+                    Some(MouseReleaseFollowUp::ActivateViaClick(click_target)) => {
+                        if event_name == "mouseup" {
+                            suppress_compat_mouse_events = false;
+                        }
+                        let outcome = activate_handle_after_pointer_release(
                             scope,
-                            "dblclick",
+                            runtime_ptr,
+                            click_target,
                             client_x,
                             client_y,
-                            click_count,
+                            button,
+                            buttons,
+                            click_count.max(1),
+                            modifiers,
+                        );
+                        if click_count >= 2
+                            && let Some(event) = construct_mouse_event_with_detail_and_modifiers(
+                                scope,
+                                "dblclick",
+                                client_x,
+                                client_y,
+                                click_count,
+                                button,
+                                buttons,
+                                modifiers,
+                            )
+                        {
+                            let _ = dispatch_public_event(scope, runtime_ptr, click_target, event);
+                        }
+                        return Ok(outcome);
+                    }
+                    Some(MouseReleaseFollowUp::DispatchEvent {
+                        name: follow_up_event_name,
+                        target,
+                    }) => {
+                        if event_name == "mouseup" {
+                            suppress_compat_mouse_events = false;
+                        }
+                        let had_pending_top_level_navigation_before_event =
+                            unsafe { &*runtime_ptr }.has_pending_location_navigation();
+                        let pending_child_navigations_before_event = unsafe { &*runtime_ptr }
+                            .pending_live_child_browsing_context_navigation_snapshot();
+                        let mut pending_download = None;
+                        if let Some(event) = construct_mouse_event_with_modifiers(
+                            scope,
+                            follow_up_event_name,
+                            client_x,
+                            client_y,
                             button,
                             buttons,
                             modifiers,
-                        )
-                    {
-                        let _ = dispatch_public_event(scope, runtime_ptr, click_target, event);
-                    }
-                    return Ok(outcome);
-                }
-                Some(MouseReleaseFollowUp::DispatchEvent {
-                    name: follow_up_event_name,
-                    target,
-                }) => {
-                    if event_name == "mouseup" {
-                        suppress_compat_mouse_events = false;
-                    }
-                    let had_pending_top_level_navigation_before_event =
-                        unsafe { &*runtime_ptr }.has_pending_location_navigation();
-                    let pending_child_navigations_before_event = unsafe { &*runtime_ptr }
-                        .pending_live_child_browsing_context_navigation_snapshot();
-                    let mut pending_download = None;
-                    if let Some(event) = construct_mouse_event_with_modifiers(
-                        scope,
-                        follow_up_event_name,
-                        client_x,
-                        client_y,
-                        button,
-                        buttons,
-                        modifiers,
-                    ) {
-                        let dispatched = dispatch_public_event(scope, runtime_ptr, target, event);
-                        if follow_up_event_name == "auxclick" && dispatched.allows_default() {
-                            pending_download = perform_auxiliary_link_default_action(
-                                scope,
-                                runtime_ptr,
-                                target,
-                                button,
-                                modifiers,
-                                &pending_child_navigations_before_event,
-                            );
+                        ) {
+                            let dispatched =
+                                dispatch_public_event(scope, runtime_ptr, target, event);
+                            if follow_up_event_name == "auxclick" && dispatched.allows_default() {
+                                pending_download = perform_auxiliary_link_default_action(
+                                    scope,
+                                    runtime_ptr,
+                                    target,
+                                    button,
+                                    modifiers,
+                                    &pending_child_navigations_before_event,
+                                );
+                            }
+                        }
+                        if follow_up_event_name == "auxclick" {
+                            return Ok(RendererInputDispatchOutcome {
+                                handled: true,
+                                triggered_top_level_navigation:
+                                    !had_pending_top_level_navigation_before_event
+                                        && unsafe { &*runtime_ptr }
+                                            .has_pending_location_navigation(),
+                                pending_download,
+                                pending_file_chooser: None,
+                            });
                         }
                     }
-                    if follow_up_event_name == "auxclick" {
-                        return Ok(RendererInputDispatchOutcome {
-                            handled: true,
-                            triggered_top_level_navigation:
-                                !had_pending_top_level_navigation_before_event
-                                    && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
-                            pending_download,
-                            pending_file_chooser: None,
-                        });
-                    }
+                    None => {}
                 }
-                None => {}
-            }
-            if event_name == "mouseup" {
-                suppress_compat_mouse_events = false;
-            }
-            Ok(input_dispatch_outcome(true))
-        });
+                if event_name == "mouseup" {
+                    suppress_compat_mouse_events = false;
+                }
+                Ok(input_dispatch_outcome(true))
+            });
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
         result
     }
@@ -1690,13 +1833,14 @@ impl ScriptVm {
             moli_layout::LayoutPoint::new(x as f32, y as f32),
         )?
         .map(|hit| hit.handle) else {
+            if matches!(event_name, "drop" | "dragleave" | "dragcancel") {
+                self.clear_active_drag_data_transfer()?;
+            }
             return Ok(input_dispatch_outcome(false));
         };
 
-        let incoming_drag_data_empty = data.items.is_empty() && data.files.is_empty();
-        let replace_active_drag_data_transfer = event_name == "dragenter"
-            && (!incoming_drag_data_empty || self.active_drag_session.is_none());
-        let clear_active_drag_data_transfer = event_name == "drop";
+        let clear_active_drag_data_transfer =
+            matches!(event_name, "drop" | "dragleave" | "dragcancel");
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
 
         let result = self.with_default_context_scope(move |scope, runtime_ptr| {
@@ -1704,50 +1848,82 @@ impl ScriptVm {
             // remains exclusively borrowed, so the field pointer stays valid for the
             // duration of this callback and is not aliased elsewhere.
             let active_drag_session = unsafe { &mut *active_drag_session };
-            let data_transfer =
-                if replace_active_drag_data_transfer || active_drag_session.is_none() {
-                    let Some(data_transfer) =
-                        crate::context_bootstrap::build_data_transfer_object(scope, &data)
-                    else {
-                        return Ok(input_dispatch_outcome(false));
-                    };
-                    *active_drag_session = Some(ActiveDragSession {
-                        data_transfer: v8::Global::new(scope, data_transfer),
-                        drop_allowed: false,
-                    });
-                    data_transfer
-                } else {
-                    v8::Local::new(
-                        scope,
-                        &active_drag_session
-                            .as_ref()
-                            .expect("active drag session should exist when reusing DataTransfer")
-                            .data_transfer,
-                    )
+            let created_session = active_drag_session.is_none();
+            if created_session {
+                let Some(data_store) =
+                    crate::context_bootstrap::create_external_drag_data_store(scope, &data)
+                else {
+                    return Ok(input_dispatch_outcome(false));
                 };
-            crate::context_bootstrap::apply_drag_modifier_drop_effect(
+                *active_drag_session = Some(ActiveDragSession {
+                    data_store,
+                    source_transfer: None,
+                    drop_effect: "none".to_owned(),
+                    drop_allowed: false,
+                });
+            }
+            let session = active_drag_session
+                .as_mut()
+                .expect("drag store created above");
+            if !created_session && matches!(event_name, "dragenter" | "drop") {
+                if crate::context_bootstrap::replace_drag_data_store_contents(
+                    scope,
+                    &session.data_store,
+                    &data,
+                )
+                .is_none()
+                {
+                    close_drag_data_transfer_source(scope, active_drag_session);
+                    return Ok(input_dispatch_outcome(false));
+                }
+            } else {
+                crate::context_bootstrap::update_drag_data_store_operations_mask(
+                    scope,
+                    &session.data_store,
+                    data.drag_operations_mask,
+                );
+            }
+            let mode = match event_name {
+                "dragstart" => DragDataStoreMode::ReadWrite,
+                "drop" => DragDataStoreMode::ReadOnly,
+                _ => DragDataStoreMode::Protected,
+            };
+            let Some(transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
                 scope,
-                data_transfer,
-                modifiers,
-            );
-            let data_transfer_value: v8::Local<'_, v8::Value> = data_transfer.into();
+                &session.data_store,
+                mode,
+                "none",
+            ) else {
+                if clear_active_drag_data_transfer {
+                    close_drag_data_transfer_source(scope, active_drag_session);
+                }
+                return Ok(input_dispatch_outcome(false));
+            };
             let allows_default = if let Some(event) =
-                construct_drag_event(scope, event_name, x, y, data_transfer_value, modifiers)
+                construct_drag_event(scope, event_name, x, y, transfer.into(), modifiers)
             {
                 dispatch_public_event(scope, runtime_ptr, handle, event).allows_default()
             } else {
                 false
             };
-            if event_name == "dragover"
-                && let Some(session) = active_drag_session.as_mut()
-            {
-                session.drop_allowed = !allows_default;
+            if event_name != "drop" || created_session {
+                let operation = accepted_drag_view_operation(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    transfer,
+                    allows_default,
+                    modifiers,
+                );
+                session.drop_allowed = operation.is_some();
+                session.drop_effect = operation.unwrap_or_else(|| "none".to_owned());
             }
-            if clear_active_drag_data_transfer && allows_default {
-                let _ = perform_drop_default_action(scope, runtime_ptr, handle, data_transfer);
+            crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
+            if event_name == "drop" && allows_default {
+                perform_drag_default_action_with_private_view(scope, runtime_ptr, handle, session);
             }
             if clear_active_drag_data_transfer {
-                active_drag_session.take();
+                close_drag_data_transfer_source(scope, active_drag_session);
             }
             Ok(input_dispatch_outcome(true))
         });
@@ -1755,8 +1931,14 @@ impl ScriptVm {
     }
 
     pub(crate) fn clear_active_drag_data_transfer(&mut self) -> Result<()> {
-        self.active_drag_session.take();
-        Ok(())
+        let mut session = self.active_drag_session.take();
+        if session.is_none() {
+            return Ok(());
+        }
+        self.with_default_context_scope(|scope, _| {
+            close_drag_data_transfer_source(scope, &mut session);
+            Ok(())
+        })
     }
 
     pub(crate) fn set_file_input_files(

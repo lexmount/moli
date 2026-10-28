@@ -55,6 +55,8 @@ const complete = new Promise(function (resolve) {
   });
 
   target.addEventListener("dragover", function (event) {
+    // Exercise author-selected operations rather than the editor's default copy.
+    event.preventDefault();
     if (shouldRecordModifierKeys()) {
       events.push(phase + "-over-keys:" + modifierState(event));
     }
@@ -87,7 +89,7 @@ const complete = new Promise(function (resolve) {
     );
     expectedDrops += 1;
     if (expectedDrops === 9) {
-      resolve();
+      setTimeout(resolve, 0);
     }
   });
 
@@ -112,47 +114,47 @@ promise_test(async function () {
       "none-enter:none:none",
       "none-over:none:none",
       "none-drop:none-text:none:none:hello world",
-      "link-enter:link:link",
-      "link-over:link:link",
-      "link-drop:link-text:link:link:hello world",
+      "link-enter:none:link",
+      "link-over:none:link",
+      "link-drop:link-text:none:link:hello world",
       "link-input:hello link-text:15:15",
-      "move-enter:move:move",
-      "move-over:move:move",
-      "move-drop:move-text:move:move:hello world",
+      "move-enter:none:move",
+      "move-over:none:move",
+      "move-drop:move-text:none:move:hello world",
       "move-input:hello move-text:15:15",
-      "copyLink-enter:copy:copyLink",
+      "copyLink-enter:none:copyLink",
       "copyLink-over:move:copyLink",
-      "copyLink-drop:copylink-text:move:copyLink:hello world",
-      "linkMove-enter:link:linkMove",
+      "copyLink-drop:copylink-text:none:copyLink:hello world",
+      "linkMove-enter:none:linkMove",
       "linkMove-over:copy:linkMove",
-      "linkMove-drop:linkmove-text:copy:linkMove:hello world",
-      "all-enter:copy:all",
+      "linkMove-drop:linkmove-text:none:linkMove:hello world",
+      "all-enter:none:all",
       "all-over:link:all",
-      "all-drop:all-text:link:all:hello world",
+      "all-drop:all-text:none:all:hello world",
       "all-input:hello all-text:14:14",
       "modifiers-enter-keys:true,true,true,true",
-      "modifiers-enter:copy:copy",
+      "modifiers-enter:none:copy",
       "modifiers-over-keys:false,true,false,true",
-      "modifiers-over:copy:copy",
+      "modifiers-over:none:copy",
       "modifiers-drop-keys:true,false,true,false",
-      "modifiers-drop:modifiers-text:copy:copy:hello world",
+      "modifiers-drop:modifiers-text:none:copy:hello world",
       "modifiers-input:hello modifiers-text:20:20",
       "modifierSelection-enter-keys:false,true,false,false",
-      "modifierSelection-enter:copy:all",
+      "modifierSelection-enter:none:all",
       "modifierSelection-over-keys:false,false,false,true",
-      "modifierSelection-over:move:all",
+      "modifierSelection-over:none:all",
       "modifierSelection-drop-keys:true,false,false,false",
-      "modifierSelection-drop:auto-text:link:all:hello world",
+      "modifierSelection-drop:auto-text:none:all:hello world",
       "modifierSelection-input:hello auto-text:15:15",
       "modifierPrecedence-enter-keys:false,false,true,false",
-      "modifierPrecedence-enter:copy:all",
+      "modifierPrecedence-enter:none:all",
       "modifierPrecedence-over-keys:false,true,false,true",
-      "modifierPrecedence-over:link:all",
+      "modifierPrecedence-over:none:all",
       "modifierPrecedence-drop-keys:true,false,true,false",
-      "modifierPrecedence-drop:precedence-text:link:all:hello world",
+      "modifierPrecedence-drop:precedence-text:none:all:hello world",
       "modifierPrecedence-input:hello precedence-text:21:21",
     ],
-    "drag operation masks should map to effectAllowed/dropEffect and expose action modifiers",
+    "independent event views expose source masks and modifier keys, while negotiated operations gate editing",
   );
 }, "Input.dispatchDragEvent exposes operation-mask effect negotiation and modifier-key matrix");
 </script>

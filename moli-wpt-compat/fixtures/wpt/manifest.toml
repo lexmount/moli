@@ -2355,7 +2355,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for renderer-driven drag lifecycle behavior: manifest dispatch-drag actions synthesize dragenter/dragover/drop, reuse the same live DataTransfer object across the drag session, preserve listener mutations, and run the text input drop default action when drop is not canceled."
+notes = "Manual compat port for renderer-driven drag lifecycle behavior: manifest dispatch-drag actions synthesize dragenter/dragover/drop, use independent protected/readonly DataTransfer views, ignore listener payload mutations, and run the text input drop default action when drop is not canceled."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2379,7 +2379,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 17
-items = [{ mime_type = "text/plain", data = "ignored-drop-text" }]
+items = [{ mime_type = "text/plain", data = "drop-text" }]
 
 [[test]]
 id = "drag-operation-mask-basic"
@@ -2393,7 +2393,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for renderer drag operation-mask mapping: source drag_operations_mask values are exposed through DataTransfer.effectAllowed and the initial dropEffect, target dropEffect overrides only run text drop defaults when allowed by the source mask, dispatch-drag modifiers populate DragEvent modifier-key state, and Ctrl/Meta/Shift/Alt modifier combinations select copy/move/link defaults with explicit link gestures taking precedence when the source mask allows them."
+notes = "Manual compat port for renderer drag operation-mask mapping: source drag_operations_mask values are exposed through DataTransfer.effectAllowed while each event view starts with dropEffect=none; explicit dragover cancellation negotiates author-handled operations, target dropEffect overrides only run text drop defaults when allowed by the source mask, dispatch-drag modifiers populate DragEvent modifier-key state, and Ctrl/Meta/Shift/Alt modifier combinations select copy/move/link defaults with explicit link gestures taking precedence when the source mask allows them."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2417,7 +2417,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 0
-items = [{ mime_type = "text/plain", data = "ignored-none-drop" }]
+items = [{ mime_type = "text/plain", data = "none-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2445,7 +2445,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 2
-items = [{ mime_type = "text/plain", data = "ignored-link-drop" }]
+items = [{ mime_type = "text/plain", data = "link-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2473,7 +2473,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 16
-items = [{ mime_type = "text/plain", data = "ignored-move-drop" }]
+items = [{ mime_type = "text/plain", data = "move-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2501,7 +2501,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 3
-items = [{ mime_type = "text/plain", data = "ignored-copylink-drop" }]
+items = [{ mime_type = "text/plain", data = "copylink-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2529,7 +2529,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 18
-items = [{ mime_type = "text/plain", data = "ignored-linkmove-drop" }]
+items = [{ mime_type = "text/plain", data = "linkmove-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2557,7 +2557,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 19
-items = [{ mime_type = "text/plain", data = "ignored-all-drop" }]
+items = [{ mime_type = "text/plain", data = "all-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2585,7 +2585,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 modifiers = 5
-items = [{ mime_type = "text/plain", data = "ignored-modifiers-drop" }]
+items = [{ mime_type = "text/plain", data = "modifiers-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2616,7 +2616,7 @@ x = 15.0
 y = 15.0
 drag_operations_mask = 19
 modifiers = 1
-items = [{ mime_type = "text/plain", data = "ignored-modifier-selection-drop" }]
+items = [{ mime_type = "text/plain", data = "auto-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2647,7 +2647,7 @@ x = 15.0
 y = 15.0
 drag_operations_mask = 19
 modifiers = 5
-items = [{ mime_type = "text/plain", data = "ignored-modifier-precedence-drop" }]
+items = [{ mime_type = "text/plain", data = "precedence-text" }]
 
 [[test]]
 id = "drag-effect-negotiation-basic"
@@ -2661,7 +2661,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for dropEffect/effectAllowed default-action negotiation: a dropEffect requested by the target must be allowed by the source operation mask before text-control drop default insertion runs."
+notes = "Manual compat port for dropEffect/effectAllowed default-action negotiation: an explicitly canceled dragover negotiates the target operation, which must be allowed by the source operation mask before text-control drop default insertion runs."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2685,7 +2685,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 1
-items = [{ mime_type = "text/plain", data = "ignored-blocked-drop" }]
+items = [{ mime_type = "text/plain", data = "blocked-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2713,7 +2713,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 17
-items = [{ mime_type = "text/plain", data = "ignored-allowed-drop" }]
+items = [{ mime_type = "text/plain", data = "allowed-text" }]
 
 [[test]]
 id = "drag-contenteditable-basic"
@@ -2751,7 +2751,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 1
-items = [{ mime_type = "text/plain", data = "ignored-drop" }]
+items = [{ mime_type = "text/plain", data = "moli" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2786,8 +2786,8 @@ x = 15.0
 y = 15.0
 drag_operations_mask = 1
 items = [
-  { mime_type = "text/plain", data = "ignored-drop" },
-  { mime_type = "text/html", data = "<b>ignored</b>" },
+  { mime_type = "text/plain", data = "fallback" },
+  { mime_type = "text/html", data = "<b>rich</b> <i>html</i>" },
 ]
 
 [[test]]
@@ -2826,7 +2826,7 @@ event = "drop"
 x = 30.0
 y = 10.0
 drag_operations_mask = 1
-items = [{ mime_type = "text/plain", data = "ignored-allowed-drop" }]
+items = [{ mime_type = "text/plain", data = "allowed-text" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2854,7 +2854,7 @@ event = "drop"
 x = 30.0
 y = 10.0
 drag_operations_mask = 1
-items = [{ mime_type = "text/plain", data = "ignored-blocked-drop" }]
+items = [{ mime_type = "text/plain", data = "blocked-text" }]
 
 [[test]]
 id = "drag-contenteditable-range-basic"
@@ -2892,7 +2892,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 1
-items = [{ mime_type = "text/plain", data = "ignored-drop" }]
+items = [{ mime_type = "text/plain", data = "moli" }]
 
 [[test.actions]]
 type = "evaluate"
@@ -2920,7 +2920,7 @@ event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 1
-items = [{ mime_type = "text/plain", data = "ignored-nested-drop" }]
+items = [{ mime_type = "text/plain", data = "nested" }]
 
 [[test]]
 id = "drag-cancel-basic"
@@ -2934,7 +2934,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "actions"]
-notes = "Manual compat port for renderer-driven drag cancellation: manifest dispatch-drag event=dragCancel clears the active DataTransfer session without dispatching a DOM dragCancel event, so a subsequent drop uses a fresh drag payload instead of listener-mutated canceled data."
+notes = "Manual compat port for renderer-driven drag cancellation: manifest dispatch-drag event=dragCancel clears the active DataTransfer session without dispatching a DOM dragCancel event, so a subsequent baseline drop uses its own payload; protected listener mutations cannot change the drag data."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -3014,7 +3014,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "file", "actions"]
-notes = "Manual compat port for file input multiple selection semantics under renderer-driven drops: a non-multiple input truncates multiple dropped files to the first selected file, while an input with multiple=true preserves all dropped files and exposes fakepath metadata for the first selected file."
+notes = "Manual compat port for file input multiple selection semantics under renderer-driven drops: a non-multiple input rejects multiple-file default editing without changing its selection, while an input with multiple=true preserves all dropped files and exposes fakepath metadata for the first selected file."
 
 [[test.actions]]
 type = "dispatch-drag"
