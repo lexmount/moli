@@ -591,6 +591,7 @@ pub(crate) fn worker_abort_signal_timeout_callback<'s>(
         delay_ms: parsed.milliseconds,
         first_deadline: None,
         is_interval: false,
+        nesting_level: None,
         extra_args: Vec::new(),
     };
     if let Some(timers) = worker_isolate_timer_queues(scope) {

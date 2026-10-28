@@ -1,5 +1,6 @@
 use super::super::timer_callback::WorkerTimerCallback;
 use super::*;
+use crate::timer_nesting::{TimerNestingLevel, TimerNestingOwner};
 use std::collections::HashSet;
 
 #[derive(webidl::WebIdlArgs)]
@@ -46,12 +47,14 @@ pub(super) fn worker_set_timeout_callback<'s>(
             .map(|i| v8::Global::new(scope, args.get(i)))
             .collect();
 
+        let nesting_level = TimerNestingLevel::for_new_timer(scope, TimerNestingOwner::Worker);
         let timer_info = TimerInfo {
             id: timer_id,
             callback,
-            delay_ms,
+            delay_ms: nesting_level.clamp_delay_ms(delay_ms),
             first_deadline: None,
             is_interval: false,
+            nesting_level: Some(nesting_level),
             extra_args,
         };
         if let Some(timers) = worker_isolate_timer_queues(scope) {
@@ -94,12 +97,14 @@ pub(super) fn worker_set_interval_callback<'s>(
             .map(|i| v8::Global::new(scope, args.get(i)))
             .collect();
 
+        let nesting_level = TimerNestingLevel::for_new_timer(scope, TimerNestingOwner::Worker);
         let timer_info = TimerInfo {
             id: timer_id,
             callback,
-            delay_ms,
+            delay_ms: nesting_level.clamp_delay_ms(delay_ms),
             first_deadline: None,
             is_interval: true,
+            nesting_level: Some(nesting_level),
             extra_args,
         };
         if let Some(timers) = worker_isolate_timer_queues(scope) {
@@ -253,6 +258,7 @@ pub(super) fn worker_request_animation_frame_callback<'s>(
         delay_ms: 16,
         first_deadline: None,
         is_interval: false,
+        nesting_level: None,
         extra_args: Vec::new(),
     };
     if let Some(timers) = worker_isolate_timer_queues(scope) {
@@ -352,5 +358,6 @@ pub(in crate::worker) struct TimerInfo {
     /// event-loop admission and interval scheduling.
     pub(in crate::worker) first_deadline: Option<tokio::time::Instant>,
     pub(in crate::worker) is_interval: bool,
+    pub(in crate::worker) nesting_level: Option<TimerNestingLevel>,
     pub(in crate::worker) extra_args: Vec<v8::Global<v8::Value>>,
 }

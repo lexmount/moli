@@ -34,14 +34,44 @@ impl PageVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         let root_document = self.document_lifecycle.identity().document;
+        let nesting_scope = self.vm().timer_nesting_scope_for_task();
         let body = self.vm_mut().run_next_classic_defer_timer_callback_body()?;
         ensure!(
             body.consumed_heap_head(),
             "a ready classic-defer timer selected before DOMContentLoaded must consume its heap entry"
         );
         let completions = self.vm_mut().take_completed_popup_javascript_url_parsers();
-        self.finish_popup_parser_producing_callback_task(root_document, completions, loader)
+        self.finish_timer_callback_task(root_document, completions, nesting_scope, loader)
             .await
+    }
+
+    pub(super) async fn finish_timer_callback_task(
+        &mut self,
+        root_document: crate::runtime::RendererDocumentToken,
+        completions: Vec<crate::native_bridge::PopupDocumentParserCompletion>,
+        nesting_scope: crate::timer_nesting::TimerNestingScope,
+        loader: &crate::network::ResourceRequestClient,
+    ) -> Result<()> {
+        if completions.is_empty() {
+            self.vm_mut()
+                .finish_selected_page_timer_callback_task(loader, nesting_scope)
+                .await?;
+            self.absorb_parser_no_execution_runs();
+            return Ok(());
+        }
+        let checkpoint = self
+            .vm_mut()
+            .finish_page_resource_completion_callback_checkpoint();
+        drop(nesting_scope);
+        checkpoint?;
+        self.absorb_parser_no_execution_runs();
+        if root_document == self.document_lifecycle.identity().document {
+            for completion in completions {
+                let step = self.vm_mut().begin_popup_document_interactive(completion)?;
+                self.finish_popup_document_lifecycle_step(step)?;
+            }
+        }
+        Ok(())
     }
 
     /// Execute one already-selected timer body without committing its
