@@ -40,16 +40,17 @@ fn extract_keys_from_string_key_path<'s>(
         return Vec::new();
     };
     if multi_entry && let Ok(array) = v8::Local::<v8::Array>::try_from(current) {
-        let mut keys = Vec::new();
+        // Equal subkeys contribute one index entry per record.
+        let mut keys = BTreeSet::new();
         for index in 0..array.length() {
             let Some(entry) = array.get_index(scope, index) else {
                 continue;
             };
             if let Ok(Some(key)) = parse_idb_key(scope, entry) {
-                keys.push(key);
+                keys.insert(key);
             }
         }
-        return keys;
+        return keys.into_iter().collect();
     }
 
     parse_idb_key(scope, current)

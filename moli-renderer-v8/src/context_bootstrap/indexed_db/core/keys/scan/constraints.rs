@@ -26,21 +26,12 @@ pub(in crate::context_bootstrap::indexed_db) fn enforce_object_store_unique_cons
             continue;
         }
 
-        let mut seen = BTreeSet::new();
-        for key in &candidate_keys {
-            if !seen.insert(key.clone()) {
-                return Err(IndexedDbError::Constraint(format!(
-                    "unique index `{}` already contains key",
-                    index.name
-                )));
-            }
-        }
+        let candidate_keys: BTreeSet<_> = candidate_keys.into_iter().collect();
 
         let existing = scan_index_entries(scope, handle, store_name, &index, None)?;
-        if existing
-            .into_iter()
-            .any(|entry| entry.primary_key != *primary_key && seen.contains(&entry.index_key))
-        {
+        if existing.into_iter().any(|entry| {
+            entry.primary_key != *primary_key && candidate_keys.contains(&entry.index_key)
+        }) {
             return Err(IndexedDbError::Constraint(format!(
                 "unique index `{}` already contains key",
                 index.name

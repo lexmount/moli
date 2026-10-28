@@ -1,5 +1,32 @@
 use super::pipe_disturbed::run_probe;
 use super::*;
+
+async fn assert_multi_entry_keys(scenario: &str) -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-multientry-keys.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nmultiEntryProbe('multientry-{scenario}-{target}', '{scenario}').then(finish, error => finish({{state: 'error', error: String(error), checks: multiEntryChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{scenario}/{target}: {result}");
+        assert_eq!(result["cases"], 48, "{scenario}/{target}: {result}");
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_multientry_indexes_deduplicate_equal_keys_per_record() -> Result<()> {
+    assert_multi_entry_keys("duplicates").await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_multientry_unique_conflicts_preserve_transaction_outcomes() -> Result<()> {
+    assert_multi_entry_keys("conflicts").await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_cursor_navigation_validates_state_in_spec_order() -> Result<()> {
     let server = FixtureServer::spawn().await?;
