@@ -5,8 +5,13 @@
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
 mod connection_lifecycle;
+mod connection_notifications;
 mod connection_queue;
 pub use connection_lifecycle::DatabaseCloseSignal;
+pub use connection_notifications::{
+    ConnectionNotifications, VersionChangeBatch, VersionChangeCompletion,
+    VersionChangeNotification, VersionChangeWake,
+};
 pub use connection_queue::{
     ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestQueues, ConnectionRequestWake,
 };
