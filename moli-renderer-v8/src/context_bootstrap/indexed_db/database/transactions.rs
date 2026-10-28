@@ -1,5 +1,6 @@
 use super::*;
 
+mod attributes;
 mod database;
 mod lifecycle;
 mod names;
@@ -17,12 +18,13 @@ fn idb_transaction_receiver<'s>(
     None
 }
 
+pub(in crate::context_bootstrap::indexed_db) use self::attributes::*;
 pub(in crate::context_bootstrap::indexed_db) use self::database::{
     close_indexed_db_database_connection, finish_indexed_db_database_close,
     idb_database_close_callback, idb_database_transaction_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::lifecycle::{
-    finish_canceled_transaction, finish_transaction_abort, idb_transaction_abort_callback,
-    idb_transaction_commit_callback,
+    abort_indexed_db_transaction_with_error, finish_canceled_transaction, finish_transaction_abort,
+    idb_transaction_abort_callback, idb_transaction_commit_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::object_store::idb_transaction_object_store_callback;

@@ -9,13 +9,12 @@ use super::{
     index_info_from_store_metadata, indexed_db_index_info, indexed_db_index_object_store,
     indexed_db_object_store_database, indexed_db_object_store_name,
     indexed_db_object_store_transaction, key_in_range, key_to_js_value, object_bool_property,
-    object_string_property, parse_cursor_direction, parse_cursor_direction_with_context,
-    parse_idb_key, parse_idb_key_path, parse_key_or_range, parse_key_range_from_value,
-    parse_optional_count, prepare_object_store_write, queue_transaction_request,
-    remove_database_index_metadata, request_error_object, scan_index_entries,
-    scan_object_store_entries, set_database_index_metadata, store_request_error,
-    store_request_success, submit_cursor_open_operation, transaction_handle_from_value,
-    with_indexed_db_manager,
+    parse_cursor_direction, parse_cursor_direction_with_context, parse_idb_key, parse_idb_key_path,
+    parse_key_or_range, parse_key_range_from_value, parse_optional_count,
+    prepare_object_store_write, queue_transaction_request, remove_database_index_metadata,
+    request_error_object, scan_index_entries, scan_object_store_entries,
+    set_database_index_metadata, store_request_error, store_request_success,
+    submit_cursor_open_operation, transaction_handle_from_value, with_indexed_db_manager,
 };
 use crate::webidl;
 

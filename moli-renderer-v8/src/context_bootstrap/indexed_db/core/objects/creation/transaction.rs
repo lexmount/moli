@@ -17,9 +17,11 @@ struct IdbTransactionObjectDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
+    #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_DB_SLOT)]
     db: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_MODE_SLOT)]
     mode: &'static str,
-    #[webapi(init = "null")]
+    #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT, init = "null")]
     error: (),
     object_store_names: v8::Local<'scope, v8::Object>,
     #[webapi(

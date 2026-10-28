@@ -16,7 +16,8 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_commo
     let transaction = indexed_db_object_store_transaction(scope, store)?;
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
         .unwrap_or(false)
-        || object_string_property(scope, transaction, "mode").as_deref() != Some("versionchange")
+        || crate::context_bootstrap::indexed_db::indexed_db_transaction_mode(scope, transaction)
+            != Some(moli_indexeddb::TransactionMode::VersionChange)
     {
         return None;
     }

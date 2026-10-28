@@ -31,7 +31,12 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
     error: v8::Local<'s, v8::Value>,
 ) {
     restore_indexed_db_upgrade_metadata(scope, transaction);
-    let _ = transaction.set(scope, v8str(scope, "error").into(), error);
+    crate::util::set_private_value(
+        scope,
+        transaction,
+        crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT,
+        error,
+    );
     set_indexed_db_slot_value(
         scope,
         transaction,
@@ -50,7 +55,10 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
         INDEXED_DB_TRANSACTION_ABORTED_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    abort_queued_transaction_requests(scope, transaction, error);
+    // The transaction's abort reason may be null (explicit abort), while
+    // every unfinished request receives its own AbortError outcome.
+    let request_error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+    abort_queued_transaction_requests(scope, transaction, request_error);
     unregister_regular_transaction(scope, transaction);
     enqueue_ready_transaction_starts(scope);
     enqueue_transaction_abort_task(scope, transaction);
@@ -67,8 +75,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_abort_callback<'
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
     {
-        let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
-        finish_transaction_abort(scope, transaction, error);
+        finish_transaction_abort(scope, transaction, v8::null(scope).into());
         rv.set_undefined();
         return;
     }
@@ -78,8 +85,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_abort_callback<'
     };
     match with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle)) {
         Ok(()) => {
-            let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
-            finish_transaction_abort(scope, transaction, error);
+            finish_transaction_abort(scope, transaction, v8::null(scope).into());
         }
         Err(error) => {
             let error = request_error_object(scope, &error);
@@ -100,4 +106,20 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_commit_callback<
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
     enqueue_transaction_commit_task(scope, transaction);
     rv.set_undefined();
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn abort_indexed_db_transaction_with_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: v8::Local<'s, v8::Value>,
+) {
+    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
+        let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
+    }
+    finish_transaction_abort(scope, transaction, error);
 }

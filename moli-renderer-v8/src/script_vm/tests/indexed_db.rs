@@ -417,7 +417,7 @@ fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["db","error","mode","objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 
@@ -5251,7 +5251,7 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
       readReq.onsuccess = () => {
         globalThis.__indexedDbAbortResult = [
           requestError,
-          tx.error && tx.error.name,
+          tx.error === null,
           String(readReq.result)
         ].join("|");
       };
@@ -5268,7 +5268,7 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbAbortResult)")
         .expect("indexeddb abort result should be readable");
 
-    assert_eq!(result, "AbortError|AbortError|undefined");
+    assert_eq!(result, "AbortError|true|undefined");
 }
 
 #[test]
