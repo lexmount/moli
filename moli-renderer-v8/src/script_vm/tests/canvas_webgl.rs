@@ -2957,6 +2957,83 @@ const IMAGE_CSP_CROSS_REALM_PROBE: &str = r#"
 "#;
 
 #[tokio::test]
+async fn html_image_csp_self_in_srcdoc_uses_creator_url_and_keeps_owner_reports() {
+    for sandboxed in [false, true] {
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-csp-self.test/page.html",
+            &loader,
+        );
+        vm.eval(&format!(
+            r#"
+globalThis.__imageSelfEvents = [];
+globalThis.__imageSelfOrigins = [];
+const parentBase = document.createElement('base');
+parentBase.href = 'https://parent-base.test/';
+document.head.appendChild(parentBase);
+globalThis.__imageSelfFrame = document.createElement('iframe');
+if ({sandboxed}) __imageSelfFrame.sandbox = 'allow-scripts';
+addEventListener('message', event => {{
+  if (event.source === __imageSelfFrame.contentWindow) {{
+    __imageSelfEvents.push(event.data);
+    __imageSelfOrigins.push(event.origin);
+  }}
+}});
+__imageSelfFrame.srcdoc = `<!doctype html>
+<meta http-equiv="Content-Security-Policy" content="img-src 'self'">
+<base href="https://child-base.test/">
+<body><script>
+addEventListener('securitypolicyviolation', event => {{
+  parent.postMessage('csp:' + event.documentURI + ':' + event.effectiveDirective, '*');
+}});
+for (const [label, url] of [
+  ['allowed', 'https://image-csp-self.test/asset.png'],
+  ['blocked', 'https://child-base.test/asset.png'],
+]) {{
+  const image = new Image();
+  image.onload = () => parent.postMessage(label + ':load', '*');
+  image.onerror = () => parent.postMessage(label + ':error', '*');
+  image.src = url;
+  document.body.appendChild(image);
+}}
+</scr` + `ipt>`;
+document.body.appendChild(__imageSelfFrame);
+"#,
+        ))
+        .expect("srcdoc image self policy fixture should evaluate");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__imageSelfEvents.filter(event => /:(load|error)$/.test(event)).length)",
+            "2",
+            "both srcdoc images must complete with their own document policy",
+        )
+        .await;
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+            .await
+            .expect("srcdoc image CSP reports should drain");
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("__imageSelfEvents.slice().sort().join('|')")
+                .expect("srcdoc image results should evaluate"),
+            "allowed:load|blocked:error|csp:about:img-src",
+            "CSP self must use the creator URL and report the actual local document; sandboxed={sandboxed}"
+        );
+        assert_eq!(
+            vm.eval("[...new Set(__imageSelfOrigins)].join('|')")
+                .expect("srcdoc message origins should evaluate"),
+            if sandboxed {
+                "null"
+            } else {
+                "https://image-csp-self.test"
+            },
+            "CSP source matching must preserve the Window's sandboxed origin"
+        );
+    }
+}
+
+#[tokio::test]
 async fn html_image_csp_uses_owner_document_across_realms() {
     for from_child in [false, true] {
         for bypass in [false, true] {

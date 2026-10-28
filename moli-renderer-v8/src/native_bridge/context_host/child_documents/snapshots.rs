@@ -24,10 +24,13 @@ impl JsContextHost {
         handle: DomHandle,
         url: &Url,
     ) -> Option<ChildBrowsingContextSnapshot> {
-        let snapshot = self.apply_page_csp_bypass_to_child_snapshot(
+        let mut snapshot = self.apply_page_csp_bypass_to_child_snapshot(
             self.materialize_local_child_snapshot_for_url(url)?,
         );
         if moli_url::is_about_blank(&snapshot.url) {
+            snapshot.policy_container.content_security_policy_self_url = self
+                .initial_child_about_blank_policy_container_from_parent(handle)
+                .content_security_policy_self_url;
             Some(snapshot.with_fallback_base_url(self.document_base_url_for_child_context(handle)))
         } else {
             Some(snapshot)
@@ -102,13 +105,17 @@ impl JsContextHost {
                     ),
                 )
             }
-            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => Some(
-                self.apply_page_csp_bypass_to_child_snapshot(ChildBrowsingContextSnapshot::srcdoc(
+            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
+                let mut snapshot = ChildBrowsingContextSnapshot::srcdoc(
                     base_url.clone(),
                     markup.clone(),
                     self.document_character_set().to_owned(),
-                )),
-            ),
+                );
+                snapshot.policy_container.content_security_policy_self_url = self
+                    .initial_child_about_blank_policy_container_from_parent(handle)
+                    .content_security_policy_self_url;
+                Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot))
+            }
             ChildBrowsingContextBootstrap::Url(url) => {
                 self.materialize_local_child_snapshot_for_navigation_url(handle, url)
             }

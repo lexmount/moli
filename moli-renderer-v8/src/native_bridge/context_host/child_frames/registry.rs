@@ -389,6 +389,8 @@ impl JsContextHost {
                         .unwrap_or_else(|| creator_document_url.to_string())
                 };
                 let document_policy_container = ChildDocumentPolicyContainer {
+                    content_security_policy_self_url: refresh_policy_source
+                        .and_then(|policy| policy.content_security_policy_self_url.clone()),
                     document_referrer,
                     referrer_policy: refresh_policy_source
                         .and_then(|policy| policy.referrer_policy.clone()),

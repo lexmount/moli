@@ -181,6 +181,7 @@ impl DocumentPolicyContainer {
                     final_url, headers,
                 ),
             document_content_security_policies: response_content_security_policies.clone(),
+            content_security_policy_self_url: Some(final_url.clone()),
             sandbox,
             response_content_security_policies,
             response_content_security_report_only_policies:
@@ -828,6 +829,7 @@ impl DocumentRuntime {
             &self.policy_container,
             request_url,
             kind,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
         )
     }
 
@@ -838,29 +840,42 @@ impl DocumentRuntime {
         policy_container: &DocumentPolicyContainer,
         request_url: &Url,
         kind: DocumentSubresourceCspKind,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
+        let policy_url = policy_container
+            .content_security_policy_self_url
+            .as_ref()
+            .unwrap_or(document_url);
         let policies = self.document_content_security_policies_for_optional_document(
             document_handle,
             &policy_container.response_content_security_policies,
             &policy_container.content_security_reporting_endpoints,
         );
-        let enforced_violation = document_url_policy_violation_from_document_policies(
+        let mut enforced_violation = document_url_policy_violation_from_document_policies(
             policies,
-            document_url,
+            policy_url,
             request_url,
             kind.resource_kind(),
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            redirect_status,
             ContentSecurityPolicyDisposition::Enforce,
         );
-        let report_only_violation = document_url_policy_violation(
+        let mut report_only_violation = document_url_policy_violation(
             &policy_container.response_content_security_report_only_policies,
             &policy_container.content_security_reporting_endpoints,
-            document_url,
+            policy_url,
             request_url,
             kind.resource_kind(),
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            redirect_status,
             ContentSecurityPolicyDisposition::Report,
         );
+        let document_uri = crate::content_security_policy::csp_url_for_report(document_url);
+        for violation in [&mut report_only_violation, &mut enforced_violation]
+            .into_iter()
+            .flatten()
+        {
+            violation.document_uri.clone_from(&document_uri);
+            violation.source_file.clone_from(&document_uri);
+        }
         DocumentContentSecurityPolicyCheck {
             report_only_violation,
             enforced_violation,
@@ -2372,6 +2387,51 @@ mod tests {
     }
 
     #[test]
+    fn image_csp_inherited_source_is_independent_of_local_document_and_report_url() {
+        let runtime = runtime_for_html("<!doctype html>");
+        let creator = Url::parse("https://creator.example.test/page").unwrap();
+        let local_document = Url::parse("about:srcdoc").unwrap();
+        let inherited = DocumentPolicyContainer::from_navigation_response_headers(
+            &[
+                ("Content-Security-Policy".into(), b"img-src 'self'".to_vec()),
+                (
+                    "Content-Security-Policy-Report-Only".into(),
+                    b"img-src 'self'".to_vec(),
+                ),
+            ],
+            &creator,
+        );
+        assert_eq!(
+            inherited.content_security_policy_self_url.as_ref(),
+            Some(&creator)
+        );
+        let allowed = runtime.document_subresource_csp_check_for_document(
+            None,
+            &local_document,
+            &inherited,
+            &creator.join("image.png").unwrap(),
+            DocumentSubresourceCspKind::Image,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        );
+        assert!(allowed.has_no_violations());
+        let (report_only, enforced) = runtime
+            .document_subresource_csp_check_for_document(
+                None,
+                &local_document,
+                &inherited,
+                &Url::parse("https://other.example.test/image.png").unwrap(),
+                DocumentSubresourceCspKind::Image,
+                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+            )
+            .into_violations();
+        for violation in [report_only.unwrap(), enforced.unwrap()] {
+            assert_eq!(violation.document_uri, "about");
+            assert_eq!(violation.source_file, "about");
+            assert_eq!(violation.effective_directive, "img-src");
+        }
+    }
+
+    #[test]
     fn csp_script_src_self_blocks_cross_origin_script_element_request() {
         let runtime = runtime_for_html(
             r#"<!doctype html>
@@ -2542,6 +2602,7 @@ mod tests {
                 &policy,
                 &request_url,
                 DocumentSubresourceCspKind::Image,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
             );
             let violation = check
                 .enforced_violation()

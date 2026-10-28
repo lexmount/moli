@@ -565,7 +565,7 @@ mod tests {
             moli_image::RgbaImage::try_new(1, 1, vec![1, 2, 3, 255]).expect("valid image pixels");
         let encoded = moli_image::encode_png(&pixels).expect("valid PNG");
         let response = crate::protocol_types::NavigationResponse::from_text_body(
-            url,
+            url.clone(),
             200,
             vec![("Content-Type".to_owned(), b"image/png".to_vec())],
             String::new(),
@@ -598,7 +598,11 @@ mod tests {
         drop(claimed);
         drop(outcome);
         drop(load);
-        assert!(resources.complete_shared_ready(&identity));
+        assert!(!resources.complete_shared_ready(
+            &identity,
+            Some(&url::Url::parse("https://other.test/image.png").unwrap()),
+        ));
+        assert!(resources.complete_shared_ready(&identity, Some(&url)));
         let ready = resources
             .ready_for_layout(element)
             .expect("the exact element should bind the decoded preload");

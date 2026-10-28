@@ -356,11 +356,39 @@ impl JsContextHost {
         let Some(owner) = self.owner_dispatch_scope_for_node(element) else {
             return DocumentCspOutcome::Allowed;
         };
+        let outcome = self.check_owner_subresource_csp(
+            scope,
+            owner,
+            request_url,
+            kind,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        );
+        if !outcome.blocks_request()
+            && matches!(kind, DocumentSubresourceCspKind::Image)
+            && let Some(response_url) = self.cached_image_response_url(element)
+        {
+            return self.check_owner_subresource_csp(
+                scope,
+                owner,
+                &response_url,
+                kind,
+                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+            );
+        }
+        outcome
+    }
+
+    pub(crate) fn check_owner_subresource_csp<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: OwnerDispatchScope,
+        request_url: &url::Url,
+        kind: DocumentSubresourceCspKind,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> DocumentCspOutcome {
         let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
             return DocumentCspOutcome::Allowed;
         };
-        // The element's Document owns this request even when a different
-        // Window's script changes its source or queues the update microtask.
         // SAFETY: this host and its DocumentRuntime are owned by the same ScriptVm.
         let (report_only_violation, enforced_violation) = unsafe { &*self.runtime }
             .document_subresource_csp_check_for_document(
@@ -369,6 +397,7 @@ impl JsContextHost {
                 &snapshot.policy_container,
                 request_url,
                 kind,
+                redirect_status,
             )
             .into_violations();
         let host_ptr: *mut JsContextHost = self;
