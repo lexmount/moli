@@ -120,9 +120,8 @@ pub(crate) use registry::{
     AdoptionCallbackTarget, CustomElementAdoptionPlan, CustomElementRegistryAssociation,
     CustomElementRegistryKey, RegistryAssociationRetarget,
 };
-mod registry_adoption_callbacks;
 mod registry_adoption_retarget;
-pub(crate) use registry_adoption_retarget::adoption_plan_for_roots_before_adoption;
+pub(crate) use registry_adoption_retarget::adoption_plan_before_adoption;
 mod registry_clone_association;
 mod registry_clone_retarget;
 pub(crate) use registry_clone_retarget::{

@@ -964,6 +964,116 @@ fn template_contents_use_the_document_interface_with_source_document_semantics()
 }
 
 #[test]
+fn template_contents_share_an_inert_document_with_independent_url_and_clone_state() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-owner-sharing.test/page",
+        "<!doctype html><head><base href='https://template-assets.test/'></head><body><iframe></iframe>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      const ns = 'http://www.w3.org/1999/xhtml';
+      const checkInterface = (source, clone) => {
+        check(Object.prototype.toString.call(clone) === Object.prototype.toString.call(source), 'clone brand');
+        check(clone.constructor === source.constructor, 'clone constructor');
+        check(Object.getPrototypeOf(clone) === Object.getPrototypeOf(source), 'clone prototype');
+        for (const type of [Document, HTMLDocument, XMLDocument]) {
+          check((clone instanceof type) === (source instanceof type), 'clone instanceof ' + type.name);
+        }
+      };
+      const documents = [document, document.querySelector('iframe').contentDocument,
+        document.implementation.createHTMLDocument(''),
+        new DOMParser().parseFromString('<body></body>', 'text/html'),
+        new DOMParser().parseFromString('<root/>', 'application/xml')];
+      const owners = [];
+      for (const doc of documents) {
+        const first = doc.createElementNS(ns, 'template');
+        const second = doc.createElementNS(ns, 'template');
+        const inert = first.content.ownerDocument;
+        check(inert !== doc, 'separate owner');
+        check(inert === second.content.ownerDocument, 'shared owner');
+        check(inert === inert.createElementNS(ns, 'template').content.ownerDocument, 'nested owner');
+        check(inert.URL === 'about:blank' && inert.documentURI === 'about:blank', 'inert URL');
+        check(inert.baseURI === 'about:blank' && inert.defaultView === null, 'inert base and window');
+        const clone = doc.cloneNode(false);
+        checkInterface(doc, clone);
+        check(clone.createElementNS(ns, 'template').content.ownerDocument !== inert, 'document clone owner');
+        for (const deep of [false, true]) {
+          const inertClone = inert.cloneNode(deep);
+          checkInterface(inert, inertClone);
+          check(inertClone.createElement('MiXeD').localName === inert.createElement('MiXeD').localName, 'clone kind');
+          const cloneOwner = inertClone.createElementNS(ns, 'template').content.ownerDocument;
+          check(cloneOwner !== inert && cloneOwner !== inertClone, 'inert clone is a new ordinary document');
+          const repeatedClone = inertClone.cloneNode(deep);
+          checkInterface(inertClone, repeatedClone);
+          const repeatedOwner = repeatedClone.createElementNS(ns, 'template').content.ownerDocument;
+          check(repeatedOwner !== cloneOwner && repeatedOwner !== repeatedClone, 'repeated clone owner');
+        }
+        owners.push(inert);
+      }
+      check(new Set(owners).size === documents.length, 'different source documents');
+      const template = document.createElement('template');
+      template.innerHTML = '<a href="relative">link</a><template><span>nested</span></template>';
+      const link = template.content.firstElementChild;
+      const nested = template.content.lastElementChild;
+      check(nested.content.ownerDocument === template.content.ownerDocument, 'parsed nested owner');
+      check(link.baseURI === 'about:blank' && link.href === 'relative', 'inert relative URL');
+      document.body.appendChild(link);
+      check(link.baseURI === 'https://template-assets.test/', 'adopted base URI');
+      check(link.href === 'https://template-assets.test/relative', 'adopted relative URL');
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn template_adoption_retargets_associated_contents_and_shadow_trees() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-owner-adoption.test/",
+        "<!doctype html><body><iframe></iframe>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      const source = document.implementation.createHTMLDocument('');
+      const child = document.querySelector('iframe').contentDocument;
+      const xml = new DOMParser().parseFromString('<root/>', 'application/xml');
+      const template = source.createElement('template');
+      template.innerHTML = '<div>text<template><span>nested</span></template></div><section></section>';
+      const content = template.content;
+      const div = content.firstChild;
+      const text = div.firstChild;
+      const nested = div.lastChild;
+      const nestedContent = nested.content;
+      const shadowHost = content.lastChild;
+      const shadow = shadowHost.attachShadow({mode: 'open'});
+      shadow.innerHTML = '<template><b>shadow nested</b></template>';
+      const shadowTemplate = shadow.firstChild;
+      const checkOwner = doc => {
+        const owner = doc.createElementNS('http://www.w3.org/1999/xhtml', 'template').content.ownerDocument;
+        check(template.ownerDocument === doc, 'principal owner');
+        check(template.content === content && nested.content === nestedContent, 'fragment identity');
+        for (const node of [content, div, text, nested, nestedContent, nestedContent.firstChild,
+          shadowHost, shadow, shadowTemplate, shadowTemplate.content, shadowTemplate.content.firstChild]) {
+          check(node.ownerDocument === owner, 'associated owner ' + node.nodeName);
+          check(!node.isConnected, 'contents remain disconnected ' + node.nodeName);
+        }
+      };
+      for (const doc of [document, child, source]) {
+        doc.body.appendChild(template);
+        checkOwner(doc);
+        const copy = doc.importNode(template, true);
+        check(copy.content.ownerDocument === content.ownerDocument, 'import owner');
+        check(copy.content.querySelector('template').content.ownerDocument === content.ownerDocument, 'nested import owner');
+      }
+      xml.adoptNode(template);
+      checkOwner(xml);
+      check(content.ownerDocument.createElement('MiXeD').localName === 'MiXeD', 'XML owner semantics');
+      document.adoptNode(template);
+      checkOwner(document);
+      check(content.ownerDocument.createElement('MiXeD').localName === 'mixed', 'HTML owner semantics');
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn template_content_host_rejects_insertion_cycles_after_adoption() {
     let mut vm = new_storage_test_vm("https://template-content-host.test/");
 

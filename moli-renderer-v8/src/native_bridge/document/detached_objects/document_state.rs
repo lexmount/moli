@@ -63,6 +63,24 @@ pub(in crate::native_bridge::document) fn detached_document_state_string<'s>(
     key: &str,
     default: &str,
 ) -> String {
+    if matches!(key, "url" | "documentURI" | "baseURI") {
+        return document_receiver_runtime_and_handle(scope, document)
+            .and_then(|(runtime_ptr, handle)| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .node(handle)
+                    .and_then(|node| node.as_document())
+                    .map(|document| {
+                        let url = if key == "baseURI" {
+                            document.base_url()
+                        } else {
+                            document.url()
+                        };
+                        url.as_str().to_owned()
+                    })
+            })
+            .unwrap_or_else(|| default.to_owned());
+    }
     detached_state_object(scope, document)
         .and_then(|state| object_string_property(scope, state, key))
         .unwrap_or_else(|| default.to_owned())

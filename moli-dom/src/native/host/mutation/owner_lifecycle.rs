@@ -427,19 +427,23 @@ impl NativeDom {
         in_document_tree: bool,
         traversal: &mut OwnerLifecycleTraversal,
     ) {
-        let mut stack = vec![root];
-        while let Some(handle) = stack.pop() {
+        let mut stack = vec![(root, owner_document, connected, in_document_tree, true)];
+        while let Some((handle, owner_document, connected, in_document_tree, track_candidates)) =
+            stack.pop()
+        {
+            let registry_mutation = if track_candidates {
+                traversal.registry_mutation
+            } else {
+                StylesheetCandidateRegistryMutation::None
+            };
             let maintains_candidates = traversal.collect_stylesheet_owners
-                || !matches!(
-                    traversal.registry_mutation,
-                    StylesheetCandidateRegistryMutation::None
-                );
+                || !matches!(registry_mutation, StylesheetCandidateRegistryMutation::None);
             let is_candidate = maintains_candidates && self.is_stylesheet_candidate(handle);
             if is_candidate {
                 if traversal.collect_stylesheet_owners {
                     traversal.changes.stylesheet_owners.push(handle);
                 }
-                match traversal.registry_mutation {
+                match registry_mutation {
                     StylesheetCandidateRegistryMutation::None => {}
                     StylesheetCandidateRegistryMutation::Register => {
                         if let Some(tree_scope) = traversal.candidate_tree_scope {
@@ -459,12 +463,34 @@ impl NativeDom {
                     }
                 }
             }
-            if traversal.detect_base_state_owner && self.is_base_state_owner(handle) {
+            if track_candidates
+                && traversal.detect_base_state_owner
+                && self.is_base_state_owner(handle)
+            {
                 traversal.changes.contains_base_state_owner = true;
             }
-            let node = self.node_mut(handle).expect("node must exist");
-            node.set_tree_scope(owner_document, connected, in_document_tree);
-            stack.extend(self.child_ids_reversed(handle));
+            let adopted_contents = (self.node(handle).and_then(Node::owner_document)
+                != owner_document)
+                .then(|| self.template_contents_fragment(handle))
+                .flatten();
+            self.node_mut(handle)
+                .expect("node must exist")
+                .set_tree_scope(owner_document, connected, in_document_tree);
+            stack.extend(self.child_ids_reversed(handle).map(|child| {
+                (
+                    child,
+                    owner_document,
+                    connected,
+                    in_document_tree,
+                    track_candidates,
+                )
+            }));
+            if let Some(document) = owner_document
+                && let Some(contents) = adopted_contents
+            {
+                let document = self.appropriate_template_contents_owner_document(document);
+                stack.push((contents, Some(document), false, false, false));
+            }
         }
     }
 }

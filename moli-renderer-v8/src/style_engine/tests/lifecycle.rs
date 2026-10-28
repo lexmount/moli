@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn adopting_inert_template_styles_does_not_prepare_unused_sources() {
+    let mut host = test_host();
+    let template = host.create_element("template");
+    let contents = host.parser_template_contents_handle(template).unwrap();
+    let style = host.create_element("style");
+    assert!(host.set_text_content(style, "span { color: blue; }"));
+    assert!(host.append_child(contents, style));
+    let destination = host.create_detached_html_document();
+    let mut engine = MoliStyleEngine::new();
+    let (_, changes) = host
+        .adopt_node_with_stylesheet_owner_changes(destination, template)
+        .unwrap();
+    engine.apply_stylesheet_owner_changes_with_host(&host, &changes);
+    assert!(engine.owner_style_sheet_processing_source(style).is_none());
+
+    // Activating the same element later must still prepare its source.
+    let insertion = host.append_child_effects(destination, style);
+    engine.apply_stylesheet_owner_changes_with_host(&host, insertion.stylesheet_owners().changes());
+    assert_eq!(
+        engine
+            .owner_style_sheet_processing_source(style)
+            .unwrap()
+            .css_text(),
+        "span { color: blue; }"
+    );
+}
+
+#[test]
 fn style_element_initialization_waits_for_parser_and_preserves_prepared_sources() {
     let mut host = test_host();
     let document = host.document_handle();

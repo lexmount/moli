@@ -25,12 +25,17 @@ pub(in crate::native_bridge) fn bridge_create_element_callback<'s>(
     let Some(options) = parsed.options.flatten(scope, runtime_ptr, document_handle) else {
         return;
     };
+    let local_name = if is_html_document(unsafe { &*runtime_ptr }, document_handle) {
+        parsed.local_name.to_ascii_lowercase()
+    } else {
+        parsed.local_name
+    };
     match create_element_wrapper_for_document(
         scope,
         args.this(),
         runtime_ptr,
         document_handle,
-        &parsed.local_name,
+        &local_name,
         options.is_name.as_deref(),
         options.registry_association,
         None,

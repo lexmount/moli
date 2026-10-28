@@ -310,7 +310,7 @@ pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 struct DocumentMetadataPrototypeDeclaration {
     #[webapi(accessor_property = "URL", getter = document_url_getter_function)]
     url: (),
-    #[webapi(accessor_property = "documentURI", getter = document_uri_getter_function)]
+    #[webapi(accessor_property = "documentURI", getter = document_url_getter_function)]
     document_uri: (),
     #[webapi(accessor_property = "readyState", getter = document_ready_state_getter_function)]
     ready_state: (),
@@ -826,30 +826,6 @@ fn document_url_getter_function<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    if let Some(url) = detached_state_string(scope, receiver, "url") {
-        set_document_string_return_value(scope, &mut rv, &url);
-        return;
-    }
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_undefined();
-        return;
-    };
-    let url = unsafe { &*runtime_ptr }
-        .document_url_for_handle(handle)
-        .to_string();
-    set_document_string_return_value(scope, &mut rv, &url);
-}
-
-fn document_uri_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    if let Some(url) = detached_state_string(scope, receiver, "documentURI") {
-        set_document_string_return_value(scope, &mut rv, &url);
-        return;
-    }
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
         rv.set_undefined();
         return;

@@ -23,13 +23,13 @@ pub use element::{
 };
 use host::StylesheetCandidateRegistries;
 pub use host::{
-    ConnectedShadowRootSnapshot, DomAttributeMutation, DomAttributeMutationOutcome,
-    DomChildListMutation, DomHost, DomMutationEffects, DomMutationRecord, DomMutationRecordBatch,
-    DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
-    DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
-    DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
-    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
-    StylesheetCandidateTreeScopeSnapshots,
+    ConnectedShadowRootSnapshot, DomAdoptionTarget, DomAssociatedTreeEdgeKind,
+    DomAttributeMutation, DomAttributeMutationOutcome, DomChildListMutation, DomHost,
+    DomMutationEffects, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
+    DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
+    DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
+    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTreeMutationEffects,
+    ScriptPrepareTrigger, ScriptPrepareTriggerKind, StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
@@ -216,7 +216,7 @@ impl NativeDom {
     /// Admit a new active Document without reusing any retained node handles.
     pub(crate) fn replace_main_document(&mut self, document: &Document) -> NativeNodeId {
         let handle = self.create_node(
-            NodeData::Document(Box::new(document.clone())),
+            NodeData::Document(Box::new(document.clone_metadata_for_new_arena())),
             None,
             true,
             true,
@@ -353,22 +353,7 @@ impl NativeDom {
     }
 
     pub fn create_element(&mut self, local_name: &str) -> NativeNodeId {
-        let handle = self.create_node(
-            NodeData::Element(Element::new_html(local_name)),
-            Some(self.document_node_id),
-            false,
-            false,
-        );
-        if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment(handle);
-            if let Some(element) = self
-                .node_mut(handle)
-                .and_then(|node| node.data_mut().as_element_mut())
-            {
-                element.set_template_contents(Some(fragment));
-            }
-        }
-        handle
+        self.allocate_element_for_document(self.document_node_id, Element::new_html(local_name))
     }
 
     pub fn create_element_ns(
@@ -386,20 +371,30 @@ impl NativeDom {
         prefix: Option<&str>,
         local_name: &str,
     ) -> NativeNodeId {
-        let namespace = namespace.unwrap_or_default().to_owned();
+        let element = Element::new(
+            local_name.to_owned(),
+            namespace.unwrap_or_default().to_owned(),
+            prefix.map(str::to_owned),
+            Vec::new(),
+        );
+        self.allocate_element_for_document(self.document_node_id, element)
+    }
+
+    fn allocate_element_for_document(
+        &mut self,
+        document_handle: NativeNodeId,
+        element: Element,
+    ) -> NativeNodeId {
+        let is_template = element.is_html_element("template");
         let handle = self.create_node(
-            NodeData::Element(Element::new(
-                local_name.to_owned(),
-                namespace,
-                prefix.map(str::to_owned),
-                Vec::new(),
-            )),
-            Some(self.document_node_id),
+            NodeData::Element(element),
+            Some(document_handle),
             false,
             false,
         );
-        if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment(handle);
+        if is_template {
+            let fragment =
+                self.create_template_contents_fragment_for_document(document_handle, Some(handle));
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -519,25 +514,37 @@ impl NativeDom {
         document_handle: NativeNodeId,
         host: Option<NativeNodeId>,
     ) -> NativeNodeId {
-        let (url, kind) = self
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .map(|document| (document.url().clone(), document.kind()))
-            .unwrap_or_else(|| {
-                (
-                    url::Url::parse("about:blank").expect("about:blank is valid"),
-                    DocumentKind::Html,
-                )
-            });
-        let document = Document::new_inert_template(url, kind);
-        let owner_document =
-            self.create_node(NodeData::Document(Box::new(document)), None, false, false);
+        let owner_document = self.appropriate_template_contents_owner_document(document_handle);
         self.create_node(
             NodeData::DocumentFragment(DocumentFragment::new(host)),
             Some(owner_document),
             false,
             false,
         )
+    }
+
+    pub(crate) fn appropriate_template_contents_owner_document(
+        &mut self,
+        document_handle: NativeNodeId,
+    ) -> NativeNodeId {
+        let document = self.node(document_handle).and_then(Node::as_document);
+        if document.is_some_and(Document::is_inert_template_document) {
+            return document_handle;
+        }
+        if let Some(owner) = document.and_then(Document::associated_inert_template_document) {
+            return owner;
+        }
+        let kind = document.map(Document::kind).unwrap_or(DocumentKind::Html);
+        let document = Document::new_inert_template(kind);
+        let owner_document =
+            self.create_node(NodeData::Document(Box::new(document)), None, false, false);
+        if let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        {
+            document.set_associated_inert_template_document(owner_document);
+        }
+        owner_document
     }
 
     pub fn set_document_fragment_host(
@@ -556,6 +563,17 @@ impl NativeDom {
         }
         fragment.set_host(host);
         true
+    }
+
+    pub(crate) fn template_contents_fragment(
+        &self,
+        template: NativeNodeId,
+    ) -> Option<NativeNodeId> {
+        let contents = self.node(template)?.as_element()?.template_contents()?;
+        // During declarative shadow parsing the parser redirects this slot to
+        // a different host's ShadowRoot, which must keep its own tree scope.
+        (self.node(contents)?.data().as_document_fragment()?.host() == Some(template))
+            .then_some(contents)
     }
 
     pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NativeNodeId {

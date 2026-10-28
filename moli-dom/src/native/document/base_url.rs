@@ -5,7 +5,7 @@ use crate::native::{NativeDom, NativeNodeId, Node};
 
 #[derive(Debug, Clone)]
 pub(super) struct DocumentBaseUrlState {
-    inherited_base_url: Option<Url>,
+    about_base_url: Option<Url>,
     fallback_base_url: Url,
     base_url_override: Option<Url>,
     base_element_url: Option<Url>,
@@ -16,13 +16,20 @@ pub(super) struct DocumentBaseUrlState {
 impl DocumentBaseUrlState {
     pub(super) fn new(document_url: &Url) -> Self {
         Self {
-            inherited_base_url: None,
+            about_base_url: None,
             fallback_base_url: document_url.clone(),
             base_url_override: None,
             base_element_url: None,
             base_url: document_url.clone(),
             base_target: None,
         }
+    }
+
+    pub(super) fn clone_without_tree_caches(&self, document_url: &Url) -> Self {
+        let mut state = Self::new(document_url);
+        state.set_fallback_base_url(document_url, self.about_base_url.clone());
+        state.set_base_url_override(self.base_url_override.clone());
+        state
     }
 
     pub(super) fn fallback_base_url(&self) -> &Url {
@@ -52,7 +59,7 @@ impl DocumentBaseUrlState {
             && url.password().is_none()
             && (url.path() == "blank" || (url.path() == "srcdoc" && url.query().is_none()));
         self.fallback_base_url = if uses_inherited_base {
-            self.inherited_base_url.as_ref().unwrap_or(url).clone()
+            self.about_base_url.as_ref().unwrap_or(url).clone()
         } else {
             url.clone()
         };
@@ -61,12 +68,12 @@ impl DocumentBaseUrlState {
     pub(super) fn set_fallback_base_url(
         &mut self,
         document_url: &Url,
-        inherited_base_url: Option<Url>,
+        about_base_url: Option<Url>,
     ) -> bool {
-        if self.inherited_base_url == inherited_base_url {
+        if self.about_base_url == about_base_url {
             return false;
         }
-        self.inherited_base_url = inherited_base_url;
+        self.about_base_url = about_base_url;
         self.set_document_url(document_url);
         true
     }
@@ -138,7 +145,7 @@ impl NativeDom {
             .node_mut(document_node_id)
             .and_then(|node| node.data_mut().as_document_mut())
         {
-            document.base_url_state.process_base_element(
+            document.metadata.base_url_state.process_base_element(
                 base_element_url,
                 target,
                 force_base_url_update,

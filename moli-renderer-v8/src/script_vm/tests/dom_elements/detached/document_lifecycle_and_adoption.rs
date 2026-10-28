@@ -1,6 +1,138 @@
 use super::*;
 
 #[test]
+fn detached_document_clones_keep_url_and_document_uri_in_sync_with_native_metadata() {
+    let mut vm = new_storage_test_vm("https://document-clone-url.test/path/page.html?query#source");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  const expectedURL = document.URL;
+  const sources = [
+    new DOMParser().parseFromString('<p>hello</p>', 'text/html'),
+    new DOMParser().parseFromString('<root/>', 'application/xml'),
+    new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg"/>', 'image/svg+xml'),
+    document.implementation.createHTMLDocument(''),
+    document.implementation.createDocument(null, 'root'),
+    new Document()
+  ];
+  const urlGetter = Object.getOwnPropertyDescriptor(Document.prototype, 'URL').get;
+  const uriGetter = Object.getOwnPropertyDescriptor(Document.prototype, 'documentURI').get;
+  for (const [index, source] of sources.entries()) {
+    const expected = index < 3 ? expectedURL : 'about:blank';
+    check(source.URL === expected && source.documentURI === expected, index + ' source URL');
+    for (const deep of [false, true]) {
+      const clone = source.cloneNode(deep);
+      for (const copy of [clone, clone.cloneNode(deep)]) {
+        const label = index + ':' + deep;
+        check(copy.URL === expected, label + ' URL: ' + copy.URL);
+        check(copy.documentURI === expected, label + ' documentURI: ' + copy.documentURI);
+        check(copy.baseURI === expected, label + ' baseURI: ' + copy.baseURI);
+        check(urlGetter.call(copy) === expected, label + ' borrowed URL getter');
+        check(uriGetter.call(copy) === expected, label + ' borrowed documentURI getter');
+        check(copy.contentType === source.contentType, label + ' contentType');
+        check(copy.childNodes.length === (deep ? source.childNodes.length : 0), label + ' children');
+      }
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("document cloning should keep URL, documentURI and native metadata consistent");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn document_clone_base_uri_survives_base_element_removal() {
+    let mut vm = new_storage_test_vm("https://document-clone-base.test/path/page.html");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const results = [];
+  for (const deep of [false, true]) {
+    const source = new DOMParser().parseFromString(
+      '<base href="https://cdn.example/assets/" target="source-window">', 'text/html');
+    const clone = source.cloneNode(deep);
+    const originalBase = clone.baseURI;
+    if (deep) clone.querySelector('base').remove();
+    const base = clone.createElement('base');
+    base.href = 'https://other.example/';
+    (clone.head || clone).appendChild(base);
+    const temporaryBase = clone.baseURI;
+    base.remove();
+    source.querySelector('base').href = 'https://changed-source.example/';
+    const anchor = clone.createElement('a');
+    anchor.href = 'image.png';
+    const repeated = clone.cloneNode(false);
+    const secondBase = repeated.createElement('base');
+    secondBase.href = 'https://second.example/';
+    repeated.appendChild(secondBase);
+    secondBase.remove();
+    results.push([
+      originalBase, temporaryBase, clone.baseURI, anchor.href, repeated.baseURI
+    ]);
+  }
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .expect("document clone base URI probe should evaluate");
+    let row = r#"["https://cdn.example/assets/","https://other.example/","https://cdn.example/assets/","https://cdn.example/assets/image.png","https://cdn.example/assets/"]"#;
+    assert_eq!(result, format!("[{row},{row}]"));
+}
+
+#[test]
+fn document_clone_preserves_inherited_about_base_url_for_relative_base_elements() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-clone-about-base.test/path/page.html",
+        "<!doctype html><head><base href='https://inherited.test/dir/page.html'></head><body><iframe id='source'></iframe>",
+    );
+    materialize_single_child_default_realm_for_test(&mut vm, "about base URL clone source");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.getElementById('source').contentDocument;
+  const sourceBase = source.createElement('base');
+  sourceBase.href = 'https://cdn.example/assets/';
+  source.head.appendChild(sourceBase);
+  const results = [];
+  for (const deep of [false, true]) {
+    const clone = source.cloneNode(deep);
+    const initialBase = clone.baseURI;
+    if (deep) clone.querySelector('base').remove();
+    const base = clone.createElement('base');
+    base.href = 'fonts/';
+    (clone.head || clone).appendChild(base);
+    const relativeBase = clone.baseURI;
+    const anchor = clone.createElement('a');
+    anchor.href = 'icon.svg';
+    const anchorURL = anchor.href;
+    const repeated = clone.cloneNode(false);
+    const repeatedBase = repeated.createElement('base');
+    repeatedBase.href = 'images/';
+    repeated.appendChild(repeatedBase);
+    const repeatedRelativeBase = repeated.baseURI;
+    repeatedBase.remove();
+    base.remove();
+    results.push([source.URL, initialBase, relativeBase, anchorURL,
+      repeatedRelativeBase, repeated.baseURI, clone.baseURI]);
+  }
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .expect(
+            "about base URL and computed override should survive document cloning independently",
+        );
+    let row = r#"["about:blank","https://cdn.example/assets/","https://inherited.test/dir/fonts/","https://inherited.test/dir/fonts/icon.svg","https://inherited.test/dir/images/","https://inherited.test/dir/fonts/","https://cdn.example/assets/"]"#;
+    assert_eq!(result, format!("[{row},{row}]"));
+}
+
+#[test]
 fn html_all_collections_ignore_public_constructor_replacement() {
     let mut vm = new_parsed_test_vm(
         "https://dom-intrinsics.test/",

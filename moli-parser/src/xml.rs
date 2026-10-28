@@ -991,7 +991,7 @@ mod tests {
     }
 
     #[test]
-    fn xml_parser_existing_document_html_template_uses_the_target_document_url() {
+    fn xml_parser_existing_document_html_template_uses_an_independent_inert_owner() {
         let parser = XmlParser;
         let mut host = DomHost::from_dom(NativeDom::new_html(
             Url::parse("https://parent.example.test/").unwrap(),
@@ -1034,11 +1034,33 @@ mod tests {
 
         assert_ne!(inert_document, host.document_handle());
         assert_ne!(inert_document, child_document);
+        let inert = host
+            .node(inert_document)
+            .and_then(Node::as_document)
+            .unwrap();
+        assert_eq!(inert.url().as_str(), "about:blank");
+        assert_eq!(inert.base_url().as_str(), "about:blank");
+        assert!(!inert.is_html_document());
         assert_eq!(
-            host.node(inert_document)
+            host.node(child_document)
                 .and_then(Node::as_document)
                 .map(|document| document.url()),
             Some(&child_url)
+        );
+        let peer = host.create_element_without_attributes_for_document(
+            child_document,
+            "template".into(),
+            "http://www.w3.org/1999/xhtml".into(),
+            None,
+        );
+        let peer_contents = host
+            .node(peer)
+            .and_then(Node::as_element)
+            .and_then(|element| element.template_contents())
+            .unwrap();
+        assert_eq!(
+            host.owner_document_handle(peer_contents),
+            Some(inert_document)
         );
     }
 

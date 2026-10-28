@@ -78,18 +78,6 @@ fn detached_document_url(parsed: &DomHost) -> Url {
         .unwrap_or_else(|| Url::parse("about:blank").expect("static about:blank parses"))
 }
 
-fn set_detached_document_url_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    url: &Url,
-) -> Option<()> {
-    let url = v8_string(scope, url.as_str())?;
-    let _ = state.set(scope, v8str(scope, "url").into(), url.into());
-    let _ = state.set(scope, v8str(scope, "documentURI").into(), url.into());
-    let _ = state.set(scope, v8str(scope, "baseURI").into(), url.into());
-    Some(())
-}
-
 fn new_detached_document_shell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &str,
@@ -115,7 +103,6 @@ fn new_detached_document_shell<'s>(
         v8str(scope, "readyState").into(),
         v8_string(scope, "complete")?.into(),
     );
-    set_detached_document_url_state(scope, state, &url)?;
     define_detached_state(scope, document, state);
     let handle = create_native_detached_document_handle_with_url(scope, kind, url)?;
     define_detached_native_handle(scope, document, handle);

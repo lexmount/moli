@@ -453,7 +453,7 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     };
     let namespace_uri = normalize_namespace(namespace_uri);
     let html_like = document_kind == "html" && namespace_uri.as_deref() == Some(XHTML_NS);
-    let local_name = if html_like {
+    let local_name = if html_like && !split_qualified_name {
         local_name_raw.to_ascii_lowercase()
     } else {
         local_name_raw

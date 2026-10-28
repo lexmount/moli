@@ -492,10 +492,13 @@ impl DomHost {
                 if !allow_document {
                     return None;
                 }
-                let mut document = document.clone();
-                document.set_design_mode_enabled(false);
-                self.dom
-                    .create_node(super::NodeData::Document(document), None, false, false)
+                let document = document.clone_for_node();
+                self.dom.create_node(
+                    super::NodeData::Document(Box::new(document)),
+                    None,
+                    false,
+                    false,
+                )
             }
             super::NodeData::DocumentType(doctype) => self.create_document_type(
                 doctype.name_value(),
@@ -585,6 +588,36 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://clone.test/").expect("test URL"),
         ))
+    }
+
+    #[test]
+    fn deeply_nested_template_adoption_updates_contents_without_recursion() {
+        let mut host = test_host();
+        let destination = host.create_detached_html_document();
+        let template = host.create_element("template");
+        let mut contents = host.dom().template_contents_fragment(template).unwrap();
+        let mut associated_nodes = vec![contents];
+        for _ in 0..DEEP_TREE_DEPTH {
+            let document = host.owner_document_handle(contents).unwrap();
+            let nested = host.create_element_without_attributes_for_document(
+                document,
+                "template".into(),
+                "http://www.w3.org/1999/xhtml".into(),
+                None,
+            );
+            assert!(host.append_child(contents, nested));
+            contents = host.dom().template_contents_fragment(nested).unwrap();
+            associated_nodes.extend([nested, contents]);
+        }
+        assert_eq!(host.adopt_node(destination, template), Some(template));
+        let owner = host
+            .dom
+            .appropriate_template_contents_owner_document(destination);
+        for node in associated_nodes {
+            assert_eq!(host.owner_document_handle(node), Some(owner));
+            assert!(!host.is_connected(node));
+        }
+        assert_eq!(host.owner_document_handle(template), Some(destination));
     }
 
     #[test]

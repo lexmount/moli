@@ -2,6 +2,7 @@ use super::super::*;
 use crate::native_bridge::document::{
     parse_import_node_options, validate_registry_association_for_document,
 };
+use crate::native_bridge::node_runtime_and_handle_from_object_or_detached;
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::context_host_ptr_from_global_bridge;
 
@@ -47,6 +48,13 @@ fn clone_detached_document_shell<'s>(
     document: v8::Local<'s, v8::Object>,
     deep: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let (source_runtime, source_handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, document).ok()?;
+    let source_metadata = unsafe { &*source_runtime }
+        .dom_host()
+        .node(source_handle)?
+        .as_document()?
+        .clone();
     let document_kind = detached_state_string(scope, document, "documentKind");
     let root_is_html = detached_document_root_local_name(scope, document)
         .is_some_and(|name| name.eq_ignore_ascii_case("html"));
@@ -64,14 +72,18 @@ fn clone_detached_document_shell<'s>(
     };
     let cloned = call_global_bridge_method(scope, helper, &[])
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let content_type = detached_document_content_type_value(scope, document)?;
-    set_detached_document_content_type(scope, cloned, &content_type)?;
-    let character_set = detached_document_character_set_value(scope, document)?;
-    set_detached_document_character_set(scope, cloned, &character_set)?;
     if html_shell {
         for child in detached_child_node_objects(scope, cloned) {
             detached_detach_from_parent(scope, child);
         }
+    }
+    let (clone_runtime, clone_handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, cloned).ok()?;
+    if !unsafe { &mut *clone_runtime }
+        .dom_host_mut()
+        .initialize_document_clone_metadata(clone_handle, &source_metadata)
+    {
+        return None;
     }
     if !deep {
         return Some(cloned);
