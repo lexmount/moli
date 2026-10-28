@@ -215,6 +215,7 @@ impl JsContextHost {
         drop(std::mem::take(&mut self.custom_elements));
         self.child_custom_elements.clear();
         self.scoped_custom_elements.clear();
+        self.foreign_custom_elements.clear();
         drop(std::mem::take(&mut self.custom_element_reactions));
         drop(std::mem::take(&mut self.observers));
         drop(std::mem::take(&mut self.child_window_proxy_records));
