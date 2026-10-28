@@ -982,9 +982,6 @@ pub(crate) fn rehome_animation_service(runtime: &JsContextHost, animation: &Anim
 pub(crate) fn refresh_animation_timeline(runtime: &JsContextHost, animation: &Animation) {
     let changed = {
         let mut state = animation.borrow_mut();
-        if state.retired {
-            return;
-        }
         let timeline =
             state
                 .timeline_document

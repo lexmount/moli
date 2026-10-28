@@ -96,9 +96,6 @@ pub(super) fn register_instance<'s>(
     object: v8::Local<'s, v8::Object>,
     instance: &Animation,
 ) {
-    if instance.borrow().retired {
-        return;
-    }
     let target = effect_target(scope, object).or_else(|| current_document(scope));
     let Some(target) = target else {
         return;

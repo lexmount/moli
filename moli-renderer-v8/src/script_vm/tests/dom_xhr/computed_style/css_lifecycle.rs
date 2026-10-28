@@ -12,6 +12,7 @@ mod playback_updates;
 mod projection_contracts;
 mod reentrant_transitions;
 mod rendered_lifetime;
+mod retired_associations;
 mod review_boundaries;
 mod review_contracts;
 mod review_followups;

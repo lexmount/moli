@@ -92,6 +92,7 @@ impl AnimationTransitionState {
             })
             .collect::<Vec<_>>();
         let mut retained = Vec::new();
+        let mut removed_css = HashSet::new();
         let mut seen = HashSet::new();
         for animation in indexed.into_iter().chain(document_effects) {
             let mut state = animation.borrow_mut();
@@ -99,8 +100,14 @@ impl AnimationTransitionState {
                 continue;
             }
             if state.owned_by_css && css_associations.contains(&state.playback.id()) {
+                // The owning element's CSS association ends here. A retained
+                // Animation wrapper can later admit this same instance through
+                // WAAPI with a new target/timeline.
                 state.playback.retire(Instant::now());
-                state.retired = true;
+                state.owned_by_css = false;
+                state.css_owner = None;
+                state.registered_target = None;
+                removed_css.insert(state.playback.id());
             }
             if state
                 .service_owner
@@ -108,12 +115,13 @@ impl AnimationTransitionState {
             {
                 state.service_owner = None;
             }
-            if !state.retired {
-                retained.push(animation.clone());
-            }
+            retained.push(animation.clone());
         }
         self.effects.get_mut().retain(|_, effects| {
-            effects.retain(|a| a.upgrade().is_some_and(|a| !a.borrow().retired));
+            effects.retain(|a| {
+                a.upgrade()
+                    .is_some_and(|a| !removed_css.contains(&a.borrow().playback.id()))
+            });
             !effects.is_empty()
         });
         retained
