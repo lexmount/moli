@@ -11,7 +11,8 @@ use crate::{
         css_style::CssInlineStyleDeclarationState,
         custom_elements::{
             CustomElementReactionCoordinator, CustomElementRegistryAssociation,
-            CustomElementRegistryKey, CustomElementStore, RegistryAssociationRetarget,
+            CustomElementRegistryKey, CustomElementRegistryKind, CustomElementStore,
+            RegistryAssociationRetarget,
         },
         document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle},
         document_script_scheduler::{
@@ -892,7 +893,7 @@ pub(crate) struct JsContextHost {
     custom_elements: CustomElementStore,
     custom_element_reactions: CustomElementReactionCoordinator,
     child_custom_elements: HashMap<DomHandle, CustomElementStore>,
-    scoped_custom_elements: HashMap<u64, CustomElementStore>,
+    scoped_custom_elements: HashMap<u32, CustomElementStore>,
     foreign_custom_elements: HashMap<CustomElementRegistryKey, CustomElementStore>,
     parser_defined_autonomous_custom_elements: VecDeque<String>,
     // Parser-created direct construction leaves html5ever's open-stack
@@ -900,10 +901,10 @@ pub(crate) struct JsContextHost {
     // constructor result, and this map moves later parser-appended children to
     // that result before the next script observes the DOM.
     parser_custom_element_handoff_replacements: HashMap<DomHandle, DomHandle>,
-    scoped_custom_element_registry_wrappers: HashMap<u64, v8::Weak<v8::Object>>,
+    scoped_custom_element_registry_wrappers: HashMap<u32, v8::Weak<v8::Object>>,
     custom_element_registry_associations:
         LinkedHashMap<DomHandle, CustomElementRegistryAssociation>,
-    next_scoped_custom_elements_registry_id: u64,
+    next_scoped_custom_elements_registry_id: u32,
     observers: ObserverStore,
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,

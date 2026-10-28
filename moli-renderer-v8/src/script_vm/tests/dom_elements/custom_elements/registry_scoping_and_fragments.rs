@@ -1201,6 +1201,37 @@ fn scoped_registry_compaction_removes_orphaned_store() {
 }
 
 #[test]
+fn scoped_registry_id_exhaustion_never_wraps_or_replaces_existing_definitions() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    vm.with_default_context_scope_and_checkpoint_for_test(|_scope, host| {
+        unsafe { &mut *host }.set_next_scoped_custom_element_registry_id_for_test(u32::MAX);
+        Ok(())
+    })
+    .expect("install the final native registry slot");
+    let result = vm.eval(r#"
+        (() => {
+            const last = new CustomElementRegistry();
+            class FinalElement extends HTMLElement {}
+            last.define('last-native-registry-slot', FinalElement);
+            const errors = [];
+            for (let i = 0; i < 2; ++i) {
+                try { new CustomElementRegistry(); errors.push('not thrown'); }
+                catch (error) { errors.push(error instanceof RangeError ? error.name : 'wrong realm'); }
+            }
+            return JSON.stringify({
+                preserved: last.get('last-native-registry-slot') === FinalElement,
+                independent: customElements.get('last-native-registry-slot') === undefined,
+                errors
+            });
+        })()
+    "#).expect("exhaustion must remain a JavaScript exception");
+    assert_eq!(
+        result,
+        r#"{"preserved":true,"independent":true,"errors":["RangeError","RangeError"]}"#
+    );
+}
+
+#[test]
 fn scoped_registry_lookup_cleanup_removes_orphaned_store() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -1227,7 +1258,7 @@ fn scoped_registry_lookup_cleanup_removes_orphaned_store() {
         assert!(
             host.custom_element_registry_object_for_key(
                 scope,
-                CustomElementRegistryKey::Scoped(host.custom_element_registry_owner_id(), 1)
+                CustomElementRegistryKey::scoped(host.custom_element_registry_owner_id(), 1)
             )
             .is_none()
         );

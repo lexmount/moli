@@ -1404,7 +1404,12 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
-    pub(crate) fn remove_scoped_custom_element_registry_wrapper_for_test(&mut self, id: u64) {
+    pub(crate) fn set_next_scoped_custom_element_registry_id_for_test(&mut self, id: u32) {
+        self.next_scoped_custom_elements_registry_id = id;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_scoped_custom_element_registry_wrapper_for_test(&mut self, id: u32) {
         self.scoped_custom_element_registry_wrappers.remove(&id);
     }
 
@@ -2046,7 +2051,7 @@ impl JsContextHost {
             .definition_for_constructor(scope, constructor)
         {
             return Some((
-                CustomElementRegistryKey::Global(self.custom_element_registry_owner_id()),
+                CustomElementRegistryKey::global(self.custom_element_registry_owner_id()),
                 name,
                 extends_local_name,
             ));
@@ -2061,7 +2066,7 @@ impl JsContextHost {
             })
         {
             return Some((
-                CustomElementRegistryKey::Child(
+                CustomElementRegistryKey::child(
                     self.custom_element_registry_owner_id(),
                     child_handle,
                 ),
@@ -2079,7 +2084,7 @@ impl JsContextHost {
             })
         {
             return Some((
-                CustomElementRegistryKey::Scoped(
+                CustomElementRegistryKey::scoped(
                     self.custom_element_registry_owner_id(),
                     scoped_id,
                 ),
@@ -2100,18 +2105,20 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         registry: v8::Local<'_, v8::Object>,
-    ) -> u64 {
+    ) -> Option<u32> {
         let id = self.next_scoped_custom_elements_registry_id;
-        self.next_scoped_custom_elements_registry_id = self
-            .next_scoped_custom_elements_registry_id
-            .checked_add(1)
-            .expect("scoped custom element registry id overflowed");
+        if id == 0 {
+            return None;
+        }
+        // Zero marks exhaustion. IDs must never wrap and alias a retained
+        // registry, even after dead wrappers have been compacted.
+        self.next_scoped_custom_elements_registry_id = id.checked_add(1).unwrap_or(0);
         self.scoped_custom_element_registry_wrappers
             .insert(id, v8::Weak::new(scope, registry));
         if id.is_multiple_of(64) {
             self.compact_scoped_custom_element_registry_wrappers();
         }
-        id
+        Some(id)
     }
 
     fn compact_scoped_custom_element_registry_wrappers(&mut self) {
@@ -2122,7 +2129,7 @@ impl JsContextHost {
             .retain(|id, _| wrappers.contains_key(id));
     }
 
-    fn remove_scoped_custom_element_registry(&mut self, id: u64) {
+    fn remove_scoped_custom_element_registry(&mut self, id: u32) {
         self.scoped_custom_element_registry_wrappers.remove(&id);
         self.scoped_custom_elements.remove(&id);
     }
@@ -2185,9 +2192,9 @@ impl JsContextHost {
             .filter_map(|(associated_handle, association)| {
                 let registry_matches_child = matches!(
                     association,
-                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                        owner, handle
-                    )) if *owner == self.custom_element_registry_owner_id() && *handle == child_handle
+                    CustomElementRegistryAssociation::Registry(key)
+                        if key.owner() == self.custom_element_registry_owner_id()
+                            && key.kind() == CustomElementRegistryKind::Child(child_handle)
                 );
                 let document_matches_child = document_handle.is_some_and(|document_handle| {
                     *associated_handle == document_handle
@@ -2282,16 +2289,10 @@ impl JsContextHost {
         handle: DomHandle,
         association: CustomElementRegistryAssociation,
     ) -> CustomElementRegistryAssociation {
-        match association {
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global(owner))
-                if owner == self.custom_element_registry_owner_id() => {}
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(_, _)) => {
-                return association;
-            }
-            CustomElementRegistryAssociation::Registry(
-                CustomElementRegistryKey::Scoped(_, _) | CustomElementRegistryKey::Global(_),
-            )
-            | CustomElementRegistryAssociation::Null => return association,
+        if !matches!(association, CustomElementRegistryAssociation::Registry(key)
+            if key.is_global() && key.owner() == self.custom_element_registry_owner_id())
+        {
+            return association;
         }
         let Some(document_handle) = self.dom_host().owner_document_handle(handle) else {
             return association;
@@ -2302,7 +2303,7 @@ impl JsContextHost {
             self.effective_custom_element_registry_association(document_handle)
         };
         if owner_default
-            == CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global(
+            == CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::global(
                 self.custom_element_registry_owner_id(),
             ))
         {
@@ -2319,13 +2320,13 @@ impl JsContextHost {
         if let Some(child_handle) =
             self.child_browsing_context_host_for_document_handle(document_handle)
         {
-            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::child(
                 self.custom_element_registry_owner_id(),
                 child_handle,
             ));
         }
         if document_handle == self.dom_host().document_handle() {
-            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global(
+            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::global(
                 self.custom_element_registry_owner_id(),
             ));
         }
@@ -2389,18 +2390,18 @@ impl JsContextHost {
         if key.owner() != self.custom_element_registry_owner_id() {
             return None;
         }
-        match key {
-            CustomElementRegistryKey::Global(_) => {
+        match key.kind() {
+            CustomElementRegistryKind::Global => {
                 crate::custom_elements::custom_elements_registry_for_current_realm(scope, None).ok()
             }
-            CustomElementRegistryKey::Child(_, handle) => {
+            CustomElementRegistryKind::Child(handle) => {
                 crate::custom_elements::custom_elements_registry_for_current_realm(
                     scope,
                     Some(handle),
                 )
                 .ok()
             }
-            CustomElementRegistryKey::Scoped(_, id) => {
+            CustomElementRegistryKind::Scoped(id) => {
                 let registry = self
                     .scoped_custom_element_registry_wrappers
                     .get(&id)
@@ -2442,10 +2443,10 @@ impl JsContextHost {
         if key.owner() != self.custom_element_registry_owner_id() {
             return self.foreign_custom_elements.get(&key);
         }
-        match key {
-            CustomElementRegistryKey::Global(_) => Some(&self.custom_elements),
-            CustomElementRegistryKey::Child(_, handle) => self.child_custom_elements.get(&handle),
-            CustomElementRegistryKey::Scoped(_, id) => self.scoped_custom_elements.get(&id),
+        match key.kind() {
+            CustomElementRegistryKind::Global => Some(&self.custom_elements),
+            CustomElementRegistryKind::Child(handle) => self.child_custom_elements.get(&handle),
+            CustomElementRegistryKind::Scoped(id) => self.scoped_custom_elements.get(&id),
         }
     }
 
@@ -2456,12 +2457,12 @@ impl JsContextHost {
         if key.owner() != self.custom_element_registry_owner_id() {
             return self.foreign_custom_elements.entry(key).or_default();
         }
-        match key {
-            CustomElementRegistryKey::Global(_) => &mut self.custom_elements,
-            CustomElementRegistryKey::Child(_, handle) => {
+        match key.kind() {
+            CustomElementRegistryKind::Global => &mut self.custom_elements,
+            CustomElementRegistryKind::Child(handle) => {
                 self.child_custom_elements.entry(handle).or_default()
             }
-            CustomElementRegistryKey::Scoped(_, id) => {
+            CustomElementRegistryKind::Scoped(id) => {
                 self.scoped_custom_elements.entry(id).or_default()
             }
         }
@@ -2533,7 +2534,7 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> Option<CustomElementRegistryKey> {
         if self.custom_elements.owns_custom_element_handle(handle) {
-            return Some(CustomElementRegistryKey::Global(
+            return Some(CustomElementRegistryKey::global(
                 self.custom_element_registry_owner_id(),
             ));
         }
@@ -2546,7 +2547,7 @@ impl JsContextHost {
                         .then_some(*child_handle)
                 })
         {
-            return Some(CustomElementRegistryKey::Child(
+            return Some(CustomElementRegistryKey::child(
                 self.custom_element_registry_owner_id(),
                 child_handle,
             ));
@@ -2560,7 +2561,7 @@ impl JsContextHost {
                         .then_some(*scoped_id)
                 })
         {
-            return Some(CustomElementRegistryKey::Scoped(
+            return Some(CustomElementRegistryKey::scoped(
                 self.custom_element_registry_owner_id(),
                 scoped_id,
             ));
@@ -2584,7 +2585,7 @@ impl JsContextHost {
     ) -> &mut CustomElementStore {
         let key = self
             .custom_element_registry_key_for_owned_handle(handle)
-            .unwrap_or(CustomElementRegistryKey::Global(
+            .unwrap_or(CustomElementRegistryKey::global(
                 self.custom_element_registry_owner_id(),
             ));
         self.custom_elements_mut_for_registry_key(key)
