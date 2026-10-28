@@ -8,6 +8,7 @@ use moli_indexeddb::sqlite::{
     service::{Command, CommandResult, DatabaseClient},
 };
 
+mod cursor;
 mod write;
 
 #[derive(Clone, Copy)]
@@ -24,6 +25,13 @@ pub(super) fn prepare_operation<'s>(
     client: &DatabaseClient,
     operation: operation::TransactionOperation<'s>,
 ) -> Result<IndexedDbTransactionOperation, IndexedDbError> {
+    if matches!(
+        operation.kind,
+        IndexedDbTransactionOperation::OpenCursor(_)
+            | IndexedDbTransactionOperation::CursorIterate { .. }
+    ) {
+        return cursor::prepare(scope, client, operation);
+    }
     if matches!(
         operation.kind,
         IndexedDbTransactionOperation::ObjectStoreWrite { .. }

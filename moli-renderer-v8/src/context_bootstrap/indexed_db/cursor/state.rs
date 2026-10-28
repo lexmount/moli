@@ -9,13 +9,6 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_request_and_transaction<'
     Some((request, transaction))
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn cursor_entries_len(
-    scope: &mut v8::PinScope<'_, '_>,
-    cursor: v8::Local<'_, v8::Object>,
-) -> usize {
-    indexed_db_cursor_state(scope, cursor).map_or(0, |state| state.entries.len())
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn cursor_key_at(
     scope: &mut v8::PinScope<'_, '_>,
     cursor: v8::Local<'_, v8::Object>,

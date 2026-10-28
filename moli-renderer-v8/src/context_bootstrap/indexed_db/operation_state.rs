@@ -51,6 +51,15 @@ type SqlOperationStart = Box<
     ) -> bool,
 >;
 
+pub(super) enum IndexedDbCursorIteration {
+    Continue(Option<super::Key>),
+    Advance(u32),
+    PrimaryKey {
+        key: super::Key,
+        primary_key: super::Key,
+    },
+}
+
 pub(super) enum IndexedDbTransactionOperation {
     /// Prepared by the common dispatcher, after selecting the SQL backend.
     /// `true` keeps this logical operation in flight until its completion.
@@ -69,6 +78,10 @@ pub(super) enum IndexedDbTransactionOperation {
         query: Option<IdbKeyRangeQuery>,
     },
     OpenCursor(IndexedDbCursorOpenOperation),
+    CursorIterate {
+        cursor: v8::Global<v8::Object>,
+        movement: IndexedDbCursorIteration,
+    },
     CursorDelete {
         key: super::Key,
     },

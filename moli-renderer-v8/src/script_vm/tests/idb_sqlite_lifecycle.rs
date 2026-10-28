@@ -6,6 +6,8 @@ use moli_indexeddb::sqlite::{
 use moli_indexeddb::{DatabaseHandle, IndexOptions, KeyPath, ObjectStoreOptions, TransactionMode};
 use std::{collections::BTreeSet, sync::mpsc, time::Duration};
 
+mod cursor_tests;
+
 struct SqlBackend {
     client: DatabaseClient,
     _service: Service,

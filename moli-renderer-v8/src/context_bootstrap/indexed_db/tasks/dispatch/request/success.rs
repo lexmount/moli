@@ -45,7 +45,24 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
         "readyState",
         done,
     );
+    let cancel =
+        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
+            scope, request,
+        )
+        .map(|_| {
+            crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_event_cancellation(
+                scope, request,
+            )
+        });
     let outcome = dispatch_idb_named_event_with_result(scope, request, "success", |_, _| {});
+    if scope.is_execution_terminating()
+        && let Some(cancel) = cancel
+    {
+        // Termination cleanup must not inspect or allocate JS values, including
+        // transaction.error, after the event listener was interrupted.
+        cancel();
+        return;
+    }
     if let Some(transaction) = transaction
         && outcome.did_listeners_throw
         && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
@@ -76,5 +93,8 @@ fn refresh_pending_cursor_surface<'s>(
     let position = object_number_property(scope, request, INDEXED_DB_PENDING_CURSOR_POSITION_SLOT)
         .unwrap_or(-1.0);
     let position = (position >= 0.0).then_some(position as usize);
+    crate::context_bootstrap::indexed_db::publish_indexed_db_sql_cursor_page(
+        scope, request, cursor,
+    );
     let _ = refresh_cursor_surface(scope, cursor, position);
 }

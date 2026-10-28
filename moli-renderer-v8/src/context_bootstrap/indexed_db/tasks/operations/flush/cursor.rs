@@ -26,6 +26,10 @@ pub(super) fn try_dispatch_cursor_operation<'s>(
                 }
             }
         }
+        IndexedDbTransactionOperation::CursorIterate { cursor, movement } => {
+            let cursor = v8::Local::new(scope, cursor);
+            crate::context_bootstrap::indexed_db::execute_cursor_iteration(scope, cursor, movement);
+        }
         _ => return false,
     }
     true

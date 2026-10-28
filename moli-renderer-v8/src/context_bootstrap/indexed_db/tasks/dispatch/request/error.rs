@@ -50,7 +50,22 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
         "readyState",
         done,
     );
+    let cancel =
+        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
+            scope, request,
+        )
+        .map(|_| {
+            crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_event_cancellation(
+                scope, request,
+            )
+        });
     let outcome = dispatch_idb_named_event_with_result(scope, request, "error", |_, _| {});
+    if scope.is_execution_terminating()
+        && let Some(cancel) = cancel
+    {
+        cancel();
+        return;
+    }
     if let Some(transaction) = transaction
         && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)

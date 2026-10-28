@@ -128,6 +128,9 @@ pub(super) fn cancel_sql_transaction(
     id: IndexedDbObjectId,
 ) {
     if let Some(transaction) = table.transactions.get_mut(&id) {
+        if transaction.finished && !transaction.aborted {
+            return;
+        }
         transaction.aborted = true;
         transaction.finished = true;
         transaction.active = false;
@@ -176,6 +179,24 @@ pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_cancellation<'s>
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) -> impl FnOnce() + 'static {
+    capture_cancellation(scope, request, true)
+}
+
+/// An interrupted success listener cannot revoke an explicit COMMIT. Its
+/// accepted native operations keep running on later owner tasks. Interrupting
+/// the operation itself (serialization/backfill) instead aborts even then.
+pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_event_cancellation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) -> impl FnOnce() + 'static {
+    capture_cancellation(scope, request, false)
+}
+
+fn capture_cancellation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    abort_committing: bool,
+) -> impl FnOnce() + 'static {
     let state = source_transaction(scope, request).and_then(|transaction| {
         let id = indexed_db_typed_state_id(scope, transaction)?;
         let table = indexed_db_runtime_state_table_for_object(scope, transaction);
@@ -185,7 +206,16 @@ pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_cancellation<'s>
         if let Some((table, id)) = state
             && let Some(table) = table.upgrade()
         {
-            cancel_sql_transaction(&mut table.borrow_mut(), id);
+            let mut table = table.borrow_mut();
+            if !abort_committing
+                && table
+                    .transactions
+                    .get(&id)
+                    .is_some_and(|state| state.committing)
+            {
+                return;
+            }
+            cancel_sql_transaction(&mut table, id);
         }
     }
 }

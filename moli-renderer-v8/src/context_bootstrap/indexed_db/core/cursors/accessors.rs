@@ -73,14 +73,55 @@ fn cached_attribute_getter<'s>(
     }
     let state = indexed_db_cursor_state(scope, cursor)?;
     let entry = state.entries.get(state.position?)?;
-    let value = match attribute {
-        CachedAttribute::Key => key_to_js_value(scope, &entry.key),
-        CachedAttribute::PrimaryKey => key_to_js_value(scope, &entry.primary_key),
-        CachedAttribute::Value => deserialize_js_value(scope, entry.value.as_ref()?)?,
+    let cancel = if state.sql.is_some() {
+        let request = cursor_request(scope, cursor)?;
+        Some(
+            crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_event_cancellation(
+                scope, request,
+            ),
+        )
+    } else {
+        None
     };
-    cursor.set_private(scope, slot, value)?;
-    rv.set(value);
-    Some(())
+    v8::tc_scope!(let scope, scope);
+    let result = (|| {
+        let value = match attribute {
+            CachedAttribute::Key => {
+                crate::context_bootstrap::indexed_db::try_key_to_js_value(scope, &entry.key)?
+            }
+            CachedAttribute::PrimaryKey => {
+                crate::context_bootstrap::indexed_db::try_key_to_js_value(
+                    scope,
+                    &entry.primary_key,
+                )?
+            }
+            CachedAttribute::Value => deserialize_js_value(scope, entry.value.as_ref()?)?,
+        };
+        cursor.set_private(scope, slot, value)?;
+        rv.set(value);
+        Some(())
+    })();
+    if scope.is_execution_terminating() || !scope.can_continue() {
+        if scope.has_caught() {
+            scope.rethrow();
+        }
+        if let Some(cancel) = cancel {
+            cancel();
+        }
+        return None;
+    }
+    if result.is_none() && !scope.has_caught() {
+        let error = dom_exception_value(
+            scope,
+            "Unable to decode the current IndexedDB cursor attribute.",
+            "UnknownError",
+        );
+        scope.throw_exception(error);
+    }
+    if scope.has_caught() {
+        scope.rethrow();
+    }
+    result
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_key_getter<'s>(

@@ -8,7 +8,9 @@ use std::{
 };
 
 mod collection;
+mod cursor;
 use collection::*;
+pub(in crate::context_bootstrap::indexed_db) use cursor::*;
 mod upgrade;
 pub(super) use upgrade::*;
 pub(super) mod sql;
@@ -352,6 +354,7 @@ struct IndexedDbRequestLifecycleState {
     blocked_dispatched: bool,
     pending_cursor_position: Option<f64>,
     error_pending_dispatch: bool,
+    pending_cursor_page: Option<Rc<cursor::SqlCursorPage>>,
 }
 
 struct IndexedDbTransactionLifecycleState {
@@ -529,6 +532,7 @@ pub(super) struct IndexedDbCursorLifecycleState {
     pub(super) got_value: bool,
     pub(super) direction: CursorDirection,
     pub(super) key_only: bool,
+    pub(super) sql: Option<Rc<cursor::SqlCursorPage>>,
 }
 
 struct IndexedDbObjectStoreLifecycleState {
@@ -785,6 +789,7 @@ pub(super) fn register_indexed_db_request_lifecycle<'s>(
             blocked_dispatched,
             pending_cursor_position: None,
             error_pending_dispatch: false,
+            pending_cursor_page: None,
         },
     );
     track_collectible_wrapper(scope, request, id, &table, ());
@@ -800,6 +805,7 @@ pub(super) fn release_indexed_db_request_dispatch_refs<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, request);
     if let Some(state) = table.borrow_mut().requests.get_mut(&id) {
         state.pending_cursor_position = None;
+        state.pending_cursor_page = None;
     }
     clear_pending_request_values(scope, request);
 }
@@ -1233,6 +1239,7 @@ pub(super) fn register_indexed_db_cursor_lifecycle(
         got_value: position.is_some(),
         direction,
         key_only,
+        sql: None,
     };
     let table = indexed_db_runtime_state_table_for_object(scope, cursor);
     let state = Rc::new(RefCell::new(state));
