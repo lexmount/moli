@@ -2249,25 +2249,54 @@ impl JsContextHost {
             .unwrap_or_else(|| self.inferred_custom_element_registry_association(handle))
     }
 
-    pub(crate) fn should_serialize_shadow_root_registry_attribute(
+    pub(crate) fn shadow_root_registry_attribute_policy(
         &self,
-        shadow_root: DomHandle,
-    ) -> bool {
-        let document_registry = self
-            .dom_host()
-            .owner_document_handle(shadow_root)
-            .map(|document| self.effective_custom_element_registry_association(document))
-            .unwrap_or(CustomElementRegistryAssociation::Null);
-        let shadow_registry = self.effective_custom_element_registry_association(shadow_root);
-        match (document_registry, shadow_registry) {
-            (CustomElementRegistryAssociation::Null, CustomElementRegistryAssociation::Null) => {
-                false
+    ) -> impl Fn(DomHandle, DomHandle, &crate::dom::native::ShadowRootInit) -> bool + '_ {
+        // Native serialization runs without author code. Reuse the document's
+        // registry for this call, including normalization of explicit defaults.
+        // Template contents can have a different owner document, so retain its
+        // identity alongside the cached association.
+        let cached_document_registry = std::cell::Cell::new(None);
+        move |_, shadow_root, _| {
+            let document = self.dom_host().owner_document_handle(shadow_root);
+            let document_registry = match document {
+                Some(document) => {
+                    if let Some((cached_document, registry)) = cached_document_registry.get()
+                        && cached_document == document
+                    {
+                        registry
+                    } else {
+                        let registry = self.effective_custom_element_registry_association(document);
+                        cached_document_registry.set(Some((document, registry)));
+                        registry
+                    }
+                }
+                None => CustomElementRegistryAssociation::Null,
+            };
+            let shadow_registry = match self.custom_element_registry_association(shadow_root) {
+                Some(CustomElementRegistryAssociation::Registry(key))
+                    if document.is_some()
+                        && key.is_global()
+                        && key.owner() == self.custom_element_registry_owner_id() =>
+                {
+                    document_registry
+                }
+                Some(association) => association,
+                None => self.inferred_custom_element_registry_association(shadow_root),
+            };
+            match (document_registry, shadow_registry) {
+                (
+                    CustomElementRegistryAssociation::Null,
+                    CustomElementRegistryAssociation::Null,
+                ) => false,
+                (
+                    CustomElementRegistryAssociation::Registry(document_key),
+                    CustomElementRegistryAssociation::Registry(shadow_key),
+                ) if document_key == shadow_key && document_key.is_document_default_backed() => {
+                    false
+                }
+                _ => true,
             }
-            (
-                CustomElementRegistryAssociation::Registry(document_key),
-                CustomElementRegistryAssociation::Registry(shadow_key),
-            ) if document_key == shadow_key && document_key.is_document_default_backed() => false,
-            _ => true,
         }
     }
 
