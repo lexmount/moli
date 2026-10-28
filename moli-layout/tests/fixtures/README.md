@@ -29,6 +29,14 @@ The narrow and wide variants use 500-unit and 1000-unit advances. Four letters
 at 40px have widths of 80px and 160px respectively, providing controls for
 FontFaceSet selection order without relying on installed fonts.
 
+## Wide-x test face
+
+`moli-wide-x.ttf` is a 640-byte TrueType font with one glyph, `x`, and a
+1000-unit advance on a 1000-unit em, so ten `x` at 16px are 160px wide. No
+common system monospace font has that advance, which makes it a fixture that
+tells a loaded web font from the fallback font. It is original project test
+data under the repository's MIT OR Apache-2.0 terms. SHA-256 `a52c88b448d28e1fbfdddaba534a2d99cc9119013aa9ca5dccb355221b44504b`.
+
 ## Subset fallback faces
 
 | Fixture | Included code points | Source and source SHA-256 | License | Fixture SHA-256 |

@@ -186,6 +186,66 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
     .expect("rounded flex max-content fixture should run");
 }
 
+/// Lays out ten `x` in a face whose `x` advances one em. At 16px the face gives
+/// 160px, while no system monospace fallback does.
+async fn wide_x_web_font_width(mask: crate::protocol_types::OptionalResourceFetchMask) -> f64 {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(mask);
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/wide-x-web-font.html")?,
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-wide-x.ttf"
+        )));
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:WideX; src:url(data:font/ttf;base64,{encoded}) format('truetype') }}
+body {{ margin:0; font-size:16px }}
+#t {{ font-family:WideX, monospace; white-space:nowrap }}
+</style>`;
+document.body.innerHTML = `<span id=t>xxxxxxxxxx</span>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page_vm.vm_mut().publish_layout_for_test()?;
+        Ok::<_, anyhow::Error>(
+            page_vm
+                .vm_mut()
+                .eval("document.getElementById('t').getBoundingClientRect().width")?
+                .parse::<f64>()?,
+        )
+    })
+    .await
+    .expect("wide-x web font fixture should run")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn loaded_web_font_advances_decide_text_width() {
+    let width = wide_x_web_font_width(crate::protocol_types::OptionalResourceFetchMask::FONT).await;
+    assert!(
+        (width - 160.0).abs() <= 0.5,
+        "text must use the web font's 1em advances, got {width}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn web_font_is_not_fetched_while_the_font_family_is_off() {
+    let width = wide_x_web_font_width(crate::protocol_types::OptionalResourceFetchMask::NONE).await;
+    assert!(
+        (width - 160.0).abs() > 1.0,
+        "with font fetching off the fallback font must lay out the text, got {width}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn block_in_inline_cssom_uses_structural_ancestors() {
     run_page_vm_async_test(async move {

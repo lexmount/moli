@@ -593,6 +593,8 @@ pub struct CommonArgs {
     pub disable_subframes: bool,
 
     /// Enable the real on-demand layout renderer and screenshot surfaces.
+    /// Layout also fetches `@font-face` fonts, so text is measured with the
+    /// page's fonts instead of the fallback font.
     /// Native scrollbars are hidden unless --scrollbars or MOLI_SCROLLBARS is enabled.
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
     /// the script so geometry APIs can read it. Script mutations do not refresh it.

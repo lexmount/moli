@@ -176,6 +176,12 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     } else {
         OptionalResourceFetchMask::NONE
     };
+    // Real layout measures text with the page's `@font-face` fonts. Without
+    // the font family the face is never fetched and every line is shaped with
+    // the fallback font, so text widths and wrapping differ from Chromium.
+    if common.layout {
+        optional_resource_fetch_mask |= OptionalResourceFetchMask::FONT;
+    }
     for (enabled, resource) in [
         (common.image, OptionalResourceFetchMask::IMAGE),
         (common.font, OptionalResourceFetchMask::FONT),
