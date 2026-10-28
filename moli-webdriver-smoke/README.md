@@ -67,14 +67,25 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
-  Six cross-engine `bidi-network` scenarios keep the foreground tab active while
+  Eleven cross-engine `bidi-network` scenarios cover iframe event ownership,
+  request identity, and subscription initialization. Six keep the foreground tab active while
   an unattached background Page inserts, navigates, or nests an iframe. They
   cover shared and separate user contexts, require request/response and
   DOMContentLoaded/load events to identify the loaded child context, and read
   the exact response bytes through the background Page's collector. The
-  foreground collector must return `no such network data`. All six identical
-  scenarios passed against Chrome for Testing and ChromeDriver 156.0.8078.47 on
-  2026-10-28; all six fail on the main revision preceding the owner fix.
+  foreground collector must return `no such network data`. Two more load distinct
+  iframe responses in two live Pages, in shared or separate user contexts. Both
+  Page-scoped collectors and a collector spanning both Pages must retain both
+  exact bodies after the second request completes, and the request IDs must be
+  distinct. The other three subscribe globally or by the default user context as the first BiDi command on an
+  existing Classic session, then insert an iframe without calling `getTree` or
+  creating a Page. They require lifecycle events with and without Network events;
+  `getTree` runs only after those events arrive. All eleven identical scenarios passed
+  against Chrome for Testing and ChromeDriver 156.0.8078.47 on 2026-10-28.
+  The original six fail on the main revision preceding the owner fix. At the
+  initial owner-fix revision, the separate-user-context collector returns the
+  second response for the first request, and both first-command global
+  subscriptions miss iframe lifecycle events.
   Forty-three `bidi-storage` scenarios cover value, compound attribute, size,
   exact-path and expiry filters, non-ASCII string values, no matches, and
   empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`

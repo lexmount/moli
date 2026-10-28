@@ -22,19 +22,20 @@ use moli_protocol::{
         DevToolsDomObjectReferenceCommand, DevToolsDomObjectReferenceOperation, DevToolsError,
         DevToolsErrorKind, DevToolsFrameId, DevToolsGetBrowserContextsCommand,
         DevToolsGetFrameTreesCommand, DevToolsGetLayoutMetricsCommand, DevToolsGetRealmsCommand,
-        DevToolsGetTargetInfoCommand, DevToolsNavigationWait, DevToolsRemoteHandleId,
-        DevToolsSessionId, DevToolsSetFileInputFilesCommand, DevToolsTargetId, DevToolsTargetInfo,
-        DevToolsTargetKind, FrontendProtocol, NavigationFrameEvent, NavigationFrameEventKind,
-        NavigationLifecycleEvent, TargetLifecycleEvent,
-        webdriver_bidi_navigation_id_from_loader_id,
+        DevToolsGetTargetInfoCommand, DevToolsGetTargetsCommand, DevToolsNavigationWait,
+        DevToolsRemoteHandleId, DevToolsSessionId, DevToolsSetFileInputFilesCommand,
+        DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
+        FrontendProtocol, NavigationFrameEvent, NavigationFrameEventKind, NavigationLifecycleEvent,
+        TargetLifecycleEvent, webdriver_bidi_navigation_id_from_loader_id,
     },
     conn::RuntimeInspectorResponseReady,
 };
 use moli_protocol_webdriver_bidi::{
     BidiCommandOutcome, BidiConnectionState, BidiDevToolsCommandDispatch, BidiErrorCode,
     BidiEventSourceHookPlan, BidiInputCommand, BidiInputCommandDispatch, BidiSessionRegistry,
-    bidi_response_from_devtools_error, bidi_response_from_devtools_result, error_response,
-    script_realm_created_event, success_response,
+    bidi_response_from_devtools_error, bidi_response_from_devtools_result,
+    bidi_user_context_from_browser_context_id, error_response, script_realm_created_event,
+    success_response,
 };
 use moli_protocol_webdriver_classic::{
     CLASSIC_ELEMENT_REFERENCE_KEY, ClassicActionState, ClassicDevToolsCommandContext,
@@ -2819,7 +2820,9 @@ impl BidiValidatedSubscribeTargets {
             bidi.record_known_bidi_subscription_context(
                 &context.context,
                 &context.top_level_context,
-                context.user_context.as_deref(),
+                Some(bidi_user_context_from_browser_context_id(
+                    context.user_context.as_deref(),
+                )),
             );
         }
         for user_context in self.user_contexts {
@@ -2853,6 +2856,7 @@ async fn validate_bidi_session_subscribe_targets(
         return None;
     }
     let mut validated = BidiValidatedSubscribeTargets::default();
+    let discover_contexts = contexts.is_empty();
     for context in contexts {
         let Some(resolved_context) =
             bidi_resolve_subscribe_context(scheduler, session_id, &context).await
@@ -2865,21 +2869,89 @@ async fn validate_bidi_session_subscribe_targets(
         };
         validated.contexts.push(resolved_context);
     }
-    if user_contexts.is_empty() {
-        return Some(BidiSessionSubscribeTargetValidation::Valid(validated));
-    }
-    let existing_user_contexts = bidi_existing_user_context_ids(scheduler, session_id).await;
-    for user_context in user_contexts {
-        if !existing_user_contexts.contains(&user_context) {
-            return Some(BidiSessionSubscribeTargetValidation::Error(error_response(
-                id,
-                BidiErrorCode::NoSuchUserContext,
-                "user context not found",
-            )));
+    if !user_contexts.is_empty() {
+        let existing_user_contexts = bidi_existing_user_context_ids(scheduler, session_id).await;
+        for user_context in user_contexts {
+            if !existing_user_contexts.contains(&user_context) {
+                return Some(BidiSessionSubscribeTargetValidation::Error(error_response(
+                    id,
+                    BidiErrorCode::NoSuchUserContext,
+                    "user context not found",
+                )));
+            }
+            validated.user_contexts.push(user_context);
         }
-        validated.user_contexts.push(user_context);
+    }
+    if discover_contexts {
+        let contexts = match bidi_existing_top_level_contexts(scheduler, session_id).await {
+            Ok(contexts) => contexts,
+            Err(error) => {
+                return Some(BidiSessionSubscribeTargetValidation::Error(
+                    bidi_response_from_devtools_error(id?, error),
+                ));
+            }
+        };
+        validated
+            .contexts
+            .extend(contexts.into_iter().filter(|context| {
+                validated.user_contexts.is_empty()
+                    || validated.user_contexts.iter().any(|user_context| {
+                        user_context
+                            == bidi_user_context_from_browser_context_id(
+                                context.user_context.as_deref(),
+                            )
+                    })
+            }));
     }
     Some(BidiSessionSubscribeTargetValidation::Valid(validated))
+}
+
+async fn bidi_existing_top_level_contexts(
+    scheduler: &mut CdpScheduler,
+    session_id: &str,
+) -> Result<Vec<BidiValidatedSubscribeContext>, DevToolsError> {
+    let command = AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
+            session_id: Some(DevToolsSessionId::from(session_id)),
+            target_id: None,
+            browser_context_id: None,
+        },
+        root: None,
+        max_depth: None,
+        filter: Some(vec![
+            DevToolsTargetFilterEntry {
+                exclude: false,
+                target_type: Some("page".to_owned()),
+            },
+            DevToolsTargetFilterEntry {
+                exclude: true,
+                target_type: None,
+            },
+        ]),
+    });
+    let result = scheduler
+        .execute_automation_command_with_protocol_messages(command)
+        .await
+        .result?;
+    let AutomationResult::GetTargets(result) = result else {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::Internal,
+            "get targets returned an unexpected result",
+        ));
+    };
+    Ok(result
+        .targets
+        .into_iter()
+        .filter_map(|info| {
+            let context = info.target_id?.into_string();
+            Some(BidiValidatedSubscribeContext {
+                top_level_context: context.clone(),
+                context,
+                user_context: info.browser_context_id.map(|id| id.into_string()),
+            })
+        })
+        .collect())
 }
 
 fn bidi_session_subscribe_protocol_shape_is_valid(

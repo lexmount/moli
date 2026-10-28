@@ -122,7 +122,7 @@ class FixtureServer:
                     self._send_html(self._semantic_shadow_frame_page())
                     return
                 if route == "/webdriver/network-data":
-                    self._send_text("webdriver network body")
+                    self._send_text(parse_qs(parsed.query).get("body", ["webdriver network body"])[0])
                     return
                 if route == "/webdriver/shared-worker":
                     self._send_html(self._shared_worker_page())

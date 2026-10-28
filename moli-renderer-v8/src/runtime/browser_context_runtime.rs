@@ -865,7 +865,8 @@ impl RendererBrowserContextRuntime {
             .fetch_add(1, Ordering::Relaxed)
             .checked_add(1)
             .expect("browser-context child Document loader id space exhausted");
-        format!("LID-CHILD-{next_id:010}")
+        // Collectors share a connection-wide request namespace across BrowserContexts.
+        format!("LID-CHILD-{}-{next_id:010}", self.id().as_u64())
     }
 
     pub(crate) fn prepare_detached_parser_script_fetch(
@@ -1251,12 +1252,29 @@ mod tests {
 
         assert_eq!(
             runtime.allocate_child_document_loader_id(),
-            "LID-CHILD-0000000001"
+            format!("LID-CHILD-{}-0000000001", runtime.id().as_u64())
         );
         assert_eq!(
             clone.allocate_child_document_loader_id(),
-            "LID-CHILD-0000000002"
+            format!("LID-CHILD-{}-0000000002", runtime.id().as_u64())
         );
+    }
+
+    #[test]
+    fn child_document_loader_ids_are_unique_across_browser_contexts() {
+        let left = RendererBrowserContextRuntime::new();
+        let right = RendererBrowserContextRuntime::new();
+        let clone = left.clone();
+        let ids = [&left, &right, &clone]
+            .into_iter()
+            .flat_map(|runtime| {
+                [
+                    runtime.allocate_child_document_loader_id(),
+                    runtime.allocate_child_document_loader_id(),
+                ]
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 6, "protocol request IDs share one namespace");
     }
 
     #[test]
