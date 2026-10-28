@@ -88,21 +88,6 @@ impl TargetActivationTransition {
 ///
 /// The events stay attached to the completion so every activation entry point
 /// must preserve their position relative to its own response or owner action.
-#[derive(Debug)]
-pub(crate) struct CompletedTargetActivation {
-    protocol_events: Vec<BackgroundProtocolEvent>,
-}
-
-impl CompletedTargetActivation {
-    fn new(protocol_events: Vec<BackgroundProtocolEvent>) -> Self {
-        Self { protocol_events }
-    }
-
-    pub(crate) fn into_protocol_events(self) -> Vec<BackgroundProtocolEvent> {
-        self.protocol_events
-    }
-}
-
 impl CdpConnection {
     pub(crate) fn target_document_is_visible(&self, target_id: &str) -> bool {
         self.browser_context
@@ -268,26 +253,11 @@ impl CdpConnection {
         (events, updates)
     }
 
-    pub(crate) async fn complete_staged_target_activation_async(
-        &mut self,
-        transition: &TargetActivationTransition,
-    ) -> CompletedTargetActivation {
-        let events = transition
-            .clone()
-            .complete_using(&mut super::super::ProtocolWorkflowDriver::inline(self))
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "failed to complete target creation activation");
-                Vec::new()
-            });
-        CompletedTargetActivation::new(events)
-    }
-
     #[cfg(test)]
     pub(crate) async fn select_page_target_for_connection_async(
         &mut self,
         target_id: &str,
-    ) -> anyhow::Result<Option<CompletedTargetActivation>> {
+    ) -> Result<Option<Vec<BackgroundProtocolEvent>>> {
         self.select_browser_focus_for_target(target_id);
         let was_visible = self.target_document_is_visible(target_id);
         let previous_active_target_id = self
@@ -339,7 +309,7 @@ impl CdpConnection {
                 );
             }
         }
-        Ok(Some(CompletedTargetActivation::new(protocol_events)))
+        Ok(Some(protocol_events))
     }
 
     pub(crate) fn page_screencast_session_ids_for_target(

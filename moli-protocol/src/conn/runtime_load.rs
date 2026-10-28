@@ -2398,6 +2398,7 @@ impl CdpConnection {
             .map(|_| ())
     }
 
+    #[cfg(test)]
     pub(crate) async fn complete_initial_document_page_build_for_owner_with_creation_diagnostics(
         &mut self,
         completed: CompletedInitialDocumentPageBuild,

@@ -125,7 +125,7 @@ impl TargetActivationOutput {
     }
 }
 
-pub(super) fn prepare_target_activation(
+pub(crate) fn prepare_target_activation(
     conn: &mut CdpConnection,
     command: DevToolsActivateTargetCommand,
 ) -> Result<Option<PreparedTargetActivation>, DevToolsError> {
@@ -318,18 +318,4 @@ pub(super) fn activation_result_plan(
 
 fn activation_error(error: anyhow::Error) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::NoSuchTarget, format!("{error:#}"))
-}
-
-pub(super) async fn execute_devtools_activate_target_command_async(
-    conn: &mut CdpConnection,
-    command: DevToolsActivateTargetCommand,
-) -> Result<Vec<BackgroundProtocolEvent>, DevToolsError> {
-    let Some(prepared) = prepare_target_activation(conn, command)? else {
-        return Ok(Vec::new());
-    };
-    let completed = prepared
-        .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-        .await
-        .map_err(activation_error)?;
-    Ok(completed.finish(conn))
 }

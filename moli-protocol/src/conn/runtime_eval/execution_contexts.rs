@@ -117,19 +117,6 @@ impl CdpConnection {
             .context("runtime default execution context lookup failed")
     }
 
-    pub(crate) async fn runtime_default_or_initial_execution_context_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Result<Option<i64>> {
-        let owner = owner.clone();
-        crate::conn::runtime_page_query_using(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            move |state| state.prepare_runtime_default_context_query(&owner),
-            &mut None,
-        )
-        .await
-    }
-
     pub async fn has_isolated_execution_context_id_async(
         &mut self,
         execution_context_id: i64,

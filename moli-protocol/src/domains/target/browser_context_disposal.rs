@@ -381,20 +381,6 @@ fn target_session_ids(
     sessions
 }
 
-pub(super) async fn execute_browser_context_disposal_async(
-    conn: &mut CdpConnection,
-    browser_context_id: String,
-    out: &mut events::TargetProtocolSideEffects,
-    command_context: &mut CommandDispatchContext,
-) -> Result<(), DevToolsError> {
-    let disposal = PreparedBrowserContextDisposal::prepare(conn, browser_context_id)?;
-    let plan = disposal
-        .complete_inline(conn, command_context, CommandOutputPlan::default())
-        .await;
-    out.extend_background_events(plan.into_background_events(None, None));
-    Ok(())
-}
-
 fn browser_context_not_found(browser_context_id: &str) -> DevToolsError {
     DevToolsError::new(
         DevToolsErrorKind::Internal,

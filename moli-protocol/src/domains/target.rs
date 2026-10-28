@@ -16,6 +16,8 @@ use crate::domains::command_output::CommandOutputPlan;
 use super::page;
 
 pub(crate) mod activation;
+mod automation;
+pub(crate) use automation::{PreparedAutomationTargetCreation, start_automation_lifecycle_command};
 mod attachment;
 pub(crate) use attachment::commit_target_attachment;
 pub(crate) use attachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
@@ -748,102 +750,6 @@ pub(crate) fn execute_immediate_devtools_target_command_with_protocol_events(
     }
 }
 
-pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: DevToolsCreateTargetCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let execution = match creation::execute_devtools_create_target_command(conn, command) {
-        Ok(execution) => execution,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let result = execution.result;
-    let creation_commit = execution.commit;
-    let mut protocol_events = Vec::new();
-    let (initial_document_events, renderer_output_predecessor) = conn
-        .ensure_created_target_initial_document_page(&result.target_id)
-        .await;
-    protocol_events.extend(initial_document_events);
-    if let Some(activation) = creation_commit.activation() {
-        protocol_events.extend(
-            conn.complete_staged_target_activation_async(activation)
-                .await
-                .into_protocol_events(),
-        );
-    }
-    if let Err(error) =
-        creation::emit_target_creation_protocol_events(conn, creation_commit, &mut protocol_events)
-    {
-        return (Err(error), Vec::new(), renderer_output_predecessor);
-    }
-    (
-        Ok(AutomationResult::CreateTarget(result)),
-        protocol_events,
-        renderer_output_predecessor,
-    )
-}
-
-pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-) {
-    match command {
-        AutomationCommand::CloseTarget(command) => {
-            let mut command_context = crate::conn::CommandDispatchContext::default();
-            let mut side_effects = events::TargetProtocolSideEffects::default();
-            let result = closing::execute_devtools_close_target_command_async(
-                conn,
-                command,
-                &mut side_effects,
-                &mut command_context,
-            )
-            .await
-            .map(AutomationResult::CloseTarget);
-            let mut protocol_events = side_effects.into_background_events();
-            protocol_events.append(&mut command_context.take_protocol_events());
-            (result, protocol_events)
-        }
-        AutomationCommand::ActivateTarget(command) => {
-            match activation::execute_devtools_activate_target_command_async(conn, command).await {
-                Ok(events) => (Ok(AutomationResult::Empty), events),
-                Err(error) => (Err(error), Vec::new()),
-            }
-        }
-        AutomationCommand::RemoveBrowserContext(_) => {
-            let AutomationCommand::RemoveBrowserContext(command) = command else {
-                unreachable!("matched remove browser context command");
-            };
-            browser_context::execute_devtools_remove_browser_context_command_async(conn, command)
-                .await
-        }
-        AutomationCommand::CreateTarget(command) => {
-            let (result, events, _) =
-                execute_devtools_create_target_command_async_with_protocol_events(conn, command)
-                    .await;
-            (result, events)
-        }
-        AutomationCommand::GetTargets(_)
-        | AutomationCommand::GetClientWindows(_)
-        | AutomationCommand::CreateBrowserContext(_)
-        | AutomationCommand::GetBrowserContexts(_) => {
-            execute_immediate_devtools_target_command_with_protocol_events(conn, command)
-        }
-        _ => (
-            Err(DevToolsError::new(
-                DevToolsErrorKind::Unsupported,
-                "UnsupportedDevToolsCommand",
-            )),
-            Vec::new(),
-        ),
-    }
-}
-
 pub(crate) fn recover_failed_target_command(
     conn: &mut CdpConnection,
     context: &mut crate::conn::CommandDispatchContext,
@@ -1399,14 +1305,16 @@ mod devtools_runtime_entry_tests {
             "test must cover an attached scheduler-deferred Runtime await"
         );
 
-        let (result, protocol_events) = execute_devtools_target_command_async_with_protocol_events(
-            &mut conn,
-            AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
-                context: cdp_context(),
-                target_id: DevToolsTargetId::from("TID-runtime-ready-close"),
-            }),
-        )
-        .await;
+        let (result, scheduler, protocol_events, _predecessor) = conn
+            .execute_automation_command_with_protocol_events(AutomationCommand::CloseTarget(
+                DevToolsCloseTargetCommand {
+                    context: cdp_context(),
+                    target_id: DevToolsTargetId::from("TID-runtime-ready-close"),
+                },
+            ))
+            .await
+            .into_complete_parts();
+        conn.extend_scheduler_events(scheduler);
 
         let AutomationResult::CloseTarget(close_result) =
             result.expect("close target should succeed")

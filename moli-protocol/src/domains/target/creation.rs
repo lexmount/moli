@@ -21,6 +21,14 @@ pub(crate) struct TargetCreationCommit {
 }
 
 impl TargetCreationCommit {
+    pub(crate) fn emit_automation_creation(
+        self,
+        conn: &mut CdpConnection,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Result<(), DevToolsError> {
+        emit_target_creation_protocol_events(conn, self, out)
+    }
+
     pub(super) fn page_target_id(&self) -> &str {
         &self.page_target_id
     }

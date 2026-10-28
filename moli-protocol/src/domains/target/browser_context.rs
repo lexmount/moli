@@ -318,58 +318,55 @@ pub(super) fn devtools_get_browser_contexts_result(
     }
 }
 
-pub(super) async fn execute_devtools_remove_browser_context_command_async(
+pub(super) fn start_automation_remove_browser_context(
     conn: &mut CdpConnection,
     command: DevToolsRemoveBrowserContextCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<BackgroundProtocolEvent>,
-) {
-    let should_emit_internal_lifecycle =
-        command.context.protocol == FrontendProtocol::WebDriverBidi;
+    id: u64,
+    context: &mut crate::conn::CommandDispatchContext,
+) -> TargetCommandTaskStep {
     let browser_context_id = command.browser_context_id.into_string();
     if browser_context_id == conn.default_browser_context_id() {
-        return (
-            Err(DevToolsError::new(
+        return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+            DevToolsError::new(
                 DevToolsErrorKind::InvalidArgument,
-                "DefaultBrowserContextCannotBeRemoved",
-            )),
-            Vec::new(),
-        );
-    }
-    if !conn.has_browser_context_id(&browser_context_id) {
-        return (
-            Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchTarget,
-                "UnknownBrowserContextId",
-            )),
-            Vec::new(),
-        );
-    }
-
-    let mut protocol_events = Vec::new();
-    if should_emit_internal_lifecycle {
-        protocol_events.extend(target_destroyed_automation_events_for_browser_context(
-            conn,
-            &browser_context_id,
+                DefaultBrowserContextCannotBeRemoved,
+            ),
         ));
     }
-    let mut side_effects = events::TargetProtocolSideEffects::default();
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    if let Err(error) = super::browser_context_disposal::execute_browser_context_disposal_async(
+    if !conn.has_browser_context_id(&browser_context_id) {
+        return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+            DevToolsError::new(DevToolsErrorKind::NoSuchTarget, UnknownBrowserContextId),
+        ));
+    }
+    let lifecycle = if command.context.protocol == FrontendProtocol::WebDriverBidi {
+        target_destroyed_automation_events_for_browser_context(conn, &browser_context_id)
+    } else {
+        Vec::new()
+    };
+    let disposal = match super::browser_context_disposal::PreparedBrowserContextDisposal::prepare(
         conn,
         browser_context_id,
-        &mut side_effects,
-        &mut command_context,
-    )
-    .await
-    {
-        return (Err(error), Vec::new());
+    ) {
+        Ok(disposal) => disposal,
+        Err(error) => {
+            return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
+        }
+    };
+    context.protocol_events_mut().extend(lifecycle);
+    if let Some(access) = conn.protocol_state_access() {
+        TargetCommandTaskStep::Workflow(disposal.into_workflow(access))
+    } else {
+        pending_dispose_browser_context_command(Some(id), None, disposal)
     }
-    protocol_events.extend(side_effects.into_background_events());
-    protocol_events.extend(command_context.take_protocol_events());
-    (Ok(AutomationResult::Empty), protocol_events)
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("DefaultBrowserContextCannotBeRemoved")]
+struct DefaultBrowserContextCannotBeRemoved;
+
+#[derive(Debug, thiserror::Error)]
+#[error("UnknownBrowserContextId")]
+struct UnknownBrowserContextId;
 
 pub(super) const DEVTOOLS_BROWSER_TARGET_ID: &str = "browser";
 

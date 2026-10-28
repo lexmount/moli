@@ -37,13 +37,27 @@ pub(crate) struct PreparedProtocolCommand {
 }
 
 impl PreparedProtocolCommand {
-    pub(crate) fn for_automation_fetch(
+    pub(crate) fn for_automation_command(
         conn: &mut CdpConnection,
         command: crate::automation::AutomationCommand,
         id: u64,
         flush: CommandResponseFlushContext,
     ) -> Result<Self, crate::automation::DevToolsError> {
-        let owner = crate::domains::fetch::fetch_automation_command_owner(conn, &command)?;
+        let lifecycle = matches!(
+            &command,
+            crate::automation::AutomationCommand::CloseTarget(_)
+                | crate::automation::AutomationCommand::RemoveBrowserContext(_)
+        );
+        let owner = match &command {
+            crate::automation::AutomationCommand::CloseTarget(command) => conn
+                .target_session_route_for_target_id(command.target_id.as_str())
+                .map(CommandOwnerScope::for_route)
+                .unwrap_or_else(|| CommandOwnerScope::capture(conn, None)),
+            crate::automation::AutomationCommand::RemoveBrowserContext(_) => conn
+                .command_owner_scope_for_devtools_context(command.context())
+                .unwrap_or_else(|| CommandOwnerScope::capture(conn, None)),
+            _ => crate::domains::fetch::fetch_automation_command_owner(conn, &command)?,
+        };
         let host = crate::conn::ProtocolPageHostScope::capture(conn, &owner).ok();
         let mut prepared = Self::prepare(
             conn,
@@ -53,10 +67,17 @@ impl PreparedProtocolCommand {
             Some(id),
             owner.session_id().map(str::to_owned),
             flush,
-            move |conn, context| conn.start_automation_fetch_dispatch(&owner, command, id, context),
+            move |conn, context| {
+                if lifecycle {
+                    conn.start_automation_target_dispatch(command, id, context)
+                } else {
+                    conn.start_automation_fetch_dispatch(&owner, command, id, context)
+                }
+            },
         );
         // Projection may outlive its Document, but must not follow a recreated
-        // host or a reused session binding. Fetch owns its own request checks.
+        // host or a reused session binding. Domains retain their request and
+        // retirement authority inside the original command context.
         prepared.runtime_host = host;
         Ok(prepared)
     }

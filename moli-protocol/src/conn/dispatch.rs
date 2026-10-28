@@ -644,6 +644,34 @@ impl CdpConnection {
         }
     }
 
+    pub(crate) fn start_automation_target_dispatch(
+        &mut self,
+        command: crate::automation::AutomationCommand,
+        id: u64,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        use crate::domains::target::TargetCommandTaskStep;
+        match crate::domains::target::start_automation_lifecycle_command(self, command, id, context)
+        {
+            TargetCommandTaskStep::Pending(pending) => {
+                context
+                    .protocol_events_mut()
+                    .extend(pending.take_start_protocol_events());
+                if let Some(cleanup) = pending.failure_cleanup() {
+                    context
+                        .register_command_failure_cleanup(CommandFailureCleanup::Target(cleanup));
+                }
+                self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
+            }
+            TargetCommandTaskStep::Complete(plan) => {
+                self.complete_with_output_plan(context, plan, Some(id), None)
+            }
+            TargetCommandTaskStep::Workflow(workflow) => {
+                self.start_command_workflow(workflow, Some(id), None, context)
+            }
+        }
+    }
+
     fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
         let scheduler_events = self.take_scheduler_events();
         CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(

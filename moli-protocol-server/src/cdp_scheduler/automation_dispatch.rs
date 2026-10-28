@@ -52,7 +52,11 @@ pub(crate) enum AutomationCommandProgress {
 pub(super) fn automation_command_uses_owned_dispatch(command: &AutomationCommand) -> bool {
     matches!(
         command,
-        AutomationCommand::GetRealms(_)
+        AutomationCommand::CreateTarget(_)
+            | AutomationCommand::CloseTarget(_)
+            | AutomationCommand::ActivateTarget(_)
+            | AutomationCommand::RemoveBrowserContext(_)
+            | AutomationCommand::GetRealms(_)
             | AutomationCommand::EvaluateScript(_)
             | AutomationCommand::CallFunction(_)
             | AutomationCommand::TerminateExecution(_)

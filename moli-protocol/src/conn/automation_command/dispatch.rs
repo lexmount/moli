@@ -143,21 +143,7 @@ impl CdpConnection {
         };
         let id = self.next_internal_runtime_command_id();
         let result: AutomationCommandResult = Default::default();
-        let protocol_success = matches!(
-            &command,
-            AutomationCommand::AddNetworkIntercept(_)
-                | AutomationCommand::RemoveNetworkIntercept(_)
-                | AutomationCommand::ContinueInterceptedRequest(_)
-                | AutomationCommand::ContinueInterceptedResponse(_)
-                | AutomationCommand::ContinueWithAuth(_)
-                | AutomationCommand::FailInterceptedRequest(_)
-                | AutomationCommand::FulfillInterceptedRequest(_)
-        )
-        .then(|| {
-            Box::new(crate::domains::fetch::devtools_fetch_success_result(
-                &command,
-            ))
-        });
+        let protocol_success = super::workflow::protocol_command_success(&command).map(Box::new);
         let workflow = prepare_automation_workflow(self, command, access, id, result.clone());
         let mut context = crate::conn::CommandDispatchContext::default();
         let step = self.start_command_workflow(workflow, Some(id), None, &mut context);
@@ -294,14 +280,16 @@ fn prepare_automation_workflow(
                 conn, command, access, id, result,
             )
         }
-        command @ (AutomationCommand::AddNetworkIntercept(_)
+        command @ (AutomationCommand::CloseTarget(_)
+        | AutomationCommand::RemoveBrowserContext(_)
+        | AutomationCommand::AddNetworkIntercept(_)
         | AutomationCommand::RemoveNetworkIntercept(_)
         | AutomationCommand::ContinueInterceptedRequest(_)
         | AutomationCommand::ContinueInterceptedResponse(_)
         | AutomationCommand::ContinueWithAuth(_)
         | AutomationCommand::FailInterceptedRequest(_)
         | AutomationCommand::FulfillInterceptedRequest(_)) => {
-            match PreparedProtocolCommand::for_automation_fetch(
+            match PreparedProtocolCommand::for_automation_command(
                 conn,
                 command,
                 id,

@@ -56,7 +56,9 @@ impl ProtocolWorkflowState<'_> {
 mod tests {
     use super::*;
     use crate::automation::*;
-    use crate::conn::{AutomationCommandTaskStep, BrowserContext, ProtocolStateOwner};
+    use crate::conn::{
+        AutomationCommandTaskStep, BrowserContext, CommandOwnerScope, ProtocolStateOwner,
+    };
     use crate::testing::TestContext;
     use serde_json::json;
 
@@ -339,6 +341,195 @@ mod tests {
             phases: vec![DevToolsNetworkInterceptPhase::BeforeRequestSent],
             url_patterns: Vec::new(),
         })
+    }
+
+    fn target_creation_command() -> AutomationCommand {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
+                session_id: None,
+                target_id: None,
+                browser_context_id: Some("BID-configuration".into()),
+            },
+            url: "about:blank".into(),
+            browser_context_id: Some("BID-configuration".into()),
+            activate: false,
+        })
+    }
+
+    async fn finish_owned_automation(
+        handle: &crate::conn::ProtocolStateHandle,
+        mut step: AutomationCommandTaskStep,
+    ) -> Result<AutomationResult, DevToolsError> {
+        loop {
+            match step {
+                AutomationCommandTaskStep::Pending(pending) => {
+                    let completed = pending.wait().await;
+                    step = handle
+                        .with_state(move |state| {
+                            state
+                                .connection
+                                .complete_automation_command_dispatch(completed)
+                        })
+                        .unwrap();
+                }
+                AutomationCommandTaskStep::Complete(output) => {
+                    let (result, output) = output.into_result_and_owner_turn();
+                    let (events, _, _, _, _, _) = output.into_renderer_owner_turn_parts();
+                    assert!(
+                        events
+                            .iter()
+                            .all(|event| event.protocol_message_id().is_none()),
+                        "internal terminals cannot escape the original automation owner"
+                    );
+                    return result;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn automation_target_lifecycle_runs_on_direct_state_without_mailbox() {
+        let mut context = fixture().await;
+        drop(context.conn.take_protocol_state_requests());
+        let owner = ProtocolStateOwner::new(context.conn);
+        let handle = owner.handle();
+        let step = handle
+            .with_state(|state| {
+                state
+                    .connection
+                    .start_automation_command_dispatch(target_creation_command())
+            })
+            .unwrap();
+        let AutomationResult::CreateTarget(created) =
+            finish_owned_automation(&handle, step).await.unwrap()
+        else {
+            panic!("creation retains its typed target result");
+        };
+        let target_id = created.target_id.clone();
+        let step = handle
+            .with_state(move |state| {
+                state.connection.start_automation_command_dispatch(
+                    AutomationCommand::ActivateTarget(DevToolsActivateTargetCommand {
+                        context: command_context(),
+                        target_id,
+                    }),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            finish_owned_automation(&handle, step).await.unwrap(),
+            AutomationResult::Empty
+        );
+        let selected = created.target_id.clone();
+        assert!(
+            handle
+                .with_state(move |state| {
+                    state
+                        .connection
+                        .browser_context_by_id("BID-configuration")
+                        .unwrap()
+                        .is_active_target(selected.as_str())
+                })
+                .unwrap()
+        );
+        let step =
+            handle
+                .with_state(move |state| {
+                    state.connection.start_automation_command_dispatch(
+                        AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
+                            context: command_context(),
+                            target_id: created.target_id,
+                        }),
+                    )
+                })
+                .unwrap();
+        assert_eq!(
+            finish_owned_automation(&handle, step).await.unwrap(),
+            AutomationResult::CloseTarget(DevToolsCloseTargetResult { success: true })
+        );
+        handle
+            .with_state(|state| {
+                state
+                    .connection
+                    .insert_browser_context(BrowserContext::new("BID-owned-remove".into()))
+            })
+            .unwrap();
+        let step = handle
+            .with_state(|state| {
+                state.connection.start_automation_command_dispatch(
+                    AutomationCommand::RemoveBrowserContext(DevToolsRemoveBrowserContextCommand {
+                        context: command_context(),
+                        browser_context_id: "BID-owned-remove".into(),
+                    }),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            finish_owned_automation(&handle, step).await.unwrap(),
+            AutomationResult::Empty
+        );
+        assert!(
+            !handle
+                .with_state(|state| state.connection.has_browser_context_id("BID-owned-remove"))
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn automation_target_creation_keeps_initial_document_on_cancel_and_ready_loss() {
+        for ready_loss in [false, true] {
+            let mut context = fixture().await;
+            drop(context.conn.take_protocol_state_requests());
+            let owner = ProtocolStateOwner::new(context.conn);
+            let handle = owner.handle();
+            let AutomationCommandTaskStep::Pending(mut pending) = handle
+                .with_state(|state| {
+                    state
+                        .connection
+                        .start_automation_command_dispatch(target_creation_command())
+                })
+                .unwrap()
+            else {
+                panic!("creation owns its initial document wait");
+            };
+            let wait = pending.take_wait().wait();
+            if ready_loss {
+                drop(wait.await);
+            } else {
+                drop(wait);
+            }
+            let step = handle
+                .with_state(move |state| {
+                    state.connection.fail_automation_command_wait(
+                        *pending,
+                        crate::OwnedProtocolWaitFailure::Cancelled,
+                    )
+                })
+                .unwrap();
+            let AutomationResult::CreateTarget(created) =
+                finish_owned_automation(&handle, step).await.unwrap()
+            else {
+                panic!("the admitted creation finishes through its original owner");
+            };
+            assert!(
+                handle
+                    .with_state(move |state| {
+                        let route = state
+                            .connection
+                            .target_session_route_for_target_id(created.target_id.as_str())
+                            .unwrap();
+                        let owner = CommandOwnerScope::for_route(route);
+                        state
+                            .connection
+                            .start_initial_document_page_ensure_for_owner(&owner)
+                            .unwrap()
+                            .is_none()
+                    })
+                    .unwrap(),
+                "cancellation must not leave an orphaned initial document reservation"
+            );
+        }
     }
 
     #[tokio::test]

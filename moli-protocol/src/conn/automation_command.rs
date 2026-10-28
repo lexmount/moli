@@ -7,7 +7,6 @@ pub use dispatch::{
 
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsError, DevToolsErrorKind,
-    DevToolsTargetId,
 };
 
 use super::*;
@@ -181,16 +180,6 @@ impl CdpConnection {
         let command_context = command.context().clone();
         let mut renderer_output_predecessor = None;
         let (result, protocol_events) = match command {
-            AutomationCommand::CreateTarget(command) => {
-                let (result, protocol_events, predecessor) =
-                    crate::domains::target::execute_devtools_create_target_command_async_with_protocol_events(
-                        self,
-                        command,
-                    )
-                    .await;
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
-            }
             command @ (AutomationCommand::GetTargets(_)
             | AutomationCommand::GetServiceWorkerLogs(_)
             | AutomationCommand::GetClientWindows(_)
@@ -205,16 +194,6 @@ impl CdpConnection {
                 crate::domains::browser::execute_devtools_browser_command(self, command),
                 Vec::new(),
             ),
-            command @ (AutomationCommand::CloseTarget(_)
-            | AutomationCommand::ActivateTarget(_)
-            | AutomationCommand::RemoveBrowserContext(_)) => {
-                Box::pin(
-                    crate::domains::target::execute_devtools_target_command_async_with_protocol_events(
-                        self, command,
-                    ),
-                )
-                .await
-            }
             command @ (AutomationCommand::Navigate(_)
             | AutomationCommand::Reload(_)
             | AutomationCommand::CaptureScreenshot(_)
@@ -257,7 +236,9 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::ElementClick(_)
+            command @ (AutomationCommand::CreateTarget(_)
+            | AutomationCommand::ActivateTarget(_)
+            | AutomationCommand::ElementClick(_)
             | AutomationCommand::DispatchMouseEvent(_)
             | AutomationCommand::DispatchKeyEvent(_)
             | AutomationCommand::DispatchTouchEvent(_)
@@ -281,7 +262,9 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, events)
             }
-            command @ (AutomationCommand::AddNetworkIntercept(_)
+            command @ (AutomationCommand::CloseTarget(_)
+            | AutomationCommand::RemoveBrowserContext(_)
+            | AutomationCommand::AddNetworkIntercept(_)
             | AutomationCommand::RemoveNetworkIntercept(_)
             | AutomationCommand::ContinueInterceptedRequest(_)
             | AutomationCommand::ContinueInterceptedResponse(_)
@@ -289,7 +272,7 @@ impl CdpConnection {
             | AutomationCommand::FailInterceptedRequest(_)
             | AutomationCommand::FulfillInterceptedRequest(_)) => {
                 let output = Box::pin(
-                    workflow::execute_fetch_inline(self, command),
+                    workflow::execute_protocol_inline(self, command),
                 )
                 .await
                 ;
@@ -361,110 +344,6 @@ impl CdpConnection {
             protocol_events,
         )
         .with_renderer_output_predecessor(renderer_output_predecessor)
-    }
-
-    pub(crate) async fn ensure_created_target_initial_document_page(
-        &mut self,
-        target_id: &DevToolsTargetId,
-    ) -> (
-        Vec<BackgroundProtocolEvent>,
-        Option<moli_core::RendererOutputFence>,
-    ) {
-        let Some(route) = self.target_session_route_for_target_id(target_id.as_str()) else {
-            return (Vec::new(), None);
-        };
-        let has_default_bidi_channel_preload_script = route
-            .browser_context_id()
-            .and_then(|browser_context_id| self.browser_context_by_id(browser_context_id))
-            .is_some_and(|browser_context| {
-                browser_context.has_default_bidi_channel_preload_script()
-            });
-        let command_owner = CommandOwnerScope::for_route(route.clone());
-        let mut initial_runtime_execution_context_ids = Vec::new();
-        let mut renderer_output_predecessor = None;
-        let pending = match self.start_initial_document_page_ensure_for_owner(&command_owner) {
-            Ok(pending) => pending,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    target_id = %target_id.as_str(),
-                    "failed to start create-target initial document page ensure"
-                );
-                return (Vec::new(), None);
-            }
-        };
-        if let Some(pending) = pending {
-            match pending.wait().await {
-                Ok(completed) => {
-                    match self
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed,
-                        )
-                        .await
-                    {
-                        Ok(diagnostics) => {
-                            renderer_output_predecessor = diagnostics.renderer_output_predecessor;
-                            initial_runtime_execution_context_ids = diagnostics
-                                .initial_runtime_realms
-                                .into_iter()
-                                .filter(|realm| {
-                                    realm
-                                        .realm_id
-                                        .as_deref()
-                                        .is_some_and(|realm_id| !realm_id.is_empty())
-                                })
-                                .map(|realm| realm.context_id)
-                                .collect();
-                        }
-                        Err(error) => {
-                            tracing::debug!(
-                                ?error,
-                                target_id = %target_id.as_str(),
-                                "failed to complete create-target initial document page ensure"
-                            );
-                            return (Vec::new(), None);
-                        }
-                    }
-                }
-                Err(error) => {
-                    let error = self.reset_failed_initial_document_page_build_for_owner(error);
-                    tracing::debug!(
-                        ?error,
-                        target_id = %target_id.as_str(),
-                        "failed to await create-target initial document page ensure"
-                    );
-                    return (Vec::new(), None);
-                }
-            }
-        }
-        let mut listener_events = Vec::new();
-        if has_default_bidi_channel_preload_script
-            || self.target_owner_has_bidi_channel_preload_script_for_owner(&command_owner)
-        {
-            let mut execution_context_ids = initial_runtime_execution_context_ids;
-            // Target lifecycle creation can materialize initial about:blank without Runtime.enable;
-            // in that path the renderer has an initial default context id but no Runtime
-            // frontend-created inspector batch.
-            if execution_context_ids.is_empty()
-                && let Ok(Some(default_context_id)) = self
-                    .runtime_default_or_initial_execution_context_id_for_owner_async(&command_owner)
-                    .await
-            {
-                execution_context_ids.push(default_context_id);
-            }
-            for execution_context_id in execution_context_ids {
-                Box::pin(
-                    crate::domains::runtime::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-                        self,
-                        &command_owner,
-                        execution_context_id,
-                        &mut listener_events,
-                    ),
-                )
-                .await;
-            }
-        }
-        (listener_events, renderer_output_predecessor)
     }
 
     pub(super) fn project_protocol_local_outputs_for_direct_command(

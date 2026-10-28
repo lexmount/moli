@@ -13,6 +13,53 @@ use crate::domains::target::session_disposal::{LiveSessionDisposal, SessionDispo
 use crate::domains::target::{PreparedPopupNavigation, TargetCreationCommit};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn created_target_has_channel_preload(
+        self,
+        host: &crate::conn::ProtocolPageHostScope,
+    ) -> bool {
+        host.can_start_operation(self.connection)
+            && self
+                .connection
+                .target_owner_has_bidi_channel_preload_script_for_owner(host.owner())
+    }
+
+    pub(crate) fn prepare_created_target_default_context(
+        self,
+        host: &crate::conn::ProtocolPageHostScope,
+    ) -> Result<crate::conn::PreparedRuntimePageQuery<Option<i64>>> {
+        anyhow::ensure!(
+            host.can_start_operation(self.connection),
+            crate::conn::NoDocumentLoaded
+        );
+        self.prepare_runtime_default_context_query(host.owner())
+    }
+
+    pub(crate) fn prepare_created_target_channel_listeners(
+        self,
+        host: &crate::conn::ProtocolPageHostScope,
+        execution_context_id: i64,
+    ) -> Option<crate::domains::runtime::PreparedBidiPreloadChannelListeners> {
+        if !host.can_start_operation(self.connection) {
+            return None;
+        }
+        self.prepare_bidi_preload_channel_listeners(host.owner().clone(), execution_context_id)
+    }
+
+    pub(crate) fn finish_automation_target_creation(
+        self,
+        host: crate::conn::ProtocolPageHostScope,
+        commit: TargetCreationCommit,
+        context: &mut crate::conn::CommandDispatchContext,
+    ) -> Result<(), crate::automation::DevToolsError> {
+        if !host.can_start_operation(self.connection) {
+            return Err(crate::automation::DevToolsError::new(
+                crate::automation::DevToolsErrorKind::NoSuchTarget,
+                crate::conn::NoDocumentLoaded,
+            ));
+        }
+        commit.emit_automation_creation(self.connection, context.protocol_events_mut())
+    }
+
     pub(crate) fn prepare_target_attachment_bindings(
         self,
         owner: CommandOwnerScope,
